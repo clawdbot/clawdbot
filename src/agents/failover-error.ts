@@ -857,3 +857,4 @@ export function resolveModelFallbackError(
   }
   return { kind: "unknown", error: err };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

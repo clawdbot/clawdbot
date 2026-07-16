@@ -14,13 +14,13 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
-  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
+import { filterLegacyNodeProtocolFeatures } from "./node-legacy-protocol-filter.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {
@@ -128,6 +128,52 @@ describe("gateway/node-command-policy", () => {
     ).toEqual({
       caps: ["device"],
       commands: ["device.info"],
+    });
+  });
+
+  it("preserves native command ids when a plugin provides another host implementation", () => {
+    const registry = createEmptyPluginRegistry();
+    for (const command of [
+      "system.notify",
+      "camera.list",
+      "camera.snap",
+      "camera.clip",
+      "location.get",
+      "remote.echo",
+    ]) {
+      registry.nodeHostCommands.push({
+        pluginId: command === "remote.echo" ? "remote" : "linux-node",
+        pluginName: command === "remote.echo" ? "Remote" : "Linux Node",
+        command: { command, handle: async () => "{}" },
+        source: "test",
+      });
+    }
+    setActivePluginRegistry(registry);
+
+    expect(
+      filterLegacyNodeProtocolFeatures({
+        caps: ["camera", "location", "device"],
+        commands: [
+          "system.notify",
+          "camera.list",
+          "camera.snap",
+          "camera.clip",
+          "location.get",
+          "remote.echo",
+          "device.info",
+        ],
+        pluginSurfaces: [],
+      }),
+    ).toEqual({
+      caps: ["camera", "location", "device"],
+      commands: [
+        "system.notify",
+        "camera.list",
+        "camera.snap",
+        "camera.clip",
+        "location.get",
+        "device.info",
+      ],
     });
   });
 

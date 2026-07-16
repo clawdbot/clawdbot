@@ -16,6 +16,7 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
+import { rawDataToString } from "../infra/ws.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   getDirectAgentForCdp,
@@ -174,22 +175,6 @@ function decodeUrlUserInfo(value: string): string {
   }
 }
 
-function rawCdpMessageToString(data: WebSocket.RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 /** Merge URL basic-auth credentials into headers without overriding explicit auth. */
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
@@ -322,11 +307,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       p.reject(err);
     }
     pending.clear();
-    try {
-      ws.close();
-    } catch {
-      // ignore
-    }
+    ws.close();
   };
 
   ws.on("error", (err) => {
@@ -340,7 +321,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
 
   ws.on("message", (data) => {
     try {
-      const parsed = JSON.parse(rawCdpMessageToString(data)) as CdpResponse;
+      const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
         return;
       }
@@ -563,11 +544,6 @@ export async function withCdpSocket<T>(
       // non-Error wrap is defensive and structurally unreachable.
       /* c8 ignore next */
       closeWithError(err instanceof Error ? err : new Error(String(err)));
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
         throw err;
       }
@@ -583,11 +559,7 @@ export async function withCdpSocket<T>(
       closeWithError(err instanceof Error ? err : new Error(String(err)));
       throw err;
     } finally {
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
+      ws.close();
     }
   }
 

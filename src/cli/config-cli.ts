@@ -2836,3 +2836,4 @@ export function registerConfigCli(program: Command) {
       await runConfigValidate({ json: Boolean(opts.json) });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1205,3 +1205,4 @@ describe("gateway-status command", () => {
     expect(call.identity).toBe("/tmp/explicit_id");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

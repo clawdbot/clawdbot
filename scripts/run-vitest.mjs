@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
@@ -56,7 +57,7 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
 export const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/openclaw-e2e-instance.test.ts",
+  ...toolingIsolatedTestFiles,
 ]);
 const EXPLICIT_FILE_TARGET_RE = /\.(?:[cm]?[jt]sx?)$/u;
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
@@ -555,6 +556,24 @@ function collectExplicitProjectRouterTargetArgs(argv, cwd = process.cwd(), fsImp
   );
 }
 
+function isExplicitDirectoryTargetArg(arg, cwd = process.cwd(), fsImpl = fs) {
+  if (!isPathLikeExplicitFileArg(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  const targetPath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  try {
+    return fsImpl.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function collectExplicitDirectoryTargetArgs(argv, cwd = process.cwd(), fsImpl = fs) {
+  return collectExplicitFileTargetArgs(argv, (arg) =>
+    isExplicitDirectoryTargetArg(arg, cwd, fsImpl),
+  );
+}
+
 function collectExplicitTestFileArgs(argv) {
   return collectExplicitFileTargetArgs(argv, isExplicitTestFileArg);
 }
@@ -735,6 +754,18 @@ function isToolingDockerTestTarget(target) {
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
+  }
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex < 0 ? argv : argv.slice(0, separatorIndex);
+  const hasExplicitIsolation = optionArgs.some(
+    (arg) => arg === "--isolate" || arg === "--no-isolate" || arg.startsWith("--isolate="),
+  );
+  if (!hasExplicitIsolation && collectExplicitDirectoryTargetArgs(argv, cwd).length > 1) {
+    // Mixed directory selectors can activate overlapping Vitest projects.
+    // Isolate their module caches so one project's mocks cannot poison another.
+    const resolved = [...argv];
+    resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
+    return resolved;
   }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))

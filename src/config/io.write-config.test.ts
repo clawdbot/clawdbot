@@ -3527,4 +3527,48 @@ describe("config io write", () => {
       expect(persisted.logging?.level).toBe("debug");
     });
   });
+
+  it("warns immediately before a root config write strips JSON5 comments", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const raw = `{
+  // Keep this operator note.
+  gateway: { mode: "local", port: 18789 }
+}
+`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, raw, "utf-8");
+      const commentWarnings: string[] = [];
+      const warn = vi.fn((message: string) => {
+        if (!message.startsWith("Config write will strip JSON5 comments")) {
+          return;
+        }
+        expect(fsNode.readFileSync(configPath, "utf-8")).toBe(raw);
+        commentWarnings.push(message);
+      });
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+      const nextConfig = { gateway: { mode: "local" as const, port: 18790 } };
+
+      await expect(
+        io.writeConfigFile(nextConfig, {
+          preCommitRuntimePreflight: async () => {
+            throw new Error("blocked before commit");
+          },
+        }),
+      ).rejects.toThrow("blocked before commit");
+      expect(commentWarnings).toEqual([]);
+
+      await io.writeConfigFile(nextConfig);
+
+      expect(commentWarnings).toEqual([
+        `Config write will strip JSON5 comments from ${configPath}.`,
+      ]);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.not.toContain("operator note");
+    });
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import { workspaceBroadcast, resetWorkspaceBroadcastForTest } from "./broadcast.js";
+import { workspaceBroadcast } from "./broadcast.js";
 import { registerWorkspaceGatewayMethods } from "./gateway.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -278,20 +278,20 @@ describe("workspace gateway methods", () => {
 });
 
 describe("workspace broadcast handle", () => {
-  it("remembers the server broadcast so agent tools can announce changes off-request", async () => {
-    resetWorkspaceBroadcastForTest();
-    expect(workspaceBroadcast()).toBeUndefined();
-
+  it("keeps the current server broadcast so agent tools can announce changes off-request", async () => {
     await withTempStateDir(async (stateDir) => {
       const { api, methods } = createApi();
       registerWorkspaceGatewayMethods({ api, store: new WorkspaceStore({ stateDir }) });
-      const broadcast = vi.fn();
+      const initialBroadcast = vi.fn();
+      const currentBroadcast = vi.fn();
 
       // A read populates the slot; agent turns started from a channel or cron have
       // no gateway request scope and rely on it.
-      await callMethod(methods.get("workspaces.get")!, {}, broadcast);
+      await callMethod(methods.get("workspaces.get")!, {}, initialBroadcast);
+      expect(workspaceBroadcast()).toBe(initialBroadcast);
 
-      expect(workspaceBroadcast()).toBe(broadcast);
+      await callMethod(methods.get("workspaces.get")!, {}, currentBroadcast);
+      expect(workspaceBroadcast()).toBe(currentBroadcast);
     });
   });
 });

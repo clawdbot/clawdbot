@@ -16,11 +16,11 @@ import {
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import {
   DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
-  FORCE_PLUGIN_REGISTRY_MIGRATION_ENV,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
 } from "./plugin-registry-migration.js";
 
+const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
 const tempDirs: string[] = [];
 
 afterEach(() => {

@@ -1,6 +1,6 @@
-// Gateway chat display projection.
-// Converts raw transcript messages into bounded Control UI/history display records.
+// Projects raw transcript messages into bounded Control UI/history display records.
 import { createHash } from "node:crypto";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   asFiniteNumber,
@@ -34,6 +34,17 @@ export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 type RoleContentMessage = {
   role: string;
   content?: unknown;
+};
+
+type ChatDisplayProjectionOptions = {
+  maxChars?: number;
+  stripEnvelope?: boolean;
+  turnBoundaryPending?: boolean;
+};
+
+type ChatDisplayProjectionResult = {
+  messages: Array<Record<string, unknown>>;
+  turnBoundaryPending: boolean;
 };
 
 type PendingMessageToolVisibleReply = {
@@ -415,7 +426,7 @@ function sanitizeChatHistoryContentBlock(
   }
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
+    const bytes = estimateBase64DecodedBytes(entry.data);
     delete entry.data;
     entry.omitted = true;
     entry.bytes = bytes;
@@ -424,7 +435,7 @@ function sanitizeChatHistoryContentBlock(
   if (type === "audio" && entry.source && typeof entry.source === "object") {
     const source = { ...(entry.source as Record<string, unknown>) };
     if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = Buffer.byteLength(source.data, "utf8");
+      const bytes = estimateBase64DecodedBytes(source.data);
       delete source.data;
       source.omitted = true;
       source.bytes = bytes;
@@ -1597,6 +1608,34 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   return isHeartbeatOkResponse(roleContent);
 }
 
+/** Identifies the hidden native input that starts a heartbeat-driven turn. */
+export function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  if (!record || isSessionsSendInterSessionUserMessage(record)) {
+    return false;
+  }
+  const roleContent = asRoleContentMessage(record);
+  return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
+}
+
+function attachProjectedTurnBoundary(message: Record<string, unknown>): Record<string, unknown> {
+  const metadata = readRecord(message["__openclaw"]);
+  if (metadata?.turnBoundary === true) {
+    return message;
+  }
+  return {
+    ...message,
+    __openclaw: {
+      ...metadata,
+      turnBoundary: true,
+    },
+  };
+}
+
+function canCarryProjectedTurnBoundary(message: RoleContentMessage | null): boolean {
+  return Boolean(message && message.role !== "system" && message.role !== "custom");
+}
+
 function openclawAssistantModel(message: Record<string, unknown>): string | undefined {
   return message.role === "assistant" &&
     message.provider === "openclaw" &&
@@ -1672,10 +1711,15 @@ function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>
 
 function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
-): Array<Record<string, unknown>> {
+  turnBoundaryPending = false,
+): {
+  messages: Array<Record<string, unknown>>;
+  turnBoundaryPending: boolean;
+} {
   if (messages.length === 0) {
-    return messages;
+    return { messages, turnBoundaryPending };
   }
+  let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
   for (let i = 0; i < messages.length; i++) {
@@ -1695,11 +1739,13 @@ function filterVisibleProjectedHistoryMessages(
       !isProjectedSessionsSendForwardedMessage(next)
     ) {
       changed = true;
+      pendingTurnBoundary = true;
       i++;
       continue;
     }
     if (shouldHideProjectedHistoryMessage(current)) {
       changed = true;
+      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
       continue;
     }
     if (
@@ -1709,9 +1755,18 @@ function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    visible.push(current);
+    if (pendingTurnBoundary && canCarryProjectedTurnBoundary(currentRoleContent)) {
+      visible.push(attachProjectedTurnBoundary(current));
+      pendingTurnBoundary = false;
+      changed = true;
+    } else {
+      visible.push(current);
+    }
   }
-  return changed ? visible : messages;
+  return {
+    messages: changed ? visible : messages,
+    turnBoundaryPending: pendingTurnBoundary,
+  };
 }
 
 function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
@@ -1882,24 +1937,33 @@ function projectEmptyAssistantErrorMessages(
   return changed ? projected : messages;
 }
 
-export function projectChatDisplayMessages(
+export function projectChatDisplayMessagesWithState(
   messages: unknown[],
-  options?: { maxChars?: number; stripEnvelope?: boolean },
-): Array<Record<string, unknown>> {
+  options?: ChatDisplayProjectionOptions,
+): ChatDisplayProjectionResult {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
   const projectedErrors = projectEmptyAssistantErrorMessages(toProjectedMessages(mirrored));
-  const projectedForwarded = mergeTtsSupplementMessages(
-    filterVisibleProjectedHistoryMessages(
-      projectSessionsSendInterSessionMessages(
-        toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
-      ),
+  const filtered = filterVisibleProjectedHistoryMessages(
+    projectSessionsSendInterSessionMessages(
+      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
     ),
+    options?.turnBoundaryPending,
   );
-  return sanitizeChatHistoryMessages(
-    projectedForwarded,
-    options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  ) as Array<Record<string, unknown>>;
+  return {
+    messages: sanitizeChatHistoryMessages(
+      mergeTtsSupplementMessages(filtered.messages),
+      options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    ) as Array<Record<string, unknown>>,
+    turnBoundaryPending: filtered.turnBoundaryPending,
+  };
+}
+
+export function projectChatDisplayMessages(
+  messages: unknown[],
+  options?: ChatDisplayProjectionOptions,
+): Array<Record<string, unknown>> {
+  return projectChatDisplayMessagesWithState(messages, options).messages;
 }
 
 function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
@@ -1916,7 +1980,7 @@ function limitChatDisplayMessages<T>(messages: T[], maxMessages?: number): T[] {
 
 export function projectRecentChatDisplayMessages(
   messages: unknown[],
-  options?: { maxChars?: number; maxMessages?: number; stripEnvelope?: boolean },
+  options?: ChatDisplayProjectionOptions & { maxMessages?: number },
 ): Array<Record<string, unknown>> {
   return limitChatDisplayMessages(
     projectChatDisplayMessages(messages, options),
@@ -1926,7 +1990,8 @@ export function projectRecentChatDisplayMessages(
 
 export function projectChatDisplayMessage(
   message: unknown,
-  options?: { maxChars?: number; stripEnvelope?: boolean },
+  options?: ChatDisplayProjectionOptions,
 ): Record<string, unknown> | undefined {
   return projectChatDisplayMessages([message], options)[0];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

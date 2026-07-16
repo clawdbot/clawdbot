@@ -7,6 +7,7 @@
           "type": "string"
         },
         "action": {
+          "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
           "enum": ["send"],
           "type": "string"
         },
@@ -84,6 +85,7 @@
           "type": "string"
         },
         "message": {
+          "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
           "type": "string"
         },
         "mimeType": {
@@ -127,7 +129,9 @@
   {
     "description": "List ids allowed for `sessions_spawn(runtime:\"subagent\")`.",
     "inputSchema": {
+      "additionalProperties": false,
       "properties": {},
+      "required": [],
       "type": "object"
     },
     "name": "agents_list",
@@ -213,6 +217,22 @@
           "type": "string"
         },
         "thinking": {
+          "type": "string"
+        },
+        "visible": {
+          "description": "visible: user sees session in UI. Use when user asked or talks via web/app.",
+          "type": "boolean"
+        },
+        "worktree": {
+          "description": "Visible session worktree",
+          "type": "boolean"
+        },
+        "worktreeBaseRef": {
+          "description": "Worktree base ref",
+          "type": "string"
+        },
+        "worktreeName": {
+          "description": "Worktree name",
           "type": "string"
         }
       },
@@ -1160,29 +1180,12 @@
       },
       {
         "deferLoading": true,
-        "description": "Gateway restart/config/update. Before config edit: config.schema.lookup exact dot path. Partial merge: config.patch; full replace only: config.apply. Removing array entries via patch needs exact array replacePaths. Writes hot-reload/restart as needed. Always human note for post-restart delivery. Internal continuation: one-shot continuationMessage; its visible follow-up uses message tool. Never write restart sentinel directly.",
+        "description": "Read gateway config + schema. Writes/restart: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": [
-                "restart",
-                "config.get",
-                "config.schema.lookup",
-                "config.apply",
-                "config.patch",
-                "update.run"
-              ],
+              "enum": ["config.get", "config.schema.lookup"],
               "type": "string"
-            },
-            "baseHash": {
-              "type": "string"
-            },
-            "continuationMessage": {
-              "type": "string"
-            },
-            "delayMs": {
-              "minimum": 0,
-              "type": "integer"
             },
             "gatewayToken": {
               "type": "string"
@@ -1190,30 +1193,7 @@
             "gatewayUrl": {
               "type": "string"
             },
-            "note": {
-              "type": "string"
-            },
             "path": {
-              "type": "string"
-            },
-            "raw": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "replacePaths": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 256,
-              "type": "array"
-            },
-            "restartDelayMs": {
-              "minimum": 0,
-              "type": "integer"
-            },
-            "sessionKey": {
               "type": "string"
             },
             "timeoutMs": {
@@ -1373,16 +1353,20 @@
       },
       {
         "deferLoading": true,
-        "description": "List requester-session active/recent subagents. If available, wait via sessions_yield; never poll-loop.",
+        "description": "Background work: subagents, media gen, cron runs. list/cancel.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list"],
+              "enum": ["list", "cancel"],
               "type": "string"
             },
             "recentMinutes": {
               "minimum": 1,
               "type": "integer"
+            },
+            "taskId": {
+              "description": "Task id",
+              "type": "string"
             }
           },
           "type": "object"

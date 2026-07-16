@@ -58,11 +58,11 @@ vi.mock("../infra/retry.js", async () => {
   };
 });
 
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ summarizeWithFallback } = await import("./compaction.js"));
+  ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
 });
 
 describe("summarizeChunks partial summary preservation (#82952)", () => {

@@ -296,9 +296,6 @@ export const streamOpenAICodexResponses: StreamFunction<
       const transport = options?.transport || "auto";
       const websocketDisabledForSession =
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
-      if (websocketDisabledForSession) {
-        recordWebSocketSseFallback(options?.sessionId);
-      }
 
       if (transport !== "sse" && !websocketDisabledForSession) {
         let websocketStarted = false;
@@ -353,13 +350,12 @@ export const streamOpenAICodexResponses: StreamFunction<
                 requestBytes: new TextEncoder().encode(bodyJson).byteLength,
               }),
             );
-            recordWebSocketFailure(options?.sessionId, error, {
-              activateSseFallback: transport === "auto",
-            });
+            if (transport === "auto" && options?.sessionId) {
+              websocketSseFallbackSessions.add(options.sessionId);
+            }
             if (websocketStarted || transport !== "auto") {
               throw error;
             }
-            recordWebSocketSseFallback(options?.sessionId);
             break;
           }
         }
@@ -906,56 +902,12 @@ type WebSocketConstructor = new (
   protocols?: string | string[] | { headers?: Record<string, string> },
 ) => WebSocketLike;
 
-interface OpenAICodexWebSocketDebugStats {
-  requests: number;
-  connectionsCreated: number;
-  connectionsReused: number;
-  cachedContextRequests: number;
-  storeTrueRequests: number;
-  fullContextRequests: number;
-  deltaRequests: number;
-  lastInputItems: number;
-  lastDeltaInputItems?: number;
-  lastPreviousResponseId?: string;
-  websocketFailures: number;
-  sseFallbacks: number;
-  websocketFallbackActive?: boolean;
-  lastWebSocketError?: string;
-}
-
 const websocketSessionCache = new Map<string, CachedWebSocketConnection>();
-const websocketDebugStats = new Map<string, OpenAICodexWebSocketDebugStats>();
 const websocketSseFallbackSessions = new Set<string>();
 let cachedWebsocket: WebSocketConstructor | null = null;
 
-function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats {
-  let stats = websocketDebugStats.get(sessionId);
-  if (!stats) {
-    stats = {
-      requests: 0,
-      connectionsCreated: 0,
-      connectionsReused: 0,
-      cachedContextRequests: 0,
-      storeTrueRequests: 0,
-      fullContextRequests: 0,
-      deltaRequests: 0,
-      lastInputItems: 0,
-      websocketFailures: 0,
-      sseFallbacks: 0,
-    };
-    websocketDebugStats.set(sessionId, stats);
-  }
-  return stats;
-}
-
-export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {
+export function resetOpenAICodexWebSocketStateForTest(): void {
   cachedWebsocket = null;
-  if (sessionId) {
-    websocketDebugStats.delete(sessionId);
-    websocketSseFallbackSessions.delete(sessionId);
-    return;
-  }
-  websocketDebugStats.clear();
   websocketSseFallbackSessions.clear();
 }
 
@@ -984,33 +936,6 @@ registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
 
 function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
   return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
-}
-
-function recordWebSocketSseFallback(sessionId: string | undefined): void {
-  if (!sessionId) {
-    return;
-  }
-  const stats = getOrCreateWebSocketDebugStats(sessionId);
-  stats.sseFallbacks++;
-  stats.websocketFallbackActive = isWebSocketSseFallbackActive(sessionId);
-}
-
-function recordWebSocketFailure(
-  sessionId: string | undefined,
-  error: unknown,
-  options: { activateSseFallback: boolean },
-): void {
-  if (!sessionId) {
-    return;
-  }
-  if (options.activateSseFallback) {
-    websocketSseFallbackSessions.add(sessionId);
-  }
-
-  const stats = getOrCreateWebSocketDebugStats(sessionId);
-  stats.websocketFailures++;
-  stats.lastWebSocketError = formatThrownValue(error);
-  stats.websocketFallbackActive = isWebSocketSseFallbackActive(sessionId);
 }
 
 async function getWebSocketConstructor(): Promise<WebSocketConstructor | null> {
@@ -1191,14 +1116,12 @@ async function acquireWebSocket(
 ): Promise<{
   socket: WebSocketLike;
   entry?: CachedWebSocketConnection;
-  reused: boolean;
   release: (options?: { keep?: boolean }) => void;
 }> {
   if (!sessionId) {
     const socket = await connectWebSocket(url, headers, signal);
     return {
       socket,
-      reused: false,
       release: ({ keep } = {}) => {
         if (keep === false) {
           closeWebSocketSilently(socket);
@@ -1223,7 +1146,6 @@ async function acquireWebSocket(
       return {
         socket: cached.socket,
         entry: cached,
-        reused: true,
         release: ({ keep } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
             closeWebSocketSilently(cached.socket);
@@ -1239,7 +1161,6 @@ async function acquireWebSocket(
       const socket = await connectWebSocket(url, headers, signal);
       return {
         socket,
-        reused: false,
         release: () => {
           closeWebSocketSilently(socket);
         },
@@ -1257,7 +1178,6 @@ async function acquireWebSocket(
   return {
     socket,
     entry,
-    reused: false,
     release: ({ keep } = {}) => {
       if (!keep || !isWebSocketReusable(entry.socket)) {
         closeWebSocketSilently(entry.socket);
@@ -1540,7 +1460,7 @@ async function processWebSocketStream(
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
 ): Promise<void> {
-  const { socket, entry, reused, release } = await acquireWebSocket(
+  const { socket, entry, release } = await acquireWebSocket(
     url,
     headers,
     options?.sessionId,
@@ -1554,31 +1474,6 @@ async function processWebSocketStream(
   const fullBody = body;
   const requestBody =
     useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
-  const stats = options?.sessionId ? getOrCreateWebSocketDebugStats(options.sessionId) : undefined;
-  if (stats) {
-    stats.requests++;
-    if (reused) {
-      stats.connectionsReused++;
-    } else {
-      stats.connectionsCreated++;
-    }
-    if (useCachedContext) {
-      stats.cachedContextRequests++;
-    }
-    if (requestBody.store === true) {
-      stats.storeTrueRequests++;
-    }
-    stats.lastInputItems = requestBody.input?.length ?? 0;
-    if (requestBody.previous_response_id) {
-      stats.deltaRequests++;
-      stats.lastDeltaInputItems = requestBody.input?.length ?? 0;
-      stats.lastPreviousResponseId = requestBody.previous_response_id;
-    } else {
-      stats.fullContextRequests++;
-      stats.lastDeltaInputItems = undefined;
-      stats.lastPreviousResponseId = undefined;
-    }
-  }
   try {
     if (options?.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -1822,3 +1717,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

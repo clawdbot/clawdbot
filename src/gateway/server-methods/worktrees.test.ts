@@ -72,7 +72,7 @@ describe("worktrees gateway methods", () => {
     ]);
     expect(service.gc).toHaveBeenCalledWith({
       limits: {},
-      isOwnerActive: expect.any(Function),
+      shouldProtectOwner: expect.any(Function),
     });
 
     expect(service.create).toHaveBeenCalledWith({
@@ -163,7 +163,7 @@ describe("worktrees gateway methods", () => {
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
       limits: { maxCount: 25, maxTotalSizeBytes: 50 * 1024 ** 3 },
-      isOwnerActive: expect.any(Function),
+      shouldProtectOwner: expect.any(Function),
     });
   });
 

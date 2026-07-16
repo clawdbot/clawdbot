@@ -127,8 +127,10 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await result.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
     expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
+      agentId: "main",
       limit: 25,
       query: "nebula launch",
+      sessionKeys: ["agent:main:launch"],
     });
     await expect.poll(() => result.textContent()).toContain("Launch planning");
     await expect.poll(() => result.textContent()).toContain("Assistant");
@@ -165,10 +167,19 @@ describeControlUiE2e("Control UI session transcript search", () => {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
       methodResponses: {
         "sessions.list": {
-          count: 0,
+          count: 1,
           defaults: { contextTokens: null, model: null, modelProvider: null },
           path: "",
-          sessions: [],
+          sessions: [
+            {
+              key: "agent:main:stale",
+              kind: "direct",
+              label: "Stale search fixture",
+              status: "done",
+              totalTokens: 0,
+              updatedAt: timestamp,
+            },
+          ],
           ts: timestamp,
         },
         "sessions.search": { indexing: true, results: [] },

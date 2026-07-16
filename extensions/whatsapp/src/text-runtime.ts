@@ -16,6 +16,5 @@ export {
   toWhatsappJid,
   toWhatsappJidWithLid,
   type JidToE164Options,
-  type LidLookup,
   type WebChannel,
 } from "./targets-runtime.js";

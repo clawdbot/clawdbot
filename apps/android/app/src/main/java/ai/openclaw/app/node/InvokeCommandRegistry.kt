@@ -29,6 +29,7 @@ data class NodeRuntimeFlags(
   val motionPedometerAvailable: Boolean,
   val installedAppsSharingEnabled: Boolean,
   val debugBuild: Boolean,
+  val voiceWakeEnabled: Boolean = false,
 )
 
 /** Per-command availability gates checked before advertising invoke methods. */
@@ -56,6 +57,7 @@ enum class NodeCapabilityAvailability {
   CallLogAvailable,
   PhotosAvailable,
   MotionAvailable,
+  VoiceWakeEnabled,
 }
 
 /** Capability entry reported to the gateway when its availability gate passes. */
@@ -105,6 +107,10 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.CallLog.rawValue,
         availability = NodeCapabilityAvailability.CallLogAvailable,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.VoiceWake.rawValue,
+        availability = NodeCapabilityAvailability.VoiceWakeEnabled,
       ),
     )
 
@@ -263,6 +269,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.PhotosAvailable -> flags.photosAvailable
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
+          NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
         }
       }.map { it.name }
 

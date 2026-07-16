@@ -4,7 +4,7 @@ import chokidar from "chokidar";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import { hashRuntimeConfigValue, resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { RuntimeConfigSnapshotRefreshOptions } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -13,6 +13,7 @@ import {
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -154,6 +155,8 @@ export function startGatewayConfigReloader(opts: {
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   /** Publishes runtime state after a hot or no-op config transaction. */
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  /** Publishes the resolved source-config revision accepted by the active runtime. */
+  onConfigRevisionApplied?: (hash: string) => void;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -233,31 +236,14 @@ export function startGatewayConfigReloader(opts: {
   let lastSourceOnlyRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
   let lastSourceOnlyRuntimeConfig: OpenClawConfig | null = null;
   let lastSourceOnlySourceConfig: OpenClawConfig | null = null;
-  let pendingRuntimeApplicationPlan: GatewayReloadPlan | null = null;
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
     opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
-  const flushPendingRuntimeApplication = async () => {
-    const pendingPlan = pendingRuntimeApplicationPlan;
-    if (!pendingPlan) {
-      return;
-    }
-    await opts.onConfigApplied?.(pendingPlan, currentConfig);
-    if (pendingRuntimeApplicationPlan === pendingPlan) {
-      pendingRuntimeApplicationPlan = null;
-    }
-  };
-  const applyCurrentRuntimePlan = async (
-    plan: GatewayReloadPlan,
-    nextRuntimeConfig: OpenClawConfig,
-  ) => {
-    if (pendingRuntimeApplicationPlan === plan) {
-      await flushPendingRuntimeApplication();
-      return;
-    }
-    await opts.onConfigApplied?.(plan, nextRuntimeConfig);
-  };
+  const appliedRevision = createConfigAppliedRevisionTracker({
+    onConfigApplied: opts.onConfigApplied,
+    onRevisionApplied: opts.onConfigRevisionApplied,
+  });
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -342,6 +328,7 @@ export function startGatewayConfigReloader(opts: {
       }) ?? preflightCandidate;
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
     const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
+    const nextConfigRevisionHash = hashRuntimeConfigValue(nextSourceConfig);
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
     let publishedRuntimeEnv: ConfigRuntimeEnvPublication | undefined;
@@ -393,7 +380,7 @@ export function startGatewayConfigReloader(opts: {
         currentRuntimeRefresh = ownership.runtimeRefresh;
         currentPluginInstallRecords = nextPluginInstallRecords;
         settings = resolveGatewayReloadSettings(runtimeConfig);
-        pendingRuntimeApplicationPlan = plan;
+        appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
     const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
@@ -437,7 +424,7 @@ export function startGatewayConfigReloader(opts: {
     // Publication can be superseded after its runtime commit but before its
     // lifecycle owner is applied. Finish that owner before the next candidate
     // prepares state that acceptance or restart policy may discard.
-    await flushPendingRuntimeApplication();
+    await appliedRevision.flush(currentConfig);
     assertCurrent();
     const commitReloadBaseline = async (
       options: {
@@ -449,7 +436,7 @@ export function startGatewayConfigReloader(opts: {
       // A prior transaction may publish runtime state immediately before a
       // newer write supersedes it. Commit that runtime owner before accepting
       // a baseline-only candidate, which can discard prepared lifecycle state.
-      await flushPendingRuntimeApplication();
+      await appliedRevision.flush(currentConfig);
       assertCurrent();
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
@@ -517,6 +504,7 @@ export function startGatewayConfigReloader(opts: {
             ))
         : undefined;
       await commitReloadBaseline(publishSource ? { publishSource } : {});
+      opts.onConfigRevisionApplied?.(nextConfigRevisionHash);
       return;
     }
 
@@ -552,7 +540,7 @@ export function startGatewayConfigReloader(opts: {
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
       await opts.onNoopConfigCommit(plan, nextConfig, ownership, nextSourceConfig);
       assertCurrent();
-      await applyCurrentRuntimePlan(plan, nextConfig);
+      await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
       return;
     }
@@ -598,7 +586,7 @@ export function startGatewayConfigReloader(opts: {
       throw error;
     }
     assertCurrent();
-    await applyCurrentRuntimePlan(plan, nextConfig);
+    await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
   };
 
@@ -632,7 +620,7 @@ export function startGatewayConfigReloader(opts: {
       markRuntimeCommitted: () => {},
     };
     await runAcceptedTransaction(async () => {
-      await flushPendingRuntimeApplication();
+      await appliedRevision.flush(currentConfig);
       if (!ownership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
@@ -721,7 +709,7 @@ export function startGatewayConfigReloader(opts: {
         throw new GatewayConfigReloadSupersededError();
       }
       if (handleMissingSnapshot(snapshot)) {
-        await flushPendingRuntimeApplication();
+        await appliedRevision.flush(currentConfig);
         return;
       }
       if (startupInternalWriteHash && typeof snapshot.hash === "string") {
@@ -797,7 +785,7 @@ export function startGatewayConfigReloader(opts: {
               markRuntimeCommitted: () => {},
             };
             await runAcceptedTransaction(async () => {
-              await flushPendingRuntimeApplication();
+              await appliedRevision.flush(currentConfig);
               if (!ownership.isCurrent()) {
                 throw new GatewayConfigReloadSupersededError();
               }
@@ -820,7 +808,7 @@ export function startGatewayConfigReloader(opts: {
       }
       if (!snapshot.valid) {
         handleInvalidSnapshot(snapshot);
-        await flushPendingRuntimeApplication();
+        await appliedRevision.flush(currentConfig);
         return;
       }
       await runAcceptedTransaction(async () => {
@@ -1003,3 +991,4 @@ export function startGatewayConfigReloader(opts: {
     hotReloadStatus: () => hotReloadStatus,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

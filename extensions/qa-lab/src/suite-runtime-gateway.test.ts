@@ -4,11 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyConfig,
   fetchJson,
-  getGatewayRetryAfterMs,
-  isConfigApplyNoopForSnapshot,
-  isConfigHashConflict,
-  isConfigPatchNoopForSnapshot,
   patchConfig,
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
@@ -128,25 +125,7 @@ describe("qa suite gateway helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("reads retry-after from the primary gateway error before appended logs", () => {
-    const error = new Error(
-      "rate limit exceeded for config.patch; retry after 38s\nGateway logs:\nprevious config changed since last load",
-    );
-
-    expect(getGatewayRetryAfterMs(error)).toBe(38_000);
-    expect(isConfigHashConflict(error)).toBe(false);
-  });
-
-  it("ignores stale retry-after text that only appears in appended gateway logs", () => {
-    const error = new Error(
-      "config changed since last load; re-run config.get and retry\nGateway logs:\nold rate limit exceeded for config.patch; retry after 38s",
-    );
-
-    expect(getGatewayRetryAfterMs(error)).toBe(null);
-    expect(isConfigHashConflict(error)).toBe(true);
-  });
-
-  it("detects cleanup config patches that would not change the snapshot", () => {
+  it("skips config mutations that would not change the snapshot", async () => {
     const config = {
       tools: {
         profile: "coding",
@@ -154,98 +133,104 @@ describe("qa suite gateway helpers", () => {
       agents: {
         list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
       },
-    };
-
-    expect(
-      isConfigPatchNoopForSnapshot(
-        config,
-        JSON.stringify({
-          tools: {
-            deny: null,
-          },
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps changed merge patches eligible for the gateway", () => {
-    expect(
-      isConfigPatchNoopForSnapshot(
-        {
-          tools: {
-            deny: ["image_generate"],
-          },
-        },
-        JSON.stringify({
-          tools: {
-            deny: null,
-          },
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores prototype keys when detecting no-op config patches", () => {
-    expect(
-      isConfigPatchNoopForSnapshot(
-        {
-          tools: {
-            profile: "coding",
-          },
-        },
-        '{"tools":{"profile":"coding"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}',
-      ),
-    ).toBe(true);
-  });
-
-  it("detects full config applies that only differ by gateway-written metadata", () => {
-    const config = {
-      gateway: {
-        controlUi: {
-          allowedOrigins: ["http://127.0.0.1:5173"],
-        },
-      },
       meta: {
         updatedAt: "2026-04-25T10:00:00.000Z",
       },
     };
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const { env } = createConfigMutationEnv(gatewayCall);
 
-    expect(
-      isConfigApplyNoopForSnapshot(
-        config,
-        JSON.stringify({
-          gateway: {
-            controlUi: {
-              allowedOrigins: ["http://127.0.0.1:5173"],
-            },
-          },
-        }),
-      ),
-    ).toBe(true);
+    await expect(
+      patchConfig({ env, patch: { tools: { deny: null } }, restartDelayMs: 0 }),
+    ).resolves.toEqual({ ok: true, noop: true });
+    await expect(
+      applyConfig({
+        env,
+        nextConfig: { tools: config.tools, agents: config.agents },
+        restartDelayMs: 0,
+      }),
+    ).resolves.toEqual({ ok: true, noop: true });
+    expect(gatewayCall).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps changed full config applies eligible for the gateway", () => {
-    expect(
-      isConfigApplyNoopForSnapshot(
-        {
-          gateway: {
-            controlUi: {
-              allowedOrigins: ["http://127.0.0.1:5173"],
-            },
-          },
-          meta: {
-            updatedAt: "2026-04-25T10:00:00.000Z",
-          },
-        },
-        JSON.stringify({
-          gateway: {
-            controlUi: {
-              allowedOrigins: ["http://127.0.0.1:5174"],
-            },
-          },
-        }),
-      ),
-    ).toBe(false);
+  it("ignores prototype keys in cleanup config patches", async () => {
+    const config = { tools: { profile: "coding" } };
+    const gatewayCall = vi.fn(async () => ({ hash: "hash-1", config }));
+    const { env } = createConfigMutationEnv(gatewayCall);
+    const patch = JSON.parse(
+      '{"tools":{"profile":"coding"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}',
+    ) as Record<string, unknown>;
+
+    await expect(patchConfig({ env, patch, restartDelayMs: 0 })).resolves.toEqual({
+      ok: true,
+      noop: true,
+    });
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
+  it("retries rate-limited config mutations using the primary gateway error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release: vi.fn(async () => {}),
+    });
+    let patchAttempts = 0;
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
+      }
+      patchAttempts += 1;
+      if (patchAttempts === 1) {
+        throw new Error(
+          "rate limit exceeded for config.patch; retryAfterMs=1\nGateway logs:\nprevious config changed since last load",
+        );
+      }
+      return { ok: true };
+    });
+    const { env } = createConfigMutationEnv(gatewayCall);
+
+    await expect(
+      patchConfig({
+        env,
+        patch: { tools: { deny: ["read"] } },
+        restartDelayMs: 0,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(patchAttempts).toBe(2);
+  });
+
+  it("retries config hash conflicts from the primary gateway error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release: vi.fn(async () => {}),
+    });
+    let patchAttempts = 0;
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: `hash-${patchAttempts + 1}`, config: { tools: {} } };
+      }
+      patchAttempts += 1;
+      if (patchAttempts === 1) {
+        throw new Error(
+          "config changed since last load; re-run config.get and retry\nGateway logs:\nold rate limit exceeded; retry after 38s",
+        );
+      }
+      return { ok: true };
+    });
+    const { env } = createConfigMutationEnv(gatewayCall);
+
+    await expect(
+      patchConfig({
+        env,
+        patch: { tools: { deny: ["read"] } },
+        restartDelayMs: 0,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(patchAttempts).toBe(2);
   });
 
   it("uses the live timeout profile for config mutations and restart settle", async () => {

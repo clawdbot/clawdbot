@@ -107,6 +107,7 @@ type SlackMarkdownOptions = {
 };
 
 type SlackCodeMarker = "`" | "```";
+const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
 
 function tokenizeSlackMrkdwn(text: string): string[] {
   const tokens: string[] = [];
@@ -164,6 +165,155 @@ function resolveSlackCodeMarkerTransition(
   return null;
 }
 
+type SlackVisibleProjection = {
+  text: string;
+  excludedRanges: Array<{ start: number; end: number }>;
+};
+
+function maskSlackExcludedText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.trim() ? `x${" ".repeat(Math.max(0, line.length - 1))}` : " ".repeat(line.length),
+    )
+    .join("\n");
+}
+
+function maskSlackExcludedRanges(projection: SlackVisibleProjection): string {
+  let masked = "";
+  let cursor = 0;
+  for (const range of projection.excludedRanges) {
+    masked += projection.text.slice(cursor, range.start);
+    masked += maskSlackExcludedText(projection.text.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  return masked + projection.text.slice(cursor);
+}
+
+function slackProjectionHasRoleHeader(projection: SlackVisibleProjection): boolean {
+  return Boolean(
+    markdownToIR(maskSlackExcludedRanges(projection), {
+      assistantTranscriptRoleHeaders: true,
+      autolink: false,
+      blockquotePrefix: "",
+      headingStyle: "none",
+      linkify: false,
+      tableMode: "off",
+    }).annotations?.some((annotation) => annotation.type === "assistant_transcript_role"),
+  );
+}
+
+function decodeSlackMrkdwnEntities(text: string): string {
+  return text.replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+}
+
+type SlackDateDisplay = "fallback" | "token";
+
+function projectSlackAngleToken(token: string, dateDisplay: SlackDateDisplay): string {
+  const inner = token.slice(1, -1);
+  if (inner.startsWith("!date^")) {
+    const fallbackSeparator = inner.indexOf("|");
+    const dateControl = fallbackSeparator === -1 ? inner : inner.slice(0, fallbackSeparator);
+    const tokenString = dateControl.split("^")[2] ?? "";
+    const fallback = fallbackSeparator === -1 ? "" : inner.slice(fallbackSeparator + 1);
+    // Modern clients render tokenString; older clients render fallback.
+    return decodeSlackMrkdwnEntities(
+      dateDisplay === "fallback" ? fallback || tokenString : tokenString || fallback,
+    );
+  }
+  const labelSeparator = inner.indexOf("|");
+  if (labelSeparator >= 0) {
+    return decodeSlackMrkdwnEntities(inner.slice(labelSeparator + 1));
+  }
+  if (inner.startsWith("@")) {
+    return "@";
+  }
+  if (inner.startsWith("#")) {
+    return "#";
+  }
+  if (inner.startsWith("!")) {
+    return "!";
+  }
+  return decodeSlackMrkdwnEntities(inner);
+}
+
+function appendSlackVisibleProjection(
+  projection: SlackVisibleProjection,
+  visible: string,
+  excluded: boolean,
+): void {
+  if (!visible) {
+    return;
+  }
+  const start = projection.text.length;
+  projection.text += visible;
+  if (!excluded) {
+    return;
+  }
+  const previous = projection.excludedRanges.at(-1);
+  if (previous?.end === start) {
+    previous.end = projection.text.length;
+  } else {
+    projection.excludedRanges.push({ start, end: projection.text.length });
+  }
+}
+
+function projectSlackMrkdwnVisibleText(
+  text: string,
+  dateDisplay: SlackDateDisplay,
+): SlackVisibleProjection {
+  const projection: SlackVisibleProjection = { text: "", excludedRanges: [] };
+  let activeMarker: SlackCodeMarker | undefined;
+  let lineHasVisibleContent = false;
+
+  for (const token of tokenizeSlackMrkdwn(text)) {
+    const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
+    if (transition !== null) {
+      activeMarker = transition;
+      continue;
+    }
+
+    let visible = token;
+    if (isAllowedSlackAngleToken(token)) {
+      visible = activeMarker ? token : projectSlackAngleToken(token, dateDisplay);
+    } else if (token === "&amp;" || token === "&lt;" || token === "&gt;") {
+      visible = decodeSlackMrkdwnEntities(token);
+    } else if (!activeMarker && (token === "*" || token === "_" || token === "~")) {
+      visible = "";
+    } else if (!activeMarker && token === ">" && !lineHasVisibleContent) {
+      visible = "";
+    } else if (token.startsWith("\\") && token.length > 1) {
+      visible = token.slice(1);
+    }
+
+    appendSlackVisibleProjection(projection, visible, activeMarker !== undefined);
+    for (const character of visible) {
+      if (character === "\n") {
+        lineHasVisibleContent = false;
+      } else if (character !== " " && character !== "\t" && character !== "\r") {
+        lineHasVisibleContent = true;
+      }
+    }
+  }
+  return projection;
+}
+
+function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
+  if (text.startsWith(SLACK_ASSISTANT_TRANSCRIPT_PREFIX)) {
+    return text;
+  }
+  const tokenProjection = projectSlackMrkdwnVisibleText(text, "token");
+  const fallbackProjection = projectSlackMrkdwnVisibleText(text, "fallback");
+  if (
+    !slackProjectionHasRoleHeader(tokenProjection) &&
+    !slackProjectionHasRoleHeader(fallbackProjection)
+  ) {
+    return text;
+  }
+  // Target-native mrkdwn can reveal a header only after the Markdown parser ran.
+  return `${SLACK_ASSISTANT_TRANSCRIPT_PREFIX}${text}`;
+}
+
 function hardSliceSlackToken(token: string, limit: number): string[] {
   const chunks: string[] = [];
   let chunk = "";
@@ -182,6 +332,13 @@ function hardSliceSlackToken(token: string, limit: number): string[] {
 
 function buildSlackRenderOptions() {
   return {
+    annotationMarkers: {
+      assistant_transcript_role: {
+        open: "`",
+        close: "`",
+        suppressNestedFormatting: true,
+      },
+    },
     styleMarkers: {
       bold: { open: "*", close: "*" },
       italic: { open: "_", close: "_" },
@@ -196,6 +353,7 @@ function buildSlackRenderOptions() {
 
 function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
   const ir = markdownToIR(markdown ?? "", {
+    assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
     headingStyle: "bold",
@@ -206,7 +364,7 @@ function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions =
 }
 
 export function normalizeSlackOutboundText(markdown: string): string {
-  return markdownToSlackMrkdwn(markdown ?? "");
+  return protectSlackAssistantTranscriptRoleHeaders(markdownToSlackMrkdwn(markdown ?? ""));
 }
 
 /** Chunk already-rendered Slack mrkdwn without splitting entities or code markers. */
@@ -282,6 +440,7 @@ export function markdownToSlackMrkdwnChunks(
   options: SlackMarkdownOptions = {},
 ): string[] {
   const ir = markdownToIR(markdown ?? "", {
+    assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
     headingStyle: "bold",
@@ -292,7 +451,8 @@ export function markdownToSlackMrkdwnChunks(
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
-    renderChunk: (chunk) => renderMarkdownWithMarkers(chunk, renderOptions),
+    renderChunk: (chunk) =>
+      protectSlackAssistantTranscriptRoleHeaders(renderMarkdownWithMarkers(chunk, renderOptions)),
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) => rendered);
 }

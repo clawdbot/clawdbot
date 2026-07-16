@@ -1870,6 +1870,24 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('mime="application/json"');
   });
 
+  it.each(["application/", "application/json garbage", 'application/json" onclick="alert(1)'])(
+    "rejects malformed MIME before file extraction: %j",
+    async (mediaType) => {
+      const filePath = await createTempMediaFile({
+        fileName: "payload.bin",
+        content: Buffer.alloc(256, 0x81),
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:document>",
+        mediaPath: filePath,
+        mediaType,
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:document>" });
+    },
+  );
+
   it("handles path traversal attempts in filenames safely", async () => {
     // Even if a file somehow got a path-like name, it should be handled safely
     const filePath = await createTempMediaFile({
@@ -2006,3 +2024,4 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("vendor-json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

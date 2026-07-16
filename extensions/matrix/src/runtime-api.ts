@@ -71,7 +71,6 @@ export {
   isPrivateOrLoopbackHost,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";

@@ -1,7 +1,7 @@
 // Loads state-directory dotenv entries used by config and runtime startup.
 import fs from "node:fs";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -59,11 +59,10 @@ type ParsedStateDirDotEnv = {
   skippedShellReferenceKeys: string[];
 };
 
-function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
-  const parsed = dotenv.parse(content);
+function parseStateDirDotEnvContent(content: string | Buffer): ParsedStateDirDotEnv {
   const entries: Record<string, string> = {};
   const skippedShellReferenceKeys: string[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     if (!value?.trim()) {
       continue;
     }
@@ -97,7 +96,7 @@ function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
 export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDirDotEnv {
   const dotEnvPath = path.join(stateDir, ".env");
   try {
-    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath, "utf8"));
+    return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath));
   } catch {
     return { entries: {}, skippedShellReferenceKeys: [] };
   }

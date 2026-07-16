@@ -50,7 +50,6 @@
 
 .workboard-toolbar__filters,
 .workboard-toolbar__actions,
-.workboard-auto-refresh,
 .workboard-draft__meta,
 .workboard-template-strip,
 .workboard-card__actions,
@@ -71,17 +70,6 @@
 .workboard-toolbar__filters {
   flex: 1;
   min-width: 260px;
-}
-
-.workboard-auto-refresh {
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.workboard-auto-refresh select.input {
-  width: 82px;
 }
 
 .workboard-refresh-status {
@@ -704,6 +692,16 @@
 
 .workboard-card--archived {
   opacity: 0.72;
+}
+
+.workboard-card.workboard-card--dragging {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent),
+    0 8px 22px color-mix(in srgb, #000 18%, transparent);
+  transform: scale(0.985);
+  cursor: grabbing;
 }
 
 .workboard-card h3 {

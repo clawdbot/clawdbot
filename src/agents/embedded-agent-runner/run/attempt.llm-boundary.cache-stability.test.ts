@@ -29,10 +29,9 @@ import type { Context, Model } from "../../../llm/types.js";
 import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
-  persistUserTurnTranscript,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
-import { summarizeMessages } from "../../cache-trace.js";
+import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
@@ -424,13 +423,8 @@ describe("append-only late media (issue #99495)", () => {
         .map((entry) => entry as { message?: AgentMsg })
         .flatMap((entry) => (entry.message ? [entry.message] : []));
       const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
-      const sentSummary = summarizeMessages(sent);
-      const nextSummary = summarizeMessages(next);
-
-      expect(nextSummary.messageCount).toBe(sentSummary.messageCount + 1);
-      expect(nextSummary.messageFingerprints.slice(0, sentSummary.messageCount)).toEqual(
-        sentSummary.messageFingerprints,
-      );
+      expect(next).toHaveLength(sent.length + 1);
+      expect(next.slice(0, sent.length)).toEqual(sent);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -458,9 +452,9 @@ describe("append-only late media (issue #99495)", () => {
       preparedMessage: resolved,
     });
     prepared.markSentToProvider?.();
-    const summary = summarizeMessages(normalizeMessagesForLlmBoundary([merged], { timezone: TZ }));
+    const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
-    expect(summary.messageCount).toBe(1);
+    expect(normalized).toHaveLength(1);
     expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
   });
 });
@@ -594,5 +588,47 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(JSON.stringify(cur[0]?.content)).toBe(JSON.stringify(hist[0]?.content));
     // ...and the room context is preserved in both (the strip does not touch it).
     expect(JSON.stringify(hist[0]?.content)).toContain("inbound_event_kind: room_event");
+  });
+
+  it("keeps persisted group sender context byte-stable from active to historical replay", () => {
+    const activeGroupTurn = currentUserMsg("The launch is Friday", TS_TURN1);
+    const persistedGroupTurn = {
+      ...storedUserMsg("The launch is Friday", TS_TURN1),
+      __openclaw: {
+        senderId: "alice-id",
+        senderName: "Alice",
+        senderUsername: "alice",
+      },
+    } as unknown as AgentMsg;
+    const asCurrent = normalizeMessagesForLlmBoundary([activeGroupTurn], {
+      timezone: TZ,
+      userTranscriptContexts: [
+        {
+          runtimeMessage: activeGroupTurn,
+          transcriptMessage: persistedGroupTurn,
+        },
+      ],
+    });
+    const asHistorical = normalizeMessagesForLlmBoundary(
+      [persistedGroupTurn, ASSISTANT_MSG, currentUserMsg("Who said that?", TS_TURN2)],
+      { timezone: TZ },
+    );
+
+    const currentContent = (asCurrent[0] as { content?: unknown } | undefined)?.content;
+    const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
+    expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
+    expect(typeof currentContent).toBe("string");
+    expect(currentContent).toContain('"name": "Alice"');
+    expect(
+      normalizeMessagesForLlmBoundary(asCurrent, {
+        timezone: TZ,
+        userTranscriptContexts: [
+          {
+            runtimeMessage: activeGroupTurn,
+            transcriptMessage: persistedGroupTurn,
+          },
+        ],
+      }),
+    ).toEqual(asCurrent);
   });
 });

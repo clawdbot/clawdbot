@@ -17,12 +17,7 @@ vi.mock("../infra/ports-probe.js", () => ({
 
 import { execFileSync } from "node:child_process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
-import {
-  forceFreePort,
-  forceFreePortAndWait,
-  listPortListeners,
-  parseLsofOutput,
-} from "./ports.js";
+import { forceFreePort, forceFreePortAndWait } from "./ports.js";
 
 type PortProcess = ReturnType<typeof forceFreePort>[number];
 
@@ -47,7 +42,11 @@ describe("gateway --force helpers", () => {
 
   it("parses lsof output into pid/command pairs", () => {
     const sample = ["p123", "cnode", "p456", "cpython", ""].join("\n");
-    const parsed = parseLsofOutput(sample);
+    (execFileSync as unknown as Mock).mockReturnValue(sample);
+    process.kill = vi.fn();
+
+    const parsed = forceFreePort(18789);
+
     expect(parsed).toEqual<PortProcess[]>([
       { pid: 123, command: "node" },
       { pid: 456, command: "python" },
@@ -56,26 +55,31 @@ describe("gateway --force helpers", () => {
 
   it("rejects malformed lsof 'p' lines with no PID", () => {
     const sample = ["p", "cnode", "p456", "cpython", ""].join("\n");
-    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+    (execFileSync as unknown as Mock).mockReturnValue(sample);
+    expect(() => forceFreePort(18789)).toThrow(/malformed PID field/);
   });
 
   it("rejects malformed lsof 'p' lines with digit-prefixed garbage", () => {
     const sample = ["p111abc", "cnode", "p456", "cpython", ""].join("\n");
-    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+    (execFileSync as unknown as Mock).mockReturnValue(sample);
+    expect(() => forceFreePort(18789)).toThrow(/malformed PID field/);
   });
 
   it("does not return partial results when a later lsof PID is malformed", () => {
     const sample = ["p456", "cpython", "pabc", "cnode", ""].join("\n");
-    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+    (execFileSync as unknown as Mock).mockReturnValue(sample);
+    expect(() => forceFreePort(18789)).toThrow(/malformed PID field/);
   });
 
   it("handles empty lsof output", () => {
-    expect(parseLsofOutput("")).toEqual<PortProcess[]>([]);
+    (execFileSync as unknown as Mock).mockReturnValue("");
+    expect(forceFreePort(18789)).toEqual<PortProcess[]>([]);
   });
 
   it("rejects non-positive lsof PIDs", () => {
     const sample = ["p0", "cnode", "p456", "cpython", ""].join("\n");
-    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+    (execFileSync as unknown as Mock).mockReturnValue(sample);
+    expect(() => forceFreePort(18789)).toThrow(/malformed PID field/);
   });
 
   it("returns empty list when lsof finds nothing", () => {
@@ -84,7 +88,7 @@ describe("gateway --force helpers", () => {
       err.status = 1; // lsof uses exit 1 for no matches
       throw err;
     });
-    expect(listPortListeners(18789)).toStrictEqual([]);
+    expect(forceFreePort(18789)).toStrictEqual([]);
   });
 
   it("returns without cleanup when lsof and the bind probe find no listener", async () => {
@@ -177,7 +181,7 @@ describe("gateway --force helpers", () => {
       err.code = "ENOENT";
       throw err;
     });
-    expect(() => listPortListeners(18789)).toThrow(/lsof not found/);
+    expect(() => forceFreePort(18789)).toThrow(/lsof not found/);
   });
 
   it("kills each listener and returns metadata", () => {
@@ -397,14 +401,19 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       "  TCP    127.0.0.1:18789      0.0.0.0:0                              124",
     ].join("\r\n");
 
+  const forceFreeWindowsPort = (port: number): PortProcess[] => {
+    process.kill = vi.fn();
+    return forceFreePort(port);
+  };
+
   it("returns empty list when netstat finds no listeners on the port", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
-    expect(listPortListeners(18789)).toStrictEqual([]);
+    expect(forceFreeWindowsPort(18789)).toStrictEqual([]);
   });
 
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    expect(forceFreeWindowsPort(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
     expect(execFileSync).toHaveBeenCalledWith(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
       encoding: "utf-8",
     });
@@ -412,24 +421,24 @@ describe("gateway --force helpers (Windows netstat path)", () => {
 
   it("parses localized Windows listener rows without depending on the state text", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeLocalizedNetstatOutput());
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    expect(forceFreeWindowsPort(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(8080, 42));
-    expect(listPortListeners(80)).toStrictEqual([]);
+    expect(forceFreeWindowsPort(80)).toStrictEqual([]);
   });
 
   it("deduplicates PIDs that appear multiple times", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 42));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }]);
+    expect(forceFreeWindowsPort(18789)).toEqual<PortProcess[]>([{ pid: 42 }]);
   });
 
   it("throws a descriptive error when netstat fails", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       throw new Error("access denied");
     });
-    expect(() => listPortListeners(18789)).toThrow(/netstat failed/);
+    expect(() => forceFreeWindowsPort(18789)).toThrow(/netstat failed/);
   });
 
   it("kills Windows listeners and returns metadata", () => {

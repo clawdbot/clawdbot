@@ -775,6 +775,127 @@ describe("buildMcpToolSchema", () => {
     }
   });
 
+  it("preserves every literal across const and enum union variants", () => {
+    const tool = makeMockTool({
+      name: "codex_threads_literal_union",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: {
+                type: "string",
+                const: "list",
+                enum: ["list", "ignored"],
+                description: "List threads",
+              },
+              thread_id: { type: "string" },
+            },
+            required: ["action"],
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", const: "fork", description: "Fork a thread" },
+              thread_id: { type: "string" },
+            },
+            required: ["action"],
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", const: "rename" },
+              thread_id: { type: "string" },
+            },
+            required: ["action"],
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["archive", "unarchive"] },
+              thread_id: { type: "string" },
+            },
+            required: ["action"],
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "fork", "rename", "archive", "unarchive"],
+          description: "List threads",
+        },
+        thread_id: { type: "string" },
+      },
+      required: ["action"],
+    });
+    expect(logWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the first literal schema when validation constraints differ", () => {
+    const tool = makeMockTool({
+      name: "codex_threads_constrained_literals",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", const: "list", pattern: "^list$" },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", const: "fork", pattern: "^fork$" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+      properties: {
+        action: { type: "string", const: "list", pattern: "^list$" },
+      },
+    });
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "codex_threads_constrained_literals.action", keeping the first variant',
+    ]);
+  });
+
+  it("does not warn for structurally identical property schemas", () => {
+    const tool = makeMockTool({
+      name: "codex_threads_identical_properties",
+      parameters: {
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              thread_id: { type: "string", description: "Thread identifier" },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              thread_id: { type: "string", description: "Thread identifier" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+      properties: {
+        thread_id: { type: "string", description: "Thread identifier" },
+      },
+    });
+    expect(logWarnMock).not.toHaveBeenCalled();
+  });
+
   it("warns once for repeated union schema conflicts across loopback schema rebuilds", () => {
     const tool = makeMockTool({
       name: "mcp_message_send_rebuild",
@@ -3190,3 +3311,4 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(res.status).toBe(403);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

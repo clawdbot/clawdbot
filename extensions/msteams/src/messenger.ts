@@ -275,7 +275,7 @@ export function renderReplyPayloadsToMessages(
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
-export async function buildActivity(
+async function buildActivity(
   msg: MSTeamsRenderedMessage,
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,

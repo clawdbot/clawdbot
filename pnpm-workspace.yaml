@@ -10,6 +10,7 @@ minimumReleaseAge: 2880
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
   - "@openclaw/fs-safe@0.4.1"
+  - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.3"
   - "@openclaw/uirouter@0.1.0"
   - "acpx"

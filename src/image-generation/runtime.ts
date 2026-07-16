@@ -25,7 +25,7 @@ const log = createSubsystemLogger("image-generation");
 // Runtime dependency seam for tests and plugin-host callers. Production uses
 // the plugin registry and provider-env helpers by default.
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
-export type ImageGenerationRuntimeDeps = {
+type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;

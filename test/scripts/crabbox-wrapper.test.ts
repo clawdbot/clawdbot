@@ -20,6 +20,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -149,6 +150,27 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  trap "exit 0" INT TERM HUP',
       "  while :; do sleep 1; done",
       "fi",
+      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}" ]; then',
+      '  expected_bundle="$(mktemp)" || exit 67',
+      '  printf "%s" "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE" > "$expected_bundle"',
+      '  if [ ! -f .openclaw-crabbox-changed-gate.bundle ] || ! cmp -s .openclaw-crabbox-changed-gate.bundle "$expected_bundle"; then',
+      '    rm -f "$expected_bundle"',
+      '    printf "%s\\n" "changed-gate bundle mismatch" >&2',
+      "    exit 67",
+      "  fi",
+      '  rm -f "$expected_bundle"',
+      "fi",
+      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}" ]; then',
+      '  actual_bundle_bytes="$(wc -c < .openclaw-crabbox-changed-gate.bundle 2>/dev/null | tr -d " ")"',
+      '  if [ "$actual_bundle_bytes" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES" ]; then',
+      '    printf "%s\\n" "changed-gate bundle size mismatch" >&2',
+      "    exit 67",
+      "  fi",
+      "fi",
+      'if [ "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" = "1" ] && [ ! -f "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
+      '  printf "%s\\n" "changed-gate bundle was not force-added" >&2',
+      "  exit 67",
+      "fi",
       'printf "%s\\0" "__OPENCLAW_FAKE_CRABBOX_V1__"',
       'printf "%s\\0" "$PWD"',
       'printf "%s\\0" "$#"',
@@ -191,6 +213,17 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "  require('node:fs').mkdirSync('.crabbox/runs/run_fake', { recursive: true });",
     "  require('node:fs').writeFileSync('.crabbox/runs/run_fake/fake-artifacts.tgz', 'fake artifact\\n');",
     "}",
+    "if (Object.hasOwn(process.env, 'OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE')) {",
+    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
+    "  const bundle = require('node:fs').existsSync(bundlePath) ? require('node:fs').readFileSync(bundlePath, 'utf8') : null;",
+    "  if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write('changed-gate bundle mismatch\\n'); process.exit(67); }",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {",
+    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
+    "  const size = require('node:fs').existsSync(bundlePath) ? require('node:fs').statSync(bundlePath).size : -1;",
+    "  if (size !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write('changed-gate bundle size mismatch\\n'); process.exit(67); }",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === '1' && !require('node:fs').existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || '')) { process.stderr.write('changed-gate bundle was not force-added\\n'); process.exit(67); }",
     "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
   ].join("\n");
   writeFileSync(helperPath, `${helperScript}\n`, "utf8");
@@ -336,9 +369,57 @@ function makeFakeGit(
       "#!/bin/sh",
       'if [ "$1" = "worktree" ] && [ "$2" = "add" ]; then',
       '  mkdir -p "$4"',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET:-}" ]; then',
+      '    ln -s "$OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET" "$4/.openclaw-crabbox-changed-gate.bundle"',
+      "  fi",
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "sparse-checkout" ] && [ "$4" = "disable" ]; then',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then',
+      '  if [ "$4" = "HEAD" ]; then',
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_SHA:-def456}"',
+      '  elif [ "$4" = "HEAD^{tree}" ]; then',
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_TREE_SHA:-tree456}"',
+      "  else",
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_BASE_SHA:-abc123}"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "-c" ] && [ "$7" = "commit-tree" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER:-}" ]; then',
+      '    for arg in "$@"; do [ "$arg" != "-p" ] || exit 68; done',
+      '    : > "$OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"',
+      "  fi",
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER"',
+      "  fi",
+      '  printf "%s\\n" "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA:-synthetic789}"',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "update-ref" ] && [ "$4" = "HEAD" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "bundle" ] && [ "$4" = "create" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER:-}" ]; then',
+      '    [ "$#" = "6" ] && [ "$6" = "HEAD" ] || exit 68',
+      '    : > "$OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"',
+      "  fi",
+      '  if [ -n "${OPENCLAW_FAKE_GIT_BUNDLE_BYTES:-}" ]; then',
+      '    head -c "$OPENCLAW_FAKE_GIT_BUNDLE_BYTES" /dev/zero | tr "\\000" x > "$5"',
+      "  else",
+      '    printf "%s" "${OPENCLAW_FAKE_GIT_BUNDLE:-fake-bundle}" > "$5"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "add" ] && [ "$4" = "-f" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"',
+      "  fi",
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "reset" ] && [ "$4" = "--mixed" ]; then',
@@ -371,8 +452,13 @@ function makeFakeGit(
     "const fs = require('node:fs');",
     "const responses = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || '{}')));",
     "const args = process.argv.slice(2);",
-    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); process.exit(0); }",
+    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, require('node:path').join(args[3], '.openclaw-crabbox-changed-gate.bundle')); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'rev-parse') { const value = args[3] === 'HEAD' ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || 'def456' : args[3] === 'HEAD^{tree}' ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || 'tree456' : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || 'abc123'; process.stdout.write(`${value}\\n`); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER) { if (args.includes('-p')) process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER, ''); } if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'update-ref' && args[3] === 'HEAD') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER, ''); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER) { if (args.length !== 6 || args[5] !== 'HEAD') process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER, ''); } const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'add' && args[3] === '-f') { if (process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER, ''); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
     "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
     "const key = args.join('\\u0000');",
@@ -499,7 +585,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Pr
     if (predicate()) {
       return;
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error("timed out waiting for condition");
 }
@@ -595,21 +681,35 @@ const remoteChangedGateEnvPrefix =
   "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
 const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
 const remoteChangedGateFetch =
-  'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
+  'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
 
 function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).toContain("command -v git");
+  expect(remoteCommand).toContain("openclaw_changed_gate_base=abc123");
   expect(remoteCommand).toContain(
-    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-abc123}",
+    "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
+  );
+  expect(remoteCommand).toContain("mktemp /tmp/openclaw-changed-gate.XXXXXX");
+  expect(remoteCommand).toContain('cp "$openclaw_changed_gate_bundle"');
+  expect(remoteCommand).toContain("git init -q || exit 2");
+  expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
+  expect(remoteCommand).toContain(
+    'git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree',
+  );
+  expect(remoteCommand).toContain("git rev-parse refs/heads/openclaw-changed-gate-tree^{tree}");
+  expect(remoteCommand).toContain(
+    'commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main',
   );
   expect(remoteCommand).toContain(
-    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
+    'git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head"',
   );
   expect(remoteCommand).toContain(
-    '[ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]',
+    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2',
   );
-  expect(remoteCommand).toContain("git init -q");
-  expect(remoteCommand).toContain(remoteChangedGateFetch);
+  expect(remoteCommand).toContain("git clean -fd -q || exit 2");
+  expect(remoteCommand).toContain("changed-gate bundle disappeared before import");
+  expect(remoteCommand).not.toContain("git apply");
+  expect(remoteCommand).not.toContain("; &&");
 }
 
 afterAll(() => {
@@ -3252,11 +3352,11 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-    // First probe is SIGKILLed at 150ms; the retry gets the full generous timeout
-    // and reads the (600ms) stderr help, so the wrapper must not hard-fail.
+    // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
+    // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "150" },
-      extraPathEntries: [makeSlowHelpCrabbox(helpText, 600)],
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
@@ -3325,9 +3425,9 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from origin/main");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
     expect(parseFakeCrabboxOutput(result).args.join(" ")).toContain(
-      'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
+      "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
     );
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
@@ -3379,14 +3479,103 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expectChangedGateGitBootstrap(remoteCommand);
-    expect(remoteCommand).toContain("git reset --mixed --quiet refs/remotes/origin/main");
-    expect(remoteCommand).toContain("git add -A");
-    expect(remoteCommand).toContain("git diff --cached --quiet");
-    expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
+    expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
   });
+
+  it("materializes the changed-gate bundle in the temporary sync checkout", () => {
+    const bundle = "synthetic-bundle";
+    const markerDir = makeTempDir(tempDirs, "openclaw-changed-gate-force-add-");
+    const forceAddMarker = path.join(markerDir, "force-added");
+    const syntheticCommitMarker = path.join(markerDir, "synthetic-commit");
+    const syntheticHeadMarker = path.join(markerDir, "synthetic-head");
+    const rootCommitMarker = path.join(markerDir, "root-commit");
+    const selfContainedBundleMarker = path.join(markerDir, "self-contained-bundle");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD: "1",
+          OPENCLAW_FAKE_GIT_BUNDLE: bundle,
+          OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER: forceAddMarker,
+          OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER: syntheticCommitMarker,
+          OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER: syntheticHeadMarker,
+          OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER: rootCommitMarker,
+          OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER: selfContainedBundleMarker,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("changed-gate bundle mismatch");
+    expect(existsSync(forceAddMarker)).toBe(true);
+    expect(existsSync(syntheticCommitMarker)).toBe(true);
+    expect(existsSync(syntheticHeadMarker)).toBe(true);
+    expect(existsSync(rootCommitMarker)).toBe(true);
+    expect(existsSync(selfContainedBundleMarker)).toBe(true);
+  });
+
+  it("transports changed-gate bundles larger than the child-process buffer", () => {
+    const bundleBytes = 2 * 1024 * 1024;
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES: String(bundleBytes),
+          OPENCLAW_FAKE_GIT_BUNDLE_BYTES: String(bundleBytes),
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("changed-gate bundle size mismatch");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a checkout-controlled changed-gate bundle symlink",
+    () => {
+      const fixtureDir = makeTempDir(tempDirs, "openclaw-changed-gate-symlink-");
+      const victimPath = path.join(fixtureDir, "victim");
+      const victimContents = "preserve-me\n";
+      const bundle = "synthetic-bundle";
+      writeFileSync(victimPath, victimContents, "utf8");
+
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+        {
+          env: {
+            OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
+            OPENCLAW_FAKE_GIT_BUNDLE: bundle,
+            OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET: victimPath,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+            [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(victimPath, "utf8")).toBe(victimContents);
+    },
+  );
 
   it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
     const result = runWrapper(
@@ -4281,7 +4470,7 @@ describe("scripts/crabbox-wrapper", () => {
     async () => {
       await runSignalCleanupProof(async (runnerPid) => {
         process.kill(runnerPid, "SIGTERM");
-        await delay(50);
+        await delay(20);
         process.kill(runnerPid, "SIGTERM");
       });
     },

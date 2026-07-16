@@ -763,3 +763,4 @@ export function normalizeModelCatalogProviderRows(params: {
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

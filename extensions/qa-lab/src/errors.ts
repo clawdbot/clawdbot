@@ -35,6 +35,13 @@ export class QaSuiteInfraError extends Error {
   }
 }
 
+export class QaSuiteScenarioSkipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QaSuiteScenarioSkipError";
+  }
+}
+
 export function toQaErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;

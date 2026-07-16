@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { renderMcp } from "./mcp.ts";
 
 type McpViewProps = Parameters<typeof renderMcp>[0];
@@ -24,13 +24,7 @@ function createProps(overrides: Partial<McpViewProps> = {}): McpViewProps {
         },
       },
     },
-    configDirty: true,
-    configSaving: false,
-    configApplying: false,
-    connected: true,
     pluginsHref: "/settings/plugins",
-    onSaveConfig: vi.fn(),
-    onApplyConfig: vi.fn(),
     editor: html`<div class="test-editor"></div>`,
     ...overrides,
   };
@@ -76,24 +70,14 @@ describe("renderMcp", () => {
     );
   });
 
-  it("does not enable publish when config is unchanged", () => {
+  it("keeps the summary free of save/publish actions (autosave owns them)", () => {
     const container = document.createElement("div");
 
-    render(renderMcp(createProps({ configDirty: false })), container);
+    render(renderMcp(createProps()), container);
 
-    expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
-  });
-
-  it("disables save actions while offline or saving", () => {
-    const container = document.createElement("div");
-
-    render(renderMcp(createProps({ connected: false })), container);
-    expect(buttonByText(container, "Save").disabled).toBe(true);
-    expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
-
-    render(renderMcp(createProps({ configSaving: true })), container);
-    expect(buttonByText(container, "Save").disabled).toBe(true);
-    expect(buttonByText(container, "Save & Publish").disabled).toBe(true);
+    expect(buttonByText.bind(null, container, "Save")).toThrow();
+    expect(buttonByText.bind(null, container, "Save & Publish")).toThrow();
+    expect(container.querySelector(".test-editor")).not.toBeNull();
   });
 
   it("quotes MCP server names in command snippets", () => {

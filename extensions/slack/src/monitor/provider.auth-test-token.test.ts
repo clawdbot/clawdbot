@@ -174,3 +174,79 @@ describe("auth.test boot call", () => {
     );
   });
 });
+
+describe("connected identity health", () => {
+  it.each([
+    {
+      name: "bot identity",
+      auth: {
+        user_id: "UBOT",
+        bot_id: "BBOT",
+        team_id: "T1",
+        is_enterprise_install: false,
+      },
+      config: undefined,
+      expected: { healthState: "healthy", lastError: null },
+    },
+    {
+      name: "user-token identity",
+      auth: {
+        user_id: "UUSER",
+        team_id: "T1",
+        is_enterprise_install: false,
+      },
+      config: undefined,
+      expected: {
+        healthState: "degraded",
+        lastError: expect.stringContaining("without bot_id"),
+      },
+    },
+    {
+      name: "enterprise identity",
+      auth: {
+        enterprise_id: "E1",
+        is_enterprise_install: true,
+      },
+      config: {
+        channels: {
+          slack: {
+            enterpriseOrgInstall: true,
+            dmPolicy: "disabled",
+            groupPolicy: "open",
+          },
+        },
+      },
+      expected: { healthState: "healthy", lastError: null },
+    },
+  ])("publishes $name through the provider status callback", async ({ auth, config, expected }) => {
+    if (config) {
+      resetSlackTestState(config);
+    }
+    getSlackClient().auth.test.mockResolvedValueOnce(auth);
+    const setStatus = vi.fn();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
+    await stopSlackMonitor(monitor);
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      ...expected,
+    });
+  });
+
+  it("publishes auth.test failures as degraded", async () => {
+    getSlackClient().auth.test.mockRejectedValueOnce(new Error("request_timeout"));
+    const setStatus = vi.fn();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
+    await stopSlackMonitor(monitor);
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: expect.any(Number),
+      healthState: "degraded",
+      lastError: "request_timeout",
+    });
+  });
+});

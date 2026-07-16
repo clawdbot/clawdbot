@@ -47,14 +47,14 @@ describe("acpx plugin", () => {
     createAcpxRuntimeServiceMock.mockReturnValue(service);
     const openKeyedStore = vi.fn();
 
-    const api = {
+    const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStore } },
+      runtime: { state: { openKeyedStore } } as never,
       registerService: vi.fn(),
       on: vi.fn(),
-    };
+    });
 
-    plugin.register(api as never);
+    plugin.register(api);
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
@@ -75,14 +75,14 @@ describe("acpx plugin", () => {
     const service = { id: "acpx-service", start: vi.fn() };
     createAcpxRuntimeServiceMock.mockReturnValue(service);
 
-    const api = {
+    const api = createTestPluginApi({
       pluginConfig: { timeoutSeconds: 180 },
-      runtime: { state: { openKeyedStore: vi.fn() } },
+      runtime: { state: { openKeyedStore: vi.fn() } } as never,
       registerService: vi.fn(),
       on: vi.fn(),
-    };
+    });
 
-    plugin.register(api as never);
+    plugin.register(api);
 
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
       timeoutMs: 180_000,
@@ -93,14 +93,14 @@ describe("acpx plugin", () => {
     const service = { id: "acpx-service", start: vi.fn() };
     createAcpxRuntimeServiceMock.mockReturnValue(service);
 
-    const api = {
+    const api = createTestPluginApi({
       pluginConfig: {},
-      runtime: {},
+      runtime: {} as never,
       registerService: vi.fn(),
       on: vi.fn(),
-    };
+    });
 
-    expect(() => plugin.register(api as never)).not.toThrow();
+    expect(() => plugin.register(api)).not.toThrow();
     expect(api.registerService).toHaveBeenCalledWith(service);
   });
 

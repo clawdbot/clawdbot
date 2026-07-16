@@ -4,6 +4,7 @@ import {
   type Journal,
   LLMock,
   type ChatCompletionRequest,
+  getTextContent,
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
@@ -32,31 +33,6 @@ const AIMOCK_DEBUG_REQUEST_LIMIT = 1_000;
 const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
 const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
-function stringifyContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => stringifyContent(part))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (content && typeof content === "object") {
-    const record = content as Record<string, unknown>;
-    if (typeof record.text === "string") {
-      return record.text;
-    }
-    if (typeof record.content === "string") {
-      return record.content;
-    }
-    if (typeof record.output === "string") {
-      return record.output;
-    }
-  }
-  return "";
-}
-
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
 }
@@ -66,7 +42,7 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      const text = stringifyContent(message.content);
+      const text = getTextContent(message.content) ?? "";
       if (!isInternalRuntimeContextCarrierText(text)) {
         return text;
       }
@@ -85,7 +61,7 @@ function isInternalRuntimeContextCarrierText(text: string) {
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
   return requestMessages(body)
-    .map((message) => stringifyContent(message.content))
+    .map((message) => getTextContent(message.content) ?? "")
     .filter(Boolean)
     .join("\n");
 }
@@ -95,7 +71,7 @@ function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "tool") {
-      return stringifyContent(message.content);
+      return getTextContent(message.content) ?? "";
     }
   }
   return "";

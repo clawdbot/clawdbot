@@ -107,4 +107,51 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     await visibleRow.waitFor();
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
+
+  it("omits noncanonical numeric filters from sessions.list requests", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "unknown",
+      methodResponses: {
+        "sessions.list": {
+          count: 0,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          path: "",
+          sessions: [],
+          ts: 1,
+        },
+      },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    await gateway.waitForRequest("sessions.list");
+    const activeMinutes = currentPage.getByLabel("Updated within");
+    const limit = currentPage.getByLabel("Limit");
+    const cases = [
+      { activeMinutes: "60minutes", limit: "70junk", expected: { limit: 50 } },
+      { activeMinutes: "12.5", limit: "1e2", expected: { limit: 50 } },
+      { activeMinutes: "9007199254740993", limit: "9007199254740993", expected: { limit: 50 } },
+      { activeMinutes: "+30", limit: "060", expected: { activeMinutes: 30, limit: 60 } },
+      { activeMinutes: " 80 ", limit: " 090 ", expected: { activeMinutes: 80, limit: 90 } },
+    ];
+    for (const testCase of cases) {
+      const requestCount = (await gateway.getRequests("sessions.list")).length;
+      await activeMinutes.fill(testCase.activeMinutes);
+      await limit.fill(testCase.limit);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(requestCount);
+      await expect
+        .poll(async () => {
+          const params = (await gateway.getRequests("sessions.list")).at(-1)?.params as
+            | Record<string, unknown>
+            | undefined;
+          return { activeMinutes: params?.activeMinutes, limit: params?.limit };
+        })
+        .toEqual({ activeMinutes: undefined, ...testCase.expected });
+    }
+  });
 });

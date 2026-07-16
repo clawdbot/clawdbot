@@ -1,17 +1,16 @@
 /**
  * Core plugin SDK contract-test fixture builders and registration helpers.
  */
+import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistryParams } from "../../plugins/registry-types.js";
-import type { OpenClawPluginApi } from "../plugin-entry.js";
+import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
-  createPluginRecord,
-  createPluginRegistry,
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-  type OpenClawConfig,
-  type PluginRecord,
-  type PluginRuntime,
-} from "../testing.js";
+} from "../../test-utils/plugin-registration.js";
+import type { OpenClawPluginApi } from "../plugin-entry.js";
 export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
 import { uniqueSortedStrings } from "./string-utils.js";
 

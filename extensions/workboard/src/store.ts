@@ -1,5 +1,6 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
+import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -39,19 +40,23 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
-import type { WorkboardAttachment, WorkboardCard } from "./types.js";
 
-export type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
+    if (
+      card.status !== "triage" ||
+      card.metadata?.archivedAt ||
+      card.metadata?.workerProtocol?.state === "idle"
+    ) {
+      return false;
+    }
+    const board = await this.boardStore.lookup(cardBoardId(card));
+    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
+  }
+
   async dispatch(
     input: number | WorkboardDispatchOptions = Date.now(),
   ): Promise<WorkboardDispatchResult> {
@@ -288,6 +293,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       boards: stores.boards,
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,
+      dataVersion: stores.dataVersion,
     });
   }
 }

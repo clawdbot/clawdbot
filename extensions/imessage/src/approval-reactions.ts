@@ -989,3 +989,4 @@ export function clearIMessageApprovalReactionTargetsForTest(): void {
   pendingReactionPollTargets.clear();
   resolverRuntimeLoader.clear();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

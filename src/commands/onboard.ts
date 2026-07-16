@@ -31,7 +31,7 @@ const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions
  * Boolean false and undefined mean "not passed" (Commander coerces unset
  * booleans to false); explicit `--no-install-daemon` arrives as `false` via
  * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated Crestodian.
+ * dispatch; the command layer routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",

@@ -1495,3 +1495,4 @@ describe("config io write prepare", () => {
     ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

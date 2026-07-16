@@ -45,11 +45,9 @@ vi.mock("./cli.host.runtime.js", async () => {
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
-    colorize: runtimeCli.colorize,
     defaultRuntime: runtimeCli.defaultRuntime,
     formatErrorMessage: runtimeCli.formatErrorMessage,
     getMemorySearchManager,
-    isRich: runtimeCli.isRich,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
     getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
@@ -2454,3 +2452,4 @@ describe("memory cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

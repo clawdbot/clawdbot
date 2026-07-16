@@ -129,14 +129,39 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
 }));
 
 import {
-  listProviderAttributionPolicies,
-  resolveProviderAttributionIdentity,
-  resolveProviderAttributionPolicy,
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
   describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
+
+type ProviderAttributionTestEnv = Parameters<typeof resolveProviderRequestPolicy>[1];
+
+function resolveProviderAttributionPolicy(provider: string, env: ProviderAttributionTestEnv) {
+  return resolveProviderRequestPolicy({ provider }, env).policy;
+}
+
+function resolveProviderAttributionIdentity(env: ProviderAttributionTestEnv) {
+  const policy = resolveProviderAttributionPolicy("openrouter", env);
+  return policy ? { product: policy.product, version: policy.version } : undefined;
+}
+
+function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
+  return [
+    "openrouter",
+    "nvidia",
+    "google",
+    "openai",
+    "xai",
+    "anthropic",
+    "groq",
+    "mistral",
+    "together",
+  ].flatMap((provider) => {
+    const policy = resolveProviderAttributionPolicy(provider, env);
+    return policy ? [policy] : [];
+  });
+}
 
 describe("provider attribution", () => {
   it("resolves the canonical OpenClaw product and runtime version", () => {
@@ -297,7 +322,7 @@ describe("provider attribution", () => {
   });
 
   it("lists the current attribution support matrix", () => {
-    // Matrix order is user-facing evidence for docs/review summaries.
+    // Resolve every supported provider through the production request-policy path.
     expect(
       listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
         policy.provider,
@@ -1462,3 +1487,4 @@ describe("provider attribution", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

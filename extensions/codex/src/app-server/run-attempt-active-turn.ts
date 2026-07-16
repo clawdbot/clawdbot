@@ -87,6 +87,7 @@ export async function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
@@ -175,6 +176,7 @@ export async function activateCodexAttemptTurn(
     cwd: effectiveCwd,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
   });
   const abortListener = () => {
     if (state.timedOut) {

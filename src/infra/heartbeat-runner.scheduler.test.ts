@@ -526,14 +526,47 @@ describe("startHeartbeatRunner", () => {
         reason: "cron:job-123",
         agentId: "ops",
         sessionKey: "agent:ops:discord:channel:alerts",
+        parentRunId: "run-targeted-parent",
         coalesceMs: 0,
       },
       expectedCall: {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+        parentRunId: "run-targeted-parent",
       },
     });
+
+    runner.stop();
+  });
+
+  it("preserves parent run lineage across untargeted wake fan-out", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([
+        { id: "main", heartbeat: { every: "30m" } },
+        { id: "ops", heartbeat: { every: "15m" } },
+      ]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat(
+      wake("delegate-return", {
+        parentRunId: "run-untargeted-parent",
+        coalesceMs: 0,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    for (let callIndex = 0; callIndex < 2; callIndex++) {
+      expectRunCallFields(runSpy, callIndex, {
+        reason: "delegate-return",
+        parentRunId: "run-untargeted-parent",
+      });
+    }
 
     runner.stop();
   });
@@ -777,6 +810,64 @@ describe("startHeartbeatRunner", () => {
     }
 
     expect(runSpy).toHaveBeenCalledTimes(3);
+    runner.stop();
+  });
+
+  it("runs a targeted notification wake for an agent without a heartbeat schedule", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expectRunCallFields(runSpy, 0, {
+      agentId: "ops",
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:ops:main",
+      heartbeat: { target: "last" },
+    });
+    runner.stop();
+  });
+
+  it("rejects targeted notification wakes for unconfigured agents", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:bogus:main",
+      heartbeat: { target: "last" },
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
     runner.stop();
   });
 

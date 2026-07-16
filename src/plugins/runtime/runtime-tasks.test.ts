@@ -1,9 +1,7 @@
 // Runtime task tests cover plugin task runtime registration, invocation, and cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,

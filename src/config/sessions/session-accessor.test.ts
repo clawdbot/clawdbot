@@ -3068,3 +3068,4 @@ describe("session accessor seam", () => {
     expect(target.sessionFile).toContain("sqlite:main:custom-topic-session:");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

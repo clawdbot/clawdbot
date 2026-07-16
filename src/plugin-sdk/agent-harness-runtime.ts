@@ -282,6 +282,26 @@ export async function loadCodexBundleMcpThreadConfig(
   const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+/**
+ * Materialize requester-scoped MCP tools for a harness run (dynamic tools, not
+ * harness-native MCP config). Lazy-loaded so harness plugins avoid the MCP manager graph.
+ */
+export async function materializeRequesterScopedMcpToolsForHarnessRun(
+  params: Parameters<
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+  >[0],
+): Promise<
+  Awaited<
+    ReturnType<
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    >
+  >
+> {
+  const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
+    await import("../agents/agent-bundle-mcp-harness.js");
+  return materialize(params);
+}
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
 export {

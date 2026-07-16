@@ -49,7 +49,7 @@ export type EffectiveContextPruningSettings = {
   };
 };
 
-export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
+const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
   mode: "cache-ttl",
   ttlMs: 5 * 60 * 1000,
   keepLastAssistants: 3,

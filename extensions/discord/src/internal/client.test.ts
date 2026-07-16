@@ -1,15 +1,15 @@
 // Discord tests cover client plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Client, ComponentRegistry, type AnyListener } from "./client.js";
+import { Client } from "./client.js";
 import { BaseCommand } from "./commands.js";
+import { ComponentRegistry } from "./component-registry.js";
 import { Button, StringSelectMenu, parseCustomId } from "./components.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+
+type AnyListener = Parameters<Client["registerListener"]>[0];
 
 function createDeferred<T = void>(): {
   promise: Promise<T>;
@@ -389,12 +389,15 @@ describe("Client.deployCommands", () => {
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
-    const hashStorePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-")),
-      "hashes.json",
-    );
+    const hashes = new Map<string, string>();
+    const commandDeployHashStore = {
+      lookup: async (key: string) => hashes.get(key),
+      register: async (key: string, value: string) => {
+        hashes.set(key, value);
+      },
+    };
     const first = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
+      commandDeployHashStore,
     });
     const firstGet = vi.fn(async () => []);
     const firstPost = vi.fn(async () => undefined);
@@ -403,7 +406,7 @@ describe("Client.deployCommands", () => {
     await first.deployCommands({ mode: "reconcile" });
 
     const second = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
+      commandDeployHashStore,
     });
     const secondGet = vi.fn(async () => []);
     const secondPost = vi.fn(async () => undefined);

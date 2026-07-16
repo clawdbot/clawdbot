@@ -917,3 +917,4 @@ export function resolvePluginSetupAutoEnableReasons(params: {
 
   return reasons;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

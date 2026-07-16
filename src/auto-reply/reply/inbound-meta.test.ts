@@ -1,6 +1,7 @@
 // Tests inbound metadata normalization before prompt injection.
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -11,21 +12,33 @@ import {
   refreshActiveGoalContext,
 } from "./inbound-meta.js";
 
+const EMPTY_CFG = {} as OpenClawConfig;
+
+const { formattingHintCalls } = vi.hoisted(() => ({
+  formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
+}));
+
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginById: (channelId: string) =>
     channelId === "slack"
       ? {
           agentPrompt: {
-            inboundFormattingHints: () => ({
-              text_markup: "slack_mrkdwn",
-              rules: [
-                "Use Slack mrkdwn, not standard Markdown.",
-                "Bold uses *single asterisks*.",
-                "Links use <url|label>.",
-                "Code blocks use triple backticks without a language identifier.",
-                "Do not use markdown headings or pipe tables.",
-              ],
-            }),
+            inboundFormattingHints: (params: {
+              cfg: OpenClawConfig;
+              accountId?: string | null;
+            }) => {
+              formattingHintCalls.push(params);
+              return {
+                text_markup: "slack_mrkdwn",
+                rules: [
+                  "Use Slack mrkdwn, not standard Markdown.",
+                  "Bold uses *single asterisks*.",
+                  "Links use <url|label>.",
+                  "Code blocks use triple backticks without a language identifier.",
+                  "Do not use markdown headings or pipe tables.",
+                ],
+              };
+            },
           },
         }
       : undefined,
@@ -112,17 +125,20 @@ function createGoalSessionEntry(
 
 describe("buildInboundMetaSystemPrompt", () => {
   it("includes stable routing fields and omits chat ids", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "123",
-      MessageSidFull: "123",
-      ReplyToId: "99",
-      OriginatingTo: "telegram:5494292670",
-      AccountId: " work ",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "123",
+        MessageSidFull: "123",
+        ReplyToId: "99",
+        OriginatingTo: "telegram:5494292670",
+        AccountId: " work ",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["schema"]).toBe("openclaw.inbound_meta.v2");
@@ -132,39 +148,48 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("keeps task-scoped chat ids out of the system prompt for cache stability", () => {
-    const first = buildInboundMetaSystemPrompt({
-      OriginatingTo: "paperclip:issue:c585d0cc",
-      OriginatingChannel: "paperclip",
-      Provider: "paperclip",
-      Surface: "paperclip",
-      ChatType: "direct",
-      AccountId: "default",
-    } as TemplateContext);
-    const second = buildInboundMetaSystemPrompt({
-      OriginatingTo: "paperclip:issue:ca527062",
-      OriginatingChannel: "paperclip",
-      Provider: "paperclip",
-      Surface: "paperclip",
-      ChatType: "direct",
-      AccountId: "default",
-    } as TemplateContext);
+    const first = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "paperclip:issue:c585d0cc",
+        OriginatingChannel: "paperclip",
+        Provider: "paperclip",
+        Surface: "paperclip",
+        ChatType: "direct",
+        AccountId: "default",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
+    const second = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "paperclip:issue:ca527062",
+        OriginatingChannel: "paperclip",
+        Provider: "paperclip",
+        Surface: "paperclip",
+        ChatType: "direct",
+        AccountId: "default",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     expect(parseInboundMetaPayload(first)["chat_id"]).toBeUndefined();
     expect(first).toBe(second);
   });
 
   it("does not include per-turn message identifiers (cache stability)", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "123",
-      MessageSidFull: "123",
-      ReplyToId: "99",
-      SenderId: "289522496",
-      OriginatingTo: "telegram:5494292670",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "123",
+        MessageSidFull: "123",
+        ReplyToId: "99",
+        SenderId: "289522496",
+        OriginatingTo: "telegram:5494292670",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["message_id"]).toBeUndefined();
@@ -174,33 +199,39 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("does not include per-turn flags in system metadata", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      ReplyToBody: "quoted",
-      ForwardedFrom: "sender",
-      ThreadStarterBody: "starter",
-      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
-      WasMentioned: true,
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        ReplyToBody: "quoted",
+        ForwardedFrom: "sender",
+        ThreadStarterBody: "starter",
+        InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
+        WasMentioned: true,
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
   });
 
   it("keeps explicit bot mentions out of the system metadata", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-      BotUsername: "SirPinchALotBot",
-      ExplicitlyMentionedBot: true,
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: true,
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["flags"]).toBeUndefined();
@@ -209,21 +240,25 @@ describe("buildInboundMetaSystemPrompt", () => {
   });
 
   it("omits sender_id when blank", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      MessageSid: "458",
-      SenderId: "   ",
-      OriginatingTo: "telegram:-1001249586642",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "group",
-    } as TemplateContext);
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        MessageSid: "458",
+        SenderId: "   ",
+        OriginatingTo: "telegram:-1001249586642",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
 
-  it("includes Slack mrkdwn response format hints for Slack chats", () => {
+  it("includes Slack mrkdwn response format hints for Slack chats and threads cfg", () => {
+    formattingHintCalls.length = 0;
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
       createTestRegistry([
@@ -258,13 +293,20 @@ describe("buildInboundMetaSystemPrompt", () => {
       ]),
     );
 
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "channel:C123",
-      OriginatingChannel: "slack",
-      Provider: "slack",
-      Surface: "slack",
-      ChatType: "channel",
-    } as TemplateContext);
+    const cfg = {
+      channels: { slack: { botToken: "test-token-placeholder" } },
+    } as OpenClawConfig;
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "channel:C123",
+        OriginatingChannel: "slack",
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "channel",
+        AccountId: " work ",
+      } as TemplateContext,
+      cfg,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toEqual({
@@ -277,16 +319,48 @@ describe("buildInboundMetaSystemPrompt", () => {
         "Do not use markdown headings or pipe tables.",
       ],
     });
+    expect(formattingHintCalls).toEqual([{ cfg, accountId: "work" }]);
   });
 
-  it("omits response format hints for non-Slack chats", () => {
-    const prompt = buildInboundMetaSystemPrompt({
-      OriginatingTo: "telegram:123",
-      OriginatingChannel: "telegram",
-      Provider: "telegram",
-      Surface: "telegram",
-      ChatType: "direct",
-    } as TemplateContext);
+  it("resolves response format hints from formattingHintsCtx for system-event turns", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingChannel: "heartbeat",
+        Provider: "heartbeat",
+        Surface: "heartbeat",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+      {
+        formattingHintsCtx: {
+          OriginatingChannel: "slack",
+          Provider: "slack",
+          Surface: "slack",
+          ChatType: "channel",
+          AccountId: "work",
+        } as TemplateContext,
+      },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    const responseFormat = payload["response_format"] as { text_markup?: string } | undefined;
+    expect(responseFormat?.text_markup).toBe("slack_mrkdwn");
+    // Trusted metadata still identifies the system event; only authoring hints
+    // follow the delivery channel.
+    expect(payload["channel"]).toBe("heartbeat");
+  });
+
+  it("omits response format hints when the channel plugin has no formatting hook", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:123",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      EMPTY_CFG,
+    );
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["response_format"]).toBeUndefined();
@@ -1499,3 +1573,4 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("Chat history since last reply (untrusted, for context):\n```json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

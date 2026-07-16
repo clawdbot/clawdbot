@@ -56,6 +56,22 @@ export function buildReleaseCandidateState(
   npmPreflightRunId: unknown;
 };
 export function reconcileReleaseCandidateState(saved: unknown, expected: unknown): unknown;
+export function buildTelegramArtifactInputs(params: {
+  artifact: {
+    digest?: string;
+    id?: number;
+    name?: string;
+    workflowRunId?: number;
+  };
+  manifest: {
+    packageVersion?: string;
+    tarballName?: string;
+    tarballSha256?: string;
+  };
+  runAttempt: number;
+  runId: string;
+  sourceSha: string;
+}): Record<string, string | number>;
 /**
  * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
  */
@@ -162,9 +178,23 @@ export function requireRunIdFromDispatchOutput(output: unknown, workflowFile: un
 export function buildPublishCommand(options: unknown): string;
 export function validatePreflightManifest(manifest: unknown, params: unknown): void;
 export function validateFullManifest(manifest: unknown, params: unknown): void;
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor,
+}: {
+  workflowRun: { headSha: string };
+  workflowRef: string;
+  isTrustedWorkflowAncestor?: ((ancestor: string, target: string) => boolean) | undefined;
+}): {
+  status: string;
+  headSha: string;
+  workflowRef: string;
+};
 export function candidateParallelsArgs(
   tarballPath: unknown,
   dependencyTarballPaths?: unknown[],
+  toolingRoot?: string,
 ): unknown[];
 export function candidateParallelsShellCommand(
   tarballPath: unknown,

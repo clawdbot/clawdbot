@@ -315,6 +315,12 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: () => undefined,
+  resolveProviderDefaultThinkingLevel: () => undefined,
+  resolveProviderThinkingProfile: () => undefined,
+  resolveProviderXHighThinking: () => undefined,
+}));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real
 // bundled provider registration.
@@ -544,7 +550,7 @@ describe("session_status tool", () => {
     });
     getSessionStateVersionMock.mockReturnValue(12);
     listSessionStateEventsSinceMock.mockReturnValue({
-      events: [{ sequence: 12, kind: "goal_changed", summary: "goal created" }],
+      events: [{ sequence: 12, kind: "upstream_missing", summary: "upstream missing via codex" }],
       truncated: false,
       earliestAvailableSequence: 12,
       historyGap: true,
@@ -559,6 +565,7 @@ describe("session_status tool", () => {
     expect(details.stateVersion).toBe(12);
     expect(details.stateChanges).toMatchObject({ historyGap: true });
     expect(text).toContain("Session state changes:");
+    expect(text).toContain('"kind": "upstream_missing"');
   });
 
   it("enables transcript usage fallback for session_status", async () => {
@@ -2483,3 +2490,4 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1457,3 +1457,4 @@ describe("redactTranscriptMessage", () => {
     expect(() => redactTranscriptMessage(msg, cfg("tools"))).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

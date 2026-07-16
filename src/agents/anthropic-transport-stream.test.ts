@@ -4064,3 +4064,4 @@ describe("anthropic transport stream", () => {
     expect(eventTypes).not.toContain("start");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

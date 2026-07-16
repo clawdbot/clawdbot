@@ -813,3 +813,4 @@ export async function handleDirectiveOnly(
   }
   return { text: ack || "OK." };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

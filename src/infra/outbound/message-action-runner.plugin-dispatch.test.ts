@@ -356,13 +356,17 @@ describe("runMessageAction plugin dispatch", () => {
       },
       actions: {
         describeMessageTool: () => ({
-          actions: ["pin", "list-pins", "member-info", "channel-info"],
+          actions: ["pin", "list-pins", "member-info", "channel-info", "edit"],
         }),
+        messageActionTargetAliases: {
+          edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
+        },
         supportsAction: ({ action }) =>
           action === "pin" ||
           action === "list-pins" ||
           action === "member-info" ||
-          action === "channel-info",
+          action === "channel-info" ||
+          action === "edit",
         handleAction,
       },
     };
@@ -446,6 +450,53 @@ describe("runMessageAction plugin dispatch", () => {
         "list pins call params",
       );
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
+    });
+
+    it("infers the trusted current target for resource-referenced edits", async () => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "actionhub",
+            source: "test",
+            origin: "bundled",
+            plugin: actionHubPlugin,
+          },
+        ]),
+      );
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "edit",
+        params: {
+          channel: "actionhub",
+          messageId: "om_123",
+          text: "updated",
+        },
+        toolContext: {
+          currentChannelProvider: "actionhub",
+          currentChannelId: "actionhub:current",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        readRecordField(readLastPluginCall(handleAction), "params", "edit call params"),
+        {
+          messageId: "om_123",
+          target: "actionhub:current",
+          text: "updated",
+          to: "actionhub:current",
+        },
+        "edit call params",
+      );
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
@@ -3007,3 +3058,4 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

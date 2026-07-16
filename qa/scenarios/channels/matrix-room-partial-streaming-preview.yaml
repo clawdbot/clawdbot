@@ -1,0 +1,24 @@
+title: Matrix partial streaming preview
+scenario:
+  id: matrix-room-partial-streaming-preview
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming
+  docsRefs:
+    - docs/concepts/streaming.md
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        streaming: partial
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runPartialStreamingPreviewScenario
+  args:
+    - expr: "scenarioContext"

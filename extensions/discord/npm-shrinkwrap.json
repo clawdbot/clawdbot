@@ -8,6 +8,7 @@
       "name": "@openclaw/discord",
       "version": "2026.7.2",
       "dependencies": {
+        "@discord/embedded-app-sdk": "2.5.0",
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.49",
         "libopus-wasm": "0.2.0",
@@ -23,6 +24,22 @@
         "openclaw": {
           "optional": true
         }
+      }
+    },
+    "node_modules/@discord/embedded-app-sdk": {
+      "version": "2.5.0",
+      "resolved": "https://registry.npmjs.org/@discord/embedded-app-sdk/-/embedded-app-sdk-2.5.0.tgz",
+      "integrity": "sha512-FNoe5PbSkoKEbqPubaBmq6tlEMOftMjR3gu55YrdrrKmBfKKM4i9P/Z+Zxl0RZdJcKviBwVcTyYMMPM/aGex/w==",
+      "license": "MIT",
+      "dependencies": {
+        "@types/lodash.transform": "^4.6.6",
+        "@types/uuid": "^10.0.0",
+        "big-integer": "^1.6.48",
+        "decimal.js-light": "^2.5.0",
+        "eventemitter3": "^5.0.0",
+        "lodash.transform": "^4.6.0",
+        "uuid": "^11.0.0",
+        "zod": "^3.9.8"
       }
     },
     "node_modules/@discordjs/voice": {
@@ -325,6 +342,21 @@
         "tslib": "^2.4.0"
       }
     },
+    "node_modules/@types/lodash": {
+      "version": "4.17.24",
+      "resolved": "https://registry.npmjs.org/@types/lodash/-/lodash-4.17.24.tgz",
+      "integrity": "sha512-gIW7lQLZbue7lRSWEFql49QJJWThrTFFeIMJdp3eH4tKoxm1OvEPg02rm4wCCSHS0cL3/Fizimb35b7k8atwsQ==",
+      "license": "MIT"
+    },
+    "node_modules/@types/lodash.transform": {
+      "version": "4.6.9",
+      "resolved": "https://registry.npmjs.org/@types/lodash.transform/-/lodash.transform-4.6.9.tgz",
+      "integrity": "sha512-1iIn+l7Vrj8hsr2iZLtxRkcV9AtjTafIyxKO9DX2EEcdOgz3Op5dhwKQFhMJgdfIRbYHBUF+SU97Y6P+zyLXNg==",
+      "license": "MIT",
+      "dependencies": {
+        "@types/lodash": "*"
+      }
+    },
     "node_modules/@types/node": {
       "version": "26.1.0",
       "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
@@ -333,6 +365,12 @@
       "dependencies": {
         "undici-types": "~8.3.0"
       }
+    },
+    "node_modules/@types/uuid": {
+      "version": "10.0.0",
+      "resolved": "https://registry.npmjs.org/@types/uuid/-/uuid-10.0.0.tgz",
+      "integrity": "sha512-7gqG38EyHgyP1S+7+xomFtL+ZNHcKv6DwNaCZmJmo1vgMugyF3TCnXVg4t1uk89mLNwnLtnY3TpOpCOyp1/xHQ==",
+      "license": "MIT"
     },
     "node_modules/@types/ws": {
       "version": "8.18.1",
@@ -343,6 +381,21 @@
         "@types/node": "*"
       }
     },
+    "node_modules/big-integer": {
+      "version": "1.6.52",
+      "resolved": "https://registry.npmjs.org/big-integer/-/big-integer-1.6.52.tgz",
+      "integrity": "sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==",
+      "license": "Unlicense",
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/decimal.js-light": {
+      "version": "2.5.1",
+      "resolved": "https://registry.npmjs.org/decimal.js-light/-/decimal.js-light-2.5.1.tgz",
+      "integrity": "sha512-qIMFpTMZmny+MMIitAB6D7iVPEorVw6YQRWkvarTkT4tBeSLLiHzcwj6q0MmYSFCiVpiqPJTJEYIrpcPzVEIvg==",
+      "license": "MIT"
+    },
     "node_modules/discord-api-types": {
       "version": "0.38.49",
       "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.49.tgz",
@@ -352,6 +405,12 @@
         "scripts/actions/documentation"
       ]
     },
+    "node_modules/eventemitter3": {
+      "version": "5.0.4",
+      "resolved": "https://registry.npmjs.org/eventemitter3/-/eventemitter3-5.0.4.tgz",
+      "integrity": "sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==",
+      "license": "MIT"
+    },
     "node_modules/libopus-wasm": {
       "version": "0.2.0",
       "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.2.0.tgz",
@@ -360,6 +419,12 @@
       "engines": {
         "node": ">=20"
       }
+    },
+    "node_modules/lodash.transform": {
+      "version": "4.6.0",
+      "resolved": "https://registry.npmjs.org/lodash.transform/-/lodash.transform-4.6.0.tgz",
+      "integrity": "sha512-LO37ZnhmBVx0GvOU/caQuipEh4GN82TcWv3yHlebGDgOxbxiwwzW5Pcx2AcvpIv2WmvmSMoC492yQFNhy/l/UQ==",
+      "license": "MIT"
     },
     "node_modules/p-map": {
       "version": "7.0.5",
@@ -426,6 +491,19 @@
       "integrity": "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==",
       "license": "MIT"
     },
+    "node_modules/uuid": {
+      "version": "14.0.0",
+      "resolved": "https://registry.npmjs.org/uuid/-/uuid-14.0.0.tgz",
+      "integrity": "sha512-Qo+uWgilfSmAhXCMav1uYFynlQO7fMFiMVZsQqZRMIXp0O7rR7qjkj+cPvBHLgBqi960QCoo/PH2/6ZtVqKvrg==",
+      "funding": [
+        "https://github.com/sponsors/broofa",
+        "https://github.com/sponsors/ctavan"
+      ],
+      "license": "MIT",
+      "bin": {
+        "uuid": "dist-node/bin/uuid"
+      }
+    },
     "node_modules/ws": {
       "version": "8.21.0",
       "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
@@ -445,6 +523,15 @@
         "utf-8-validate": {
           "optional": true
         }
+      }
+    },
+    "node_modules/zod": {
+      "version": "3.25.76",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz",
+      "integrity": "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
       }
     }
   }

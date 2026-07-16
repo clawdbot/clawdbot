@@ -28,6 +28,7 @@ import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
 export type BackgroundTasksProps = {
   agentId: string;
+  statusRowId: string;
   collapsed: boolean;
   /** Pane too narrow for a side rail: presentation moves to a bottom strip
    * (mirrors the workspace rail's narrow mode). */
@@ -59,6 +60,9 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
 };
 
@@ -79,12 +83,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -97,6 +104,7 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
   };
   host.backgroundTasksState = next;
@@ -291,6 +299,7 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
     narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
@@ -316,67 +325,6 @@ export function createBackgroundTasksProps(
  * list has loaded for the pane's agent. */
 function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
-}
-
-type BackgroundTasksStatus = { count: number; startedMs: number | null };
-
-/** Summary for the bottom-of-thread status row: active-task count plus the
- * oldest active start time so the row ticks one elapsed label, not one per
- * task. `startedMs` is null when no active task has a usable timestamp. */
-function activeBackgroundTasksStatus(
-  props: BackgroundTasksProps | undefined,
-): BackgroundTasksStatus | null {
-  const active = props?.tasks?.filter(isActiveTask) ?? [];
-  if (active.length === 0) {
-    return null;
-  }
-  let startedMs: number | null = null;
-  for (const task of active) {
-    const started = taskTimestampMs(task.startedAt ?? task.createdAt);
-    if (started > 0 && (startedMs === null || started < startedMs)) {
-      startedMs = started;
-    }
-  }
-  return { count: active.length, startedMs };
-}
-
-/** Post-turn status row in the chat thread: once the agent turn settles while
- * background tasks keep running, the running work stays visible next to a
- * free composer. The link opens the tasks rail (noop when already open). */
-export function renderBackgroundTasksStatusRow(
-  backgroundTasks: BackgroundTasksProps | undefined,
-): TemplateResult | typeof nothing {
-  const status = activeBackgroundTasksStatus(backgroundTasks);
-  // Disconnected snapshots are stale: task events cannot arrive, so a ticking
-  // "running" claim would be a lie. The rail owns the disconnected state.
-  if (!backgroundTasks?.connected || !status) {
-    return nothing;
-  }
-  const label =
-    status.count === 1
-      ? t("chat.backgroundTasks.statusRunningOne")
-      : t("chat.backgroundTasks.statusRunningMany", { count: String(status.count) });
-  const openRail = () => {
-    if (backgroundTasks.collapsed) {
-      backgroundTasks.onToggleCollapsed();
-    }
-  };
-  return html`
-    <div class="chat-tasks-status" role="status">
-      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-      ${status.startedMs !== null
-        ? html`
-            <!-- Ticking time stays out of the polite live region: without
-                 aria-hidden, screen readers would re-announce every second. -->
-            <span class="chat-tasks-status__time" aria-hidden="true">
-              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-            </span>
-            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-          `
-        : nothing}
-      <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
-    </div>
-  `;
 }
 
 export function renderBackgroundTasksToggle(
@@ -408,7 +356,8 @@ export function renderBackgroundTasksToggle(
 
 // Status tone drives the meta line's colored word and the running pulse dot;
 // pill chips read too heavy at rail width, so tone is typographic only.
-const STATUS_TONES = {
+// Shared with the status row's hover preview (chat-background-tasks-status.ts).
+export const STATUS_TONES = {
   queued: "warn",
   running: "warn",
   completed: "ok",

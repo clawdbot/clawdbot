@@ -1,9 +1,7 @@
 // Verifies OpenAI-compatible endpoint defaults for streaming usage and reasoning payloads.
 import { describe, expect, it } from "vitest";
-import {
-  detectOpenAICompletionsCompat,
-  resolveOpenAICompletionsCompatDefaults,
-} from "./openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { resolveOpenAICompletionsCompatDefaults } from "./openai-completions-compat.test-support.js";
 
 describe("resolveOpenAICompletionsCompatDefaults", () => {
   it("keeps streaming usage enabled for provider-declared compatible endpoints", () => {

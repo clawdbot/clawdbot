@@ -279,6 +279,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -376,6 +377,7 @@ describe("skills gateway handlers (clawhub)", () => {
       version: "1.2.3",
       force: false,
       acknowledgeClawHubRisk: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -407,6 +409,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -464,6 +467,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -512,6 +516,7 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
       acknowledgeClawHubRisk: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);

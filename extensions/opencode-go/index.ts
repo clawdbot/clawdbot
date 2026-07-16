@@ -1,7 +1,7 @@
 // Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -135,7 +135,7 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });

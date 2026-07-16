@@ -15,8 +15,10 @@ const POST_FORCE_KILL_WAIT_MS = 250;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */
+// prompt:snapshots:check is intentionally absent: it regenerates snapshots by
+// running real embedded-agent turns (~2min) and owns a dedicated CI lane
+// (check-prompt-snapshots) so no boundary shard carries that wall clock.
 export const BOUNDARY_CHECKS = [
-  ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
   ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
@@ -449,8 +451,6 @@ function formatDuration(ms) {
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
   return prettyMilliseconds(Math.max(0, roundedMs), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 1,
     unitCount: 1,
   });
 }

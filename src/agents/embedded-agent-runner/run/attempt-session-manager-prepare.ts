@@ -2,6 +2,7 @@
  * Prepares the durable session manager before embedded-agent session creation.
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import {
   invalidateSessionFileRepairCache,
   repairSessionFileIfNeeded,
@@ -20,6 +21,7 @@ import {
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
+import { createUserTranscriptContextRegistry } from "./attempt.user-transcript-context-registry.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
@@ -82,6 +84,10 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   const preparedUserTurnMessage = attempt.skipPreparedUserTurnMessage
     ? undefined
     : await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  let latestPersistedUserMessage: AgentMessage | undefined;
+  let latestRuntimeUserMessage: AgentMessage | undefined;
+  let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
+  const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
   const sessionManager = guardSessionManager(SessionManager.open(attempt.sessionFile), {
     agentId: input.sessionAgentId,
     sessionKey: attempt.sessionKey,
@@ -100,8 +106,24 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     },
     withCompactionPersistence: (append, validateAppend) =>
       input.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
-    onUserMessagePersisted: (message) => {
+    onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
+      latestPersistedUserMessage = undefined;
+      latestUserTurnTranscriptRecorder =
+        recorder ??
+        (preparedMessage === preparedUserTurnMessage
+          ? attempt.userTurnTranscriptRecorder
+          : undefined);
+    },
+    onUserMessagePersisted: (message, runtimeMessage) => {
+      latestPersistedUserMessage = message;
+      latestRuntimeUserMessage = runtimeMessage;
+      if (runtimeMessage) {
+        userTranscriptContextRegistry.record(runtimeMessage, message);
+      }
       attempt.onUserMessagePersisted?.(message);
+    },
+    onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+      latestRuntimeUserMessage = runtimeMessage;
     },
     onUserMessageBlocked: () => {
       attempt.userTurnTranscriptRecorder?.markBlocked();
@@ -164,8 +186,27 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       cwd: input.effectiveCwd,
     });
   });
+  // Bootstrap may repair or migrate transcript rows. Only user writes after
+  // preparation can be the active prompt source at the provider boundary.
+  latestPersistedUserMessage = undefined;
+  latestRuntimeUserMessage = undefined;
+  userTranscriptContextRegistry.clear();
 
   return {
+    userMessageBoundary: {
+      getUserTranscriptContexts: () => {
+        const transcriptMessage =
+          latestPersistedUserMessage ?? latestUserTurnTranscriptRecorder?.getPersistedMessage?.();
+        // A suppressed retry reuses the canonical persisted row, while the SDK
+        // may rebuild its runtime object. Match against that row as the stable
+        // fallback after preferring the exact suppressed runtime correlation.
+        const runtimeMessage =
+          latestRuntimeUserMessage ??
+          (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
+        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
+      },
+      preparedUserTurnMessage,
+    },
     isOpenAIResponsesApi,
     preparedUserTurnMessage,
     sessionManager,

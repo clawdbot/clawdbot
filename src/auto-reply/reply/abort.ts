@@ -63,7 +63,7 @@ const abortDeps = {
   ...defaultAbortDeps,
 };
 
-export const testing = {
+const abortTestApi = {
   setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
@@ -96,6 +96,10 @@ export const testing = {
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.abortTestApi")] = abortTestApi;
+}
 
 export function abortSessionRunTargetWithOutcome(params: { key?: string; sessionId?: string }): {
   active: boolean;

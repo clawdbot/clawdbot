@@ -156,7 +156,7 @@ type FleetActionResult = {
   dataPurged?: boolean;
 };
 
-export type FleetServiceOptions = {
+type FleetServiceOptions = {
   env?: NodeJS.ProcessEnv;
   containers?: FleetContainerRuntime;
   fetch?: typeof fetch;
@@ -796,3 +796,4 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -106,6 +106,7 @@ export type ProfileUsageStats = {
   blockedReason?: AuthProfileBlockedReason;
   blockedSource?: AuthProfileBlockedSource;
   blockedModel?: string;
+  blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;

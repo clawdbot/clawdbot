@@ -175,7 +175,7 @@ export async function sendMessageZalo(
   );
 }
 
-export async function sendPhotoZalo(
+async function sendPhotoZalo(
   chatId: string,
   photoUrl: string,
   options: ZaloSendOptions = {},

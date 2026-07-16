@@ -3039,3 +3039,4 @@ describe("chrome MCP page parsing", () => {
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

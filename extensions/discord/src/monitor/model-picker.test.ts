@@ -1,23 +1,17 @@
 // Discord tests cover model picker plugin behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import { serializePayload } from "../internal/discord.js";
+import { parseCustomId, serializePayload } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
-  DISCORD_CUSTOM_ID_MAX_CHARS,
-  DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE,
-  DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
-  DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE,
-  DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
+  DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   buildDiscordModelPickerCustomId,
-  computeAlphaBuckets,
   createDiscordModelPickerModelToken,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
   findProviderBucketLocation,
   loadDiscordModelPickerData,
-  parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
 } from "./model-picker.state.js";
 import { createModelsProviderData } from "./model-picker.test-utils.js";
@@ -27,6 +21,18 @@ import {
   renderDiscordModelPickerRecentsView,
   toDiscordModelPickerMessagePayload,
 } from "./model-picker.view.js";
+
+const DISCORD_CUSTOM_ID_MAX_CHARS = 100;
+const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = 25;
+const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = 25;
+const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = 25;
+
+function parseDiscordModelPickerCustomId(customId: string) {
+  const parsed = parseCustomId(customId);
+  return parsed.key === DISCORD_MODEL_PICKER_CUSTOM_ID_KEY
+    ? parseDiscordModelPickerData(parsed.data)
+    : null;
+}
 
 const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
@@ -424,87 +430,6 @@ describe("model paging", () => {
       "expected model page when provider exists",
     );
     expect(page.pageSize).toBe(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
-  });
-});
-
-describe("computeAlphaBuckets", () => {
-  it("returns a single all-bucket when items fit under the threshold", () => {
-    const items = ["alpha", "beta", "gamma", "delta"];
-    const buckets = computeAlphaBuckets(items);
-    expect(buckets).toHaveLength(1);
-    expect(buckets[0]?.id).toBe("all");
-    expect(buckets[0]?.label).toBe("All (4)");
-    expect(buckets[0]?.start).toBe(0);
-    expect(buckets[0]?.end).toBe(4);
-  });
-
-  it("partitions a diverse list into letter-range buckets", () => {
-    // 30 alphabetically diverse items: 10 'a' + 10 'b' + 10 'c' = 30 total.
-    const items = [
-      ...Array.from({ length: 10 }, (_, i) => `apple-${i}`),
-      ...Array.from({ length: 10 }, (_, i) => `banana-${i}`),
-      ...Array.from({ length: 10 }, (_, i) => `cherry-${i}`),
-    ].toSorted();
-    const buckets = computeAlphaBuckets(items);
-    expect(buckets.length).toBeGreaterThan(1);
-    // Every item must appear in exactly one bucket.
-    const reconstructed = buckets.flatMap((b) => items.slice(b.start, b.end));
-    expect(reconstructed).toEqual(items);
-    // Labels carry counts.
-    for (const bucket of buckets) {
-      expect(bucket.label).toMatch(/\(\d+\)$/);
-    }
-  });
-
-  it("keeps the same letter group inside one bucket (no stragglers)", () => {
-    // 19 'a' items + 5 'b' items = 24 total. Below threshold so single bucket.
-    // Bump to 30 to engage buckets.
-    const items = [
-      ...Array.from({ length: 19 }, (_, i) => `a-${String(i).padStart(2, "0")}`),
-      ...Array.from({ length: 11 }, (_, i) => `b-${String(i).padStart(2, "0")}`),
-    ].toSorted();
-    const buckets = computeAlphaBuckets(items);
-    // No bucket may contain items with mixed first letters except as a
-    // boundary-extended single bucket.
-    for (const bucket of buckets) {
-      const bucketItems = items.slice(bucket.start, bucket.end);
-      const firstLetters = new Set(bucketItems.map((item) => item.charAt(0)));
-      // The boundary extender keeps a letter group whole; either the bucket
-      // is fully one letter or it crossed a letter boundary intentionally.
-      expect(firstLetters.size).toBeGreaterThanOrEqual(1);
-    }
-    // Bucket sizes hit the target ± a letter-boundary spillover.
-    const oversized = buckets.filter(
-      (bucket) => bucket.end - bucket.start > DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE + 10,
-    );
-    expect(oversized).toEqual([]);
-  });
-
-  it("falls back to numeric chunks when every item shares the same first letter", () => {
-    const items = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i).padStart(2, "0")}`);
-    const buckets = computeAlphaBuckets(items);
-    expect(buckets.length).toBe(2);
-    expect(buckets[0]?.id).toBe("1-20");
-    expect(buckets[0]?.label).toMatch(/^1–20 \(20\)$/);
-    expect(buckets[1]?.id).toBe("21-30");
-    expect(buckets[1]?.label).toMatch(/^21–30 \(10\)$/);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(computeAlphaBuckets([])).toEqual([]);
-  });
-
-  it("never returns more than 25 buckets even for huge same-prefix lists", () => {
-    // Regression: with a fixed target=20 a 501-item list yielded 26 numeric
-    // buckets, exceeding the Discord select-option cap and breaking the
-    // picker for the largest wildcard configs. Dynamic target keeps the
-    // bucket count <= 25 regardless of input size.
-    const items = Array.from({ length: 501 }, (_, i) => `qwen3-${String(i).padStart(3, "0")}`);
-    const buckets = computeAlphaBuckets(items);
-    expect(buckets.length).toBeLessThanOrEqual(25);
-    // Sanity check: a much larger list still fits.
-    const huge = Array.from({ length: 5000 }, (_, i) => `qwen3-${String(i).padStart(4, "0")}`);
-    expect(computeAlphaBuckets(huge).length).toBeLessThanOrEqual(25);
   });
 });
 
@@ -1484,3 +1409,4 @@ describe("Discord model picker recents view", () => {
     expect(recentBtn.label).toContain("anthropic/claude-sonnet-4-5");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -78,6 +78,7 @@ function createAgentAccount(
     allowFrom: ["*"],
     reconnectMs: 1_500,
     agentActivity: false,
+    commandMenu: true,
     config: {
       allowFrom: ["*"],
     },
@@ -145,6 +146,7 @@ describe("handleClickClackInbound", () => {
       allowFrom: ["*"],
       reconnectMs: 1_500,
       agentActivity: false,
+      commandMenu: true,
       config: {},
     } satisfies ResolvedClickClackAccount;
 

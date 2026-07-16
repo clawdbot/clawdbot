@@ -11,14 +11,13 @@ import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
+  testing,
 } from "./agent-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
-  testing,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
@@ -371,7 +370,7 @@ function makeRuntime(
 
 afterEach(async () => {
   cleanupTempDirs(tempDirs);
-  await cleanupBundleMcpHarness();
+  await testing.resetSessionMcpRuntimeManager();
 });
 
 describe("session MCP runtime", () => {
@@ -2245,6 +2244,1634 @@ process.on("SIGINT", shutdown);`,
   });
 });
 
+describe("requester-scoped MCP connection resolution", () => {
+  afterEach(async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest();
+    resolverTesting.setMcpConnectionResolverTimeoutMsForTest();
+    resolverTesting.setMcpConnectionRevalidateMsForTest();
+    vi.useRealTimers();
+  });
+
+  it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+          headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+        }),
+      },
+    ]);
+
+    const created: Array<{
+      sessionId: string;
+      requesterScope?: SessionMcpRuntime["requesterScope"];
+      include?: string[];
+      exclude?: string[];
+    }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        sessionId: params.sessionId,
+        requesterScope: params.requesterScope,
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-shared",
+      sessionKey: "agent:test:session-shared",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+      agentAccountId: "bot-1",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-shared",
+      sessionKey: "agent:test:session-shared",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+      agentAccountId: "bot-1",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-shared",
+      sessionKey: "agent:test:session-shared",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-b",
+      messageChannel: "telegram",
+      agentAccountId: "bot-1",
+    });
+
+    // Same requester reuses both static and requester-scoped entries; other sender adds one.
+    expect(created).toEqual([
+      {
+        sessionId: "session-shared",
+        requesterScope: undefined,
+        include: undefined,
+        exclude: ["user-mail"],
+      },
+      {
+        sessionId: "session-shared",
+        requesterScope: {
+          requesterSenderId: "sender-a",
+          agentAccountId: "bot-1",
+          messageChannel: "telegram",
+        },
+        include: ["user-mail"],
+        exclude: undefined,
+      },
+      {
+        sessionId: "session-shared",
+        requesterScope: {
+          requesterSenderId: "sender-b",
+          agentAccountId: "bot-1",
+          messageChannel: "telegram",
+        },
+        include: ["user-mail"],
+        exclude: undefined,
+      },
+    ]);
+    expect(manager.listSessionIds()).toEqual(["session-shared"]);
+    expect(manager.listRuntimeKeys()).toHaveLength(3);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps the tools.effective config summary in fingerprint parity with the peeked runtime", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    const { resolveSessionMcpConfigSummary } = await import("./agent-bundle-mcp-tools.js");
+    const manager = testing.createSessionMcpRuntimeManager();
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http", url: "https://static.example.test" },
+        },
+      },
+    };
+
+    // Static-only config: the summary must match the bare runtime byte-for-byte.
+    const staticRuntime = await manager.getOrCreate({
+      sessionId: "session-parity-static",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+    });
+    expect(
+      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
+    ).toBe(staticRuntime.configFingerprint);
+
+    // With a resolver registered, tools.effective peeks the bare static-partition
+    // runtime; summary parity keeps it from reporting stale-config forever.
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      { serverName: "user-mail", resolve: async () => null },
+    ]);
+    await manager.getOrCreate({
+      sessionId: "session-parity-scoped",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+    });
+    const peeked = manager.peekSession({ sessionId: "session-parity-scoped" });
+    expect(peeked?.configFingerprint).toBe(
+      resolveSessionMcpConfigSummary({ workspaceDir: "/workspace", cfg: cfg as never }).fingerprint,
+    );
+
+    await manager.disposeAll();
+  });
+
+  it("skips connection resolve on requester cache hits", async () => {
+    let resolveCalls = 0;
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        pluginId: "mail-plugin",
+        serverName: "user-mail",
+        resolve: async (ctx) => {
+          resolveCalls += 1;
+          return {
+            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+          };
+        },
+      },
+    ]);
+
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      requesterScope: params.requesterScope,
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-resolve-once",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-resolve-once",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    expect(resolveCalls).toBe(1);
+    await manager.disposeAll();
+  });
+
+  it("omits a throwing resolver without rejecting static MCP materialization", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        pluginId: "broken-plugin",
+        serverName: "user-mail",
+        resolve: async () => {
+          throw new Error("provider unavailable");
+        },
+      },
+    ]);
+
+    const created: Array<{ include?: string[]; exclude?: string[] }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await expect(
+      manager.getOrCreate({
+        sessionId: "session-throw",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        requesterSenderId: "sender-a",
+        messageChannel: "telegram",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(created).toEqual([{ include: undefined, exclude: ["user-mail"] }]);
+    expect(manager.listRuntimeKeys()).toHaveLength(1);
+
+    await manager.disposeAll();
+  });
+
+  it("omits requester-scoped servers without requester context or when resolve returns null", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) =>
+          ctx.requesterSenderId === "allowed" ? { url: "https://mcp.example.test/allowed" } : null,
+      },
+    ]);
+
+    const created: Array<{ include?: string[]; exclude?: string[] }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-fail-closed",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+    });
+    await manager.getOrCreate({
+      sessionId: "session-fail-closed",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "denied",
+      messageChannel: "slack",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-fail-closed",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "allowed",
+      messageChannel: "slack",
+    });
+
+    // Static entry is reused; only the allowed requester materializes a scoped runtime.
+    expect(created).toEqual([
+      { include: undefined, exclude: ["user-mail"] },
+      { include: ["user-mail"], exclude: undefined },
+    ]);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps config fingerprints stable across alternating requesters", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+          headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+        }),
+      },
+    ]);
+
+    const fingerprints: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      fingerprints.push(params.configFingerprint ?? "missing");
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": {
+            transport: "streamable-http",
+            toolFilter: { include: ["send*"] },
+          },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-fingerprint",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-fingerprint",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "bob",
+      messageChannel: "telegram",
+    });
+    await manager.getOrCreate({
+      sessionId: "session-fingerprint",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+    });
+
+    // Empty static reconcile + two requester creates; requester fingerprints match.
+    expect(fingerprints).toHaveLength(3);
+    expect(fingerprints[0]).toMatch(SHA256_HEX_PATTERN);
+    expect(fingerprints[1]).toBe(fingerprints[2]);
+    expect(fingerprints[1]).toMatch(SHA256_HEX_PATTERN);
+    expect(fingerprints[0]).not.toBe(fingerprints[1]);
+    expect(manager.listRuntimeKeys()).toHaveLength(3);
+
+    await manager.disposeAll();
+  });
+
+  it("idle-sweeps requester-scoped runtimes and disposes them with the session", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    let nowMs = 1_000_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      const runtime = makeRuntime([{ toolName: "probe", description: "probe" }]);
+      return {
+        ...runtime,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        lastUsedAt: nowMs,
+        dispose: async () => {
+          disposed.push(params.requesterScope?.requesterSenderId ?? "static");
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    const cfg = {
+      mcp: {
+        sessionIdleTtlMs: 1_000,
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-idle",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(manager.listRuntimeKeys()).toHaveLength(2);
+
+    nowMs += 2_000;
+    const swept = await manager.sweepIdleRuntimes();
+    expect(swept).toBe(2);
+    expect(disposed.toSorted()).toEqual(["sender-a", "static"]);
+    expect(manager.listSessionIds()).toEqual([]);
+  });
+
+  it("omits a stalled resolver without hanging static materialization", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionResolverTimeoutMsForTest(25);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        pluginId: "hang-plugin",
+        serverName: "user-mail",
+        resolve: () => new Promise(() => {}),
+      },
+    ]);
+
+    const created: Array<{ include?: string[]; exclude?: string[] }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    vi.useFakeTimers();
+    const pending = manager.getOrCreate({
+      sessionId: "session-timeout",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(pending).resolves.toBeDefined();
+    expect(created).toEqual([{ include: undefined, exclude: ["user-mail"] }]);
+    await manager.disposeAll();
+  });
+
+  it("upgrades a partially resolved requester runtime when more servers resolve", async () => {
+    let resolveRound = 0;
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "mail-a",
+        resolve: async () => ({ url: "https://mcp.example.test/a" }),
+      },
+      {
+        serverName: "mail-b",
+        resolve: async () => {
+          resolveRound += 1;
+          return resolveRound >= 2 ? { url: "https://mcp.example.test/b" } : null;
+        },
+      },
+    ]);
+
+    const createdIncludes: string[][] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      if (params.includeServerNames) {
+        createdIncludes.push([...params.includeServerNames].toSorted());
+      }
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "mail-a": { transport: "streamable-http" },
+          "mail-b": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-partial",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(createdIncludes).toEqual([["mail-a"]]);
+
+    await manager.getOrCreate({
+      sessionId: "session-partial",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(createdIncludes).toEqual([["mail-a"], ["mail-a", "mail-b"]]);
+    // Static part was created once and not rebuilt when the requester side upgraded.
+    expect(manager.listRuntimeKeys().filter((key) => !key.startsWith("{"))).toEqual([
+      "session-partial",
+    ]);
+
+    await manager.disposeAll();
+  });
+
+  it("routes callTool on a fresh combined runtime without a prior getCatalog", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    const createRuntime: RuntimeFactory = (params) => {
+      const serverName = params.includeServerNames?.has("user-mail")
+        ? "user-mail"
+        : params.excludeServerNames?.has("user-mail")
+          ? "shared"
+          : "shared";
+      const toolName = serverName === "user-mail" ? "send" : "shared_tool";
+      const base = makeRuntime([{ toolName, description: toolName }], serverName);
+      return {
+        ...base,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: 0,
+          servers: {
+            [serverName]: {
+              serverName,
+              launchSummary: serverName,
+              toolCount: 1,
+            },
+          },
+          tools: [
+            {
+              serverName,
+              safeServerName: serverName,
+              toolName,
+              description: toolName,
+              inputSchema: { type: "object", properties: {} },
+              fallbackDescription: toolName,
+            },
+          ],
+        }),
+        callTool: async (calledServer, calledTool) => ({
+          content: [{ type: "text", text: `${calledServer}:${calledTool}` }],
+          isError: false,
+        }),
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-combined-call",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    await expect(runtime.callTool("user-mail", "send", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "user-mail:send" }],
+    });
+    await expect(runtime.callTool("shared", "shared_tool", {})).resolves.toMatchObject({
+      content: [{ type: "text", text: "shared:shared_tool" }],
+    });
+
+    await manager.disposeAll();
+  });
+
+  it("evicts LRU idle requester runtimes past the per-session cap", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({ url: `https://mcp.example.test/${ctx.requesterSenderId}` }),
+      },
+    ]);
+
+    const disposedSenders: string[] = [];
+    let syntheticLastUsedAt = 100_000;
+    const createRuntime: RuntimeFactory = (params) => {
+      const sender = params.requesterScope?.requesterSenderId;
+      const base = makeRuntime([{ toolName: "probe", description: "probe" }]);
+      // Distinct ascending lastUsedAt per runtime so LRU ordering is deterministic.
+      const lastUsedAt = (syntheticLastUsedAt += 1_000);
+      return {
+        ...base,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {},
+        dispose: async () => {
+          if (sender) {
+            disposedSenders.push(sender);
+          }
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      // Pin the sweep clock near the synthetic lastUsedAt values so the idle
+      // TTL sweep never fires; this test exercises only the cap eviction.
+      now: () => 150_000,
+      maxIdleRequesterRuntimesPerSession: 2,
+    });
+    const cfg = {
+      mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+    };
+
+    for (const sender of ["sender-a", "sender-b", "sender-c"]) {
+      await manager.getOrCreate({
+        sessionId: "session-cap",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        requesterSenderId: sender,
+        messageChannel: "telegram",
+      });
+    }
+
+    // sender-a is the least recently used zero-lease scoped runtime.
+    expect(disposedSenders).toEqual(["sender-a"]);
+    // Bare static reconcile key + two newest requester keys survive.
+    expect(manager.listRuntimeKeys()).toHaveLength(3);
+
+    await manager.disposeAll();
+  });
+
+  it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    const makeCatalog = (serverName: string, toolName: string) => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
+      },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName,
+          description: toolName,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: toolName,
+        },
+      ],
+    });
+    const swapCatalogByServer = new Map<string, (toolName: string) => void>();
+    const createRuntime: RuntimeFactory = (params) => {
+      const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
+      let current = makeCatalog(serverName, serverName === "user-mail" ? "send" : "shared_tool");
+      swapCatalogByServer.set(serverName, (toolName) => {
+        current = makeCatalog(serverName, toolName);
+      });
+      return {
+        ...makeRuntime([{ toolName: "unused", description: "unused" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        peekCatalog: () => current,
+        getCatalog: async () => current,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-combined-refresh",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    const before = await runtime.getCatalog();
+    expect(before.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send", "shared_tool"]);
+
+    // A part replacing its catalog (tools/list_changed refresh) must invalidate
+    // the merged facade cache instead of serving the stale combined catalog.
+    swapCatalogByServer.get("user-mail")?.("send_v2");
+    const after = await runtime.getCatalog();
+    expect(after.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send_v2", "shared_tool"]);
+    expect(
+      runtime
+        .peekCatalog()
+        ?.tools.map((tool) => tool.toolName)
+        .toSorted(),
+    ).toEqual(["send_v2", "shared_tool"]);
+
+    await manager.disposeAll();
+  });
+
+  it("disposes cached scoped runtime when revalidation resolves empty", async () => {
+    let allow = true;
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1_000);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () =>
+          allow
+            ? {
+                url: "https://mcp.example.test/user",
+                headers: { Authorization: "Bearer test-auth-token" },
+              }
+            : null,
+      },
+    ]);
+
+    let nowMs = 50_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      const label = params.requesterScope ? "scoped" : "static";
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        dispose: async () => {
+          disposed.push(label);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-revoke",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(manager.listRuntimeKeys().some((key) => key.startsWith("{"))).toBe(true);
+
+    allow = false;
+    nowMs += 2_000;
+    const after = await manager.getOrCreate({
+      sessionId: "session-revoke",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    expect(disposed).toContain("scoped");
+    expect(manager.listRuntimeKeys().some((key) => key.startsWith("{"))).toBe(false);
+    expect(manager.listRuntimeKeys()).toEqual(["session-revoke"]);
+    // Static part still works.
+    const catalog = await after.getCatalog();
+    expect(Object.keys(catalog.servers)).toEqual(["bundleProbe"]);
+
+    await manager.disposeAll();
+  });
+
+  it("serializes disposeSession with in-flight requester resolve", async () => {
+    let releaseResolve: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => {
+          await gate;
+          return { url: "https://mcp.example.test/user" };
+        },
+      },
+    ]);
+
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      requesterScope: params.requesterScope,
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const pending = manager.getOrCreate({
+      sessionId: "session-race-dispose",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            shared: { command: "true" },
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    // Static may install; dispose is chained after the exclusive requester section.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    const disposePromise = manager.disposeSession("session-race-dispose");
+    releaseResolve?.();
+    await pending;
+    await disposePromise;
+    expect(manager.listRuntimeKeys()).toEqual([]);
+    expect(testing.getBookkeepingSizes(manager).requesterWorkChains).toBe(0);
+
+    await manager.disposeAll();
+  });
+
+  it("serializes concurrent requester installs so the last resolution wins", async () => {
+    let call = 0;
+    let clock = 0;
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { hashMcpResolvedConnections, testing: resolverTesting } =
+      await import("./mcp-connection-resolver.js");
+    // Tiny revalidate window; monotonic clock advances every now() so the next
+    // exclusive section is past the window and re-resolves.
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => {
+          call += 1;
+          const token = call === 1 ? "test-auth-token" : "secret-token";
+          if (call === 1) {
+            await firstGate;
+          }
+          return {
+            url: "https://mcp.example.test/user",
+            headers: { Authorization: `Bearer ${token}` },
+          };
+        },
+      },
+    ]);
+
+    const builtHashes: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      if (params.connectionOverrides) {
+        builtHashes.push(hashMcpResolvedConnections(params.connectionOverrides));
+      }
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => {
+        clock += 10;
+        return clock;
+      },
+      enableIdleSweepTimer: false,
+    });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    const first = manager.getOrCreate({
+      sessionId: "session-serialize",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    const second = manager.getOrCreate({
+      sessionId: "session-serialize",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    // Second is queued behind the first exclusive section. First installs the first credential, then
+    // second re-resolves the rotated credential and replaces — last serialized resolution wins.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    expect(call).toBe(2);
+    expect(builtHashes).toHaveLength(2);
+    expect(builtHashes[0]).not.toBe(builtHashes[1]);
+    expect(manager.listRuntimeKeys().filter((key) => key.startsWith("{"))).toHaveLength(1);
+
+    await manager.disposeAll();
+    expect(Object.values(testing.getBookkeepingSizes(manager)).every((n) => n === 0)).toBe(true);
+  });
+
+  it("clears internal bookkeeping maps after disposeAll", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime: (params) => ({
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      }),
+    });
+    await manager.getOrCreate({
+      sessionId: "session-bookkeeping",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { "user-mail": { transport: "streamable-http" } } },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(testing.getBookkeepingSizes(manager).runtimes).toBeGreaterThan(0);
+    await manager.disposeAll();
+    expect(testing.getBookkeepingSizes(manager)).toEqual({
+      runtimes: 0,
+      connectionMeta: 0,
+      createInFlight: 0,
+      requesterWorkChains: 0,
+      sessionKeys: 0,
+      idleTtl: 0,
+      deferredRetirement: 0,
+      advertisedScopedCatalogs: 0,
+    });
+  });
+
+  it("revalidates credentials past the revalidation window without rebuilding on unchanged hash", async () => {
+    let resolveCalls = 0;
+    let token = "test-auth-token";
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1_000);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => {
+          resolveCalls += 1;
+          return {
+            url: "https://mcp.example.test/user",
+            headers: { Authorization: `Bearer ${token}` },
+          };
+        },
+      },
+    ]);
+
+    let nowMs = 10_000;
+    let createCount = 0;
+    const createRuntime: RuntimeFactory = (params) => {
+      createCount += 1;
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await manager.getOrCreate({
+      sessionId: "session-revalidate",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(resolveCalls).toBe(1);
+    expect(createCount).toBe(2); // empty static + requester
+
+    // Within revalidation window: no resolver call.
+    nowMs += 500;
+    await manager.getOrCreate({
+      sessionId: "session-revalidate",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(resolveCalls).toBe(1);
+    expect(createCount).toBe(2);
+
+    // Past window, unchanged credentials: resolve once, no rebuild.
+    nowMs += 1_000;
+    await manager.getOrCreate({
+      sessionId: "session-revalidate",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(resolveCalls).toBe(2);
+    expect(createCount).toBe(2);
+
+    // Past window with rotated header: rebuild requester runtime.
+    token = "secret-token";
+    nowMs += 1_000;
+    await manager.getOrCreate({
+      sessionId: "session-revalidate",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(resolveCalls).toBe(3);
+    expect(createCount).toBe(3);
+
+    await manager.disposeAll();
+  });
+
+  it("uses full-set safe names independent of which servers resolve", async () => {
+    const { assignSafeServerNames } = await import("./agent-bundle-mcp-names.js");
+    const fullSet = assignSafeServerNames(["mail.prod", "mail-prod", "shared"]);
+    // Declaration order: mail.prod declared first claims the unsuffixed base,
+    // matching legacy collision ownership for existing configs.
+    expect(fullSet.get("mail.prod")).toBe("mail-prod");
+    expect(fullSet.get("mail-prod")).toBe("mail-prod-2");
+    expect(fullSet.get("shared")).toBe("shared");
+
+    let resolveBoth = true;
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "mail-prod",
+        resolve: async () => (resolveBoth ? { url: "https://mcp.example.test/mail-prod" } : null),
+      },
+    ]);
+
+    const passedMaps: Array<ReadonlyMap<string, string> | undefined> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      passedMaps.push(params.safeServerNamesByServer);
+      const isScoped = Boolean(params.requesterScope);
+      const serverName = isScoped ? "mail-prod" : "mail.prod";
+      const safe = params.safeServerNamesByServer?.get(serverName) ?? serverName;
+      return {
+        ...makeRuntime([{ toolName: "send", description: "send" }], serverName),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: 0,
+          servers: {
+            [serverName]: {
+              serverName,
+              safeServerName: safe,
+              launchSummary: serverName,
+              toolCount: 1,
+            },
+          },
+          tools: [
+            {
+              serverName,
+              safeServerName: safe,
+              toolName: "send",
+              inputSchema: { type: "object", properties: {} },
+              fallbackDescription: "send",
+            },
+          ],
+        }),
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "mail.prod": { command: "true" },
+          "mail-prod": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-safe-names",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    resolveBoth = false;
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-safe-names",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-b",
+      messageChannel: "telegram",
+    });
+
+    // Every create for this session received the same full-set assignments;
+    // declaration order gives "mail.prod" (declared first) the unsuffixed base.
+    expect(passedMaps.length).toBeGreaterThan(1);
+    for (const map of passedMaps) {
+      expect(map?.get("mail.prod")).toBe("mail-prod");
+      expect(map?.get("mail-prod")).toBe("mail-prod-2");
+    }
+
+    const catalogA = await runtimeA.getCatalog();
+    const catalogB = await runtimeB.getCatalog();
+    expect(catalogA.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
+    // B may only have static part if scoped omitted; shared names still match full-set map.
+    if (catalogA.servers["mail-prod"]) {
+      expect(catalogA.servers["mail-prod"]?.safeServerName).toBe("mail-prod-2");
+    }
+    expect(catalogB.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
+
+    // Merge preserves precomputed names (no further re-suffix).
+    const merged = testing.mergeMcpToolCatalogs([catalogA, catalogB]);
+    expect(merged.servers["mail.prod"]?.safeServerName).toBe("mail-prod");
+
+    await manager.disposeAll();
+  });
+
+  it("reconciles a stale bare runtime when every server becomes requester-scoped", async () => {
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      requesterScope: params.requesterScope,
+      dispose: async () => {
+        disposed.push(
+          params.includeServerNames
+            ? `include:${[...params.includeServerNames].toSorted().join(",") || "empty"}`
+            : "full",
+        );
+      },
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    // No resolver yet: bare session runtime owns the only server.
+    await manager.getOrCreate({
+      sessionId: "session-stale-bare",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "user-mail": { command: "true" },
+          },
+        },
+      } as never,
+    });
+    expect(manager.listRuntimeKeys()).toEqual(["session-stale-bare"]);
+    expect(manager.peekSession({ sessionId: "session-stale-bare" })).toBeDefined();
+
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    await manager.getOrCreate({
+      sessionId: "session-stale-bare",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+
+    // Stale bare runtime is disposed and replaced by the empty static entry.
+    expect(disposed).toContain("full");
+    expect(manager.peekSession({ sessionId: "session-stale-bare" })).toBeDefined();
+    const bare = manager.peekSession({ sessionId: "session-stale-bare" });
+    expect(bare?.requesterScope).toBeUndefined();
+    expect(manager.listRuntimeKeys().some((key) => key.startsWith("{"))).toBe(true);
+
+    await manager.disposeAll();
+  });
+
+  it("does not put resolved URLs into catalog descriptions for overridden servers", async () => {
+    const secretUrl = "https://secret-host.example/signed/path?token=placeholder";
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-no-url-desc",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "user-mail": {
+              transport: "streamable-http",
+              url: "https://placeholder.example",
+            },
+          },
+        },
+      },
+      connectionOverrides: new Map([
+        ["user-mail", { url: secretUrl, headers: { Authorization: "Bearer test-auth-token" } }],
+      ]),
+    });
+    try {
+      const catalog = await runtime.getCatalog();
+      const summary =
+        catalog.servers["user-mail"]?.launchSummary ??
+        catalog.diagnostics?.[0]?.launchSummary ??
+        "";
+      expect(summary).toBe("user-mail: requester-scoped connection");
+      expect(summary).not.toContain("secret-host.example");
+      expect(summary).not.toContain("signed/path");
+      expect(summary).not.toContain("?token=");
+      for (const tool of catalog.tools) {
+        expect(tool.fallbackDescription ?? "").not.toContain("secret-host.example");
+        expect(tool.fallbackDescription ?? "").not.toContain("signed/path");
+      }
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("preserves active leases on requester-scoped runtimes when retiring a session", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/user" }),
+      },
+    ]);
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-lease-scoped",
+      sessionKey: "agent:test:session-lease-scoped",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          sessionIdleTtlMs: 0,
+          servers: {
+            "user-mail": { transport: "streamable-http" },
+          },
+        },
+      },
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    // Returned runtime is the scoped part; bare empty runtime has zero leases.
+    expect(runtime.requesterScope?.requesterSenderId).toBe("sender-a");
+    const release = runtime.acquireLease?.();
+    expect(runtime.activeLeases).toBeGreaterThan(0);
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-lease-scoped",
+        reason: "test-preserve-scoped-lease",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain("session-lease-scoped");
+    expect(testing.getCachedRuntimeKeys().some((key) => key.startsWith("{"))).toBe(true);
+
+    release?.();
+    await completeDeferredSessionMcpRuntimeRetirement(runtime);
+    expect(testing.getCachedSessionIds()).not.toContain("session-lease-scoped");
+  });
+
+  it("rebuilds partitions when full-set safe-name assignments change", async () => {
+    const fingerprints: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      fingerprints.push(params.configFingerprint ?? "");
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "mail-prod",
+        resolve: async () => ({ url: "https://mcp.example.test/mail" }),
+      },
+    ]);
+
+    await manager.getOrCreate({
+      sessionId: "session-fp-safe",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "mail.prod": { command: "true" },
+            "mail-prod": { transport: "streamable-http" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    const afterFirst = fingerprints.length;
+    expect(afterFirst).toBeGreaterThanOrEqual(2);
+
+    await manager.getOrCreate({
+      sessionId: "session-fp-safe",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            "mail.prod": { command: "true" },
+            "mail-prod": { transport: "streamable-http" },
+            // New colliding base changes full-set safe-name assignments.
+            mail_prod: { command: "true" },
+          },
+        },
+      } as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(fingerprints.length).toBeGreaterThan(afterFirst);
+    // New partition fingerprints differ from the first create batch.
+    expect(
+      fingerprints.slice(afterFirst).some((fp) => !fingerprints.slice(0, afterFirst).includes(fp)),
+    ).toBe(true);
+
+    await manager.disposeAll();
+  });
+
+  it("getOrCreateRequesterScoped returns undefined without senderId and never creates static transports", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => ({
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+        }),
+      },
+    ]);
+    const created: Array<{
+      requesterScope?: SessionMcpRuntime["requesterScope"];
+      include?: string[];
+      exclude?: string[];
+    }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        requesterScope: params.requesterScope,
+        include: params.includeServerNames ? [...params.includeServerNames] : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }], "user-mail"),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          shared: { command: "true" },
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    await expect(
+      manager.getOrCreateRequesterScoped({
+        sessionId: "session-scoped-only",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+      }),
+    ).resolves.toBeUndefined();
+    expect(created).toEqual([]);
+
+    const scoped = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-scoped-only",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(scoped?.requesterScope?.requesterSenderId).toBe("sender-a");
+    // Only the requester partition — no bare static runtime entry.
+    expect(created).toEqual([
+      {
+        requesterScope: {
+          requesterSenderId: "sender-a",
+          messageChannel: "telegram",
+        },
+        include: ["user-mail"],
+        exclude: undefined,
+      },
+    ]);
+    expect(manager.listRuntimeKeys().every((key) => key.startsWith("{"))).toBe(true);
+
+    await manager.disposeAll();
+  });
+
+  it("reuses requester cache keys for getOrCreateRequesterScoped", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    let resolveCount = 0;
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) => {
+          resolveCount += 1;
+          return { url: `https://mcp.example.test/${ctx.requesterSenderId}` };
+        },
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "probe", description: "probe" }], "user-mail"),
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      requesterScope: params.requesterScope,
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    const first = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-reuse",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    const second = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-reuse",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "sender-a",
+      messageChannel: "telegram",
+    });
+    expect(first).toBe(second);
+    expect(resolveCount).toBe(1);
+    expect(manager.listRuntimeKeys()).toHaveLength(1);
+
+    await manager.disposeAll();
+  });
+
+  it("keeps advertised scoped catalog stable across senders and clears on dispose", async () => {
+    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async (ctx) =>
+          ctx.requesterSenderId === "authed" ? { url: "https://mcp.example.test/authed" } : null,
+      },
+    ]);
+    const createRuntime: RuntimeFactory = (params) => {
+      const runtime = makeRuntime([{ toolName: "inbox", description: "read inbox" }], "user-mail");
+      return {
+        ...runtime,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        requesterScope: params.requesterScope,
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: {
+        servers: {
+          "user-mail": { transport: "streamable-http" },
+        },
+      },
+    };
+
+    expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
+
+    const authed = await manager.getOrCreateRequesterScoped({
+      sessionId: "session-adv",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      requesterSenderId: "authed",
+      messageChannel: "telegram",
+    });
+    expect(authed).toBeDefined();
+    const catalog = await authed!.getCatalog();
+    manager.rememberAdvertisedScopedCatalog("session-adv", catalog);
+
+    const advertised = manager.getAdvertisedScopedCatalog("session-adv");
+    expect(advertised?.tools.map((tool) => tool.toolName)).toEqual(["inbox"]);
+
+    // Unauthed sender: no runtime, but advertised catalog stays.
+    await expect(
+      manager.getOrCreateRequesterScoped({
+        sessionId: "session-adv",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        requesterSenderId: "guest",
+        messageChannel: "telegram",
+      }),
+    ).resolves.toBeUndefined();
+    expect(manager.getAdvertisedScopedCatalog("session-adv")?.tools.map((t) => t.toolName)).toEqual(
+      ["inbox"],
+    );
+
+    await manager.disposeSession("session-adv");
+    expect(manager.getAdvertisedScopedCatalog("session-adv")).toBeNull();
+  });
+});
+
 describe("disposeSession timeout", () => {
   it(
     "force-closes transport and client when terminateSession hangs past the timeout",
@@ -3070,3 +4697,4 @@ process.on("SIGINT", shutdown);`,
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

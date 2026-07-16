@@ -401,10 +401,6 @@ async function restartGatewayWithConfigPatch(params: {
 export {
   applyConfig,
   fetchJson,
-  getGatewayRetryAfterMs,
-  isConfigApplyNoopForSnapshot,
-  isConfigHashConflict,
-  isConfigPatchNoopForSnapshot,
   patchConfig,
   readConfigSnapshot,
   restartGatewayWithConfigPatch,

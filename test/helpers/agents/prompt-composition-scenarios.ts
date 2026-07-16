@@ -147,7 +147,7 @@ function buildAutoReplySystemPrompt(params: {
   groupSystemPrompt?: string;
 }) {
   const extraSystemPromptParts = [
-    buildInboundMetaSystemPrompt(params.sessionCtx),
+    buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
@@ -699,14 +699,17 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,
-    extraSystemPrompt: buildInboundMetaSystemPrompt({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "D123",
-      AccountId: "A1",
-      ChatType: "direct",
-    }),
+    extraSystemPrompt: buildInboundMetaSystemPrompt(
+      {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        AccountId: "A1",
+        ChatType: "direct",
+      },
+      {},
+    ),
   });
   return {
     scenario: "maintenance-prompts",

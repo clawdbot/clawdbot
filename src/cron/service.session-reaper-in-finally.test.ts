@@ -9,8 +9,8 @@ import {
   withCronServiceStateForTest,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
-import { resetReaperThrottle } from "./session-reaper.js";
+import { onTimer } from "./service/timer.test-support.js";
+import { resetReaperThrottle } from "./session-reaper.test-support.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 

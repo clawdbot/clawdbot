@@ -1,11 +1,14 @@
 // Imessage tests cover catchup bridge plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getIMessageRuntime } from "../runtime.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import {
-  resetIMessageCatchupCursorStoreForTest,
+  IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
   resolveCatchupConfig,
-  saveIMessageCatchupCursor,
+  resolveIMessageCatchupCursorKey,
+  type IMessageCatchupCursor,
 } from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -53,14 +56,27 @@ function makeRow(opts: {
   };
 }
 
+function seedCatchupCursor(
+  accountId: string,
+  cursor: Omit<IMessageCatchupCursor, "updatedAt">,
+): void {
+  getIMessageRuntime()
+    .state.openSyncKeyedStore<IMessageCatchupCursor>({
+      namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+      maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+    })
+    .register(resolveIMessageCatchupCursorKey(accountId), {
+      ...cursor,
+      updatedAt: Date.now(),
+    });
+}
+
 describe("runIMessageCatchup", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
-    resetIMessageCatchupCursorStoreForTest();
   });
 
   afterEach(() => {
-    resetIMessageCatchupCursorStoreForTest();
     vi.useRealTimers();
   });
 
@@ -159,7 +175,7 @@ describe("runIMessageCatchup", () => {
 
   it("does not crash on Date-invalid persisted cursor timestamps", async () => {
     const log = vi.fn();
-    await saveIMessageCatchupCursor("default", {
+    seedCatchupCursor("default", {
       lastSeenMs: 8_700_000_000_000_000,
       lastSeenRowid: 10,
     });

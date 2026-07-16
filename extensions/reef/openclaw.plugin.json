@@ -18,6 +18,7 @@
       "relayUrl": {
         "type": "string",
         "format": "uri",
+        "pattern": "^[hH][tT][tT][pP][sS]?://[^\\\\/?#@]+/?$",
         "default": "https://reefwire.ai"
       },
       "handle": {
@@ -68,12 +69,6 @@
         "type": "string",
         "minLength": 1
       },
-      "friends": {
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/friend"
-        }
-      },
       "requestPolicy": {
         "enum": [
           "code-only",
@@ -82,60 +77,9 @@
         ],
         "default": "code-only"
       },
-      "dmPolicy": {
-        "const": "pairing",
-        "default": "pairing"
-      },
-      "allowFrom": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "default": []
-      },
       "enabled": {
         "type": "boolean",
         "default": true
-      }
-    },
-    "$defs": {
-      "friend": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "autonomy",
-          "ed25519PublicKey",
-          "x25519PublicKey",
-          "keyEpoch"
-        ],
-        "properties": {
-          "autonomy": {
-            "enum": [
-              "notify-only",
-              "bounded",
-              "extended"
-            ],
-            "default": "bounded"
-          },
-          "ed25519PublicKey": {
-            "type": "string",
-            "minLength": 43,
-            "maxLength": 43
-          },
-          "x25519PublicKey": {
-            "type": "string",
-            "minLength": 43,
-            "maxLength": 43
-          },
-          "keyEpoch": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "safetyNumberChanged": {
-            "type": "boolean",
-            "default": false
-          }
-        }
       }
     }
   },
@@ -148,6 +92,7 @@
           "relayUrl": {
             "type": "string",
             "format": "uri",
+            "pattern": "^[hH][tT][tT][pP][sS]?://[^\\\\/?#@]+/?$",
             "default": "https://reefwire.ai"
           },
           "handle": {
@@ -198,12 +143,6 @@
             "type": "string",
             "minLength": 1
           },
-          "friends": {
-            "type": "object",
-            "additionalProperties": {
-              "$ref": "#/$defs/friend"
-            }
-          },
           "requestPolicy": {
             "enum": [
               "code-only",
@@ -212,60 +151,9 @@
             ],
             "default": "code-only"
           },
-          "dmPolicy": {
-            "const": "pairing",
-            "default": "pairing"
-          },
-          "allowFrom": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": []
-          },
           "enabled": {
             "type": "boolean",
             "default": true
-          }
-        },
-        "$defs": {
-          "friend": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "autonomy",
-              "ed25519PublicKey",
-              "x25519PublicKey",
-              "keyEpoch"
-            ],
-            "properties": {
-              "autonomy": {
-                "enum": [
-                  "notify-only",
-                  "bounded",
-                  "extended"
-                ],
-                "default": "bounded"
-              },
-              "ed25519PublicKey": {
-                "type": "string",
-                "minLength": 43,
-                "maxLength": 43
-              },
-              "x25519PublicKey": {
-                "type": "string",
-                "minLength": 43,
-                "maxLength": 43
-              },
-              "keyEpoch": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "safetyNumberChanged": {
-                "type": "boolean",
-                "default": false
-              }
-            }
           }
         }
       }

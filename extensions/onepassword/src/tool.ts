@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/types";
 import { parseToolInput, type OnePasswordBroker } from "./broker.js";
 import { OnePasswordError } from "./errors.js";
+import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
 const OnePasswordToolSchema = {
   type: "object",
@@ -27,6 +28,10 @@ const OnePasswordToolSchema = {
       minLength: 1,
       maxLength: 300,
       description: "Why the agent needs this secret. Required for get.",
+    },
+    authorizationNonce: {
+      type: "string",
+      description: "Internal. Injected by the gateway policy layer; never set this manually.",
     },
   },
 } as unknown as AnyAgentTool["parameters"];
@@ -105,7 +110,9 @@ export function createOnePasswordTool(
         if (input.action === "list") {
           return jsonResult({ ok: true, items: await broker.list(invocation) });
         }
-        const secret = await broker.get(toolCallId, input, invocation);
+        const nonceValue = params[AUTHORIZATION_NONCE_PARAM];
+        const nonce = typeof nonceValue === "string" ? nonceValue : undefined;
+        const secret = await broker.get(toolCallId, input, invocation, nonce);
         return jsonResult({ ok: true, ...secret });
       } catch (error) {
         return errorResult(error);

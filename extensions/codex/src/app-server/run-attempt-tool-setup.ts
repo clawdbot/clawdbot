@@ -1,6 +1,8 @@
 import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
+  materializeRequesterScopedMcpToolsForHarnessRun,
+  resolveAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildDynamicTools,
@@ -8,7 +10,10 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
-import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
+import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoadingForRuntime,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -38,6 +43,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     sessionAgentId,
     pluginConfig,
     profilerEnabled,
+    agentDir,
   } = connection;
   const preDynamicSummary = preDynamicStartupStages.snapshot();
   if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary)) {
@@ -138,9 +144,79 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ignoreDisableMessageTool: true,
     ignoreRuntimePlan: true,
   });
+  // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
+  // Specs come from the session advertised-catalog cache so fingerprints stay stable.
+  const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workspaceDir: effectiveWorkspace,
+    agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+    cfg: params.config,
+    requesterSenderId: params.senderId,
+    agentAccountId: params.agentAccountId,
+    messageChannel: params.messageChannel ?? params.messageProvider,
+    reservedToolNames: [
+      ...tools.map((tool) => tool.name),
+      ...registeredTools.map((tool) => tool.name),
+    ],
+    toolsAllow: params.toolsAllow,
+    policyContext: {
+      config: params.config,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: sessionAgentId,
+      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentAccountId: params.agentAccountId,
+      messageProvider: params.messageProvider ?? params.messageChannel,
+      messageChannel: params.messageChannel,
+      chatType: params.chatType,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      modelHasVision: params.model.input?.includes("image") ?? false,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd ?? effectiveWorkspace,
+      sandboxToolPolicy: sandbox?.tools,
+    },
+    warn: (message) => embeddedAgentLog.warn(message),
+  });
+  // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
+  // MCP tools exactly like every other dynamic tool. Filter both lists with the
+  // same rule so execution and advertised specs stay name-aligned.
+  const scopedExecutable = scopedMcpTools
+    ? filterCodexDynamicTools(scopedMcpTools.tools, pluginConfig)
+    : [];
+  const scopedAdvertised = scopedMcpTools
+    ? filterCodexDynamicTools(scopedMcpTools.advertisedTools, pluginConfig)
+    : [];
+  const toolsWithScopedMcp = scopedExecutable.length > 0 ? [...tools, ...scopedExecutable] : tools;
+  const registeredWithScopedMcp =
+    scopedAdvertised.length > 0 ? [...registeredTools, ...scopedAdvertised] : registeredTools;
   const toolBridge = createCodexDynamicToolBridge({
-    tools,
-    registeredTools,
+    tools: toolsWithScopedMcp,
+    registeredTools: registeredWithScopedMcp,
     signal: runAbortController.signal,
     computerContextEpoch,
     loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
@@ -148,7 +224,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     }),
     directToolNames: resolveCodexDynamicToolDirectNames(
       params,
-      isHostScopedAgentToolActive("crestodian"),
+      isHostScopedAgentToolActive("openclaw"),
     ),
     hookContext: {
       agentId: sessionAgentId,
@@ -171,8 +247,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     },
   });
   return {
-    tools,
-    registeredTools,
+    tools: toolsWithScopedMcp,
+    registeredTools: registeredWithScopedMcp,
+    scopedMcpTools,
     dynamicToolParams,
     computerContextEpoch,
     toolBridge,

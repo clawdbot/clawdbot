@@ -1085,3 +1085,4 @@ module.exports = {
     expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

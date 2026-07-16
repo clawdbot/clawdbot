@@ -881,3 +881,4 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   }
   return { regressions, summary, warnings };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

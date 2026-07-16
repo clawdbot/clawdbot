@@ -89,15 +89,20 @@ export async function fetchWithRuntimeDispatcher(
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,
 ): Promise<Response> {
-  const runtimeDeps = loadUndiciRuntimeDeps();
+  return await fetchWithPreparedRuntimeDispatcher(loadUndiciRuntimeDeps(), input, init);
+}
+
+/** Uses one prepared Undici snapshot so reusable fetch wrappers stay stable. */
+export function fetchWithPreparedRuntimeDispatcher(
+  runtimeDeps: UndiciRuntimeDeps,
+  input: RequestInfo | URL,
+  init?: DispatcherAwareRequestInit,
+): Promise<Response> {
   const runtimeFetch = runtimeDeps.fetch as unknown as (
     input: RequestInfo | URL,
     init?: DispatcherAwareRequestInit,
-  ) => Promise<unknown>;
-  return (await runtimeFetch(
-    input,
-    normalizeRuntimeRequestInit(init, runtimeDeps.FormData),
-  )) as Response;
+  ) => Promise<Response>;
+  return runtimeFetch(input, normalizeRuntimeRequestInit(init, runtimeDeps.FormData));
 }
 
 /**

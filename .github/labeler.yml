@@ -10,6 +10,13 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: linux-node":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/linux-node/**"
+          - "docs/nodes/camera.md"
+          - "docs/nodes/location-command.md"
+          - "docs/platforms/linux.md"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:
@@ -221,6 +228,7 @@
       - any-glob-to-any-file:
           - "apps/linux/**"
           - "docs/platforms/linux.md"
+          - "extensions/linux-canvas/**"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:

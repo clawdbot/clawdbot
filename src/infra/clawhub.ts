@@ -1943,3 +1943,4 @@ export async function fetchClawHubPromotionsFeed(
   const etag = response.headers.get("etag") ?? undefined;
   return { status: "ok", feed, payload, ...(etag ? { etag } : {}) };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

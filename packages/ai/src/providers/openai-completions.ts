@@ -244,7 +244,6 @@ export const streamOpenAICompletions: StreamFunction<
             partial: output,
           });
         } else if (block.type === "toolCall") {
-          block.arguments = parseStreamingJson(block.partialArgs);
           // Finalize in-place and strip the scratch buffers so replay only
           // carries parsed arguments.
           delete block.partialArgs;
@@ -1455,3 +1454,4 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
       model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

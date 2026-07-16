@@ -7,10 +7,7 @@ import {
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
-import {
-  rememberPersistedIMessageEcho,
-  resetPersistedIMessageEchoCacheForTest,
-} from "./persisted-echo-cache.js";
+import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 /**
@@ -35,7 +32,6 @@ const cfg = {} as OpenClawConfig;
 
 beforeEach(() => {
   installIMessageStateRuntimeForTest();
-  resetPersistedIMessageEchoCacheForTest();
 });
 
 function createParams(

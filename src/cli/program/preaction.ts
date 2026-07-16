@@ -45,14 +45,6 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
   );
 }
 
-function getRootCommand(command: Command): Command {
-  let current = command;
-  while (current.parent) {
-    current = current.parent;
-  }
-  return current;
-}
-
 function getActionCommandPath(actionCommand: Command): string[] {
   const commandPath: string[] = [];
   let current: Command | null = actionCommand;
@@ -64,11 +56,10 @@ function getActionCommandPath(actionCommand: Command): string[] {
 }
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  const root = getRootCommand(actionCommand);
-  if (root.getOptionValueSource("logLevel") !== "cli") {
+  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
     return undefined;
   }
-  const logLevel = root.getOptionValue("logLevel");
+  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 

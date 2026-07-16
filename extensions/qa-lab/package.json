@@ -5,6 +5,8 @@
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
   "dependencies": {
+    "@openclaw/crabline": "0.1.11",
+    "@openclaw/matrix": "workspace:*",
     "@copilotkit/aimock": "1.35.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "p-limit": "7.3.0",
@@ -16,7 +18,6 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@openclaw/crabline": "0.1.11",
     "@openclaw/discord": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",

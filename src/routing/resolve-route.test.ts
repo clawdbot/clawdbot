@@ -1277,3 +1277,4 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.matchedBy).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

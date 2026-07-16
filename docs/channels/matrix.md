@@ -299,11 +299,12 @@ All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (
 
 ```bash
 openclaw matrix encryption setup
+printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix encryption setup --recovery-key-stdin
 ```
 
 Bootstraps secret storage and cross-signing, creates a room-key backup if needed, then prints status and next steps. Useful flags:
 
-- `--recovery-key <key>` apply a recovery key before bootstrapping (prefer the stdin form below)
+- `--recovery-key-stdin` reads a recovery key from stdin without exposing it in process arguments; `--recovery-key <key>` remains available for compatibility
 - `--force-reset-cross-signing` discard the current cross-signing identity and create a new one (intentional use only)
 
 For a new account, enable E2EE at creation time:

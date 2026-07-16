@@ -166,7 +166,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -197,7 +197,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -227,7 +227,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -257,7 +257,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -318,7 +318,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -351,7 +351,7 @@ describe("handleAssistantFailover", () => {
         if (outcome.action !== "retry") {
           return;
         }
-        expect(outcome.retryKind).toBeUndefined();
+        expect(outcome.retryKind).toBe("profile_rotation");
         expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
         expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
         expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
@@ -476,7 +476,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBeUndefined();
+      expect(outcome.retryKind).toBe("profile_rotation");
       expect(maybeRetrySameModelRateLimit).toHaveBeenCalledTimes(1);
       expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
       expect(advanceAuthProfile).toHaveBeenCalledTimes(1);

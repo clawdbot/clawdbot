@@ -251,8 +251,35 @@ describe("config shared auth disconnects", () => {
       {
         ok: true,
         path: "/tmp/openclaw.json",
+        // Ack hash from the persisted write; equals what config.get reports.
+        hash: "next-hash",
         config: persistedConfig,
       },
+      undefined,
+    );
+  });
+
+  it("acks config.apply with the persisted snapshot hash", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.apply",
+      params: {
+        raw: JSON.stringify(tokenAuthConfig("new-token"), null, 2),
+        baseHash: "base-hash",
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.apply"],
+      'configHandlers["config.apply"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash" }),
       undefined,
     );
   });

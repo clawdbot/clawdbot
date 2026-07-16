@@ -96,7 +96,11 @@ enum GatewayLaunchAgentManager {
     }
 
     static func kickstart() async -> String? {
-        await self.runDaemonCommand(["restart"], timeout: 20)
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd restart skipped (disable marker set)")
+            return nil
+        }
+        return await self.runDaemonCommand(["restart"], timeout: 20)
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -106,6 +110,13 @@ enum GatewayLaunchAgentManager {
             generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
             generatedEnvironmentWrapperURL: directory.appendingPathComponent(
                 "\(gatewayLaunchdLabel)-env-wrapper.sh"))
+    }
+
+    /// Empty means no Gateway LaunchAgent. Nil preserves an unreadable
+    /// ownership record so update callers fail closed instead of consuming it.
+    static func launchdProgramArguments() -> [String]? {
+        guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return [] }
+        return self.launchdConfigSnapshot()?.programArguments
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -265,6 +276,11 @@ extension GatewayLaunchAgentManager {
             return nil
         }
         return self.runningGatewayPID(from: service)
+    }
+
+    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
+        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
+        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
     }
     #endif
 }

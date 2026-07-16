@@ -67,9 +67,17 @@ describe("renderChatComposer controls", () => {
 
     const onAbort = vi.fn();
     view = renderComposer({ canAbort: true, onAbort, draft: "Follow up" });
-    expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
+    expect(button(view.container, t("chat.followUpModeSteer")).disabled).toBe(false);
     button(view.container, t("chat.runControls.stopGenerating")).click();
     expect(onAbort).toHaveBeenCalledOnce();
+
+    view = renderComposer({
+      canAbort: true,
+      draft: "Follow up later",
+      followUpMode: "queue",
+      onAbort,
+    });
+    expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {

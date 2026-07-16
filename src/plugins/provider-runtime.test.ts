@@ -1137,6 +1137,52 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("unwraps secret sentinels only after finding the provider auth hook", async () => {
+    const { mintSecretSentinel } = await import("../secrets/sentinel.js");
+    const sourceToken = "provider-source-token";
+    const sourceSentinel = mintSecretSentinel(sourceToken, { label: "provider-runtime-test" });
+    const prepareRuntimeAuth = vi.fn(async () => ({ apiKey: "runtime-token" }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        prepareRuntimeAuth,
+      },
+    ]);
+
+    await prepareProviderRuntimeAuth({
+      provider: DEMO_PROVIDER_ID,
+      context: {
+        env: process.env,
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        model: MODEL,
+        apiKey: sourceSentinel,
+        authMode: "token",
+      },
+    });
+
+    expect(prepareRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: sourceToken }),
+    );
+
+    resolvePluginProvidersMock.mockReturnValue([]);
+    await expect(
+      prepareProviderRuntimeAuth({
+        provider: "provider-without-hook",
+        context: {
+          env: process.env,
+          provider: "provider-without-hook",
+          modelId: MODEL.id,
+          model: { ...MODEL, provider: "provider-without-hook" },
+          apiKey: "oc-sent-v2.unknown.end",
+          authMode: "token",
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("returns no runtime plugin when the provider has no owning plugin", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
@@ -2714,3 +2760,4 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

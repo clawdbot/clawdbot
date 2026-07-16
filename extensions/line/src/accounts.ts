@@ -14,8 +14,6 @@ import type {
   ResolvedLineAccount,
 } from "./types.js";
 
-export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-
 function readFileIfExists(filePath: string | undefined): string | undefined {
   return tryReadSecretFileSync(filePath, "LINE credential file", { rejectSymlink: true });
 }

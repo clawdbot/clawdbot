@@ -334,7 +334,7 @@ function mapRunTaskInFlowCreateError(params: {
   throw params.error;
 }
 
-export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
+function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
   const flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {

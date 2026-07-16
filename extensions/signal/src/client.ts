@@ -25,7 +25,7 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
-export type SignalSseEvent = {
+type SignalSseEvent = {
   event?: string;
   data?: string;
   id?: string;

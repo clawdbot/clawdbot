@@ -7,6 +7,8 @@ export {
   type ChunkTextRangesOptions,
   type TextChunkRange,
 } from "../../packages/markdown-core/src/chunk-text.js";
+/** Quote-aware HTML tag tokens for exact post-render projections. */
+export { tokenizeHtmlTags } from "../../packages/markdown-core/src/html-tags.js";
 
 /**
  * Splits outbound channel text into chunks no longer than the requested limit.

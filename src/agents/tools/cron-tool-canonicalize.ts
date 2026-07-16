@@ -242,8 +242,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
       typeof payload.timeoutSeconds === "number" ||
       typeof payload.lightContext === "boolean" ||
       typeof payload.allowUnsafeExternalContent === "boolean" ||
-      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks)) ||
-      (payload.toolsAllow !== undefined && isStringArrayOrNull(payload.toolsAllow));
+      (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
     if (hasAgentTurnSignal) {
       payload.kind = "agentTurn";
     } else if (isNonEmptyString(payload.text)) {

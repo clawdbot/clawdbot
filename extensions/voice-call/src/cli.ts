@@ -65,22 +65,6 @@ const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
 
-const voiceCallCliDeps = {
-  callGatewayFromCli,
-};
-
-export const testing = {
-  setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
-    voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
-  },
-  isGatewayUnavailableForLocalFallback,
-  parseVoiceCallIntOption,
-  resolveGatewayContinueTimeoutMs,
-  resolveGatewayOperationTimeoutMs,
-  readGatewayPollTimeoutMs,
-  resolveVoiceCallDeadlineMs,
-};
-
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
 }
@@ -125,7 +109,7 @@ async function callVoiceCallGateway(
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.ceil(opts.timeoutMs))
         : VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS;
-    const payload = await voiceCallCliDeps.callGatewayFromCli(
+    const payload = await callGatewayFromCli(
       method,
       { json: true, timeout: String(timeoutMs) },
       params,
@@ -926,3 +910,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

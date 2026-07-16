@@ -39,6 +39,7 @@ describe("gateway client capability tool filtering", () => {
   it("does not let tools.allow resurrect a gated tool for a channel run", () => {
     const tools = createOpenClawCodingTools({
       messageProvider: "telegram",
+      disableMessageTool: true,
       config: { tools: { allow: ["show_widget"] } },
       toolConstructionPlan: {
         includeBaseCodingTools: false,

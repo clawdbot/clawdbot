@@ -144,7 +144,7 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `node_host_config` SQLite row alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Node-hosted MCP servers
@@ -231,15 +231,15 @@ operators can ignore skills from every paired node with
 
 ### Headless identity state
 
-The headless node keeps three separate state files:
+The headless node keeps three separate state records:
 
-- `~/.openclaw/node.json`: the legacy client instance ID (stored as `nodeId`), display name, and Gateway connection metadata.
+- `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
 node routing. The client instance ID is only connection metadata. Changing
-`--node-id` or deleting only `node.json` therefore does not reset pairing. See
+`--node-id` or migrating a retired `node.json` therefore does not reset pairing. See
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
 
@@ -289,23 +289,26 @@ A desktop or server node can expose chat-capable models from an Ollama server ru
 The official `codex` plugin can expose non-archived Codex sessions on a
 headless node host or native macOS node. Catalog registration no longer depends
 on `supervision.enabled`; that option gates the agent-facing supervision tools.
+Set `sessionCatalog.enabled: false` in the Codex plugin config to disable the
+operator catalog and paired-node catalog commands without disabling the
+provider or harness.
 The plugin must still be active on both computers, and the node setting remains
 local consent: enabling only the Gateway cannot read another computer's Codex
 state.
 
 The node advertises the versioned read-only
 `codex.appServer.threads.list.v1` and
-`codex.appServer.thread.turns.list.v1` commands. Approve the node pairing
+`codex.appServer.thread.turns.list.v1` commands. A native node host with the
+Codex CLI available also advertises `codex.terminal.resume.v1`. Approve the node pairing
 upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
 Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
-Selecting a row opens the normal Chat pane and reads its persisted transcript
+By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
-`thread/turns/list` calls with full item projection. The node invoke transport is request/response only and cannot
-carry the streaming turns, live events, or approvals required to continue a
-native thread through the Codex harness. **Continue** and **Archive** are
-therefore unavailable for remote rows. On the Gateway computer, stored and idle
+`thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
+
+The relay does not provide the full OpenClaw harness continuation and archive ownership contracts. **Continue** and **Archive** are therefore unavailable for remote rows. On the Gateway computer, stored and idle
 rows can start a distinct model-locked Chat branch. Either can be archived only
 after the operator confirms that no other Codex client is using it; a stored
 row's live activity remains unknown. Active rows cannot branch or archive.
@@ -316,11 +319,20 @@ pagination, local continuation, and the metadata security boundary.
 ### Claude sessions and transcripts
 
 The bundled `anthropic` plugin discovers non-archived Claude CLI and Claude
-Desktop sessions on the Gateway and paired nodes. Unlike Codex supervision,
-this needs no separate opt-in: a remote macOS app node advertises
+Desktop sessions on the Gateway and paired nodes by default. Set
+`plugins.entries.anthropic.config.sessionCatalog.enabled: false` to disable the
+operator catalog and paired-node catalog commands without disabling Anthropic
+models or the Claude CLI backend.
+A remote macOS app node advertises
 `anthropic.claude.sessions.list.v1` and `anthropic.claude.sessions.read.v1`
 when the Anthropic plugin is enabled and `~/.claude/projects/` exists. Approve
 the node pairing upgrade when those commands first appear.
+
+A native node host with the Claude CLI available also advertises
+`anthropic.claude.terminal.resume.v1`. Eligible CLI and Desktop rows can open
+`claude --resume <session-id>` in the operator terminal on their owning host.
+This is a takeover of the native session; unlike OpenClaw adoption, it does not
+fork the Claude session first.
 
 The catalog combines valid Claude CLI project-index records with a bounded
 metadata prefix from current `sdk-cli` JSONL files. Claude Desktop's local
@@ -369,6 +381,34 @@ node does not advertise this command yet, so its rows remain view-only.
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 
+### OpenCode and Pi sessions
+
+The bundled OpenCode and ACPX plugins also discover read-only native session
+catalogs on the Gateway and paired nodes. A node advertises
+`opencode.sessions.list.v1` / `opencode.sessions.read.v1` when the `opencode`
+CLI is installed, and `acpx.pi.sessions.list.v1` / `acpx.pi.sessions.read.v1`
+when Pi's session directory exists. Approve the node pairing upgrade when new
+commands first appear. When the matching CLI is also available, the node adds
+`opencode.terminal.resume.v1` or `acpx.pi.terminal.resume.v1`; the existing row
+menu and viewer header can then reopen the selected session in its owning
+terminal with `opencode --session <id>` or `pi --session <id>`.
+
+OpenCode reads through its official CLI JSON/export surface. Pi reads its
+documented JSONL session store, including project and global `settings.json`
+session directories plus `PI_CODING_AGENT_DIR` and
+`PI_CODING_AGENT_SESSION_DIR` overrides. Both catalogs are enabled by default;
+turn them off in the Web UI under **Config > Plugins**.
+
+Terminal resume uses the stored session working directory and the same
+allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
+node command execution.
+
+### Terminal file uploads
+
+The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
+
+Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -410,7 +450,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
+`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -501,7 +541,7 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
+- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
 - `canvas eval` accepts inline JS (`--js`) or a positional arg.
 
 ### A2UI (Canvas)
@@ -514,10 +554,11 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
-- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
+- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 - macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
+- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
 
 ## Photos + videos (node camera)
 

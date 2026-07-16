@@ -331,11 +331,11 @@ describe("foreground reply freshness", () => {
         if (params.ctx.MessageSid === "new-message") {
           newerStarted.resolve();
           // Same-session follow-up admission waits for the owning final delivery.
-          params.replyOptions?.onFollowupAdmissionWaitChange?.(true);
+          params.replyOptions?.onReplyAdmissionWaitChange?.(true);
           try {
             await olderDelivered.promise;
           } finally {
-            params.replyOptions?.onFollowupAdmissionWaitChange?.(false);
+            params.replyOptions?.onReplyAdmissionWaitChange?.(false);
           }
           return {
             queuedFinal: false,

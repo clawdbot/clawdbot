@@ -318,6 +318,29 @@ describe("route composer fallback", () => {
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
 
+  it("restores one atomic history snapshot when returning to a session", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    state.chatMessages = [{ role: "assistant", content: "first session" }];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
+    state.currentSessionId = "session-first";
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+    state.chatMessages = [{ role: "assistant", content: "second session" }];
+    state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
+    state.currentSessionId = "session-second";
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+
+    expect(state.chatMessages).toEqual([{ role: "assistant", content: "first session" }]);
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      nextOffset: 400,
+      totalMessages: 718,
+    });
+    expect(state.currentSessionId).toBe("session-first");
+  });
+
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state: owner } = createRouteState("");
@@ -1345,3 +1368,4 @@ describe("refreshChatMetadata", () => {
     expect(SLASH_COMMANDS.some((command) => command.name === "work-command")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

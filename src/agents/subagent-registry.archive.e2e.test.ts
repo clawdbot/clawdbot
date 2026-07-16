@@ -6,11 +6,11 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGateway } from "../gateway/call.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
+import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
 import {
-  getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime.js";
+} from "../tasks/task-runtime.test-helpers.js";
 
 const taskRuntimeMocks = vi.hoisted(() => ({
   finalizeTaskRunByRunId: vi.fn<(_params: unknown) => unknown[]>(() => [{}]),
@@ -19,6 +19,7 @@ const taskStatusMocks = vi.hoisted(() => ({
   findTaskByRunIdForStatus: vi.fn(),
   listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
 }));
+const hasLiveOrRecentlyDispatchedContinuationWorkMock = vi.hoisted(() => vi.fn(() => false));
 
 const noop = () => {};
 let currentConfig = {
@@ -69,6 +70,10 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../auto-reply/continuation/work-store.js", () => ({
+  hasLiveOrRecentlyDispatchedContinuationWork: hasLiveOrRecentlyDispatchedContinuationWorkMock,
+}));
+
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
 }));
@@ -83,10 +88,10 @@ vi.mock("./subagent-registry.store.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   const setRegistryTestDeps = (
@@ -123,6 +128,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
     loadConfigMock.mockClear();
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReset().mockReturnValue(false);
     taskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
     taskStatusMocks.findTaskByRunIdForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
@@ -190,6 +196,60 @@ describe("subagent registry archive behavior", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     await waitForNoRequesterRuns();
+  });
+
+  it("defers archive sweep deletion while continuation work is still live", async () => {
+    const childSessionKey = "agent:main:subagent:delete-work-live";
+    mod.addSubagentRunForTests({
+      runId: "run-delete-work-live",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "guard archived delete until continuation drains",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+    });
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReturnValueOnce(true).mockReturnValue(false);
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(hasLiveOrRecentlyDispatchedContinuationWorkMock).toHaveBeenCalledWith(childSessionKey);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({ runId: "run-delete-work-live" }),
+    ]);
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.some(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toBe(false);
+
+    await mod.testing.sweepOnceForTests();
+    await flushSweepMicrotasks();
+
+    await waitForNoRequesterRuns();
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toEqual([
+      [
+        {
+          method: "sessions.delete",
+          params: {
+            key: childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          },
+          timeoutMs: 10_000,
+        },
+      ],
+    ]);
   });
 
   it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {

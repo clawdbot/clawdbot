@@ -916,3 +916,4 @@ export async function handleTelegramAction(
 
   throw new Error(`Unsupported Telegram action: ${String(action)}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

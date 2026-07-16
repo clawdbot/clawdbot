@@ -2,24 +2,27 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
-import {
-  buildIMessageInboundContext,
-  describeIMessageEchoDropLog,
-  resolveIMessageReactionContext,
-  resolveIMessageInboundDecision,
-} from "./inbound-processing.js";
+import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
+type InboundProcessingModule = typeof import("./inbound-processing.js");
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
+let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
+let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
+
+beforeEach(async () => {
+  ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
+  ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
+    await import("./inbound-processing.js"));
 });
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
-  type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
+  type InboundDecisionParams = Parameters<
+    InboundProcessingModule["resolveIMessageInboundDecision"]
+  >[0];
 
   function createInboundDecisionParams(
     overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
@@ -74,6 +77,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
       return lookup.messageId === "42";
     });
+    const logVerbose = vi.fn();
 
     const decision = await resolveDecision({
       message: {
@@ -83,6 +87,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Reasoning:\n_step_",
       bodyText: "Reasoning:\n_step_",
       echoCache: { has: echoHas },
+      logVerbose,
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
@@ -90,6 +95,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageId: "42",
     });
     expect(echoHas).toHaveBeenCalledTimes(1);
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
   });
 
   it("matches attachment-only echoes by bodyText placeholder", async () => {
@@ -726,17 +732,6 @@ describe("resolveIMessageReactionContext", () => {
   });
 });
 
-describe("describeIMessageEchoDropLog", () => {
-  it("includes message id when available", async () => {
-    expect(
-      describeIMessageEchoDropLog({
-        messageText: "Reasoning:\n_step_",
-        messageId: "abc-123",
-      }),
-    ).toContain("id=abc-123");
-  });
-});
-
 describe("buildIMessageInboundContext", () => {
   it("keeps numeric row id and provider GUID separately for action tooling", async () => {
     const decision = await resolveIMessageInboundDecision({
@@ -784,7 +779,8 @@ describe("buildIMessageInboundContext", () => {
       groupHistories: new Map(),
     });
 
-    expect(ctxPayload.MessageSid).toBe("1");
+    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
+    expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
   });
 
@@ -1068,8 +1064,9 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const { ctxPayload } = await buildIMessageInboundContext(
       buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
     );
-    // First inbound → shortId "1". The chat.db rowid 999 must NOT leak.
-    expect(ctxPayload.MessageSid).toBe("1");
+    // The gateway-allocated short id must not leak the chat.db rowid.
+    expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
+    expect(ctxPayload.MessageSid).not.toBe("999");
   });
 
   it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", async () => {

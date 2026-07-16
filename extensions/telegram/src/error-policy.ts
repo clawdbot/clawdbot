@@ -116,7 +116,3 @@ export function shouldSuppressTelegramError(params: {
 export function isSilentErrorPolicy(policy: TelegramErrorPolicy): boolean {
   return policy === "silent";
 }
-
-export function resetTelegramErrorPolicyStoreForTest() {
-  errorCooldownStore.clear();
-}

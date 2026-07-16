@@ -10,10 +10,10 @@ set -euo pipefail
 #   DMG_VOLUME_NAME        default: CFBundleName
 #   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
-#   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
-#   DMG_ICON_SIZE          default: 128
-#   DMG_APP_POS            default: "125 160"
-#   DMG_APPS_POS           default: "375 160"
+#   DMG_WINDOW_BOUNDS      default: "400 100 1080 530" (680x430)
+#   DMG_ICON_SIZE          default: 144
+#   DMG_APP_POS            default: "170 305"
+#   DMG_APPS_POS           default: "510 305"
 #   SKIP_DMG_STYLE=1       skip Finder styling
 #   DMG_EXTRA_SECTORS      extra sectors to keep when shrinking RW image (default: 2048)
 
@@ -43,10 +43,10 @@ DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
 DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/apps/macos/Packaging/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/apps/macos/Packaging/dmg-background.png}"
 
-DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
-DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
-DMG_APP_POS="${DMG_APP_POS:-125 160}"
-DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
+DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 1080 530}"
+DMG_ICON_SIZE="${DMG_ICON_SIZE:-144}"
+DMG_APP_POS="${DMG_APP_POS:-170 305}"
+DMG_APPS_POS="${DMG_APPS_POS:-510 305}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
 
 require_integer_list() {

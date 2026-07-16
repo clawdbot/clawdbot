@@ -70,7 +70,6 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
     public let thinkingLevel: String?
     public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
 
-    // periphery:ignore - package tests construct patch responses; app consumers decode them.
     public init(
         key: String? = nil,
         modelProvider: String?,

@@ -88,7 +88,7 @@ async function waitForJsonFile<T>(filePath: string, timeoutMs: number): Promise<
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => {
-        setTimeout(resolve, 25);
+        setTimeout(resolve, 5);
       });
     }
   }

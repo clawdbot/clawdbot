@@ -1353,3 +1353,4 @@ export async function restartLaunchAgent({
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

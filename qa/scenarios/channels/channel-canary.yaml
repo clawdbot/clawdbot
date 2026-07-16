@@ -60,4 +60,7 @@ flow:
             expr: matchingOutbound.length === 1
             message:
               expr: "`expected one canary reply, saw ${matchingOutbound.length}; transcript=${formatTransportTranscript(state, { conversationId: config.conversationId })}`"
+        - assert:
+            expr: "transport.id !== 'telegram' || Boolean(outbound.replyToId)"
+            message: Telegram canary reply was not threaded to the driver message
       detailsExpr: outbound.text

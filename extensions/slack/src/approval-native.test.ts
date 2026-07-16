@@ -1217,3 +1217,4 @@ describe("slack native approval adapter", () => {
     ).toEqual({ authorized: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

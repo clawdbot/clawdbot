@@ -1113,3 +1113,4 @@ describe("policy commands", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

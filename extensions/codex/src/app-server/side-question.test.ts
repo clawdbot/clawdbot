@@ -1430,6 +1430,35 @@ describe("runCodexAppServerSideQuestion", () => {
     ).toBeUndefined();
   });
 
+  it("omits the loop-detection PreToolUse subprocess for side threads when disabled", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        {
+          pluginConfig: {
+            appServer: { loopDetectionPreToolUseRelay: false },
+          },
+          nativeHookRelay: { enabled: true },
+        },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const config = forkParams?.config as Record<string, unknown> | undefined;
+    expect(config?.["features.hooks"]).toBe(true);
+    expect(config?.["hooks.PreToolUse"]).toEqual([]);
+    const hookState = config?.["hooks.state"] as
+      | Record<string, { enabled?: unknown; trusted_hash?: unknown }>
+      | undefined;
+    expect(codexHookStateForEvent(hookState, "pre_tool_use")).toEqual({ enabled: false });
+  });
+
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;
@@ -3144,3 +3173,4 @@ describe("runCodexAppServerSideQuestion", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

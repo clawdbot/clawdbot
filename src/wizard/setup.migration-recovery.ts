@@ -398,5 +398,3 @@ export function prepareSetupMigrationRetryPlan(
   });
   return { ...plan, items, summary: summarizeMigrationItems(items) };
 }
-
-export const testing = { writeSetupMigrationAttempt };

@@ -59,7 +59,7 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
-export type WhatsAppInboundEvent = {
+type WhatsAppInboundEvent = {
   id?: string;
   timestamp?: number;
   isBatched?: boolean;
@@ -85,7 +85,7 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
-export type WhatsAppInboundPayload = {
+type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
   media?: {
@@ -103,7 +103,7 @@ export type WhatsAppInboundPayload = {
   }>;
 };
 
-export type WhatsAppInboundPlatform = {
+type WhatsAppInboundPlatform = {
   chatJid: string;
   recipientJid: string;
   sender?: WhatsAppIdentity;

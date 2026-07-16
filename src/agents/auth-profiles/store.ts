@@ -161,7 +161,7 @@ function publishRuntimeSnapshotsAfterCommit(publish: (() => void) | undefined): 
   }
 }
 
-export const testing = {
+const testing = {
   publishRuntimeSnapshotsAfterCommit,
   resetRuntimeSnapshotPublisherForTest(): void {
     runtimeSnapshotPublisherForTest = undefined;
@@ -170,6 +170,10 @@ export const testing = {
     runtimeSnapshotPublisherForTest = publisher;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileStoreTestApi")] =
+    testing;
+}
 
 function resolvePersistedLoadOptions(
   options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "database"> | undefined,
@@ -1710,3 +1714,4 @@ export function restoreAuthProfileStorePersistenceSnapshot(
   });
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildTerminalEnv, createTerminalLaunchPolicy } from "./launch.js";
+import {
+  buildTerminalEnv,
+  createTerminalLaunchPolicy,
+  resolveTerminalSpawnPlan,
+} from "./launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -350,5 +354,54 @@ describe("buildTerminalEnv", () => {
   it("preserves an existing TERM", () => {
     const env = buildTerminalEnv({ TERM: "screen-256color" });
     expect(env.TERM).toBe("screen-256color");
+  });
+});
+
+describe("resolveTerminalSpawnPlan", () => {
+  it("quotes every command argument for a login shell", () => {
+    const plan = resolveTerminalSpawnPlan({
+      agentId: "main",
+      cwd: "/work",
+      shell: "/bin/zsh",
+      args: ["-l"],
+      initialCommand: ["codex", "resume", "a b;$HOME", "it's"],
+    });
+    expect(plan).toMatchObject({
+      shell: "/bin/zsh",
+      args: ["-il", "-c", "'codex' 'resume' 'a b;$HOME' 'it'\"'\"'s'"],
+    });
+  });
+
+  it("uses a valid cwd override and falls back to home for a missing override", () => {
+    const cwd = tempDirs.make("terminal-resume-cwd-");
+    const base = {
+      agentId: "main",
+      cwd: "/missing/base",
+      shell: "/bin/sh",
+      args: [],
+      initialCommand: ["claude", "--resume", "id"],
+    };
+    expect(resolveTerminalSpawnPlan({ ...base, cwdOverride: cwd }).cwd).toBe(cwd);
+    expect(
+      resolveTerminalSpawnPlan(
+        { ...base, cwdOverride: "/definitely/missing" },
+        { env: { HOME: "/fallback/home" } },
+      ).cwd,
+    ).toBe("/fallback/home");
+  });
+
+  it("spawns the resume executable directly on Windows", () => {
+    expect(
+      resolveTerminalSpawnPlan(
+        {
+          agentId: "main",
+          cwd: "/work",
+          shell: "cmd.exe",
+          args: [],
+          initialCommand: ["codex.exe", "resume", "thread"],
+        },
+        { platform: "win32" },
+      ),
+    ).toMatchObject({ shell: "codex.exe", args: ["resume", "thread"] });
   });
 });

@@ -112,11 +112,11 @@ export type MemoryWikiConfigResolver = (
   appConfig?: OpenClawConfig,
 ) => ResolvedMemoryWikiConfig;
 
-export const DEFAULT_WIKI_VAULT_MODE: WikiVaultMode = "isolated";
-export const DEFAULT_WIKI_VAULT_SCOPE: WikiVaultScope = "global";
-export const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
-export const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
-export const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
+const DEFAULT_WIKI_VAULT_MODE: WikiVaultMode = "isolated";
+const DEFAULT_WIKI_VAULT_SCOPE: WikiVaultScope = "global";
+const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
+const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
+const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
 const MemoryWikiConfigSource = z
   .strictObject({
@@ -225,11 +225,11 @@ function expandHomePath(inputPath: string, homedir: string): string {
   return inputPath;
 }
 
-export function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
+function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
   return path.join(homedir, ".openclaw", "wiki", "main");
 }
 
-export function resolveDefaultMemoryWikiVaultRoot(homedir = os.homedir()): string {
+function resolveDefaultMemoryWikiVaultRoot(homedir = os.homedir()): string {
   return path.join(homedir, ".openclaw", "wiki");
 }
 

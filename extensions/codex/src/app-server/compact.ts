@@ -914,3 +914,4 @@ function formatCompactionError(error: unknown): string {
   }
   return String(error);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

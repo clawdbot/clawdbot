@@ -6,7 +6,7 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
-import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
+import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.types.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
 const TRANSIENT_FALLBACK_REASONS = new Set([

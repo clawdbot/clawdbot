@@ -64,12 +64,9 @@
   --shell-nav-width: 0px;
 }
 
-/* Desktop only: below the drawer breakpoint .shell-nav is the slide-over
-   drawer (layout.mobile.css) and must stay renderable while collapsed. */
-@media (min-width: 1101px) {
-  .shell--nav-collapsed .shell-nav {
-    display: none;
-  }
+/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
+.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
+  display: none;
 }
 
 /* Floating expand control shown while the sidebar is hidden. On native macOS
@@ -114,10 +111,8 @@
   stroke-linejoin: round;
 }
 
-@media (max-width: 1100px) {
-  .shell-nav-expand {
-    display: none;
-  }
+.shell--mobile-nav .shell-nav-expand {
+  display: none;
 }
 
 html.openclaw-native-macos .shell-nav-expand {
@@ -126,7 +121,7 @@ html.openclaw-native-macos .shell-nav-expand {
 
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
    back/forward and add openclaw-native-nav; the in-page toggles (desktop
-   collapse/expand plus the drawer hamburger below 1100px) would duplicate
+   collapse/expand plus the drawer hamburger in compact layouts) would duplicate
    it, so they disappear entirely (⌘B and the accessible titlebar button
    cover keyboard/screen-reader use). Older apps only add
    openclaw-native-macos and keep the web controls visible. */
@@ -138,8 +133,8 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 
 /* Shipped Mac app builds without web chrome still use openclaw-native-nav
    above; new hosts render the replacement controls in this document. Unlike
-   that rule this keeps the drawer hamburger: the web toolbar hides at
-   <=1100px, so narrow windows still need the in-page toggle. */
+   that rule this keeps the drawer hamburger: the web toolbar hides in compact
+   layouts, so narrow windows still need the in-page toggle. */
 html.openclaw-native-web-chrome .shell-nav-expand,
 html.openclaw-native-web-chrome .sidebar-brand__collapse {
   display: none;
@@ -174,10 +169,8 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   opacity: 0.38;
 }
 
-@media (max-width: 1100px) {
-  .macos-titlebar-controls {
-    display: none;
-  }
+.shell--mobile-nav .macos-titlebar-controls {
+  display: none;
 }
 
 .shell--onboarding {
@@ -209,24 +202,22 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   --shell-settings-nav-width: 288px;
 }
 
-@media (min-width: 1101px) {
-  .shell--settings {
-    grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
-    grid-template-rows: 0 1fr;
-    --shell-nav-width: var(--shell-settings-nav-width);
-  }
+.shell--settings:not(.shell--mobile-nav) {
+  grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
+  grid-template-rows: 0 1fr;
+  --shell-nav-width: var(--shell-settings-nav-width);
+}
 
-  .shell--settings .content {
-    padding: 44px clamp(28px, 5vw, 72px) 72px;
-  }
+.shell--settings:not(.shell--mobile-nav) .content {
+  padding: 44px clamp(28px, 5vw, 72px) 72px;
+}
 
-  .shell--settings .content-header {
-    max-height: none;
-  }
+.shell--settings:not(.shell--mobile-nav) .content-header {
+  max-height: none;
+}
 
-  .shell--settings .page-title {
-    font-size: 26px;
-  }
+.shell--settings:not(.shell--mobile-nav) .page-title {
+  font-size: 26px;
 }
 
 .shell--settings .content-header,
@@ -238,6 +229,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 }
 
 .settings-sidebar {
+  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -795,6 +787,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
      never shine through with a mismatched tone. */
   --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -803,14 +796,6 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
-  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
-     broken. Editable fields inside (menu filters) re-enable selection below. */
-  user-select: none;
-}
-
-.sidebar input,
-.sidebar textarea {
-  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -1083,17 +1068,18 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   margin: 12px 16px 0;
 }
 
-@media (min-width: 1101px) {
-  /* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
-  .sidebar-update-card--floating .sidebar-update-card {
-    width: min(360px, calc(100% - 48px));
-    margin-left: 32px;
-  }
+/* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+.shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 48px));
+  margin-left: 32px;
+}
 
-  /* Native dashboard actions must also clear AppKit's drag strip. */
-  html.openclaw-native-macos .sidebar-update-card--floating .sidebar-update-card {
-    margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
-  }
+/* Native dashboard actions must also clear AppKit's drag strip. */
+html.openclaw-native-macos
+  .shell:not(.shell--mobile-nav)
+  .sidebar-update-card--floating
+  .sidebar-update-card {
+  margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
 }
 
 .sidebar-update-card__action {
@@ -1555,6 +1541,72 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   flex-direction: column;
   gap: 2px;
   min-height: 12px;
+}
+
+.sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
+  gap: 8px;
+}
+
+.sidebar-session-catalog-host {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-session-catalog-host__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 19px;
+  padding: 1px 12px 1px 20px;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+}
+
+.sidebar-session-catalog-host__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+}
+
+.sidebar-session-catalog-host__count {
+  width: 20px;
+  flex: 0 0 20px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.68;
+  text-align: center;
+}
+
+.sidebar-session-catalog-host__count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+}
+
+.sidebar-session-catalog-host__count--error svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-host__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
+  padding-left: 18px;
 }
 
 .sidebar-session-pagination {
@@ -2242,15 +2294,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   min-width: 0;
 }
 
-.sidebar-agent-menu__new {
-  padding-inline-start: 26px;
-}
-
-.sidebar-agent-menu__new:disabled {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */
 .sidebar-agent-menu a.sidebar-customize-menu__item {
   color: inherit;
@@ -2746,7 +2789,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
    =========================================== */
 
 @media (max-width: 1100px) {
-  .shell {
+  .shell--mobile-nav {
     --shell-pad: 12px;
     --shell-gap: 12px;
     grid-template-columns: 1fr;
@@ -2757,7 +2800,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
       "content";
   }
 
-  .topbar {
+  .shell--mobile-nav .topbar {
     position: static;
     padding: 6px 12px;
     gap: 10px;

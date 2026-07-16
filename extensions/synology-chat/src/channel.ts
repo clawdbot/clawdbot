@@ -285,7 +285,7 @@ async function sendSynologyChatMedia(
   });
 }
 
-export const synologyChatMessageAdapter = defineChannelMessageAdapter({
+const synologyChatMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
     capabilities: {
@@ -300,7 +300,7 @@ export const synologyChatMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-export function createSynologyChatPlugin(): SynologyChatPlugin {
+function createSynologyChatPlugin(): SynologyChatPlugin {
   return createChatChannelPlugin({
     base: {
       id: CHANNEL_ID,

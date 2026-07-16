@@ -22,7 +22,7 @@ function isNoReplyMarker(text: string): boolean {
   return /^NO_REPLY$/i.test(trimmed) || /^\{\s*"action"\s*:\s*"NO_REPLY"\s*\}$/i.test(trimmed);
 }
 
-export function sanitizeSessionMemoryTranscriptText(text: string): string | null {
+function sanitizeSessionMemoryTranscriptText(text: string): string | null {
   if (isNoReplyMarker(text)) {
     return null;
   }
@@ -133,7 +133,7 @@ export function getRecentSessionContentFromEvents(
   return allMessages.slice(-messageCount).join("\n");
 }
 
-export async function getRecentSessionContent(
+async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount = 15,
 ): Promise<string | null> {

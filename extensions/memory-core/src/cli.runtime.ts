@@ -13,12 +13,10 @@ import {
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
-  colorize,
   defaultRuntime,
   formatErrorMessage,
   getRuntimeConfig,
   getMemorySearchManager,
-  isRich,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
@@ -72,6 +70,8 @@ import {
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
+
+const { accent, heading, info, muted, success, warn } = theme;
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -189,7 +189,7 @@ function emitMemorySecretResolveDiagnostics(
   }
   const toStderr = params?.json === true;
   for (const entry of diagnostics) {
-    const message = theme.warn(`[secrets] ${entry}`);
+    const message = warn(`[secrets] ${entry}`);
     if (toStderr) {
       defaultRuntime.error(message);
     } else {
@@ -900,13 +900,6 @@ export async function runMemoryStatus(
     return;
   }
 
-  const rich = isRich();
-  const heading = (text: string) => colorize(rich, theme.heading, text);
-  const muted = (text: string) => colorize(rich, theme.muted, text);
-  const info = (text: string) => colorize(rich, theme.info, text);
-  const success = (text: string) => colorize(rich, theme.success, text);
-  const warn = (text: string) => colorize(rich, theme.warn, text);
-  const accent = (text: string) => colorize(rich, theme.accent, text);
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
@@ -959,9 +952,8 @@ export async function runMemoryStatus(
           : embeddingProbe.ok
             ? "ready"
             : "unavailable";
-      const stateColor =
-        state === "skipped" ? theme.muted : embeddingProbe.ok ? theme.success : theme.warn;
-      lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
+      const stateColor = state === "skipped" ? muted : embeddingProbe.ok ? success : warn;
+      lines.push(`${label("Embeddings")} ${stateColor(state)}`);
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
@@ -1035,9 +1027,8 @@ export async function runMemoryStatus(
               : "unavailable"
           : "disabled";
       const formatVectorLine = (lineLabel: string, state: string) => {
-        const vectorColor =
-          state === "ready" ? theme.success : state === "unavailable" ? theme.warn : theme.muted;
-        lines.push(`${label(lineLabel)} ${colorize(rich, vectorColor, state)}`);
+        const vectorColor = state === "ready" ? success : state === "unavailable" ? warn : muted;
+        lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
       };
       if (status.backend === "builtin") {
         const storeState = formatVectorState(status.vector.storeAvailable);
@@ -1067,36 +1058,29 @@ export async function runMemoryStatus(
           ? "ready"
           : "unavailable"
         : "disabled";
-      const ftsColor =
-        ftsState === "ready"
-          ? theme.success
-          : ftsState === "unavailable"
-            ? theme.warn
-            : theme.muted;
-      lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState)}`);
+      const ftsColor = ftsState === "ready" ? success : ftsState === "unavailable" ? warn : muted;
+      lines.push(`${label("FTS")} ${ftsColor(ftsState)}`);
       if (status.fts.error) {
         lines.push(`${label("FTS error")} ${warn(status.fts.error)}`);
       }
     }
     if (status.cache) {
       const cacheState = status.cache.enabled ? "enabled" : "disabled";
-      const cacheColor = status.cache.enabled ? theme.success : theme.muted;
+      const cacheColor = status.cache.enabled ? success : muted;
       const suffix =
         status.cache.enabled && typeof status.cache.entries === "number"
           ? ` (${status.cache.entries} entries)`
           : "";
-      lines.push(`${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`);
+      lines.push(`${label("Embedding cache")} ${cacheColor(cacheState)}${suffix}`);
       if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
         lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
       }
     }
     if (status.batch) {
       const batchState = status.batch.enabled ? "enabled" : "disabled";
-      const batchColor = status.batch.enabled ? theme.success : theme.warn;
+      const batchColor = status.batch.enabled ? success : warn;
       const batchSuffix = ` (failures ${status.batch.failures}/${status.batch.limit})`;
-      lines.push(
-        `${label("Batch")} ${colorize(rich, batchColor, batchState)}${muted(batchSuffix)}`,
-      );
+      lines.push(`${label("Batch")} ${batchColor(batchState)}${muted(batchSuffix)}`);
       if (status.batch.lastError) {
         lines.push(`${label("Batch error")} ${warn(status.batch.lastError)}`);
       }
@@ -1197,11 +1181,6 @@ export async function runMemoryIndex(
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
           if (opts.verbose) {
             const status = manager.status();
-            const rich = isRich();
-            const heading = (text: string) => colorize(rich, theme.heading, text);
-            const muted = (text: string) => colorize(rich, theme.muted, text);
-            const info = (text: string) => colorize(rich, theme.info, text);
-            const warn = (text: string) => colorize(rich, theme.warn, text);
             const label = (text: string) => muted(`${text}:`);
             const sourceLabels = (status.sources ?? []).map((source) =>
               formatSourceLabel(source, status.workspaceDir ?? "", agentId),
@@ -1416,17 +1395,12 @@ export async function runMemorySearch(
         defaultRuntime.log("No matches.");
         return;
       }
-      const rich = isRich();
       const lines: string[] = [];
       for (const result of results) {
         lines.push(
-          `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
-            rich,
-            theme.accent,
-            `${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`,
-          )}`,
+          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
         );
-        lines.push(colorize(rich, theme.muted, result.snippet));
+        lines.push(muted(result.snippet));
         lines.push("");
       }
       defaultRuntime.log(lines.join("\n").trim());
@@ -1545,67 +1519,48 @@ export async function runMemoryPromote(
         return;
       }
 
-      const rich = isRich();
       const lines: string[] = [];
-      lines.push(
-        `${colorize(rich, theme.heading, "Short-Term Promotion Candidates")} ${colorize(
-          rich,
-          theme.muted,
-          `(${agentId})`,
-        )}`,
-      );
-      lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${shortenHomePath(storePath)}`);
-      lines.push(colorize(rich, theme.muted, `Store health: ${formatAuditCounts(audit)}`));
+      lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
+      lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
       for (const candidate of candidates) {
         lines.push(
-          `${colorize(rich, theme.success, candidate.score.toFixed(3))} ${colorize(
-            rich,
-            theme.accent,
-            `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`,
-          )}`,
+          `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
         );
         lines.push(
-          colorize(
-            rich,
-            theme.muted,
+          muted(
             `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {
-          lines.push(colorize(rich, theme.muted, `concepts=${candidate.conceptTags.join(", ")}`));
+          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
         }
         if (candidate.snippet) {
-          lines.push(colorize(rich, theme.muted, candidate.snippet));
+          lines.push(muted(candidate.snippet));
         }
         lines.push("");
       }
       if (audit.issues.length > 0) {
-        lines.push(colorize(rich, theme.warn, "Audit issues:"));
+        lines.push(warn("Audit issues:"));
         for (const issue of audit.issues) {
-          lines.push(
-            colorize(rich, issue.severity === "error" ? theme.warn : theme.muted, issue.message),
-          );
+          lines.push((issue.severity === "error" ? warn : muted)(issue.message));
         }
         lines.push("");
       }
       if (applyResult) {
         if (applyResult.applied > 0) {
           lines.push(
-            colorize(
-              rich,
-              theme.success,
+            success(
               `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
             ),
           );
           lines.push(
-            colorize(
-              rich,
-              theme.muted,
+            muted(
               `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
         } else {
-          lines.push(colorize(rich, theme.warn, "No candidates met apply criteria."));
+          lines.push(warn("No candidates met apply criteria."));
         }
       }
       defaultRuntime.log(lines.join("\n").trim());
@@ -1695,38 +1650,25 @@ export async function runMemoryPromoteExplain(
         return;
       }
 
-      const rich = isRich();
       const lines = [
-        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
-          rich,
-          theme.muted,
-          "(" + agentId + ")",
-        )}`,
-        colorize(rich, theme.accent, candidate.key),
-        colorize(
-          rich,
-          theme.muted,
+        `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
+        accent(candidate.key),
+        muted(
           `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
         ),
         candidate.snippet,
-        colorize(
-          rich,
-          theme.muted,
+        muted(
           `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
         ),
-        colorize(
-          rich,
-          theme.muted,
+        muted(
           `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
         ),
-        colorize(
-          rich,
-          theme.muted,
+        muted(
           `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
         ),
       ];
       if (candidate.conceptTags.length > 0) {
-        lines.push(colorize(rich, theme.muted, `concepts=${candidate.conceptTags.join(", ")}`));
+        lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
       }
       defaultRuntime.log(lines.join("\n"));
     },
@@ -1841,27 +1783,18 @@ export async function runMemoryRemHarness(
           return;
         }
 
-        const rich = isRich();
         const lines = [
-          `${colorize(rich, theme.heading, "REM Harness")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
-          colorize(rich, theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
+          `${heading("REM Harness")} ${muted(`(${agentId})`)}`,
+          muted(`workspace=${shortenHomePath(workspaceDir)}`),
           ...(opts.path
             ? [
-                colorize(
-                  rich,
-                  theme.muted,
-                  `sourcePath=${shortenHomePath(path.resolve(opts.path))}`,
-                ),
-                colorize(
-                  rich,
-                  theme.muted,
+                muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+                muted(
                   `historicalFiles=${sourceFiles.length} importedFiles=${importedFileCount} importedSignals=${importedSignalCount}`,
                 ),
                 ...(skippedPaths.length > 0
                   ? [
-                      colorize(
-                        rich,
-                        theme.warn,
+                      warn(
                         `skipped=${skippedPaths.map((entry) => shortenHomePath(entry)).join(", ")}`,
                       ),
                     ]
@@ -1870,34 +1803,30 @@ export async function runMemoryRemHarness(
             : []),
           ...(opts.grounded
             ? [
-                colorize(
-                  rich,
-                  theme.muted,
+                muted(
                   `groundedInputs=${groundedInputPaths.length > 0 ? groundedInputPaths.map((entry) => shortenHomePath(entry)).join(", ") : "none"}`,
                 ),
               ]
             : []),
-          colorize(
-            rich,
-            theme.muted,
+          muted(
             `recentRecallEntries=${preview.recallEntryCount} deepCandidates=${deepCandidates.length}`,
           ),
           "",
-          colorize(rich, theme.heading, "REM Preview"),
+          heading("REM Preview"),
           ...remPreview.bodyLines,
           ...(groundedPreview
             ? [
                 "",
-                colorize(rich, theme.heading, "Grounded REM"),
+                heading("Grounded REM"),
                 ...groundedPreview.files.flatMap((file) => [
-                  colorize(rich, theme.muted, file.path),
+                  muted(file.path),
                   file.renderedMarkdown,
                   "",
                 ]),
               ]
             : []),
           "",
-          colorize(rich, theme.heading, "Deep Candidates"),
+          heading("Deep Candidates"),
           ...(deepCandidates.length > 0
             ? deepCandidates
                 .slice(0, 10)
@@ -1973,30 +1902,18 @@ export async function runMemoryRemBackfill(
         }
         defaultRuntime.log(
           [
-            `${colorize(isRich(), theme.heading, "REM Backfill")} ${colorize(isRich(), theme.muted, "(rollback)")}`,
-            colorize(isRich(), theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
+            `${heading("REM Backfill")} ${muted("(rollback)")}`,
+            muted(`workspace=${shortenHomePath(workspaceDir)}`),
             ...(diaryRollback
               ? [
-                  colorize(
-                    isRich(),
-                    theme.muted,
-                    `dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`,
-                  ),
-                  colorize(isRich(), theme.muted, `removedEntries=${diaryRollback.removed}`),
+                  muted(`dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`),
+                  muted(`removedEntries=${diaryRollback.removed}`),
                 ]
               : []),
             ...(shortTermRollback
               ? [
-                  colorize(
-                    isRich(),
-                    theme.muted,
-                    `shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`,
-                  ),
-                  colorize(
-                    isRich(),
-                    theme.muted,
-                    `removedShortTermEntries=${shortTermRollback.removed}`,
-                  ),
+                  muted(`shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`),
+                  muted(`removedShortTermEntries=${shortTermRollback.removed}`),
                 ]
               : []),
           ].join("\n"),
@@ -2102,27 +2019,22 @@ export async function runMemoryRemBackfill(
           return;
         }
 
-        const rich = isRich();
         defaultRuntime.log(
           [
-            `${colorize(rich, theme.heading, "REM Backfill")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
-            colorize(rich, theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
-            colorize(rich, theme.muted, `sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
-            colorize(
-              rich,
-              theme.muted,
+            `${heading("REM Backfill")} ${muted(`(${agentId})`)}`,
+            muted(`workspace=${shortenHomePath(workspaceDir)}`),
+            muted(`sourcePath=${shortenHomePath(path.resolve(opts.path))}`),
+            muted(
               `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
             ),
             ...(opts.stageShortTerm
               ? [
-                  colorize(
-                    rich,
-                    theme.muted,
+                  muted(
                     `stagedShortTermEntries=${stagedShortTermEntries} replacedShortTermEntries=${replacedShortTermEntries}`,
                   ),
                 ]
               : []),
-            colorize(rich, theme.muted, `dreamsPath=${shortenHomePath(written.dreamsPath)}`),
+            muted(`dreamsPath=${shortenHomePath(written.dreamsPath)}`),
           ].join("\n"),
         );
       } finally {
@@ -2131,3 +2043,4 @@ export async function runMemoryRemBackfill(
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

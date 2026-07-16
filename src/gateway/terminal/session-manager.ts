@@ -1,134 +1,35 @@
-// Owns the lifecycle of operator terminal sessions: one PTY per open, bound to
-// the connection that opened it, streamed back over the gateway event channel.
+// Owns one PTY per operator connection and its gateway event lifecycle.
 import { randomUUID } from "node:crypto";
-import { spawnTerminalPty, type TerminalPtyHandle } from "./pty.js";
-
-/** Emits one terminal event frame to the single owning connection. */
-type TerminalEventSink = (connId: string, event: string, payload: unknown) => void;
-
-/** Injectable PTY spawner so tests can drive sessions without a real shell. */
-type TerminalSpawner = typeof spawnTerminalPty;
-
-const TERMINAL_EVENT_DATA = "terminal.data" as const;
-const TERMINAL_EVENT_EXIT = "terminal.exit" as const;
-
-type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
-
-type TerminalSession = {
-  id: string;
-  /** Owning connection; null while the session is detached. */
-  connId: string | null;
-  agentId: string;
-  cwd: string;
-  shell: string;
-  pty: TerminalPtyHandle;
-  seq: number;
-  closed: boolean;
-  createdAtMs: number;
-  buffer: TerminalOutputRing;
-  /** Kills the session when a detach outlives the grace period. */
-  reaper: ReturnType<typeof setTimeout> | null;
-  detachedAtMs: number | null;
-};
-
-/** One session's facts as reported by terminal.list. */
-type TerminalSessionSummary = {
-  sessionId: string;
-  agentId: string;
-  shell: string;
-  cwd: string;
-  attached: boolean;
-  createdAtMs: number;
-};
-
-/** Bounds concurrent shells so a client cannot exhaust host processes. */
-const DEFAULT_MAX_SESSIONS = 24;
-/**
- * Rolling output kept per session for reattach replay and terminal.text,
- * in UTF-16 code units (≈ bytes for typical terminal output). Constant, not
- * config: ~256 KiB × session cap bounds worst-case memory at a few MiB.
- */
-const DEFAULT_SCROLLBACK_CHARS = 256 * 1024;
-/**
- * Cap on simultaneously detached sessions; the oldest detached session is
- * killed to make room. Keeps repeated disconnects from parking a full
- * session-cap worth of headless shells.
- */
-const DEFAULT_MAX_DETACHED_SESSIONS = 8;
-/** Default grace period before a detached session is killed (seconds). */
-export const DEFAULT_TERMINAL_DETACH_SECONDS = 300;
-
-/**
- * Bounded ring of recent PTY output. Raw bytes, not a screen snapshot: after
- * head truncation a replay can start mid-escape-sequence; emulators recover on
- * the next full repaint (prompt, clear, resize-triggered redraw). A true
- * server-side VT snapshot would need a terminal emulator per session and is a
- * tracked follow-up.
- */
-class TerminalOutputRing {
-  private chunks: string[] = [];
-  private total = 0;
-
-  constructor(private readonly cap: number) {}
-
-  push(chunk: string): void {
-    if (chunk.length >= this.cap) {
-      this.chunks = [chunk.slice(chunk.length - this.cap)];
-      this.total = this.cap;
-      return;
-    }
-    this.chunks.push(chunk);
-    this.total += chunk.length;
-    // Evict whole chunks (PTY write granularity) so surviving data keeps its
-    // original boundaries; the ring may briefly dip below cap, never above.
-    while (this.total > this.cap && this.chunks.length > 1) {
-      const head = this.chunks.shift();
-      if (!head) {
-        break;
-      }
-      this.total -= head.length;
-    }
-  }
-
-  snapshot(): string {
-    return this.chunks.join("");
-  }
-}
-
-type TerminalSessionManagerOptions = {
-  emit: TerminalEventSink;
-  spawn?: TerminalSpawner;
-  maxSessions?: number;
-  env?: NodeJS.ProcessEnv;
-  /**
-   * How long a session may stay detached after its connection drops before it
-   * is killed. 0 (default) preserves kill-on-disconnect; the config-facing
-   * default lives in DEFAULT_TERMINAL_DETACH_SECONDS and is applied by the
-   * gateway wiring.
-   */
-  detachGraceMs?: number;
-  maxDetachedSessions?: number;
-  scrollbackChars?: number;
-};
-
-/** Parameters for a resolved host terminal launch (isolation already checked). */
-type TerminalOpenRequest = {
-  connId: string;
-  agentId: string;
-  cwd: string;
-  shell: string;
-  args: string[];
-  cols: number;
-  rows: number;
-  env: Record<string, string>;
-};
-
-type TerminalOpenOutcome =
-  | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
-  | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
-
-/** Abort state shared between a pending open and lifecycle/policy teardown. */
-type OpenToken = { agentId: string; abortMessage?: string };
+import {
+  ensureTerminalUploadCleanup,
+  stageTerminalUpload,
+  type TerminalUploadFile,
+  type TerminalUploadResult,
+} from "../../infra/terminal-file-upload.js";
+import {
+  createLocalTerminalBackend,
+  type LocalTerminalBackendSpawner,
+  type TerminalBackend,
+} from "./backend.js";
+import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { TerminalOutputController } from "./output-flow-control.js";
+import { TerminalOutputRing } from "./output-ring.js";
+import {
+  DEFAULT_MAX_DETACHED_SESSIONS,
+  DEFAULT_MAX_SESSIONS,
+  DEFAULT_SCROLLBACK_CHARS,
+} from "./session-limits.js";
+import type { TerminalAttachSummary, TerminalSessionSummary } from "./session-types.js";
+export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
+import type {
+  TerminalEventSink,
+  TerminalExitReason,
+  TerminalOpenOutcome,
+  TerminalOpenRequest,
+  TerminalPendingOpen,
+  TerminalSession,
+  TerminalSessionManagerOptions,
+} from "./session-manager.types.js";
 
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index by
@@ -140,9 +41,10 @@ export class TerminalSessionManager {
   // Opens still awaiting spawn, keyed by connection. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
-  private readonly pendingOpens = new Map<string, Set<OpenToken>>();
+  private readonly pendingOpens = new Map<string, Set<TerminalPendingOpen>>();
   private readonly emit: TerminalEventSink;
-  private readonly spawn: TerminalSpawner;
+  private readonly getBufferedAmount: (connId: string) => number | undefined;
+  private readonly spawn?: LocalTerminalBackendSpawner;
   private readonly maxSessions: number;
   private readonly detachGraceMs: number;
   private readonly maxDetachedSessions: number;
@@ -150,10 +52,16 @@ export class TerminalSessionManager {
   // Slots reserved by opens that are still awaiting spawn. Counted against the
   // cap so concurrent opens cannot all pass the check and exceed maxSessions.
   private opening = 0;
+  // Cancellation frees a session slot, but cannot stop every backend factory.
+  // Bound those physical operations until they settle so disconnect churn
+  // cannot create an unbounded number of native/node spawn attempts.
+  private spawning = 0;
 
   constructor(options: TerminalSessionManagerOptions) {
+    void ensureTerminalUploadCleanup();
     this.emit = options.emit;
-    this.spawn = options.spawn ?? spawnTerminalPty;
+    this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
+    this.spawn = options.spawn;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
@@ -167,6 +75,16 @@ export class TerminalSessionManager {
 
   /** Spawns a shell and wires its output/exit to the owning connection. */
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
+    if (request.signal?.aborted) {
+      return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
+    }
+    if (this.spawning >= this.maxSessions * 2) {
+      return {
+        ok: false,
+        code: "limit",
+        message: `terminal spawn limit reached (${this.maxSessions * 2})`,
+      };
+    }
     if (this.sessions.size + this.opening >= this.maxSessions) {
       return {
         ok: false,
@@ -176,74 +94,119 @@ export class TerminalSessionManager {
     }
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
-    const token: OpenToken = { agentId: request.agentId };
-    this.trackPendingOpen(request.connId, token);
-    let pty: TerminalPtyHandle;
-    try {
-      pty = await this.spawn({
-        file: request.shell,
-        args: request.args,
-        cwd: request.cwd,
-        env: request.env,
-        cols: request.cols,
-        rows: request.rows,
-      });
-    } catch (err) {
+    this.spawning += 1;
+    let reservationActive = true;
+    const releaseReservation = () => {
+      if (!reservationActive) {
+        return;
+      }
+      reservationActive = false;
       this.opening -= 1;
-      this.untrackPendingOpen(request.connId, token);
+      this.untrackPendingOpen(request.connId, pending);
+    };
+    const pending: TerminalPendingOpen = {
+      agentId: request.agentId,
+      abort: (message) => {
+        pending.abortMessage ??= message;
+        // A hung spawn must not consume capacity after its owner is gone.
+        // Its eventual backend is still killed by the abortMessage check below.
+        releaseReservation();
+      },
+    };
+    const abortPending = () => {
+      pending.abort(this.openAbortMessage(request.signal));
+    };
+    request.signal?.addEventListener("abort", abortPending, { once: true });
+    this.trackPendingOpen(request.connId, pending);
+    let backend: TerminalBackend;
+    try {
+      backend = request.createBackend
+        ? await request.createBackend()
+        : await createLocalTerminalBackend(
+            {
+              file: request.shell,
+              args: request.args,
+              cwd: request.cwd,
+              env: request.env,
+              cols: request.cols,
+              rows: request.rows,
+            },
+            this.spawn,
+          );
+    } catch (err) {
+      this.spawning -= 1;
+      releaseReservation();
+      request.signal?.removeEventListener("abort", abortPending);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, code: "spawn_failed", message };
     }
     // Hand the reservation over to the live session (synchronous from here — no
     // await — so the counts never both drop).
-    this.opening -= 1;
-    this.untrackPendingOpen(request.connId, token);
-    if (token.abortMessage) {
+    this.spawning -= 1;
+    releaseReservation();
+    request.signal?.removeEventListener("abort", abortPending);
+    if (pending.abortMessage) {
       // The owning connection disconnected while the shell was spawning; kill it
       // now rather than register an orphan no one can reach or close.
       try {
-        pty.kill();
+        backend.kill();
       } catch {
         // Best-effort; the process may already be gone.
       }
-      return { ok: false, code: "closed", message: token.abortMessage };
+      return { ok: false, code: "closed", message: pending.abortMessage };
     }
 
+    const sessionId = randomUUID();
+    const buffer = new TerminalOutputRing(this.scrollbackChars);
+    const owner = { connId: request.connId as string | null };
+    const output = new TerminalOutputController({
+      backend,
+      getConnId: () => owner.connId,
+      getBufferedAmount: this.getBufferedAmount,
+      record: (chunk) => buffer.push(chunk),
+      emit: (connId, data, seq) =>
+        this.emit(connId, TERMINAL_EVENT_DATA, {
+          sessionId,
+          seq,
+          data,
+        }),
+    });
     const session: TerminalSession = {
-      id: randomUUID(),
-      connId: request.connId,
+      id: sessionId,
+      // One owner cell keeps lifecycle mutation and async output routing atomic.
+      get connId() {
+        return owner.connId;
+      },
+      set connId(connId) {
+        owner.connId = connId;
+      },
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
-      pty,
-      seq: 0,
+      backend,
+      stageUpload: request.stageUpload ?? stageTerminalUpload,
       closed: false,
       createdAtMs: Date.now(),
-      buffer: new TerminalOutputRing(this.scrollbackChars),
+      buffer,
+      output,
       reaper: null,
       detachedAtMs: null,
     };
     this.sessions.set(session.id, session);
     this.indexByConn(request.connId, session.id);
 
-    pty.onData((chunk) => {
-      if (session.closed) {
-        return;
+    backend.onData((chunk) => {
+      if (!session.closed) {
+        session.output.push(chunk);
       }
-      // Always buffer so attach can replay; stream only while a conn owns it.
-      session.buffer.push(chunk);
-      if (session.connId === null) {
-        return;
-      }
-      this.emit(session.connId, TERMINAL_EVENT_DATA, {
-        sessionId: session.id,
-        seq: session.seq++,
-        data: chunk,
-      });
     });
-    pty.onExit((event) => {
+    backend.onExit((event) => {
       const signal = event.signal && event.signal !== 0 ? event.signal : null;
-      this.finalize(session, "process_exit", { exitCode: event.exitCode ?? null, signal });
+      this.finalize(session, event.error ? "error" : "process_exit", {
+        exitCode: event.exitCode ?? null,
+        signal,
+        ...(event.error ? { error: event.error } : {}),
+      });
     });
 
     return {
@@ -262,7 +225,8 @@ export class TerminalSessionManager {
       return false;
     }
     try {
-      session.pty.write(data);
+      session.output.noteInput();
+      session.backend.write(data);
       return true;
     } catch {
       this.finalize(session, "error", { error: "write failed" });
@@ -277,11 +241,28 @@ export class TerminalSessionManager {
       return false;
     }
     try {
-      session.pty.resize(cols, rows);
+      session.backend.resize(cols, rows);
       return true;
     } catch {
+      this.finalize(session, "error", { error: "resize failed" });
       return false;
     }
+  }
+
+  /** Stages a file on the same host as an owned terminal session. */
+  async upload(
+    connId: string,
+    sessionId: string,
+    file: TerminalUploadFile,
+  ): Promise<TerminalUploadResult | undefined> {
+    const session = this.ownedSession(connId, sessionId);
+    if (!session) {
+      return undefined;
+    }
+    const result = await session.stageUpload(file);
+    // Upload can outlive a socket or take-over. Do not return a usable path to
+    // a connection that no longer owns the terminal after the await.
+    return this.ownedSession(connId, sessionId) === session ? result : undefined;
   }
 
   /** Closes one session on operator request. */
@@ -302,12 +283,7 @@ export class TerminalSessionManager {
    * in one synchronous step, so no PTY chunk can land in both the returned
    * buffer and the new owner's event stream.
    */
-  attach(
-    connId: string,
-    sessionId: string,
-  ):
-    | { sessionId: string; agentId: string; cwd: string; shell: string; buffer: string }
-    | undefined {
+  attach(connId: string, sessionId: string): TerminalAttachSummary | undefined {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) {
       return undefined;
@@ -316,6 +292,7 @@ export class TerminalSessionManager {
       clearTimeout(session.reaper);
       session.reaper = null;
     }
+    session.output.resetOwnership();
     session.detachedAtMs = null;
     if (session.connId !== null && session.connId !== connId) {
       this.byConn.get(session.connId)?.delete(session.id);
@@ -334,6 +311,7 @@ export class TerminalSessionManager {
       cwd: session.cwd,
       shell: session.shell,
       buffer: session.buffer.snapshot(),
+      seq: session.output.endOffset,
     };
   }
 
@@ -361,19 +339,23 @@ export class TerminalSessionManager {
     return session.buffer.snapshot();
   }
 
-  private trackPendingOpen(connId: string, token: OpenToken): void {
+  private trackPendingOpen(connId: string, pending: TerminalPendingOpen): void {
     let set = this.pendingOpens.get(connId);
     if (!set) {
       set = new Set();
       this.pendingOpens.set(connId, set);
     }
-    set.add(token);
+    set.add(pending);
   }
 
-  private untrackPendingOpen(connId: string, token: OpenToken): void {
+  private openAbortMessage(signal: AbortSignal | undefined): string {
+    return signal?.reason instanceof Error ? signal.reason.message : "terminal open cancelled";
+  }
+
+  private untrackPendingOpen(connId: string, pending: TerminalPendingOpen): void {
     const set = this.pendingOpens.get(connId);
     if (set) {
-      set.delete(token);
+      set.delete(pending);
       if (set.size === 0) {
         this.pendingOpens.delete(connId);
       }
@@ -391,8 +373,8 @@ export class TerminalSessionManager {
     // never answered, so the client has no session id to reattach.
     const opens = this.pendingOpens.get(connId);
     if (opens) {
-      for (const token of opens) {
-        token.abortMessage = "connection closed during open";
+      for (const pending of opens) {
+        pending.abort("connection closed during open");
       }
     }
     const ids = this.byConn.get(connId);
@@ -419,9 +401,9 @@ export class TerminalSessionManager {
     // Config can change while spawn is awaiting the native PTY import. Mark the
     // pending open so it kills the process instead of registering stale access.
     for (const opens of this.pendingOpens.values()) {
-      for (const token of opens) {
-        if (!isAllowed(token.agentId)) {
-          token.abortMessage = "terminal closed because the agent policy changed";
+      for (const pending of opens) {
+        if (!isAllowed(pending.agentId)) {
+          pending.abort("terminal closed because the agent policy changed");
         }
       }
     }
@@ -439,6 +421,7 @@ export class TerminalSessionManager {
 
   /** Parks a session ownerless with a reaper; PTY output keeps buffering. */
   private detach(session: TerminalSession): void {
+    session.output.resetOwnership();
     session.connId = null;
     session.detachedAtMs = Date.now();
     session.reaper = setTimeout(() => {
@@ -471,8 +454,8 @@ export class TerminalSessionManager {
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
     for (const opens of this.pendingOpens.values()) {
-      for (const token of opens) {
-        token.abortMessage = "gateway closed during terminal open";
+      for (const pending of opens) {
+        pending.abort("gateway closed during terminal open");
       }
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.
@@ -507,6 +490,7 @@ export class TerminalSessionManager {
     if (session.closed) {
       return;
     }
+    session.output.dispose({ flush: !opts?.silent && session.connId !== null });
     session.closed = true;
     if (session.reaper) {
       clearTimeout(session.reaper);
@@ -517,7 +501,7 @@ export class TerminalSessionManager {
       this.byConn.get(session.connId)?.delete(session.id);
     }
     try {
-      session.pty.kill();
+      session.backend.kill();
     } catch {
       // Process may already be gone; the kill is best-effort teardown.
     }

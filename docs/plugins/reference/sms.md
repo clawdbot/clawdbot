@@ -16,7 +16,7 @@ Twilio SMS channel plugin for OpenClaw text messages.
 
 ## Surface
 
-channels: sms
+channels: `sms`
 
 ## Related docs
 

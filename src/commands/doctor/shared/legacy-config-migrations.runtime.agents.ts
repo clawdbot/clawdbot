@@ -1465,3 +1465,4 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -38,7 +38,10 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  readTranscriptStatsSync,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -169,7 +172,7 @@ const memoryDeps = {
 };
 
 /** Overrides memory helper dependencies for tests. */
-export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
+function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
     ensureSelectedAgentHarnessPlugin,
@@ -185,6 +188,12 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     now: () => Date.now(),
     ...overrides,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentRunnerMemoryTestApi")] = {
+    setAgentRunnerMemoryTestDeps,
+  };
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -517,8 +526,19 @@ async function readSessionLogSnapshot(params: {
   if (!logPath) {
     return {};
   }
-  if (parseSqliteSessionFileMarker(logPath)) {
-    return {};
+  const sqliteMarker = parseSqliteSessionFileMarker(logPath);
+  if (sqliteMarker) {
+    // SQLite-backed transcripts intentionally skip the legacy JSONL tail scan
+    // (there is no usage line to parse), but the byte-size guard below still
+    // needs a real value or it silently degrades to token-only triggering.
+    if (!params.includeByteSize) {
+      return {};
+    }
+    try {
+      return { byteSize: readTranscriptStatsSync(sqliteMarker).sizeBytes };
+    } catch {
+      return {};
+    }
   }
 
   const snapshot: SessionLogSnapshot = {};
@@ -1584,3 +1604,4 @@ export async function runMemoryFlushIfNeeded(params: {
 
   return { sessionEntry: activeSessionEntry, outcome };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

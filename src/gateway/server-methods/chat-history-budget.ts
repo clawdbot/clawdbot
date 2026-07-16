@@ -40,6 +40,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
+  const turnBoundary = metadata.turnBoundary === true;
   return {
     role,
     timestamp,
@@ -48,6 +49,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
+      ...(turnBoundary ? { turnBoundary: true } : {}),
       truncated: true,
       reason: "oversized",
     },

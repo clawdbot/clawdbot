@@ -1732,3 +1732,4 @@ describe("finalizeSetupWizard", () => {
     expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

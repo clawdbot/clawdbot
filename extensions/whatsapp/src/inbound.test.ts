@@ -2,11 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   extractContactContext,
-  extractExternalAdReplyContext,
   extractLocationData,
   extractMediaPlaceholder,
   extractText,
 } from "./inbound.js";
+import { extractExternalAdReplyContext } from "./inbound/extract.js";
 
 describe("web inbound helpers", () => {
   it("prefers the main conversation body", () => {

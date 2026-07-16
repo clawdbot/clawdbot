@@ -17,6 +17,10 @@ import {
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
+import type {
+  CodexPluginMetadataCache,
+  CodexPluginMetadataQueryKind,
+} from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
@@ -89,6 +93,7 @@ type ReadCodexPluginInventoryParams = {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
   readPluginDetails?: boolean;
   suppressAppInventoryRefresh?: boolean;
@@ -113,9 +118,7 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  const curatedListed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
+  const curatedListed = await listCodexPluginMetadata(params, "curated-global", {});
   const shouldListWorkspacePlugins = policy.pluginPolicies.some(
     (pluginPolicy) =>
       pluginPolicy.enabled &&
@@ -126,10 +129,10 @@ export async function readCodexPluginInventory(
     try {
       workspaceListResult = {
         kind: "listed",
-        response: (await params.request("plugin/list", {
+        response: await listCodexPluginMetadata(params, "workspace-directory", {
           cwds: [],
           marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME],
-        } satisfies v2.PluginListParams)) as v2.PluginListResponse,
+        }),
       };
     } catch (error) {
       if (!(error instanceof CodexAppServerRpcError)) {
@@ -278,6 +281,72 @@ export function pluginReadParams(
       : {}),
     pluginName,
   };
+}
+
+/** Returns configured plugin keys whose current metadata may still recover. */
+export function resolveRecoverableCodexPluginConfigKeys(params: {
+  policy: ResolvedCodexPluginsPolicy;
+  metadataCache: CodexPluginMetadataCache;
+  appCacheKey: string;
+}): string[] {
+  return params.policy.pluginPolicies
+    .filter(
+      (pluginPolicy) =>
+        pluginPolicy.enabled &&
+        !isSettledMissingPluginPolicy({
+          pluginPolicy,
+          metadataCache: params.metadataCache,
+          appCacheKey: params.appCacheKey,
+        }),
+    )
+    .map((pluginPolicy) => pluginPolicy.configKey)
+    .toSorted();
+}
+
+async function listCodexPluginMetadata(
+  params: ReadCodexPluginInventoryParams,
+  queryKind: CodexPluginMetadataQueryKind,
+  requestParams: v2.PluginListParams,
+): Promise<v2.PluginListResponse> {
+  // Workspace-directory plugins are activated OUTSIDE OpenClaw, so a cached
+  // miss has no invalidation signal; keep those queries live so external
+  // activation is visible on the next turn (bounded by the build deadline).
+  if (!params.metadataCache || !params.appCacheKey || queryKind === "workspace-directory") {
+    return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
+  }
+  const snapshot = await params.metadataCache.load({
+    appCacheKey: params.appCacheKey,
+    queryKind,
+    requestParams,
+    request: async (method, listedParams) =>
+      (await params.request(method, listedParams)) as v2.PluginListResponse,
+    // Upstream fail-open: with omitted marketplaceKinds a remote catalog fetch
+    // failure only warns and returns local marketplaces (no load error), which
+    // is indistinguishable from a genuinely absent plugin. Settle curated
+    // negatives only when the curated marketplace itself is present.
+    cacheable: (response: v2.PluginListResponse) =>
+      (response.marketplaces ?? []).some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+  });
+  return snapshot.response;
+}
+
+function isSettledMissingPluginPolicy(params: {
+  pluginPolicy: ResolvedCodexPluginPolicy;
+  metadataCache: CodexPluginMetadataCache;
+  appCacheKey: string;
+}): boolean {
+  const queryKind: CodexPluginMetadataQueryKind =
+    params.pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+      ? "workspace-directory"
+      : "curated-global";
+  const listed = params.metadataCache.read(params.appCacheKey, queryKind)?.response;
+  if (!listed) {
+    return false;
+  }
+  if (queryKind === "workspace-directory") {
+    return !findWorkspaceMarketplacePlugin(listed, params.pluginPolicy.pluginName);
+  }
+  return !findOpenAiCuratedMarketplacePlugin(listed, params.pluginPolicy.pluginName);
 }
 
 function readCachedAppInventory(
@@ -464,7 +533,8 @@ function marketplaceRef(
   };
 }
 
-function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
+/** True for either supported OpenAI curated marketplace wire name. */
+export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
   return (
     marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||
     marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME

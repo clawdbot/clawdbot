@@ -2580,3 +2580,4 @@ describe("Azure OpenAI Responses content type support", () => {
     expect(liveTextSignatures).toEqual([undefined, undefined, undefined]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

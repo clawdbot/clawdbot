@@ -46,6 +46,8 @@ flow:
                 ref: env
               action: react
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 emoji:
@@ -56,6 +58,8 @@ flow:
                 ref: env
               action: edit
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 text:
@@ -66,6 +70,8 @@ flow:
                 ref: env
               action: delete
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
         - call: state.readMessage

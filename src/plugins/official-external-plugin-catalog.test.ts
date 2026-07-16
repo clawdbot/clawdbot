@@ -1203,3 +1203,4 @@ describe("official external plugin catalog", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

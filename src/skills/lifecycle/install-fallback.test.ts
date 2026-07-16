@@ -25,14 +25,11 @@ vi.mock("../loading/workspace.js", () => ({
 
 let installSkill: typeof import("./install.js").installSkill;
 let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
-let skillsInstallTesting: typeof import("./install.js").testing;
+let skillsInstallTesting: typeof import("./install.test-support.js").skillsInstallTesting;
 
 async function loadSkillsInstallModulesForTest() {
-  ({
-    installSkill,
-    resolveInstallerKindReadiness,
-    testing: skillsInstallTesting,
-  } = await import("./install.js"));
+  ({ installSkill, resolveInstallerKindReadiness } = await import("./install.js"));
+  ({ skillsInstallTesting } = await import("./install.test-support.js"));
 }
 
 function makeSkillEntry(

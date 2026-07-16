@@ -2843,3 +2843,4 @@ describe("resolveGatewayModelSupportsImages", () => {
     ).resolves.toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

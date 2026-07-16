@@ -10,7 +10,6 @@ import {
   buildBeforeModelResolveAttachments,
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
-  resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
@@ -248,7 +247,7 @@ function createConfiguredModel(
   };
 }
 
-describe("resolveEffectiveRuntimeModel", () => {
+describe("resolveEmbeddedRuntimeModelPolicy", () => {
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
@@ -261,15 +260,16 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       contextConfigProvider: "openai",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "modelsConfig",
       tokens: 1_000_000,
     });
@@ -288,14 +288,15 @@ describe("resolveEffectiveRuntimeModel", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = resolveEffectiveRuntimeModel({
+    const result = resolveEmbeddedRuntimeModelPolicy({
       cfg,
       provider: "codex",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
+      nativeModelOwned: false,
     });
 
-    expect(result.ctxInfo).toEqual({
+    expect(result.contextWindowInfo).toEqual({
       source: "model",
       tokens: 272_000,
     });

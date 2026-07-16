@@ -27,7 +27,8 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   };
 });
 
-const { handleLoginCommand, testing } = await import("./commands-login.js");
+const { handleLoginCommand } = await import("./commands-login.js");
+const { testing } = await import("./commands-login.test-support.js");
 const { loadCommandHandlers } = await import("./commands-handlers.runtime.js");
 const { handlePluginCommand } = await import("./commands-plugin.js");
 

@@ -14,16 +14,16 @@ vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: isMessagingToolSendActionMock,
 }));
 import {
-  CRITICAL_THRESHOLD,
-  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-  TOOL_CALL_HISTORY_SIZE,
   UNKNOWN_TOOL_THRESHOLD,
-  WARNING_THRESHOLD,
   detectToolCallLoop,
-  hashToolCall,
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
+
+const TOOL_CALL_HISTORY_SIZE = 30;
+const WARNING_THRESHOLD = 10;
+const CRITICAL_THRESHOLD = 20;
+const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
 function createState(): SessionState {
   return {
@@ -31,6 +31,16 @@ function createState(): SessionState {
     state: "processing",
     queueDepth: 0,
   };
+}
+
+function recordArgsHash(toolName: string, params: unknown): string {
+  const state = createState();
+  recordToolCall(state, toolName, params, "hash-test");
+  const hash = state.toolCallHistory?.[0]?.argsHash;
+  if (!hash) {
+    throw new Error("recordToolCall did not record an argument hash");
+  }
+  return hash;
 }
 
 const enabledLoopDetectionConfig: ToolLoopDetectionConfig = { enabled: true };
@@ -193,30 +203,30 @@ function expectPingPongLoop(
 }
 
 describe("tool-loop-detection", () => {
-  describe("hashToolCall", () => {
+  describe("recordToolCall argument hashing", () => {
     it("creates consistent hash for same tool and params", () => {
-      const hash1 = hashToolCall("read", { path: "/file.txt" });
-      const hash2 = hashToolCall("read", { path: "/file.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file.txt" });
+      const hash2 = recordArgsHash("read", { path: "/file.txt" });
       expect(hash1).toBe(hash2);
     });
 
     it("creates different hashes for different params", () => {
-      const hash1 = hashToolCall("read", { path: "/file1.txt" });
-      const hash2 = hashToolCall("read", { path: "/file2.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file1.txt" });
+      const hash2 = recordArgsHash("read", { path: "/file2.txt" });
       expect(hash1).not.toBe(hash2);
     });
 
     it("creates different hashes for different tools", () => {
-      const hash1 = hashToolCall("read", { path: "/file.txt" });
-      const hash2 = hashToolCall("write", { path: "/file.txt" });
+      const hash1 = recordArgsHash("read", { path: "/file.txt" });
+      const hash2 = recordArgsHash("write", { path: "/file.txt" });
       expect(hash1).not.toBe(hash2);
     });
 
     it("hashes non-object params with the same digest shape", () => {
       const hashes = [
-        hashToolCall("tool", "string-param"),
-        hashToolCall("tool", 123),
-        hashToolCall("tool", null),
+        recordArgsHash("tool", "string-param"),
+        recordArgsHash("tool", 123),
+        recordArgsHash("tool", null),
       ];
       expect(hashes).toHaveLength(3);
       for (const hash of hashes) {
@@ -227,14 +237,14 @@ describe("tool-loop-detection", () => {
     });
 
     it("produces deterministic hashes regardless of key order", () => {
-      const hash1 = hashToolCall("tool", { a: 1, b: 2 });
-      const hash2 = hashToolCall("tool", { b: 2, a: 1 });
+      const hash1 = recordArgsHash("tool", { a: 1, b: 2 });
+      const hash2 = recordArgsHash("tool", { b: 2, a: 1 });
       expect(hash1).toBe(hash2);
     });
 
     it("keeps hashes fixed-size even for large params", () => {
       const payload = { data: "x".repeat(20_000) };
-      const hash = hashToolCall("read", payload);
+      const hash = recordArgsHash("read", payload);
       expect(hash.startsWith("read:")).toBe(true);
       expect(hash.length).toBe("read:".length + 64);
     });
@@ -251,8 +261,8 @@ describe("tool-loop-detection", () => {
       };
       equivalentPayload.self = equivalentPayload;
 
-      expect(hashToolCall("tool", payload)).toBe(hashToolCall("tool", equivalentPayload));
-      expect(hashToolCall("tool", payload)).toEqual(expect.stringMatching(/^tool:[a-f0-9]{64}$/));
+      expect(recordArgsHash("tool", payload)).toBe(recordArgsHash("tool", equivalentPayload));
+      expect(recordArgsHash("tool", payload)).toEqual(expect.stringMatching(/^tool:[a-f0-9]{64}$/));
     });
   });
 
@@ -277,7 +287,7 @@ describe("tool-loop-detection", () => {
       expect(state.toolCallHistory).toHaveLength(TOOL_CALL_HISTORY_SIZE);
 
       const oldestCall = state.toolCallHistory?.[0];
-      expect(oldestCall?.argsHash).toBe(hashToolCall("tool", { iteration: 10 }));
+      expect(oldestCall?.argsHash).toBe(recordArgsHash("tool", { iteration: 10 }));
     });
 
     it("records timestamp for each call", () => {
@@ -309,7 +319,7 @@ describe("tool-loop-detection", () => {
       }
 
       expect(state.toolCallHistory).toHaveLength(4);
-      expect(state.toolCallHistory?.[0]?.argsHash).toBe(hashToolCall("tool", { iteration: 6 }));
+      expect(state.toolCallHistory?.[0]?.argsHash).toBe(recordArgsHash("tool", { iteration: 6 }));
     });
   });
 
@@ -1265,3 +1275,4 @@ describe("tool-loop-detection", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

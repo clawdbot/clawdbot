@@ -1263,7 +1263,7 @@ export async function handleFeishuMessage(params: {
             requireMention,
           },
           commands: {
-            authorized: commandAuthorized,
+            authorized: commandAuthorized === true,
           },
         },
         extra: {
@@ -1700,3 +1700,4 @@ export async function handleFeishuMessage(params: {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

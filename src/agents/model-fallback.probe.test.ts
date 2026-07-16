@@ -131,7 +131,7 @@ let mockedResolveAuthProfileOrder: ReturnType<
   typeof vi.mocked<AuthProfilesOrderModule["resolveAuthProfileOrder"]>
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
-let modelFallbackTesting: ModelFallbackModule["testing"];
+let resolveCooldownDecision: (typeof import("./model-fallback.test-support.js"))["resolveCooldownDecision"];
 let probeThrottleInternals: ModelFallbackModule["probeThrottleInternals"];
 let resetLogger: LoggerModule["resetLogger"];
 let setLoggerOverride: LoggerModule["setLoggerOverride"];
@@ -147,6 +147,7 @@ async function loadModelFallbackProbeModules() {
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackModule = await import("./model-fallback.js");
+  const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(
     authProfilesSourceCheckModule.hasAnyAuthProfileStoreSource,
@@ -158,7 +159,7 @@ async function loadModelFallbackProbeModules() {
   );
   mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
-  modelFallbackTesting = modelFallbackModule.testing;
+  resolveCooldownDecision = modelFallbackTestSupport.resolveCooldownDecision;
   probeThrottleInternals = modelFallbackModule.probeThrottleInternals;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
@@ -292,7 +293,7 @@ describe("runWithModelFallback – probe logic", () => {
     if (params.usageStats) {
       authStore.usageStats = params.usageStats;
     }
-    return modelFallbackTesting.resolveCooldownDecision({
+    return resolveCooldownDecision({
       candidate: OPENAI_PROBE_CANDIDATE,
       isPrimary: params.isPrimary ?? true,
       requestedModel: params.requestedModel ?? true,
@@ -302,16 +303,14 @@ describe("runWithModelFallback – probe logic", () => {
       authRuntime: {
         getSoonestCooldownExpiry: mockedGetSoonestCooldownExpiry,
         resolveProfilesUnavailableReason: mockedResolveProfilesUnavailableReason,
-      } as unknown as Parameters<
-        typeof modelFallbackTesting.resolveCooldownDecision
-      >[0]["authRuntime"],
+      } as unknown as Parameters<typeof resolveCooldownDecision>[0]["authRuntime"],
       authStore,
       profileIds: ["openai-profile-1"],
     });
   }
 
   function expectOpenAiProbeSuspension(
-    decision: ReturnType<ModelFallbackModule["testing"]["resolveCooldownDecision"]>,
+    decision: ReturnType<typeof resolveCooldownDecision>,
     reason: "rate_limit" | "billing",
   ) {
     expect(decision).toEqual({

@@ -277,7 +277,7 @@ describe("migration provider runtime", () => {
     });
   });
 
-  it("derives a fresh manifest registry so newly bundled migration providers are discoverable", () => {
+  it("discovers newly bundled migration providers from current metadata", () => {
     const provider = createMigrationProvider("hermes");
     const active = createEmptyPluginRegistry();
     const loaded = createEmptyPluginRegistry();
@@ -290,55 +290,21 @@ describe("migration provider runtime", () => {
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : loaded,
     );
-    mocks.loadPluginRegistrySnapshot.mockReturnValue(
-      createMockPluginIndex([
-        {
-          pluginId: "migrate-hermes",
-          origin: "bundled",
-          enabled: true,
-        },
-      ]),
-    );
-    mocks.loadPluginManifestRegistry.mockImplementation(() => ({
-      diagnostics: [],
-      plugins: [
-        {
+    mocks.listBundledPluginMetadata.mockReturnValue([
+      {
+        manifest: {
           id: "migrate-hermes",
-          origin: "bundled",
           contracts: { migrationProviders: ["hermes"] },
         },
-      ],
-    }));
+      },
+    ] as never);
 
     const resolved = resolvePluginMigrationProvider({ providerId: "hermes" });
 
     expect(resolved).toBe(provider);
-    expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-      workspaceDir: undefined,
+    expect(mocks.listBundledPluginMetadata).toHaveBeenCalledWith({
+      includeChannelConfigs: false,
     });
-    const manifestParams = requireMockCallArg(
-      mocks.loadPluginManifestRegistry,
-      "loadPluginManifestRegistry",
-    ) as {
-      index?: MockPluginIndex;
-      config?: OpenClawConfig;
-      env?: NodeJS.ProcessEnv;
-      includeDisabled?: unknown;
-      workspaceDir?: unknown;
-    };
-    expect(manifestParams.index?.plugins).toEqual([
-      {
-        pluginId: "migrate-hermes",
-        origin: "bundled",
-        enabled: true,
-      },
-    ]);
-    expect(manifestParams.config).toEqual({});
-    expect(manifestParams.env).toBe(process.env);
-    expect(manifestParams.includeDisabled).toBe(true);
-    expect(manifestParams.workspaceDir).toBeUndefined();
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["migrate-hermes"],
     });

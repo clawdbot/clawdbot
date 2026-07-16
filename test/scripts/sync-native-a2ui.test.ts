@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  checkLinuxCanvasA2uiReferences,
   checkNativeA2uiResources,
   getNativeA2uiResourcePaths,
   syncNativeA2uiResources,
@@ -45,7 +46,26 @@ describe("scripts/sync-native-a2ui.mjs", () => {
         "Resources",
         "CanvasA2UI",
       ),
+      linuxConsumerFile: path.join("/repo", "apps", "linux", "src-tauri", "src", "canvas.rs"),
     });
+  });
+
+  it("requires Linux Canvas to embed the plugin-owned resources", async () => {
+    const root = await makeTempDir();
+    const linuxConsumerFile = path.join(root, "canvas.rs");
+    await fs.writeFile(
+      linuxConsumerFile,
+      [
+        'include_bytes!("../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/index.html");',
+        'include_bytes!("../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js");',
+      ].join("\n"),
+    );
+
+    await expect(checkLinuxCanvasA2uiReferences({ linuxConsumerFile })).resolves.toBeUndefined();
+    await fs.writeFile(linuxConsumerFile, 'const OTHER: &[u8] = b"stale";\n');
+    await expect(checkLinuxCanvasA2uiReferences({ linuxConsumerFile })).rejects.toThrow(
+      "Linux Canvas must embed the synced native A2UI resources",
+    );
   });
 
   it("replaces stale native resources with the generated source files", async () => {

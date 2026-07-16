@@ -2,13 +2,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   coerceFiniteScheduleNumber,
-  clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
+} from "./schedule.js";
+import {
+  clearCronScheduleCacheForTest,
   getCronScheduleCacheMaxForTest,
   getCronScheduleCacheSizeForTest,
   hasCronInCacheForTest,
-} from "./schedule.js";
+} from "./schedule.test-support.js";
 
 function requireTimestamp(value: number | undefined, label: string): number {
   if (value === undefined) {

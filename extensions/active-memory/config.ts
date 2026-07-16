@@ -30,6 +30,7 @@ import {
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
   type ActiveMemoryChatType,
+  type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
   type ActiveMemoryQmdSearchMode,
   type ActiveMemoryThinkingLevel,
@@ -239,6 +240,7 @@ function normalizePluginConfig(
     allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
+    fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
@@ -345,6 +347,10 @@ function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
   return "off";
 }
 
+function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
+  return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
+}
+
 function resolvePromptStyle(
   promptStyle: unknown,
   queryMode: ActiveRecallPluginConfig["queryMode"],
@@ -386,6 +392,7 @@ export {
   clampInt,
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,
+  normalizeActiveMemoryFastMode,
   normalizePluginConfig,
   requireTransientWorkspaceDir,
   resetActiveMemoryConfigForTests,

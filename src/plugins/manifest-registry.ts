@@ -1220,3 +1220,4 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1375,3 +1375,4 @@ describe("maybeRepairOpenAICodexAuthProfileStores", () => {
     ).toEqual(legacy);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

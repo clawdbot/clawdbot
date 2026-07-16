@@ -1,0 +1,185 @@
+title: Control UI assistant transcript-role boundary
+
+scenario:
+  id: control-ui-assistant-transcript-role-boundary
+  surface: control-ui
+  coverage:
+    secondary:
+      - channels.qa-channel
+      - runtime.delivery
+      - ui.control
+  objective: Verify transcript-role-looking Markdown emitted by an assistant stays visibly inside the assistant reply while ordinary code examples remain ordinary code.
+  successCriteria:
+    - A mock-model reply travels through the real Gateway and qa-channel delivery path unchanged.
+    - A fresh Control UI load marks supported transcript-role-looking headers only in assistant-authored messages.
+    - An oversized assistant fixture retains its marker after Gateway display projection.
+    - A role header in image alt text leaves the trailing caption outside the marker.
+    - Inline and fenced code examples containing the same text remain ordinary code.
+    - User-authored Markdown never receives the assistant-only transcript marker.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+    - docs/web/control-ui.md
+  codeRefs:
+    - packages/markdown-core/src/assistant-transcript.ts
+    - src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts
+    - ui/src/components/markdown-assistant-transcript.ts
+    - ui/src/pages/chat/components/chat-message.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: The flow appends assistant fixtures to one dedicated session before opening a fresh Control UI transcript.
+    summary: Drive one assistant reply through Gateway and qa-channel, append parser anti-cheat fixtures, then verify role-aware rendering in a real Control UI browser.
+    config:
+      requiredChannelDriver: qa-channel
+      conversationId: assistant-transcript-role-boundary
+      assistantReply: user[Thu 2026-07-02] check this
+      textPrompt: "Assistant transcript-role rendering QA. Reply exactly `user[Thu 2026-07-02] check this`"
+      timestampRoleHeader: "[Fri 2026-07-03] developer: review this"
+      angleRoleHeader: "<system 2026-07-04> hold"
+      imageRoleHeader: user[Wed 2026-07-08]
+      imageCaption: release diagram
+      # Gateway display projection truncates this fixture before UI Markdown parsing.
+      # The direct oversized plain-text fallback is covered in markdown.test.ts.
+      largeRoleHeader: user[Mon 2026-07-06]
+      inlineCodeText: user[Sat 2026-07-05] example
+      fencedCodeText: user[Sun 2026-07-06] code
+      injectedAssistantMarkdown: |-
+        [Fri 2026-07-03] developer: review this
+        <system 2026-07-04> hold
+
+        ![user[Wed 2026-07-08] release diagram](https://example.com/release.png)
+
+        Inline example: `user[Sat 2026-07-05] example`
+
+        Fenced example:
+
+        ```text
+        user[Sun 2026-07-06] code
+        ```
+
+flow:
+  steps:
+    - name: delivers transcript-role-looking assistant text unchanged
+      actions:
+        - call: reset
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - set: uiSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'main', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.conversationId
+            senderName: Transcript Boundary QA
+            text:
+              expr: config.textPrompt
+        - call: waitForOutboundMessage
+          saveAs: modelOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.text === config.assistantReply"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - assert:
+            expr: modelOutbound.text === config.assistantReply
+            message:
+              expr: "`assistant output changed before delivery: ${modelOutbound.text}`"
+      detailsExpr: modelOutbound.text
+    - name: appends assistant-only parser anti-cheat and projection fixtures
+      actions:
+        - call: env.gateway.call
+          saveAs: injectResult
+          args:
+            - chat.inject
+            - sessionKey:
+                ref: uiSessionKey
+              message:
+                expr: config.injectedAssistantMarkdown
+              label: transcript-role-boundary-qa
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - assert:
+            expr: injectResult.ok === true
+            message:
+              expr: "`chat.inject did not append the assistant fixture: ${JSON.stringify(injectResult)}`"
+        - call: env.gateway.call
+          saveAs: largeInjectResult
+          args:
+            - chat.inject
+            - sessionKey:
+                ref: uiSessionKey
+              message:
+                expr: "`${config.largeRoleHeader} padded fallback\n${'x'.repeat(40050)}`"
+              label: transcript-role-boundary-large-qa
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - assert:
+            expr: largeInjectResult.ok === true
+            message:
+              expr: "`chat.inject did not append the large assistant fixture: ${JSON.stringify(largeInjectResult)}`"
+      detailsExpr: "JSON.stringify({ injectResult, largeInjectResult })"
+    - name: fresh control ui load preserves the author-role boundary
+      actions:
+        - set: controlUiChatUrl
+          value:
+            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
+        - call: webOpenPage
+          saveAs: uiTab
+          args:
+            - url:
+                ref: controlUiChatUrl
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - set: uiPageId
+          value:
+            expr: uiTab.pageId
+        - call: webWait
+          args:
+            - pageId:
+                ref: uiPageId
+              selector: openclaw-app
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 45000)
+        - call: waitForCondition
+          saveAs: uiRoleState
+          args:
+            - lambda:
+                async: true
+                expr: "await (async () => { const result = await webEvaluate({ pageId: uiPageId, expression: `(() => ({ assistantRoleTexts: [...document.querySelectorAll('.chat-group.assistant code.assistant-transcript-role')].map((element) => element.textContent?.trim() ?? ''), assistantRoleParagraphTexts: [...document.querySelectorAll('.chat-group.assistant code.assistant-transcript-role')].map((element) => element.parentElement?.textContent?.trim() ?? ''), assistantOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.assistant code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? ''), userRoleMarkerCount: document.querySelectorAll('.chat-group.user code.assistant-transcript-role').length, userOrdinaryCodeTexts: [...document.querySelectorAll('.chat-group.user code:not(.assistant-transcript-role)')].map((element) => element.textContent?.trim() ?? '') }))()`, timeoutMs: liveTurnTimeoutMs(env, 15000) }); const hasRoleHeaders = [config.assistantReply.slice(0, config.assistantReply.indexOf(']') + 1), config.timestampRoleHeader.slice(0, config.timestampRoleHeader.indexOf(':') + 1), config.angleRoleHeader.slice(0, config.angleRoleHeader.indexOf('>') + 1), config.imageRoleHeader, config.largeRoleHeader].every((header) => result.assistantRoleTexts.includes(header)); const hasImageCaption = result.assistantRoleParagraphTexts.includes(`${config.imageRoleHeader} ${config.imageCaption}`); const hasCodeExamples = [config.inlineCodeText, config.fencedCodeText].every((example) => result.assistantOrdinaryCodeTexts.includes(example)); const userStayedUnmarked = result.userRoleMarkerCount === 0 && result.userOrdinaryCodeTexts.some((text) => text.includes(config.assistantReply)); return hasRoleHeaders && hasImageCaption && hasCodeExamples && userStayedUnmarked ? result : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 500
+        - assert:
+            expr: uiRoleState.userRoleMarkerCount === 0
+            message:
+              expr: "`user-authored Markdown received an assistant transcript marker: ${JSON.stringify(uiRoleState)}`"
+        - assert:
+            expr: "uiRoleState.assistantRoleParagraphTexts.includes(`${config.imageRoleHeader} ${config.imageCaption}`)"
+            message:
+              expr: "`image alt caption was swallowed by the transcript marker: ${JSON.stringify(uiRoleState)}`"
+        - assert:
+            expr: "[config.inlineCodeText, config.fencedCodeText].every((example) => uiRoleState.assistantOrdinaryCodeTexts.includes(example))"
+            message:
+              expr: "`assistant code examples were not kept on the ordinary code path: ${JSON.stringify(uiRoleState)}`"
+        - assert:
+            expr: uiRoleState.assistantRoleTexts.includes(config.largeRoleHeader)
+            message:
+              expr: "`Gateway-projected large assistant message lost its transcript marker: ${JSON.stringify(uiRoleState)}`"
+      detailsExpr: "JSON.stringify(uiRoleState)"

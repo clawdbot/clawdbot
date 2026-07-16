@@ -56,6 +56,12 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
 ]);
 const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
+    "extensions/discord",
+    // Bundled at build time into the served Discord Activity shell asset rather than
+    // imported by plugin runtime code; see scripts/build-discord-activity-sdk.mjs.
+    new Set(["@discord/embedded-app-sdk"]),
+  ],
+  [
     "extensions/lobster",
     // Keep Lobster external to the plugin bundle; its computed core import is resolved at runtime.
     new Set(["@clawdbot/lobster"]),

@@ -1036,3 +1036,4 @@ export class DefaultResourceLoader implements ResourceLoader {
     return conflicts;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

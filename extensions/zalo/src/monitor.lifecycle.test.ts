@@ -72,6 +72,8 @@ async function startLifecycleMonitor(
 describe("monitorZaloProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    getUpdatesMock.mockReset();
+    getUpdatesMock.mockImplementation(() => new Promise(() => {}));
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -95,6 +97,41 @@ describe("monitorZaloProvider lifecycle", () => {
 
     expect(settled).toBe(true);
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
+  });
+
+  it("clears poll error backoff on abort without retrying", async () => {
+    vi.useFakeTimers();
+    let abort: AbortController | undefined;
+    let run: Promise<void> | undefined;
+    try {
+      getUpdatesMock.mockReset();
+      getUpdatesMock.mockRejectedValue(new Error("zalo poll transport failed"));
+
+      const started = await startLifecycleMonitor();
+      abort = started.abort;
+      run = started.run;
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("zalo poll transport failed"),
+      );
+      expect(getUpdatesMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      abort.abort();
+      await run;
+
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(getUpdatesMock).toHaveBeenCalledTimes(1);
+      expect(started.runtime.log).toHaveBeenCalledWith(
+        "[default] Zalo provider stopped mode=polling",
+      );
+    } finally {
+      abort?.abort();
+      await run?.catch(() => undefined);
+      vi.useRealTimers();
+    }
   });
 
   it("deletes an existing webhook before polling", async () => {

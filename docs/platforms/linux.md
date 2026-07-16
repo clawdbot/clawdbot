@@ -2,6 +2,7 @@
 summary: "Linux support + companion app status"
 read_when:
   - Looking for Linux companion app status
+  - Enabling camera, location, or notifications on a Linux node host
   - Planning platform coverage or contributions
   - Debugging Linux OOM kills or exit 137 on a VPS or container
 title: "Linux app"
@@ -18,7 +19,9 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 - installs the OpenClaw CLI and managed Node runtime when they are missing
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
+- discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
 - opens the Gateway-served Control UI with its resolved authentication URL
+- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 
 Stable releases built from `main` ship `.deb` and AppImage bundles as assets on the
@@ -42,6 +45,14 @@ The `Linux App` CI workflow uploads the same bundles as the
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
 
+### Canvas
+
+Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
+
+The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
+
+Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
+
 ## CLI and SSH alternative
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
@@ -55,6 +66,49 @@ The CLI remains the simplest option for a headless server, a VPS, or a remote Ga
 
 Full server guide: [Linux Server](/vps). Step-by-step VPS example:
 [exe.dev](/install/exe-dev).
+
+## Node capabilities
+
+The bundled Linux Node plugin gives the CLI `openclaw node` service device capabilities without requiring the desktop app. Commands are advertised to the Gateway only when their capability is enabled and the required local tool exists.
+
+| Capability                              | Default | Requirement                                                           |
+| --------------------------------------- | ------- | --------------------------------------------------------------------- |
+| Desktop notifications (`system.notify`) | On      | `notify-send` from libnotify and a desktop notification session       |
+| Camera photos and clips (`camera.*`)    | Off     | FFmpeg, V4L2 camera access, and PulseAudio or PipeWire for clip audio |
+| Location (`location.get`)               | Off     | GeoClue2 and its `where-am-i` demo                                    |
+
+Configure the plugin in `openclaw.json`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          notify: { enabled: true },
+          camera: { enabled: true },
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Restart the node service after changing these settings. Availability is determined once per process and the node advertisement is rebuilt on restart.
+
+The Gateway approves the node's command and capability surface separately from device pairing. On first start, or after enabling more capabilities, approve the pending surface:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
+A node can be connected and device-paired while its effective `caps` and `commands` remain empty until this approval completes.
+
+Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
+
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

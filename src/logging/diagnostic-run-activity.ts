@@ -627,11 +627,11 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
+function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
 
-export function markDiagnosticToolStartedForTest(params: {
+function markDiagnosticToolStartedForTest(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -641,9 +641,7 @@ export function markDiagnosticToolStartedForTest(params: {
   recordToolStarted(params);
 }
 
-export function markDiagnosticModelStartedForTest(
-  params: DiagnosticModelStartedActivityEvent,
-): void {
+function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void {
   recordModelStarted(params);
 }
 
@@ -691,3 +689,13 @@ function registerDiagnosticRunActivityListener(): void {
 }
 
 registerDiagnosticRunActivityListener();
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.diagnosticRunActivityTestApi")
+  ] = {
+    markDiagnosticModelStartedForTest,
+    markDiagnosticRunProgressForTest,
+    markDiagnosticToolStartedForTest,
+  };
+}

@@ -2583,3 +2583,4 @@ function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v
     ...overrides,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

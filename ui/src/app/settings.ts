@@ -42,6 +42,7 @@ import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/sp
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
+import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
@@ -51,39 +52,29 @@ export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
-export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
-  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
-    ? (value as ChatSendShortcut)
-    : "enter";
+function normalizeChoice<T extends string>(
+  values: readonly T[],
+  fallback: T,
+): (value: unknown) => T {
+  return (value) => (values.includes(value as T) ? (value as T) : fallback);
 }
+
+export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+
+const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
+export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
+
+export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
+
+const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
+export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
+
+export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
-export function normalizeChatWorkspaceDock(value: unknown): ChatWorkspaceDock {
-  return CHAT_WORKSPACE_DOCKS.includes(value as ChatWorkspaceDock)
-    ? (value as ChatWorkspaceDock)
-    : "right";
-}
-
-/** Normalize a persisted pinned-agent list; unknown shapes fall back to []
-    and stale/duplicate ids are dropped without a migration. */
-function normalizePinnedAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const pinned: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const agentId = entry.trim();
-    if (agentId && !pinned.includes(agentId)) {
-      pinned.push(agentId);
-    }
-  }
-  return pinned;
-}
+export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -112,6 +103,8 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatSendShortcut?: ChatSendShortcut;
+  chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
+  catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
@@ -346,6 +339,8 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatSendShortcut: "enter",
+    chatFollowUpMode: "steer",
+    catalogOpenTarget: "viewer",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
@@ -396,6 +391,8 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatFollowUpMode: normalizeChatFollowUpMode(parsed.chatFollowUpMode),
+      catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
@@ -499,6 +496,13 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatPersistCommentary: next.chatPersistCommentary ?? false,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
+    // Steer is the default; only the opt-out queue mode persists.
+    ...(normalizeChatFollowUpMode(next.chatFollowUpMode) === "queue"
+      ? { chatFollowUpMode: "queue" as const }
+      : {}),
+    ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
+      ? { catalogOpenTarget: "terminal" as const }
       : {}),
     ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
       ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }

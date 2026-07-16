@@ -25,11 +25,9 @@ import {
   baseTelegramMessageContextConfig,
   buildTelegramMessageContextForTest,
 } from "./bot-message-context.test-harness.js";
-import {
-  dispatchTelegramMessage,
-  resetTelegramReplyFenceForTests,
-} from "./bot-message-dispatch.js";
+import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests } from "./runtime.test-support.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];

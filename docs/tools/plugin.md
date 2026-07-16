@@ -62,7 +62,11 @@ bundled, official external, and source-only plugins, see
     ```
 
     Treat plugin installs like running code. Prefer pinned versions for
-    reproducible production installs.
+    reproducible production installs. ClawHub packages and OpenClaw's
+    bundled/official catalog are trusted sources. New arbitrary npm, git,
+    local path/archive, `npm-pack:`, or marketplace sources require
+    `--force` in noninteractive installs after you
+    review and trust the source.
 
   </Step>
 

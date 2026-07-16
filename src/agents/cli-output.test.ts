@@ -2592,3 +2592,4 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

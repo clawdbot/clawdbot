@@ -1,15 +1,30 @@
 /** Tests secret target registry pattern compile/match/expand behavior. */
 import { describe, expect, it } from "vitest";
 import {
+  compileTargetRegistryEntry,
   expandPathTokens,
   matchPathTokens,
   materializePathTokens,
-  parsePathPattern,
 } from "./target-registry-pattern.js";
+
+function compilePattern(pathPattern: string, refPathPattern?: string) {
+  return compileTargetRegistryEntry({
+    id: "test.pattern",
+    targetType: "test.pattern",
+    configFile: "openclaw.json",
+    pathPattern,
+    ...(refPathPattern ? { refPathPattern } : {}),
+    secretShape: refPathPattern ? "sibling_ref" : "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  });
+}
 
 describe("target registry pattern helpers", () => {
   it("matches wildcard and array tokens with stable capture ordering", () => {
-    const tokens = parsePathPattern("agents.list[].memorySearch.providers.*.apiKey");
+    const tokens = compilePattern("agents.list[].memorySearch.providers.*.apiKey").pathTokens;
     const match = matchPathTokens(
       ["agents", "list", "2", "memorySearch", "providers", "openai", "apiKey"],
       tokens,
@@ -45,8 +60,12 @@ describe("target registry pattern helpers", () => {
   });
 
   it("materializes sibling ref paths from wildcard and array captures", () => {
-    const refTokens = parsePathPattern("agents.list[].memorySearch.providers.*.apiKeyRef");
-    expect(materializePathTokens(refTokens, ["1", "anthropic"])).toEqual([
+    const refTokens = compilePattern(
+      "agents.list[].memorySearch.providers.*.apiKey",
+      "agents.list[].memorySearch.providers.*.apiKeyRef",
+    ).refPathTokens;
+    expect(refTokens).toBeDefined();
+    expect(materializePathTokens(refTokens ?? [], ["1", "anthropic"])).toEqual([
       "agents",
       "list",
       "1",
@@ -55,14 +74,14 @@ describe("target registry pattern helpers", () => {
       "anthropic",
       "apiKeyRef",
     ]);
-    expect(materializePathTokens(refTokens, ["anthropic"])).toBeNull();
-    expect(materializePathTokens(refTokens, ["01", "anthropic"])).toBeNull();
-    expect(materializePathTokens(refTokens, ["+1", "anthropic"])).toBeNull();
-    expect(materializePathTokens(refTokens, ["4294967294", "anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens ?? [], ["anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens ?? [], ["01", "anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens ?? [], ["+1", "anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens ?? [], ["4294967294", "anthropic"])).toBeNull();
   });
 
   it("matches two wildcard captures in five-segment header paths", () => {
-    const tokens = parsePathPattern("models.providers.*.headers.*");
+    const tokens = compilePattern("models.providers.*.headers.*").pathTokens;
     const match = matchPathTokens(
       ["models", "providers", "openai", "headers", "x-api-key"],
       tokens,
@@ -90,7 +109,7 @@ describe("target registry pattern helpers", () => {
 
     const arrayMatches = expandPathTokens(
       root,
-      parsePathPattern("agents.list[].memorySearch.remote.apiKey"),
+      compilePattern("agents.list[].memorySearch.remote.apiKey").pathTokens,
     );
     expect(
       arrayMatches.map((entry) => ({
@@ -111,7 +130,10 @@ describe("target registry pattern helpers", () => {
       },
     ]);
 
-    const wildcardMatches = expandPathTokens(root, parsePathPattern("talk.providers.*.apiKey"));
+    const wildcardMatches = expandPathTokens(
+      root,
+      compilePattern("talk.providers.*.apiKey").pathTokens,
+    );
     expect(
       wildcardMatches
         .map((entry) => ({

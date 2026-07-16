@@ -9,8 +9,7 @@ const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true
 const resolveLegacyWebhookNameToChatUserId = vi
   .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
   .mockResolvedValue(undefined);
-const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
-  await import("./webhook-handler.js");
+const { createWebhookHandler } = await import("./webhook-handler.js");
 
 type TestLog = {
   info: (...args: unknown[]) => void;
@@ -48,11 +47,13 @@ function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
   return message;
 }
 
+let accountSequence = 0;
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
   return {
-    accountId: "default",
+    accountId: `test-account-${++accountSequence}`,
     enabled: true,
     token: "valid-token",
     incomingUrl: "https://nas.example.com/incoming",
@@ -114,7 +115,6 @@ describe("createWebhookHandler", () => {
   let log: TestLog;
 
   beforeEach(() => {
-    clearSynologyWebhookRateLimiterStateForTest();
     sendMessage.mockClear();
     sendMessage.mockResolvedValue(true);
     resolveLegacyWebhookNameToChatUserId.mockClear();

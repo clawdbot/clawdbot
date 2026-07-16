@@ -2036,3 +2036,4 @@ describe("oversized transcript line guards", () => {
     expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

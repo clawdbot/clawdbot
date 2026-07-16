@@ -61,7 +61,7 @@ function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string 
 }
 
 /** Resolves the currently configured provider/model/runtime route for a session key. */
-export function resolveConfiguredDoctorSessionStateRoute(params: {
+function resolveConfiguredDoctorSessionStateRoute(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
@@ -128,9 +128,7 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
 }
 
 /** Fast prefilter for session stores that might contain plugin-owned routing state. */
-export function storeMayContainPluginSessionRouteState(
-  store: Record<string, SessionEntry>,
-): boolean {
+function storeMayContainPluginSessionRouteState(store: Record<string, SessionEntry>): boolean {
   return Object.entries(store).some(([sessionKey, entry]) =>
     entryMayContainPluginSessionRouteState(sessionKey, entry),
   );
@@ -338,7 +336,7 @@ function scanEntryForOwner(params: {
 }
 
 /** Scans session entries for state owned by plugins that no longer match the configured route. */
-export function scanSessionRouteStateOwners(params: {
+function scanSessionRouteStateOwners(params: {
   owners: readonly DoctorSessionRouteStateOwner[];
   store: Record<string, Record<string, unknown>>;
   routes: Record<string, DoctorSessionRouteState>;
@@ -397,7 +395,7 @@ function clearRecordKeys(
 }
 
 /** Clears stale plugin-owned routing fields from a session entry and refreshes updatedAt. */
-export function applySessionRouteStateRepair(params: {
+function applySessionRouteStateRepair(params: {
   sessionKey: string;
   entry: Record<string, unknown>;
   repair: DoctorSessionRouteStateRepair;

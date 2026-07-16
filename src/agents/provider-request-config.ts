@@ -844,3 +844,4 @@ export function getModelProviderRequestTransport(
 ): ModelProviderRequestTransportOverrides | undefined {
   return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

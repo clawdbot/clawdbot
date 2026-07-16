@@ -1,0 +1,35 @@
+title: Matrix E2EE backup reset preserves encrypted history via local key re-upload
+scenario:
+  id: matrix-e2ee-history-exists-backup-empty
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-history-exists-backup-empty
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Empty Backup Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeHistoryExistsBackupEmptyScenario
+  args:
+    - expr: "scenarioContext"

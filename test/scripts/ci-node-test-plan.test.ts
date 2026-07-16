@@ -145,9 +145,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
-    expect(bundled.slice(0, 2).map((shard) => shard.shardName)).toEqual([
+    expect(bundled.slice(0, 4).map((shard) => shard.shardName)).toEqual([
       "core-tooling",
-      "auto-reply-reply-commands",
+      "auto-reply-reply-commands-1",
+      "auto-reply-reply-commands-2",
+      "auto-reply-reply-commands-3",
     ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,
@@ -184,15 +186,41 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(15);
-    expect(compact.filter((shard) => !shard.requiresDist)).toHaveLength(14);
+    expect(compact.length).toBeGreaterThanOrEqual(12);
+    expect(compact.length).toBeLessThanOrEqual(24);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
+    expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
         shard.groups.every((group) => group.requiresDist === shard.requiresDist),
       ),
     ).toBe(true);
+    // Runtime-balanced packing must keep the two heaviest measured groups in
+    // different jobs; regressing to per-file weights recombines them.
+    const jobOf = (name: string) =>
+      compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
+    expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
+    expect(jobOf("core-unit-fast")).toBeGreaterThanOrEqual(0);
+    expect(jobOf("agentic-agents-core-runner-embedded")).not.toBe(jobOf("core-unit-fast"));
+    // Spawn/signal-timing suites never mix with regular groups, and every
+    // compact bin runs serially: overlapping Vitest runs flake timing-
+    // sensitive tests on both runner classes.
+    const exclusiveGroupRe = /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
+    for (const shard of compact) {
+      const exclusiveCount = shard.groups.filter((group) =>
+        exclusiveGroupRe.test(group.shard_name),
+      ).length;
+      if (exclusiveCount > 0) {
+        expect(exclusiveCount).toBe(shard.groups.length);
+      }
+      expect(shard.planConcurrency).toBe(1);
+    }
+    expect(
+      compact.filter((shard) =>
+        shard.groups.some((group) => exclusiveGroupRe.test(group.shard_name)),
+      ).length,
+    ).toBeGreaterThan(0);
     expect(
       compact
         .flatMap((shard) =>
@@ -233,27 +261,14 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
         .every((shard) => shard.timeoutMinutes === 120),
     ).toBe(true);
-    const largeJobs = compact.filter((shard) =>
-      shard.checkName.startsWith("checks-node-compact-large-"),
-    );
+    // Whole-config groups now pack into the same runtime-balanced bins as
+    // include-pattern groups; the separate "-whole-" job class is gone.
+    expect(compact.some((shard) => shard.checkName.includes("-whole-"))).toBe(false);
     expect(
-      largeJobs.map((shard) => shard.groups.filter((group) => !group.includePatterns).length),
-    ).toEqual([2, 2, 2]);
-    expect(
-      compact.some((shard) => shard.checkName.startsWith("checks-node-compact-large-whole-")),
-    ).toBe(false);
-    const smallWholeJobs = compact.filter((shard) =>
-      shard.checkName.startsWith("checks-node-compact-small-whole-"),
-    );
-    const wholeGroupCounts = smallWholeJobs.map((shard) => shard.groups.length);
-    expect(Math.max(...wholeGroupCounts) - Math.min(...wholeGroupCounts)).toBeLessThanOrEqual(1);
-    expect(
-      smallWholeJobs.some((shard) =>
-        shard.groups.some((group) => group.shard_name === "core-tooling"),
-      ),
+      compact.some((shard) => shard.groups.some((group) => group.shard_name === "core-tooling")),
     ).toBe(false);
     expect(
-      smallWholeJobs
+      compact
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "core-tooling-isolated"),
     ).toEqual(
@@ -262,7 +277,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       }),
     );
     expect(
-      smallWholeJobs
+      compact
         .flatMap((shard) => shard.groups)
         .find((group) => group.shard_name === "core-tooling-docker"),
     ).toEqual(
@@ -274,7 +289,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(3);
+    expect(toolingGroups).toHaveLength(4);
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -297,6 +312,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         configs: [
           "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,
@@ -859,20 +875,52 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "agentic-agents-core-subagents",
       },
       {
-        checkName: "checks-node-agentic-agents-core-runner",
+        checkName: "checks-node-agentic-agents-core-runner-cli",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
         includePatterns: agentShards[4]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-core-runner",
+        shardName: "agentic-agents-core-runner-cli",
       },
       {
-        checkName: "checks-node-agentic-agents-core-runtime",
+        checkName: "checks-node-agentic-agents-core-runner-commands",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
         includePatterns: agentShards[5]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-commands",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-embedded",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[6]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-embedded",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-sessions",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[7]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-sessions",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runtime",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[8]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runtime",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-isolated",
+        configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
+        includePatterns: agentShards[9]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-isolated",
       },
       {
         checkName: "checks-node-agentic-agents-embedded",
@@ -1003,10 +1051,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands",
+        checkName: "checks-node-auto-reply-reply-commands-1",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands",
+        shardName: "auto-reply-reply-commands-1",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-2",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-2",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-3",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-3",
       },
       {
         checkName: "checks-node-auto-reply-reply-dispatch",

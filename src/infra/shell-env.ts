@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -317,6 +318,52 @@ export function getShellPathFromLoginShell(opts: {
   cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
   return cachedShellPath;
 }
+
+type UserShellExecutableResolution = {
+  executable: string;
+  /** Present only when the login-shell PATH selected the executable. */
+  pathEnv?: string;
+};
+
+export function resolveExecutableFromUserShellPath(
+  executable: string,
+  opts: {
+    env: NodeJS.ProcessEnv;
+    pathEnv?: string;
+    includeExtensionless?: boolean;
+    strategy: "fallback" | "prefer";
+    timeoutMs?: number;
+    exec?: typeof execFileSync;
+    platform?: NodeJS.Platform;
+  },
+): UserShellExecutableResolution | undefined {
+  const direct = resolveExecutableFromPathEnv(
+    executable,
+    opts.pathEnv ?? opts.env.PATH ?? opts.env.Path ?? "",
+    opts.env,
+    { includeExtensionless: opts.includeExtensionless },
+  );
+  if (direct && opts.strategy === "fallback") {
+    return { executable: direct };
+  }
+  const shellPath = getShellPathFromLoginShell({
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    exec: opts.exec,
+    platform: opts.platform,
+  });
+  if (!shellPath) {
+    return direct ? { executable: direct } : undefined;
+  }
+  const resolved = resolveExecutableFromPathEnv(executable, shellPath, opts.env, {
+    includeExtensionless: opts.includeExtensionless,
+  });
+  if (resolved) {
+    return { executable: resolved, pathEnv: shellPath };
+  }
+  return direct ? { executable: direct } : undefined;
+}
+
 export function getShellEnvAppliedKeys(): string[] {
   return [...lastAppliedKeys];
 }

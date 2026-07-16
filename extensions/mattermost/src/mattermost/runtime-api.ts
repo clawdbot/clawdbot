@@ -31,9 +31,6 @@ export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
-  buildInboundHistoryFromMap,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 export {

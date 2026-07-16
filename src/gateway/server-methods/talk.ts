@@ -883,3 +883,4 @@ export const talkHandlers: GatewayRequestHandlers = {
     respond(true, payload, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

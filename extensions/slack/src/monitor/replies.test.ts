@@ -1308,3 +1308,4 @@ describe("deliverReplies message_sent hook", () => {
     expect(internalCalls[0]?.[0]?.context).toMatchObject({ isGroup: true, groupId: "C123" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

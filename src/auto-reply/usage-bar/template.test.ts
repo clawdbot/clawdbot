@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
+import { loadUsageBarTemplate } from "./template.js";
+import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 

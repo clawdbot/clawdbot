@@ -51,7 +51,6 @@ const {
   setMessageReactionSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
 } = harness;
@@ -60,19 +59,17 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-  await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
   TelegramSpooledReplayProcessingError,
-  withTelegramSpooledReplayUpdate,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
+const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -151,6 +148,7 @@ function installPerKeySequentializer(): void {
         key,
         current.catch(() => undefined),
       );
+
       try {
         await current;
       } finally {
@@ -160,6 +158,13 @@ function installPerKeySequentializer(): void {
       }
     };
   });
+}
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
 }
 
 function mockTelegramConfigWrites() {
@@ -249,11 +254,8 @@ describe("createTelegramBot", () => {
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
     pluginRuntime.clearPluginInteractiveHandlers();
-    clearAccountThrottlersForTest();
+    resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -3972,12 +3974,13 @@ describe("createTelegramBot", () => {
           telegram: {
             groupPolicy: "open",
             groups: {
-              "*": { requireMention: true },
-              "123": { requireMention: false },
+              "*": { requireMention: false },
+              "123": {},
             },
           },
         },
       },
+      botRequireMention: true,
       message: {
         chat: { id: 123, type: "group", title: "Dev Chat" },
         text: "hello",
@@ -3993,6 +3996,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
         text: "hello",
@@ -4008,6 +4012,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 789, type: "group", title: "No Me" },
         text: "hello",
@@ -4021,6 +4026,7 @@ describe("createTelegramBot", () => {
     await dispatchMessage({
       message: testCase.message,
       me: testCase.me,
+      botRequireMention: testCase.botRequireMention,
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
@@ -4258,15 +4264,19 @@ describe("createTelegramBot", () => {
     setMessageReactionSpy.mockClear();
     setMyCommandsSpy.mockClear();
   }
-  function getMessageHandler() {
-    createTelegramBot({ token: "tok" });
+  function getMessageHandler(botRequireMention?: boolean) {
+    createTelegramBot({
+      token: "tok",
+      ...(typeof botRequireMention === "boolean" ? { requireMention: botRequireMention } : {}),
+    });
     return getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
   }
   async function dispatchMessage(params: {
     message: Record<string, unknown>;
     me?: Record<string, unknown>;
+    botRequireMention?: boolean;
   }) {
-    const handler = getMessageHandler();
+    const handler = getMessageHandler(params.botRequireMention);
     await handler({
       message: params.message,
       me: params.me ?? { username: "openclaw_bot" },
@@ -6099,3 +6109,4 @@ describe("createTelegramBot", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

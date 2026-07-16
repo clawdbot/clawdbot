@@ -132,7 +132,7 @@ function waitForDead(pid: number, timeoutMs = 2_000): void {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error(`pid ${pid} is still alive`);
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
   }
 }
 
@@ -145,14 +145,14 @@ function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 async function waitForPortFile(portFile: string): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (existsSync(portFile)) {
       const port = Number(readFileSync(portFile, "utf8"));
       if (Number.isInteger(port) && port > 0) {
         return port;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`timed out waiting for ${portFile}`);
 }

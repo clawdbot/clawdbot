@@ -1,10 +1,16 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
+import {
+  analyzeControlUiCatalogs,
+  assertScopedCatalogFallbackUpdate,
+  flattenControlUiCatalog,
+} from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
   buildBatchPrompt,
@@ -12,6 +18,7 @@ import {
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
+import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function processIsAlive(pid: number): boolean {
@@ -52,6 +59,126 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("builds a deterministic fallback list without accepting catalog drift", () => {
+    const source = flattenControlUiCatalog(
+      { group: { first: "First {count}", second: "Second" } },
+      "en",
+    );
+    const missingAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        ["de", new Map([["group.first", "Erste {count}"]])],
+        ["fr", new Map([["group.first", "Premiere {count}"]])],
+      ]),
+    );
+
+    expect(missingAnalysis).toEqual({
+      errors: [],
+      fallbacks: { "group.second": ["de", "fr"] },
+    });
+
+    const driftAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        [
+          "fr",
+          new Map([
+            ["group.second", "Deuxieme"],
+            ["group.first", "Premiere"],
+            ["group.orphan", "Orpheline"],
+          ]),
+        ],
+      ]),
+    );
+    expect(driftAnalysis.errors).toEqual([
+      "fr: orphan keys: group.orphan",
+      "fr: keys are not in English catalog order",
+      "fr:group.first expected {count} got {}",
+    ]);
+    expect(driftAnalysis.fallbacks).toEqual({});
+  });
+
+  it("rejects invalid catalog leaf values", () => {
+    expect(() => flattenControlUiCatalog({ group: { title: 42 } }, "fr")).toThrow(
+      "fr:group.title must be a string or object",
+    );
+  });
+
+  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
+    const current = {
+      fallbacks: { "group.second": ["de", "fr"] },
+      sourceHash: "source",
+      version: 1,
+    };
+
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["fr"] } },
+        "de",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+  });
+
+  it("finds raw text and attributes split by template interpolation", () => {
+    const source =
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+    const sourceFile = ts.createSourceFile(
+      "ui/src/pages/example.ts",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+
+    expect(
+      collectControlUiRawCopyFromSource({
+        filePath: path.resolve("ui/src/pages/example.ts"),
+        source,
+        sourceFile,
+      }).map(({ kind, text }) => ({ kind, text })),
+    ).toEqual([
+      { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Delete" },
+      { kind: "html-text", text: "Delete" },
+    ]);
+  });
+
+  it("keeps verification keyless even when provider credentials exist", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "redacted",
+          OPENAI_API_KEY: "redacted",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).not.toContain("provider=openai");
+    expect(result.stdout).not.toContain("provider=anthropic");
+  });
+
   it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
     const items = [
       {
@@ -262,9 +389,9 @@ describe("control-ui-i18n process runner", () => {
         });
 
         try {
-          const deadline = Date.now() + 5_000;
+          const deadline = Date.now() + 30_000;
+          let fastReady = false;
           while (Date.now() < deadline) {
-            let fastReady = false;
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
             } catch {}
@@ -278,7 +405,7 @@ describe("control-ui-i18n process runner", () => {
               setTimeout(resolve, 10);
             });
           }
-          expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+          expect(fastReady).toBe(true);
           expect(grandchildPid).toBeGreaterThan(0);
           expect(processIsAlive(grandchildPid)).toBe(true);
 

@@ -8,6 +8,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS } from "./legacy-config-migrations.runtime.providers.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrations.runtime.session.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT } from "./legacy-config-migrations.runtime.system-agent.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
 
 /** Ordered runtime legacy config migrations applied by doctor. */
@@ -20,5 +21,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION,
+  ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS,
 ];

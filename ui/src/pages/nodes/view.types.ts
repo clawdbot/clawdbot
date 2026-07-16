@@ -7,6 +7,16 @@ import type {
   InventoryRemovalRequest,
 } from "../../lib/nodes/index.ts";
 
+/**
+ * Pending destructive inventory action awaiting in-page confirmation. Native
+ * `window.confirm` silently returns false in webviews without a dialog bridge
+ * (macOS app before the confirm-panel fix, Tauri), so the page renders its own
+ * confirm dialog instead.
+ */
+export type InventoryRemovalPrompt =
+  | { kind: "entry"; entry: InventoryRemovalRequest }
+  | { kind: "stale"; entries: InventoryRemovalRequest[] };
+
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -37,8 +47,11 @@ export type NodesProps = {
   onDeviceRevoke: (deviceId: string, role: string) => void;
   onNodeApprove: (requestId: string) => void;
   onNodeReject: (requestId: string) => void;
+  inventoryRemovalPrompt: InventoryRemovalPrompt | null;
   onInventoryRemove: (entry: InventoryRemovalRequest) => void;
   onInventoryCleanup: (entries: InventoryRemovalRequest[]) => void;
+  onInventoryRemovalConfirm: () => void;
+  onInventoryRemovalCancel: () => void;
   onLoadConfig: () => void;
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;

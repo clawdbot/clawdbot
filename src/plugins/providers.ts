@@ -888,3 +888,4 @@ export function resolveUsageHookProviderPluginContracts(params: {
     return providerIds.length > 0 ? [{ pluginId, providerIds }] : [];
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

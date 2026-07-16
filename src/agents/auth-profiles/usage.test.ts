@@ -9,7 +9,6 @@ import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
-  testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -18,6 +17,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
+import { testing as authProfileUsageTesting } from "./usage.test-support.js";
 
 const storeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
@@ -83,6 +83,7 @@ function expectProfileErrorStateCleared(
 ) {
   expect(stats?.blockedUntil).toBeUndefined();
   expect(stats?.blockedReason).toBeUndefined();
+  expect(stats?.blockedScope).toBeUndefined();
   expect(stats?.cooldownUntil).toBeUndefined();
   expect(stats?.disabledUntil).toBeUndefined();
   expect(stats?.disabledReason).toBeUndefined();
@@ -102,6 +103,18 @@ describe("resolveProfileUnusableUntil", () => {
       resolveProfileUnusableUntil({ blockedUntil: 300, cooldownUntil: 100, disabledUntil: 200 }),
     ).toBe(300);
     expect(resolveProfileUnusableUntil({ cooldownUntil: 300 })).toBe(300);
+  });
+
+  it("keeps legacy blockedModel rows profile-wide", () => {
+    expect(
+      resolveProfileUnusableUntil({ blockedUntil: 300, blockedModel: "model-a" }, "model-b"),
+    ).toBe(300);
+  });
+
+  it("applies explicitly model-scoped blocks only to that model", () => {
+    const stats = { blockedUntil: 300, blockedModel: "model-a", blockedScope: "model" as const };
+    expect(resolveProfileUnusableUntil(stats, "model-a")).toBe(300);
+    expect(resolveProfileUnusableUntil(stats, "model-b")).toBeNull();
   });
 });
 
@@ -285,17 +298,32 @@ describe("isProfileInCooldown", () => {
     expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
   });
 
-  it("does not bypass model-scoped cooldown when blockedUntil is active", () => {
+  it("bypasses model-scoped blocks and cooldowns for sibling models", () => {
     const now = Date.now();
     const store = makeStore({
       "google:default": {
         blockedUntil: now + 120_000,
         blockedReason: "subscription_limit",
+        blockedModel: "gemini-3-flash-preview",
+        blockedScope: "model",
         cooldownUntil: now + 60_000,
         cooldownReason: "timeout",
         cooldownModel: "gemini-3-flash-preview",
       },
     });
+    expect(isProfileInCooldown(store, "google:default", now, "gemini-3-flash-preview")).toBe(true);
+    expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(false);
+  });
+
+  it("keeps legacy blockedModel rows active for sibling models", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "google:default": {
+        blockedUntil: now + 120_000,
+        blockedModel: "gemini-3-flash-preview",
+      },
+    });
+
     expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
   });
 });
@@ -917,6 +945,89 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
 });
 
 describe("markAuthProfileBlockedUntil", () => {
+  it("keeps repeated same-model blocks scoped to that model", async () => {
+    const now = Date.parse("2026-05-30T18:00:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.4",
+        blockedScope: "model",
+      },
+    });
+    mockLockedUpdateForStore(store);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: now + 120_000,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.4",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.4");
+    expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.4")).toBe(true);
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.4-mini")).toBe(false);
+  });
+
+  it("widens an active block after a different model fails", async () => {
+    const now = Date.parse("2026-05-30T18:00:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.4",
+        blockedScope: "model",
+      },
+    });
+    mockLockedUpdateForStore(store);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: now + 120_000,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.4-mini",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats?.["openai:default"]?.blockedModel).toBeUndefined();
+    expect(store.usageStats?.["openai:default"]?.blockedScope).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.4-mini")).toBe(true);
+  });
+
+  it("never narrows an active profile-wide block", async () => {
+    const now = Date.parse("2026-05-30T18:00:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+      },
+    });
+    mockLockedUpdateForStore(store);
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai:default",
+        blockedUntil: now + 120_000,
+        source: "codex_rate_limits",
+        modelId: "gpt-5.4",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats?.["openai:default"]?.blockedModel).toBeUndefined();
+    expect(store.usageStats?.["openai:default"]?.blockedScope).toBeUndefined();
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.4-mini")).toBe(true);
+  });
+
   it("keeps a later active blocked-until timestamp", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T18:00:00.000Z"));
     const laterBlockedUntil = Date.parse("2031-01-01T00:00:00.000Z");
@@ -1475,3 +1586,4 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     expect(stats?.cooldownModel).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

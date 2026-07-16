@@ -1,11 +1,13 @@
 // Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSetupCommand } from "./register.setup.js";
+import { registerSetupCommand, resolveSetupCommandRoute } from "./register.setup.js";
 
 const mocks = vi.hoisted(() => ({
   setupCommandMock: vi.fn(),
   setupWizardCommandMock: vi.fn(),
+  runSystemAgentMock: vi.fn(),
+  readConfigFileSnapshotMock: vi.fn(),
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -15,6 +17,8 @@ const mocks = vi.hoisted(() => ({
 
 const setupCommandMock = mocks.setupCommandMock;
 const setupWizardCommandMock = mocks.setupWizardCommandMock;
+const runSystemAgentMock = mocks.runSystemAgentMock;
+const readConfigFileSnapshotMock = mocks.readConfigFileSnapshotMock;
 const runtime = mocks.runtime;
 
 function lastSetupOptions(): Record<string, unknown> | undefined {
@@ -35,6 +39,14 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
+vi.mock("../../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: mocks.runSystemAgentMock,
+}));
+
+vi.mock("../../config/config.js", () => ({
+  readConfigFileSnapshot: mocks.readConfigFileSnapshotMock,
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
 }));
@@ -50,6 +62,98 @@ describe("registerSetupCommand", () => {
     vi.clearAllMocks();
     setupCommandMock.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
+    runSystemAgentMock.mockResolvedValue(undefined);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: false,
+      valid: true,
+      sourceConfig: {},
+    });
+  });
+
+  it("keeps routing precedence explicit", () => {
+    expect(
+      resolveSetupCommandRoute({
+        hasOnboardingFlag: true,
+        hasSystemAgentRequest: true,
+        configured: true,
+        interactive: true,
+        json: true,
+      }),
+    ).toBe("onboarding");
+    expect(
+      resolveSetupCommandRoute({
+        hasOnboardingFlag: false,
+        hasSystemAgentRequest: true,
+        configured: false,
+        interactive: false,
+        json: false,
+      }),
+    ).toBe("system-agent");
+    expect(
+      resolveSetupCommandRoute({
+        hasOnboardingFlag: false,
+        hasSystemAgentRequest: false,
+        configured: true,
+        interactive: true,
+        json: false,
+      }),
+    ).toBe("system-agent");
+    expect(
+      resolveSetupCommandRoute({
+        hasOnboardingFlag: false,
+        hasSystemAgentRequest: false,
+        configured: false,
+        interactive: true,
+        json: true,
+      }),
+    ).toBe("onboarding");
+  });
+
+  it("runs one-shot system-agent requests without probing config", async () => {
+    await runCli(["setup", "-m", "status", "--yes"]);
+
+    expect(runSystemAgentMock).toHaveBeenCalledWith(
+      { message: "status", yes: true, json: false },
+      runtime,
+    );
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("uses system overview JSON on configured systems", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: {} },
+    });
+
+    await runCli(["setup", "--json"]);
+
+    expect(runSystemAgentMock).toHaveBeenCalledWith(
+      { message: undefined, yes: false, json: true },
+      runtime,
+    );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps onboarding JSON for unconfigured systems", async () => {
+    await runCli(["setup", "--json"]);
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
+    expect(lastWizardOptions()?.json).toBe(true);
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("registers a hidden retired-name alias", async () => {
+    const program = new Command();
+    registerSetupCommand(program);
+
+    expect(program.helpInformation()).not.toContain("crestodian"); // hidden alias
+    await program.parseAsync(["crestodian", "--message", "status"], { from: "user" }); // hidden alias
+    expect(runSystemAgentMock).toHaveBeenCalledWith(
+      { message: "status", yes: false, json: false },
+      runtime,
+    );
   });
 
   it("runs setup wizard command by default", async () => {

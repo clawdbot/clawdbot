@@ -5,6 +5,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createDiscordActivityButton } from "../activities/interaction.js";
 import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
@@ -34,6 +35,7 @@ export function createDiscordProviderInteractionSurface(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
+  applicationId?: string;
   token: string;
   commandSpecs: NativeCommandSpec[];
   nativeEnabled: boolean;
@@ -131,6 +133,22 @@ export function createDiscordProviderInteractionSurface(params: {
       threadBindings: params.threadBindings,
     }),
   ];
+  const activityButton = createDiscordActivityButton(
+    {
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      accountId: params.accountId,
+      guildEntries: params.guildEntries,
+      allowFrom: params.allowFrom,
+      dmPolicy: params.dmPolicy,
+      runtime: params.runtime,
+      token: params.token,
+    },
+    params.applicationId,
+  );
+  if (activityButton) {
+    components.push(activityButton);
+  }
   const modals: Modal[] = [];
 
   if (approvalActionsEnabled) {

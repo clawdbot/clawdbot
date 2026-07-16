@@ -1,6 +1,6 @@
 /** Generates the documented matrix of user-supplied credential fields that accept SecretRefs. */
-import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
-import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
+import { getSecretTargetRegistry } from "./target-registry-data.js";
+import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
   id: string;
@@ -25,7 +25,7 @@ export type SecretRefCredentialMatrixDocument = {
 /** Builds the public SecretRef credential matrix from the source target registry. */
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
-  for (const entry of getSourceSecretTargetRegistry()) {
+  for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
     const isCanonicalFirecrawlWebFetchEntry =
       entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
     // Firecrawl web fetch moved to the plugin-owned path, but matrix docs keep the public
@@ -69,7 +69,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
     pathSyntax: 'Dot path with "*" for map keys and "[]" for arrays.',
     scope:
       "Credentials that are strictly user-supplied and not minted/rotated by OpenClaw runtime.",
-    excludedMutableOrRuntimeManaged: getUnsupportedSecretRefSurfacePatterns(),
+    excludedMutableOrRuntimeManaged: unsupportedSecretRefSurfacePolicy.listPatterns(),
     entries,
   };
 }

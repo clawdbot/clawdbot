@@ -177,6 +177,26 @@ CREATE TABLE IF NOT EXISTS session_watch_cursors (
 CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
   ON session_watch_cursors(target_session_key);
 
+CREATE TABLE IF NOT EXISTS session_upstream_links (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  catalog_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  upstream_kind TEXT NOT NULL,
+  upstream_ref_json TEXT,
+  last_marker_json TEXT,
+  last_scanned_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  -- (session_key, agent_id) composite identity: under session.scope="global" agents
+  -- share bare keys; a key-only row would let one agent overwrite another's upstream.
+  PRIMARY KEY (session_key, agent_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
+  ON session_upstream_links(catalog_id);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -228,7 +248,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolution_ref TEXT NOT NULL CHECK (
     length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
   ),
-  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin', 'system-agent')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
   requested_by_device_id TEXT,
@@ -522,11 +542,13 @@ CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
 CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   attachment_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  agent_id TEXT,
   message_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT,
   retention_class TEXT,
   alt TEXT NOT NULL,
+  original_media_root TEXT NOT NULL,
   original_media_id TEXT NOT NULL,
   original_media_subdir TEXT NOT NULL,
   original_content_type TEXT NOT NULL,
@@ -534,7 +556,8 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   original_height INTEGER,
   original_size_bytes INTEGER,
   original_filename TEXT,
-  record_json TEXT NOT NULL
+  record_json TEXT NOT NULL,
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
@@ -542,6 +565,13 @@ CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_message
   ON managed_outgoing_image_records(session_key, message_id, attachment_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_session
+  ON managed_outgoing_image_records(session_key, agent_id, created_at DESC, attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_agent_message
+  ON managed_outgoing_image_records(session_key, agent_id, message_id, attachment_id)
   WHERE message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS channel_pairing_requests (
@@ -621,6 +651,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_port INTEGER,
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
+  gateway_context_path TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 
@@ -980,6 +1011,16 @@ CREATE INDEX IF NOT EXISTS idx_skill_uploads_idempotency
   ON skill_uploads(idempotency_key_hash)
   WHERE idempotency_key_hash IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS skill_upload_chunks (
+  upload_id TEXT NOT NULL,
+  byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  chunk_blob BLOB NOT NULL,
+  PRIMARY KEY (upload_id, byte_offset),
+  FOREIGN KEY (upload_id) REFERENCES skill_uploads(upload_id) ON DELETE CASCADE,
+  CHECK (length(chunk_blob) = size_bytes)
+);
+
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,
@@ -1102,6 +1143,12 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
@@ -1671,6 +1718,37 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+-- A reconciliation journal is written before managed-worktree mutation. The
+-- bounded Git base snapshot repairs any subset left by an interrupted apply.
+CREATE TABLE IF NOT EXISTS worker_workspace_reconciliations (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  base_manifest_ref TEXT NOT NULL,
+  current_manifest_ref TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  base_pack BLOB NOT NULL CHECK (length(base_pack) <= 268435456),
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
+
+-- A completed remote turn is fenced from stale-claim teardown until its
+-- workspace result is durably reconciled into the managed worktree.
+CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  claim_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  gateway_instance_id TEXT NOT NULL,
+  recovery_requested_at_ms INTEGER,
+  workspace_accepted_at_ms INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+);
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

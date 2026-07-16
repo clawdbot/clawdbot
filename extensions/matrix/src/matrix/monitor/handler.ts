@@ -165,13 +165,6 @@ type MatrixDraftStreamHandle = {
   reset: () => void;
 };
 
-export class MatrixRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "MatrixRetryableInboundError";
-  }
-}
-
 async function redactMatrixDraftEvent(
   client: MatrixClient,
   roomId: string,
@@ -184,7 +177,7 @@ function buildMatrixFinalizedPreviewContent(): Record<string, unknown> {
   return { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true };
 }
 
-export type MatrixMonitorHandlerParams = {
+type MatrixMonitorHandlerParams = {
   client: MatrixClient;
   core: PluginRuntime;
   cfg: CoreConfig;
@@ -1713,7 +1706,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
-      let retryableReplyDeliveryFailed = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: _route.agentId,
@@ -2052,6 +2044,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         latestDraftFullText = "";
       };
 
+      const resetDraftDeliveryState = async () => {
+        await draftStream?.discardPending();
+        draftStream?.reset();
+        draftConsumed = false;
+        currentDraftMessageGeneration = 0;
+        currentDraftBlockOffset = 0;
+        latestDraftFullText = "";
+        pendingDraftBoundaries.length = 0;
+        latestQueuedDraftBoundaryOffsets.clear();
+        currentDraftReplyToId = draftReplyToId;
+        progressDraftGate.reset();
+        resetPreviewToolProgress();
+      };
+
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
         core.channel.reply.createReplyDispatcherWithTyping({
           ...prefixOptions,
@@ -2321,9 +2327,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
           },
           onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
-            if (err instanceof MatrixRetryableInboundError) {
-              retryableReplyDeliveryFailed = true;
-            }
             if (info.kind === "final") {
               finalReplyDeliveryFailed = true;
             } else {
@@ -2492,6 +2495,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                               resetPreviewToolProgress();
                             }
                           : undefined,
+                        onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
                         ...buildPreviewToolProgressReplyOptions(),
                         onModelSelected,
                       },
@@ -2518,13 +2522,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
       if (finalReplyDeliveryFailed) {
-        if (retryableReplyDeliveryFailed) {
-          logVerboseMessage(
-            `matrix: final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
-          );
-          // Explicit retryable failures reopen replay so the same history can be retried.
-          return;
-        }
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
@@ -2532,13 +2529,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
       if (!queuedFinal && nonFinalReplyDeliveryFailed) {
-        if (retryableReplyDeliveryFailed) {
-          logVerboseMessage(
-            `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
-          );
-          // Explicit retryable failures reopen replay.
-          return;
-        }
         logVerboseMessage(
           `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
@@ -2583,3 +2573,4 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     }
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

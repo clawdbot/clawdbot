@@ -1483,11 +1483,7 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (fs.existsSync(gitMarker)) {
     return null;
   }
-  return [
-    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-    "- Details: /concepts/agent-workspace#git-backup-recommended",
-  ].join("\n");
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
 }
 
 /** Emits the workspace backup tip when applicable. */
@@ -1497,3 +1493,4 @@ export function noteWorkspaceBackupTip(workspaceDir: string) {
     note(tip, "Workspace");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

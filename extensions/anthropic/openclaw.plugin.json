@@ -317,6 +317,24 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "sessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "sessionCatalog": {
+      "label": "Native Session Discovery",
+      "help": "Controls whether Claude Code sessions from this Gateway and paired nodes appear in the sidebar. Disabling also removes this host's paired-node catalog commands without disabling Anthropic models or the Claude CLI backend. Node-list failures usually indicate a Gateway pairing-store or node-registry problem; verify Settings > Devices or run openclaw nodes list. Changes require a Gateway restart."
+    },
+    "sessionCatalog.enabled": {
+      "label": "Discover Claude Code Sessions",
+      "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    }
   }
 }

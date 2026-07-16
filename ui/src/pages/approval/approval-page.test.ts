@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AllowedApprovalSnapshot,
@@ -12,27 +10,15 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { applicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { ApprovalPage } from "./approval-page.ts";
 
 const TEST_ELEMENT_SUFFIX = crypto.randomUUID();
-const PROVIDER_ELEMENT_NAME = `test-approval-page-context-provider-${TEST_ELEMENT_SUFFIX}`;
 const APPROVAL_PAGE_ELEMENT_NAME = `test-openclaw-approval-page-${TEST_ELEMENT_SUFFIX}`;
 
-class ApprovalPageContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext) {
-    this.contextProvider.setValue(context);
-  }
-}
-
 // The non-isolated UI runner resets modules but not customElements. Register
-// the current provider and page graphs so context and locale state stay paired.
-customElements.define(PROVIDER_ELEMENT_NAME, ApprovalPageContextProvider);
+// the current page graph so context and locale state stay paired.
 customElements.define(APPROVAL_PAGE_ELEMENT_NAME, class extends ApprovalPage {});
 
 type TestApprovalPage = HTMLElement & {
@@ -124,9 +110,8 @@ function createPage(params: {
   withBootFallback?: boolean;
 }) {
   const source = createGateway(params.client, params.connected);
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as ApprovalPageContextProvider;
   const page = document.createElement(APPROVAL_PAGE_ELEMENT_NAME) as TestApprovalPage;
-  provider.setContext({
+  const provider = createApplicationContextProvider({
     basePath: "",
     gateway: source.gateway,
   } as unknown as ApplicationContext);

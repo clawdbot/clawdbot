@@ -366,11 +366,21 @@ export function finalizeToolTerminalPresentation(params: {
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
-export class BeforeToolCallBlockedError extends Error {
+class BeforeToolCallBlockedError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "BeforeToolCallBlockedError";
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
+  ] = {
+    create(message: string): Error {
+      return new BeforeToolCallBlockedError(message);
+    },
+  };
 }
 
 class BeforeToolCallFailureError extends Error {
@@ -2054,21 +2064,6 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
   }
 }
 
-/** Test-only access to before_tool_call internals. */
-export const testing = {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
-  buildAdjustedParamsKey,
-  adjustedParamsByToolCallId,
-  preExecutionBlockedToolCallIds,
-  structuredReplaySafeToolCallIds,
-  runBeforeToolCallHook,
-  mergeParamsWithApprovalOverrides,
-  isPlainObject,
-};
-
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -2082,3 +2077,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

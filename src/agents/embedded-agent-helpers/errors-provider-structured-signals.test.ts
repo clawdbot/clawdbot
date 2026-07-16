@@ -1,7 +1,12 @@
 // Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
-import { classifyFailoverSignal } from "./errors.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import {
+  classifyAssistantFailoverReason,
+  classifyProviderRuntimeFailureKind,
+  classifyFailoverSignal,
+} from "./errors.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderPluginError: vi.fn(),
@@ -110,6 +115,60 @@ describe("provider failover hook structured signals", () => {
       }),
     ).toBe("billing");
   });
+
+  it.each([
+    { errorType: "rate_limit_error", reason: "rate_limit", runtimeKind: "rate_limit" },
+    { errorType: "api_error", reason: "server_error", runtimeKind: "unclassified" },
+  ] as const)(
+    "classifies message-less Anthropic $errorType assistant failures",
+    ({ errorType, reason, runtimeKind }) => {
+      providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
+        if (context.provider !== "anthropic") {
+          return undefined;
+        }
+        if (context.errorType === "rate_limit_error") {
+          return "rate_limit";
+        }
+        return context.errorType === "api_error" ? "server_error" : undefined;
+      });
+
+      const message = makeAssistantMessageFixture({
+        provider: "anthropic",
+        errorMessage: undefined,
+        errorType,
+        content: [],
+      });
+
+      expect(classifyAssistantFailoverReason(message)).toBe(reason);
+      expect(
+        classifyProviderRuntimeFailureKind({
+          provider: "anthropic",
+          message: "",
+          errorType,
+        }),
+      ).toBe(runtimeKind);
+    },
+  );
+
+  it.each([
+    { provider: "google", code: "SERVER_ERROR" },
+    { provider: "anthropic", code: "INSUFFICIENT_QUOTA" },
+    { provider: "openai", code: "INTERNAL" },
+    { provider: "openai", code: "DEADLINE_EXCEEDED" },
+    { provider: "anthropic", code: "UNAVAILABLE" },
+    { provider: "google", code: "API_ERROR" },
+    { provider: "google", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not apply provider-native $code semantics to non-owner $provider",
+    ({ provider, code }) => {
+      providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+      expect(classifyFailoverSignal({ provider, code, message: "" })).toBeNull();
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).toBe(
+        "unclassified",
+      );
+    },
+  );
 
   it("does not promote generic SDK type strings as structured provider descriptors", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue("billing");

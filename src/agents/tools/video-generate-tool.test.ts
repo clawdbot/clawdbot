@@ -15,12 +15,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
-import {
-  createVideoGenerateTool,
-  resolveVideoGenerationModelConfigForTool,
-} from "./video-generate-tool.js";
+import { createVideoGenerateTool } from "./video-generate-tool.js";
+import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -1692,3 +1690,4 @@ describe("createVideoGenerateTool", () => {
     expect(input.resolution).toBe("draft-large");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

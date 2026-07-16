@@ -35,6 +35,7 @@ import {
   resolveLegacyPluginStateSidecarPath,
   type LegacyPluginStateSidecarRow,
 } from "./state-migrations.storage.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
@@ -162,7 +163,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
 
 export async function migrateLegacyInstalledPluginIndex(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: params.stateDir });
   if (!fileExists(sourcePath)) {
     return { changes: [], warnings: [] };
@@ -196,10 +197,14 @@ export async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
+      // SQLite owns the install ledger; discovery can omit disabled or currently unloadable plugins.
+      // Archive the retired JSON for recovery instead of blocking startup on conflicting metadata.
+      archiveLegacyInstalledPluginIndex({ sourcePath, changes, warnings });
       return {
         changes,
-        warnings: [
-          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
+        warnings,
+        notices: [
+          `Kept canonical shared SQLite plugin install metadata despite differing legacy records for: ${merged.conflicts.join(", ")}`,
         ],
       };
     }
@@ -400,6 +405,14 @@ export async function runLegacyMigrationPlans(
             changes,
             warnings,
           });
+        }
+        if (allEntriesCovered && plan.cleanupSource === "remove" && fileExists(plan.sourcePath)) {
+          try {
+            fs.unlinkSync(plan.sourcePath);
+            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+          } catch (err) {
+            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+          }
         }
         if (allEntriesCovered && plan.removeSource) {
           try {

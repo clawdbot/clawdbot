@@ -37,6 +37,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
@@ -51,8 +52,17 @@ import {
   type ApplicationNavigationOptions,
 } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ensureCustomElementDefined } from "./lazy-custom-element.ts";
+import {
+  BROWSER_PANEL_ELEMENT,
+  COMMAND_PALETTE_ELEMENT,
+  ensureOptionalElementForHost,
+  isOptionalElementDefined,
+  preloadOptionalElement,
+  TERMINAL_PANEL_ELEMENT,
+  type OptionalCustomElement,
+} from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
+import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 import {
   isNativeWebChromeHost,
   NATIVE_HISTORY_STATE_EVENT,
@@ -63,88 +73,22 @@ import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigatio
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
+import {
+  NAV_WIDTH_MAX,
+  NAV_WIDTH_MIN,
+  loadSettings,
+  normalizeCatalogOpenTarget,
+} from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
+  committedRouteId?: RouteId;
+  committedLocation?: RouteLocation;
 };
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
-
-type OptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
-type UpdatingHost = {
-  requestUpdate: () => unknown;
-};
-
-const COMMAND_PALETTE_ELEMENT = {
-  tagName: "openclaw-command-palette",
-  label: "command palette",
-  loadModule: () => import("../components/command-palette.ts"),
-} satisfies OptionalCustomElement;
-
-const TERMINAL_PANEL_ELEMENT = {
-  tagName: "openclaw-terminal-panel",
-  label: "terminal panel",
-  loadModule: () => import("../components/terminal/terminal-panel-registration.ts"),
-} satisfies OptionalCustomElement;
-
-const BROWSER_PANEL_ELEMENT = {
-  tagName: "openclaw-browser-panel",
-  label: "browser panel",
-  loadModule: () => import("../components/browser/browser-panel.ts"),
-} satisfies OptionalCustomElement;
-
-const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
-
-function isOptionalElementDefined(element: OptionalCustomElement): boolean {
-  return customElements.get(element.tagName) !== undefined;
-}
-
-function ensureOptionalElementForHost(
-  host: UpdatingHost,
-  element: OptionalCustomElement,
-): Promise<void> {
-  if (isOptionalElementDefined(element)) {
-    host.requestUpdate();
-    return Promise.resolve();
-  }
-  const existingLoads = hostElementLoads.get(host);
-  const loads = existingLoads ?? new Map<string, Promise<void>>();
-  if (!existingLoads) {
-    hostElementLoads.set(host, loads);
-  }
-  const pending = loads.get(element.tagName);
-  if (pending) {
-    return pending;
-  }
-  const load = ensureCustomElementDefined(element.tagName, element.loadModule)
-    .then(() => {
-      host.requestUpdate();
-    })
-    .catch((error: unknown) => {
-      console.error(`[openclaw] failed to load ${element.label}`, error);
-      throw error;
-    })
-    .finally(() => {
-      loads.delete(element.tagName);
-    });
-  loads.set(element.tagName, load);
-  return load;
-}
-
-function preloadOptionalElement(host: UpdatingHost, element: OptionalCustomElement): void {
-  if (isOptionalElementDefined(element)) {
-    return;
-  }
-  void ensureOptionalElementForHost(host, element).catch(() => undefined);
-}
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
@@ -152,12 +96,13 @@ const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !=
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
-  return match
-    ? {
-        routeId: match.routeId,
-        location: match.location,
-      }
-    : {};
+  const committedMatch = routerState.matches[0];
+  return {
+    ...(match ? { routeId: match.routeId, location: match.location } : {}),
+    ...(committedMatch
+      ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
+      : {}),
+  };
 }
 
 function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState): boolean {
@@ -165,7 +110,11 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.routeId === next.routeId &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
-    previous.location?.hash === next.location?.hash
+    previous.location?.hash === next.location?.hash &&
+    previous.committedRouteId === next.committedRouteId &&
+    previous.committedLocation?.pathname === next.committedLocation?.pathname &&
+    previous.committedLocation?.search === next.committedLocation?.search &&
+    previous.committedLocation?.hash === next.committedLocation?.hash
   );
 }
 
@@ -220,19 +169,6 @@ function renderApprovalDocument(runtime: ApplicationRuntime) {
   `;
 }
 
-function isTerminalAvailable(
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-  terminalEnabled: boolean,
-): boolean {
-  if (!snapshot.connected || !terminalEnabled) {
-    return false;
-  }
-  return (
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "terminal.open") === true
-  );
-}
-
 function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
   if (!snapshot.connected) {
     return false;
@@ -244,7 +180,8 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 }
 
 function isMobileNavLayout(): boolean {
-  return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
+  const maxWidth = isNativeWebChromeHost() ? 600 : 1100;
+  return globalThis.matchMedia?.(`(max-width: ${maxWidth}px)`).matches ?? false;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -519,6 +456,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   private lastNativeNavState: NativeNavState | undefined;
+  private didConsiderNativeRouteRestore = false;
+  private pendingNativeNewSession = false;
   private readonly settingsPreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -534,7 +473,13 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.subscriptions
       .effect(
         () => this.context,
-        () => () => this.resetShellEpochState(),
+        () => {
+          if (this.pendingNativeNewSession) {
+            this.pendingNativeNewSession = false;
+            this.handleNativeNewSession();
+          }
+          return () => this.resetShellEpochState();
+        },
       )
       .watch(
         () => this.context?.navigation,
@@ -597,9 +542,12 @@ class OpenClawShell extends OpenClawLightDomElement {
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
-    // Shipped Mac app builds without web chrome still drive these events.
+    // Shipped Mac app builds without web chrome still drive these events; the
+    // app's ⌘N menu item reuses native-new-session, while its ⌘K menu item
+    // uses native-toggle-search because the legacy open-search is open-only.
     window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
@@ -612,6 +560,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
     window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
@@ -773,9 +722,25 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openPalette();
   };
 
+  private readonly handleNativeToggleSearch = (event: Event) => {
+    // The ⌘K menu item intercepts the key equivalent before page keydown, so
+    // closing must route through here; preventDefault acknowledges the event
+    // (the native dispatcher falls back to open-search when unhandled).
+    event.preventDefault();
+    this.togglePalette();
+  };
+
   private readonly handleNativeNewSession = () => {
     const context = this.context;
-    if (!context || this.onboarding) {
+    if (this.onboarding) {
+      return;
+    }
+    if (!context) {
+      // Native hosts flush queued commands at document-finish, which can beat
+      // runtime initialization; retain the request and replay once the
+      // context effect fires instead of silently dropping the ⌘N. A boolean is
+      // enough: the destination is idempotent, so repeated presses collapse.
+      this.pendingNativeNewSession = true;
       return;
     }
     const agentId = context.agentSelection.state.selectedId ?? "";
@@ -1092,6 +1057,35 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    const committedRouteId = routeState.committedRouteId;
+    const committedSearch = routeState.committedLocation?.search ?? "";
+    // Restoration and persistence both wait for a live context: consuming the
+    // one-shot restore without a router to call, or persisting the bootstrap
+    // route first, would clobber the stored route.
+    const routeContext = this.context;
+    if (committedRouteId && routeContext) {
+      // A rendered/pending match that differs from the committed route is an
+      // in-flight navigation: it wins over the one-shot restore, and the stale
+      // committed route must not be persisted over the remembered destination.
+      const pendingDiffers =
+        routeState.routeId !== committedRouteId ||
+        (routeState.location?.search ?? "") !== committedSearch;
+      if (!this.didConsiderNativeRouteRestore) {
+        this.didConsiderNativeRouteRestore = true;
+        const storedRoute = pendingDiffers
+          ? null
+          : considerRouteRestore(committedRouteId, committedSearch);
+        if (storedRoute) {
+          // Replace instead of push so a fresh window does not start with a
+          // Back entry pointing at the bootstrap chat route.
+          routeContext.replace(storedRoute.routeId, { search: storedRoute.search });
+          return;
+        }
+      }
+      if (!pendingDiffers) {
+        persistRoute(committedRouteId, committedSearch);
+      }
+    }
     const context = this.context;
     if (context) {
       this.ensureAgentsList(context.gateway.snapshot);
@@ -1174,9 +1168,11 @@ class OpenClawShell extends OpenClawLightDomElement {
       <div
         class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
-          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
-          ? "shell--onboarding"
-          : ""} ${settingsTakeover ? "shell--settings" : ""}"
+          : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${navDrawerOpen
+          ? "shell--nav-drawer-open"
+          : ""} ${this.onboarding ? "shell--onboarding" : ""} ${settingsTakeover
+          ? "shell--settings"
+          : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
@@ -1256,6 +1252,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
+                .terminalAvailable=${terminalAvailable}
+                .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
@@ -1384,3 +1382,4 @@ if (!customElements.get("openclaw-app")) {
 if (!customElements.get("openclaw-app-shell")) {
   customElements.define("openclaw-app-shell", OpenClawShell);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

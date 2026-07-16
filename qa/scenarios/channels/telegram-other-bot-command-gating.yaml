@@ -1,0 +1,39 @@
+title: Telegram command addressed to another bot
+
+scenario:
+  id: telegram-other-bot-command-gating
+  surface: channel-framework
+  category: channel-framework.channel-actions-commands-and-approvals
+  coverage:
+    primary: [channels.native-commands]
+  objective: Verify a command addressed to another Telegram bot does not wake OpenClaw.
+  successCriteria:
+    - The driver sends a native status command addressed to another bot.
+    - The Telegram group remains quiet for the observation window.
+  codeRefs:
+    - extensions/telegram/src/bot-message-context.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Address a command to another bot and verify OpenClaw ignores it.
+    config:
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: ignores another bot's command
+      actions:
+        - resetTransport: true
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /status@OpenClawQaOtherBot
+        - waitForNoOutbound:
+            quietMs: 8000
+            sinceIndex: { ref: outboundStartIndex }
+      detailsExpr: "'command addressed to another bot stayed quiet'"

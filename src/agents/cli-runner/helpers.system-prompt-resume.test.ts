@@ -29,7 +29,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { CliBackendConfig } from "../../config/types.js";
-import { buildClaudeLiveArgs } from "./claude-live-session.js";
+import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 
 // Minimal backend config matching the Anthropic claude-cli backend shape.

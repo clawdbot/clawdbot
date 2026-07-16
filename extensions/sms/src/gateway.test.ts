@@ -1,10 +1,23 @@
 // Sms tests cover gateway plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSmsWebhookRoute } from "./gateway.js";
+import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-const registerPluginHttpRoute = vi.hoisted(() => vi.fn(() => vi.fn()));
+const { registeredRoutes, registerPluginHttpRoute, waitUntilAbort } = vi.hoisted(() => {
+  const routeCleanups: Array<() => void> = [];
+  return {
+    registeredRoutes: routeCleanups,
+    registerPluginHttpRoute: vi.fn(() => vi.fn()),
+    waitUntilAbort: vi.fn(async (_signal: AbortSignal, onAbort?: () => void) => {
+      if (onAbort) {
+        routeCleanups.push(onAbort);
+      }
+    }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-outbound", () => ({ waitUntilAbort }));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
   createFixedWindowRateLimiter: () => ({
@@ -15,8 +28,6 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
   readRequestBodyWithLimit: vi.fn(async () => ""),
   registerPluginHttpRoute,
 }));
-
-const registeredRoutes: Array<() => void> = [];
 
 function createAccount(accountId: string, webhookPath = "/webhooks/sms"): ResolvedSmsAccount {
   return {
@@ -36,9 +47,10 @@ function createAccount(accountId: string, webhookPath = "/webhooks/sms"): Resolv
   };
 }
 
-describe("registerSmsWebhookRoute", () => {
+describe("startSmsGatewayAccount", () => {
   beforeEach(() => {
     registerPluginHttpRoute.mockClear();
+    waitUntilAbort.mockClear();
   });
 
   afterEach(() => {
@@ -48,55 +60,58 @@ describe("registerSmsWebhookRoute", () => {
     registeredRoutes.length = 0;
   });
 
-  function registerRoute(params: Parameters<typeof registerSmsWebhookRoute>[0]) {
-    const unregister = registerSmsWebhookRoute(params);
-    registeredRoutes.push(unregister);
-    return unregister;
+  async function startRoute(
+    params: Omit<Parameters<typeof startSmsGatewayAccount>[0], "abortSignal">,
+  ) {
+    return await startSmsGatewayAccount({
+      ...params,
+      abortSignal: new AbortController().signal,
+    });
   }
 
-  it("rejects duplicate webhook paths across SMS accounts", () => {
+  it("rejects duplicate webhook paths across SMS accounts", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
-    registerRoute({
+    await startRoute({
       cfg: {},
       account: createAccount("default"),
       channelRuntime,
     });
 
-    expect(() =>
-      registerRoute({
+    await expect(
+      startRoute({
         cfg: {},
         account: createAccount("support"),
         channelRuntime,
       }),
-    ).toThrow(/already registered by account default/u);
+    ).rejects.toThrow(/already registered by account default/u);
   });
 
-  it("rejects duplicate webhook paths after route normalization", () => {
+  it("rejects duplicate webhook paths after route normalization", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
-    registerRoute({
+    await startRoute({
       cfg: {},
       account: createAccount("default", "/webhooks/sms"),
       channelRuntime,
     });
 
-    expect(() =>
-      registerRoute({
+    await expect(
+      startRoute({
         cfg: {},
         account: createAccount("support", "webhooks/sms"),
         channelRuntime,
       }),
-    ).toThrow(/already registered by account default/u);
+    ).rejects.toThrow(/already registered by account default/u);
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("allows distinct webhook paths across SMS accounts", () => {
+  it("allows distinct webhook paths across SMS accounts", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
-    registerRoute({
+    await startRoute({
       cfg: {},
       account: createAccount("default"),
       channelRuntime,
     });
-    registerRoute({
+    await startRoute({
       cfg: {},
       account: createAccount("support", "/webhooks/sms/support"),
       channelRuntime,

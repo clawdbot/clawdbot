@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.144.3",
+    "@openai/codex": "0.144.4",
     "semver": "7.8.5",
     "smol-toml": "1.7.0",
     "typebox": "1.3.3",

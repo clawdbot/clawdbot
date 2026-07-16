@@ -39,6 +39,12 @@
         "type": "string",
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
       },
+      "fastMode": {
+        "anyOf": [
+          { "type": "boolean" },
+          { "type": "string", "enum": ["auto"] }
+        ]
+      },
       "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
       "setupGraceTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
       "queryMode": {
@@ -145,6 +151,10 @@
     "thinking": {
       "label": "Thinking Override",
       "help": "Advanced: optional thinking level for the blocking memory sub-agent. Defaults to off for speed."
+    },
+    "fastMode": {
+      "label": "Fast Mode Override",
+      "help": "Advanced: optional fast-mode override for the blocking memory sub-agent. Leave unset to inherit normal agent, session, and model defaults."
     },
     "promptOverride": {
       "label": "Prompt Override",

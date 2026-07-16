@@ -20,6 +20,7 @@ import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
 import android.net.Uri
@@ -209,6 +210,7 @@ class MainViewModel private constructor(
         "Screenshot fixture mode must be selected before live runtime startup"
       }
       runtime.setForeground(foreground)
+      runtime.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
       _requestedHomeDestination.value = scene.homeDestination
       requestedSettingsRouteState.value = scene.settingsRoute
       return
@@ -217,6 +219,8 @@ class MainViewModel private constructor(
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     prefs.setDisplayName("Pixel")
     prefs.setSpeakerEnabled(true)
+    prefs.setVoiceWakeEnabled(scene == AndroidScreenshotScene.VoiceWake)
+    prefs.setVoiceWakeWords(VoiceWakePreferences.defaultTriggerWords)
     val runtime = nodeApp.ensureScreenshotFixtureRuntime()
     runtime.setForeground(foreground)
     runtimeRef.value = runtime
@@ -377,6 +381,15 @@ class MainViewModel private constructor(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
+  val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
+  val voiceWakeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeAvailable }
+  val voiceWakeIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeIsListening }
+  val voiceWakeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.voiceWakeStatusText }
+  val voiceWakeLastTriggeredCommand: StateFlow<String?> =
+    runtimeState(initial = null) { it.voiceWakeLastTriggeredCommand }
+  val voiceWakeWordsSaving: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeWordsSaving }
+  val voiceWakeWordsNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.voiceWakeWordsNoticeText }
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
@@ -770,6 +783,18 @@ class MainViewModel private constructor(
 
   fun setSpeakerEnabled(enabled: Boolean) {
     ensureRuntime().setSpeakerEnabled(enabled)
+  }
+
+  fun setVoiceWakeEnabled(enabled: Boolean) {
+    ensureRuntime().setVoiceWakeEnabled(enabled)
+  }
+
+  fun setVoiceWakeWords(values: List<String>) {
+    ensureRuntime().setVoiceWakeWords(values)
+  }
+
+  fun refreshVoiceWakePermission() {
+    ensureRuntime().refreshVoiceWakePermission()
   }
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {

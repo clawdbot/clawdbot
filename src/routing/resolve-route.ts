@@ -819,3 +819,4 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

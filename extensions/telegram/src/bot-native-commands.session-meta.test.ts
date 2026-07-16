@@ -666,7 +666,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
     const commandModule = await import("./bot-native-commands.js");
     registerTelegramNativeCommands = commandModule.registerTelegramNativeCommands;
-    await commandModule.testing.loadNativeCommandRuntime();
+    await import("./bot-native-commands.runtime.js");
     agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 
@@ -2067,3 +2067,4 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(deliveryCall.replies).toEqual([{ text: "No response generated. Please try again." }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

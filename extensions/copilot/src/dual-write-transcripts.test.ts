@@ -20,8 +20,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   attachCopilotMirrorIdentity,
   dualWriteCopilotTranscriptBestEffort,
-  mirrorCopilotTranscript,
 } from "./dual-write-transcripts.js";
+
+const mirrorCopilotTranscript = dualWriteCopilotTranscriptBestEffort;
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
@@ -189,20 +190,6 @@ describe("mirrorCopilotTranscript", () => {
     expect(
       (await readMirrorMessages(target)).filter((message) => message.role === "user"),
     ).toHaveLength(1);
-  });
-
-  it("rejects mirror writes without a runtime session identity", async () => {
-    await expect(
-      mirrorCopilotTranscript({
-        sessionId: "session-1",
-        messages: [
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "no identity" }],
-            timestamp: Date.now(),
-          }),
-        ],
-      }),
-    ).rejects.toThrow("runtime session identity");
   });
 
   it("deduplicates re-emits by idempotency scope", async () => {

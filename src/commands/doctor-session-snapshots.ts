@@ -39,7 +39,7 @@ type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 
-export function resolveSessionSnapshotBundledSkillsDir(params?: {
+function resolveSessionSnapshotBundledSkillsDir(params?: {
   bundledSkillsDir?: string;
   argv1?: string;
   moduleUrl?: string;
@@ -259,7 +259,7 @@ function resolveMovedBundledSkillPath(params: {
 }
 
 /** Finds cached bundled-skill paths that point at old runtime/temp package roots. */
-export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
+function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
   pathExists?: (filePath: string) => boolean;
@@ -654,4 +654,13 @@ export async function noteSessionSnapshotHealth(params?: {
     );
   }
   note(lines.join("\n"), "Session snapshots");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorSessionSnapshotsTestApi")
+  ] = {
+    resolveSessionSnapshotBundledSkillsDir,
+    scanSessionStoreForStaleRuntimeSnapshotPaths,
+  };
 }

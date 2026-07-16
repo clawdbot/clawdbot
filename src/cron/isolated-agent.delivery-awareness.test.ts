@@ -10,7 +10,7 @@ import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
-import { resetCompletedDirectCronDeliveriesForTests } from "./isolated-agent/delivery-dispatch.js";
+import { resetCompletedDirectCronDeliveriesForTests } from "./isolated-agent/delivery-dispatch.test-support.js";
 
 async function writeDefaultAgentSessionStoreEntries(
   entries: Record<string, Record<string, unknown>>,

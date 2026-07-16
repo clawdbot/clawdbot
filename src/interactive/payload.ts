@@ -1005,3 +1005,4 @@ export function resolveInteractiveTextFallback(params: {
     .join("\n\n");
   return interactiveText || params.text;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

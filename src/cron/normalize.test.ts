@@ -568,7 +568,7 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
-  it("prunes agentTurn-only payload fields from systemEvent create jobs", () => {
+  it("retains toolsAllow while pruning agentTurn-only fields from systemEvent create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "system-event-prune",
       schedule: { kind: "every", everyMs: 60_000 },
@@ -588,7 +588,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload).toEqual({ kind: "systemEvent", text: "hello" });
+    expect(payload).toEqual({ kind: "systemEvent", text: "hello", toolsAllow: ["exec"] });
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
@@ -951,7 +951,7 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
-  it("promotes implicit text payloads with agentTurn hints to agentTurn patches", () => {
+  it("does not infer agentTurn from the shared toolsAllow field", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
         text: " continue the report ",
@@ -960,11 +960,10 @@ describe("normalizeCronJobPatch", () => {
     }) as unknown as Record<string, unknown>;
 
     expect(normalized.payload).toEqual({
-      kind: "agentTurn",
-      message: "continue the report",
+      text: "continue the report",
       toolsAllow: ["read"],
     });
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(false);
   });
 
   it("preserves null sessionKey patches and trims string values", () => {
@@ -1028,7 +1027,7 @@ describe("normalizeCronJobPatch", () => {
     expect(schedule.staggerMs).toBe(30_000);
   });
 
-  it("prunes agentTurn-only payload fields from systemEvent patch payloads", () => {
+  it("retains toolsAllow while pruning agentTurn-only fields from systemEvent patch payloads", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
         kind: "systemEvent",
@@ -1044,7 +1043,7 @@ describe("normalizeCronJobPatch", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload).toEqual({ kind: "systemEvent", text: "hi" });
+    expect(payload).toEqual({ kind: "systemEvent", text: "hi", toolsAllow: ["exec"] });
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

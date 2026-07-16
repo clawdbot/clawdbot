@@ -916,7 +916,7 @@ export async function sendControlledSubagentMessage(params: {
   }
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
@@ -934,3 +934,8 @@ export const testing = {
       : defaultSubagentControlDeps;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentControlTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

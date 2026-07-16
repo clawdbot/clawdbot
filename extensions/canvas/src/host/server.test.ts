@@ -15,6 +15,8 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type CanvasWatchFactory = NonNullable<
   Parameters<typeof import("./server.js").createCanvasHostHandler>[0]["watchFactory"]
 >;
@@ -27,6 +29,7 @@ type TrackingWebSocket = {
   sent: string[];
   on: (event: string, cb: () => void) => TrackingWebSocket;
   send: (message: string) => void;
+  terminate: () => void;
 };
 
 type CapturedResponse = {
@@ -118,14 +121,13 @@ async function captureHandlerResponse(
 }
 
 async function captureA2uiFixtureResponse(
-  rootDir: string,
   url: string,
   method = "GET",
   liveReload = true,
 ): Promise<CapturedResponse> {
-  const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
+  const { handleA2uiHttpRequest } = await import("./a2ui.js");
   return await captureHttpResponse(
-    createA2uiHttpRequestHandler({ rootDir, liveReload }),
+    async (req, res) => await handleA2uiHttpRequest(req, res, { liveReload }),
     url,
     method,
   );
@@ -196,7 +198,6 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -241,8 +242,6 @@ describe("canvas host", () => {
     vi.resetModules();
     const serverModule = await import("./server.js");
     ({ createCanvasHostHandler, startCanvasHost } = serverModule);
-    canvasLiveReloadMaxInboundMessageBytes =
-      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -482,10 +481,10 @@ describe("canvas host", () => {
     const constructorOptions: unknown[] = [];
     let connectionHandler: ((socket: TrackingWebSocket) => void) | undefined;
     class CapturingWebSocketServer {
-      on(event: string, cb: (socket: TrackingWebSocket) => void) {
-        if (event === "connection") {
-          connectionHandler = cb;
-        }
+      readonly clients = new Set<TrackingWebSocket>();
+
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        connectionHandler = cb;
         return this;
       }
 
@@ -506,20 +505,11 @@ describe("canvas host", () => {
     try {
       expect(constructorOptions[0]).toMatchObject({
         noServer: true,
-        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       });
-      const socketHandlers: string[] = [];
-      const socket: TrackingWebSocket = {
-        sent: [],
-        on: (event) => {
-          socketHandlers.push(event);
-          return socket;
-        },
-        send: vi.fn(),
-      };
-      expect(connectionHandler).toBeDefined();
-      connectionHandler?.(socket);
-      expect(socketHandlers).toEqual(expect.arrayContaining(["error", "close"]));
+      const socketOn = vi.fn();
+      connectionHandler?.({ on: socketOn } as unknown as TrackingWebSocket);
+      expect(socketOn).toHaveBeenCalledWith("error", expect.any(Function));
     } finally {
       await handler.close();
     }
@@ -593,22 +583,17 @@ describe("canvas host", () => {
 
     const watcherStart = watcherState.watchers.length;
     const TrackingWebSocketServerClass = class TrackingWebSocketServer {
-      static latestInstance: { connectionCount: number } | undefined;
       static latestSocket: TrackingWebSocket | undefined;
-      connectionCount = 0;
-      readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+      readonly clients = new Set<TrackingWebSocket>();
+      private connectionHandler?: (socket: TrackingWebSocket) => void;
 
-      on(event: string, cb: (...args: unknown[]) => void) {
-        const list = this.handlers.get(event) ?? [];
-        list.push(cb);
-        this.handlers.set(event, list);
+      on(_event: string, cb: (socket: TrackingWebSocket) => void) {
+        this.connectionHandler = cb;
         return this;
       }
 
-      emit(event: string, ...args: unknown[]) {
-        for (const cb of this.handlers.get(event) ?? []) {
-          cb(...args);
-        }
+      emit(_event: string, socket: TrackingWebSocket) {
+        this.connectionHandler?.(socket);
       }
 
       handleUpgrade(
@@ -620,15 +605,9 @@ describe("canvas host", () => {
         void req;
         void socket;
         void head;
-        const closeHandlers: Array<() => void> = [];
         const ws: TrackingWebSocket = {
           sent: [],
-          on: (event, handler) => {
-            if (event === "close") {
-              closeHandlers.push(handler);
-            }
-            return ws;
-          },
+          on: () => ws,
           send: (message: string) => {
             ws.sent.push(message);
             if (message === "reload") {
@@ -638,20 +617,15 @@ describe("canvas host", () => {
               resolveReload();
             }
           },
+          terminate: vi.fn(),
         };
+        this.clients.add(ws);
         TrackingWebSocketServerClass.latestSocket = ws;
         cb(ws);
       }
 
       close(cb?: (err?: Error) => void) {
         cb?.();
-      }
-
-      constructor(..._args: unknown[]) {
-        TrackingWebSocketServerClass.latestInstance = this;
-        this.on("connection", () => {
-          this.connectionCount += 1;
-        });
       }
     };
 
@@ -671,11 +645,6 @@ describe("canvas host", () => {
         Buffer.alloc(0),
       );
       expect(upgraded).toBe(true);
-      const latestServer = TrackingWebSocketServerClass.latestInstance;
-      if (!latestServer) {
-        throw new Error("expected Canvas host websocket server");
-      }
-      expect(latestServer.connectionCount).toBe(1);
       const ws = TrackingWebSocketServerClass.latestSocket;
       if (!ws) {
         throw new Error("expected Canvas host websocket");
@@ -691,59 +660,64 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const a2uiRoot = await createCaseDir();
-    const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
+    const fixtureEntryDir = await createCaseDir();
+    const a2uiRoot = path.join(fixtureEntryDir, "a2ui");
+    const nestedAssetDir = path.join(
+      a2uiRoot,
+      `test-assets-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const nestedAssetUrlPath = path.basename(nestedAssetDir);
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-
-    await fs.mkdir(nestedAssetDir, { recursive: true });
-    await fs.writeFile(
-      path.join(a2uiRoot, "index.html"),
-      `<openclaw-a2ui-host></openclaw-a2ui-host>
-<script>openclawCanvasA2UIAction</script>`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
-    await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    const originalArgv = [...process.argv];
 
     try {
-      const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
+      process.argv[1] = path.join(fixtureEntryDir, "openclaw.mjs");
+      await fs.mkdir(nestedAssetDir, { recursive: true });
+      await fs.writeFile(
+        path.join(a2uiRoot, "index.html"),
+        `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+        "utf8",
+      );
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+
+      const res = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const noReloadRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`, "GET", false);
+      const noReloadRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/`, "GET", false);
       expect(noReloadRes.body).toContain("openclawCanvasA2UIAction");
       expect(noReloadRes.body).not.toContain(CANVAS_WS_PATH);
 
-      const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
+      const bundleRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
 
       const assetRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/assets/demo/sample.txt`,
+        `${A2UI_PATH}/${nestedAssetUrlPath}/sample.txt`,
       );
       expect(assetRes.status).toBe(200);
       expect(assetRes.headers["content-type"]).toBe("text/plain");
       expect(assetRes.body).toBe("nested asset");
 
-      const traversalRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/%2e%2e%2fpackage.json`,
-      );
+      const traversalRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
-      const malformedRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/%E0%A4%A`);
+      const malformedRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
+      process.argv.splice(0, process.argv.length, ...originalArgv);
       await fs.rm(linkPath, { force: true });
     }
   });

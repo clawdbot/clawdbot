@@ -1451,7 +1451,7 @@ export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawCo
   };
 }
 
-export function providerWildcardModelKey(provider: string): string {
+function providerWildcardModelKey(provider: string): string {
   return modelKey(normalizeProviderId(provider), "*");
 }
 
@@ -1466,7 +1466,7 @@ export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: st
   return allowedKeys.has(providerWildcardModelKey(key.slice(0, separator)));
 }
 
-export function resolveAllowedModelSelection(
+function resolveAllowedModelSelection(
   params: {
     cfg?: OpenClawConfig;
     provider: string;
@@ -1671,3 +1671,4 @@ export function createModelVisibilityPolicyWithFallbacks(
   };
   return policy;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

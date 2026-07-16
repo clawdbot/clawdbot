@@ -58,6 +58,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -374,6 +375,68 @@ describe("buildOpenAISpeechProvider", () => {
         process.env.OPENAI_TTS_BASE_URL = previousBaseUrl;
       }
     }
+  });
+
+  it("treats a blank environment API key as missing across speech entry points", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "   ");
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    await expect(
+      provider.synthesizeTelephony?.({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("trims a valid environment API key for normal and telephony synthesis", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "  sk-env  ");
+    const provider = buildOpenAISpeechProvider();
+    const authorizationHeaders: Array<string | null> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      authorizationHeaders.push(new Headers(init?.headers).get("authorization"));
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    }) as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(true);
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      timeoutMs: 1_000,
+    });
+
+    expect(authorizationHeaders).toEqual(["Bearer sk-env", "Bearer sk-env"]);
   });
 
   it("preserves talk responseFormat overrides", () => {

@@ -1,10 +1,12 @@
 // Session key case tests cover preserving meaningful case in session keys.
 import { describe, expect, it } from "vitest";
-import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import {
+  resolveSessionEntryCandidates,
+  resolveSessionStoreEntry,
+} from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
-  isCasePreservingPeer,
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
   parseRawSessionConversationRef,
@@ -26,22 +28,6 @@ const entry = (to: string, updatedAt: number): SessionEntry =>
 const ROOM_A = "!MixedRoomAbCdEf:example.org";
 const ROOM_B = "!OtherRoomGhIjKl:matrix.example.org";
 const EVENT = "$EvMixedCaseAbCdEfGhIjKlMnOpQrStUvWxYz0";
-
-describe("isCasePreservingPeer", () => {
-  it("enrolls Matrix channel/group and Signal group; not direct or other channels", () => {
-    expect(isCasePreservingPeer("matrix", "channel")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "group")).toBe(true);
-    expect(isCasePreservingPeer("matrix", "direct")).toBe(false);
-    expect(isCasePreservingPeer("signal", "group")).toBe(true);
-    expect(isCasePreservingPeer("signal", "direct")).toBe(false);
-    expect(isCasePreservingPeer("telegram", "group")).toBe(false);
-    expect(isCasePreservingPeer("slack", "channel")).toBe(false);
-  });
-
-  it("is case-insensitive on the channel/peerKind labels", () => {
-    expect(isCasePreservingPeer("Matrix", "Channel")).toBe(true);
-  });
-});
 
 describe("requiresFoldedSessionKeyAliasProof", () => {
   it("requires alias proof only for tail-preserved Matrix room keys", () => {
@@ -261,6 +247,26 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
 });
 
 describe("resolveSessionStoreEntry — case-distinct Matrix session safety (codex #87366 P2)", () => {
+  it("returns the selected persisted key when resolving candidate rows", () => {
+    const staleExact = entry("room:!MixedRoomAbCdEf:example.org", 100);
+    const freshStructuralAlias = entry("room:!MixedRoomAbCdEf:example.org", 200);
+    const structuralAliasKey = "Agent:Main:Matrix:Channel:!MixedRoomAbCdEf:example.org";
+
+    const resolved = resolveSessionEntryCandidates({
+      entries: [
+        { sessionKey: ROOM_MIXED_KEY, entry: staleExact },
+        { sessionKey: structuralAliasKey, entry: freshStructuralAlias },
+      ],
+      sessionKey: ROOM_MIXED_KEY,
+    });
+
+    expect(resolved.existing).toEqual({
+      sessionKey: structuralAliasKey,
+      entry: freshStructuralAlias,
+    });
+    expect(resolved.legacyKeys).toContain(structuralAliasKey);
+  });
+
   it("does NOT collapse a case-distinct sibling room (different real room, not an alias)", () => {
     // Two genuinely distinct Matrix rooms whose ids differ only by case; each
     // delivers to its OWN id. Resolving one must not mark the other for deletion.

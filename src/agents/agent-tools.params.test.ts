@@ -8,8 +8,6 @@ import {
   REQUIRED_PARAM_GROUPS,
   getToolParamsRecord,
   normalizeFileToolPathParam,
-  normalizeHallucinatedOfficePathExtension,
-  stripMalformedXmlArgValueSuffix,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 
@@ -20,28 +18,18 @@ describe("assertRequiredParams", () => {
   });
 
   it("strips only the malformed terminal XML arg-value suffix", () => {
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>")).toBe("echo test");
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>>>>>")).toBe("echo test");
-    expect(stripMalformedXmlArgValueSuffix("echo test</arg_value>")).toBe("echo test</arg_value>");
-    expect(stripMalformedXmlArgValueSuffix("echo </arg_value>> test")).toBe(
-      "echo </arg_value>> test",
-    );
+    expect(normalizeFileToolPathParam("echo test</arg_value>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>>>>>")).toBe("echo test");
+    expect(normalizeFileToolPathParam("echo test</arg_value>")).toBe("echo test</arg_value>");
+    expect(normalizeFileToolPathParam("echo </arg_value>> test")).toBe("echo </arg_value>> test");
   });
 
   it("normalizes known hallucinated Office/codex path extensions", () => {
-    expect(normalizeHallucinatedOfficePathExtension("reports/final.docodex")).toBe(
-      "reports/final.docx",
-    );
-    expect(normalizeHallucinatedOfficePathExtension("slides/plan.pptxodex")).toBe(
-      "slides/plan.pptx",
-    );
-    expect(normalizeHallucinatedOfficePathExtension("sheets/budget.XLSCODEX")).toBe(
-      "sheets/budget.xlsx",
-    );
-    expect(normalizeHallucinatedOfficePathExtension("notes/codex-report.txt")).toBe(
-      "notes/codex-report.txt",
-    );
-    expect(normalizeHallucinatedOfficePathExtension("archive.docodex/notes.txt")).toBe(
+    expect(normalizeFileToolPathParam("reports/final.docodex")).toBe("reports/final.docx");
+    expect(normalizeFileToolPathParam("slides/plan.pptxodex")).toBe("slides/plan.pptx");
+    expect(normalizeFileToolPathParam("sheets/budget.XLSCODEX")).toBe("sheets/budget.xlsx");
+    expect(normalizeFileToolPathParam("notes/codex-report.txt")).toBe("notes/codex-report.txt");
+    expect(normalizeFileToolPathParam("archive.docodex/notes.txt")).toBe(
       "archive.docodex/notes.txt",
     );
   });

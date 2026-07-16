@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
@@ -23,15 +24,20 @@ import {
   query,
   transitionValues,
 } from "./placement-row-codec.js";
+import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
+import { createPlacementTurnClaimOps, signalTurnClaimRelease } from "./placement-turn-claims.js";
 import {
-  createPlacementTurnClaimOps,
-  signalTurnClaimRelease,
-  type PlacementStoreRuntime,
-} from "./placement-turn-claims.js";
+  clearWorkerWorkspaceReconciliation,
+  createPlacementWorkspaceJournalOps,
+} from "./placement-workspace-journal.js";
+import {
+  createPlacementWorkspaceResultOps,
+  hasWorkerWorkspacePendingResult,
+} from "./placement-workspace-result.js";
 
 export type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
 
@@ -66,6 +72,7 @@ export function createWorkerSessionPlacementStore(
   const now = options.now ?? Date.now;
   const runtime: PlacementStoreRuntime = {
     path,
+    instanceId: randomUUID(),
     now,
     read: () => openOpenClawStateDatabase({ path }).db,
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
@@ -74,6 +81,8 @@ export function createWorkerSessionPlacementStore(
 
   return {
     ...createPlacementTurnClaimOps(runtime),
+    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceResultOps(runtime),
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return find(read(), required(sessionId, "session id"));
@@ -179,6 +188,7 @@ export function createWorkerSessionPlacementStore(
       environmentId: string;
       ownerEpoch: number;
       expectedGeneration: number;
+      workspaceBaseManifestRef?: string;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.sessionId, "session id");
       const environmentId = required(input.environmentId, "environment id");
@@ -193,9 +203,21 @@ export function createWorkerSessionPlacementStore(
         ) {
           throw new Error(`Cannot drain stale worker placement for session ${sessionId}`);
         }
+        if (hasWorkerWorkspacePendingResult(db, sessionId)) {
+          throw new Error(
+            `Cannot drain session ${sessionId} with a pending cloud workspace result`,
+          );
+        }
         // Draining closes new admission first. The already-admitted worker may
         // finish under its old claim before reconciliation advances ownership.
-        const values = transitionValues(current, "draining", {}, now());
+        const values = transitionValues(
+          current,
+          "draining",
+          input.workspaceBaseManifestRef === undefined
+            ? {}
+            : { workspaceBaseManifestRef: input.workspaceBaseManifestRef },
+          now(),
+        );
         const turnClaim = current.turnClaim;
         if (turnClaim) {
           values.turn_claim_owner = turnClaim.owner;
@@ -230,7 +252,35 @@ export function createWorkerSessionPlacementStore(
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed during drain`);
         }
+        if (input.workspaceBaseManifestRef !== undefined) {
+          clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
+        }
         return getRequired(db, sessionId);
+      });
+    },
+
+    finishReclaim(input: {
+      sessionId: string;
+      environmentId: string;
+      ownerEpoch: number;
+      expectedGeneration: number;
+    }): WorkerSessionPlacementRecord {
+      const sessionId = required(input.sessionId, "session id");
+      const environmentId = required(input.environmentId, "environment id");
+      const ownerEpoch = normalizeEpoch(input.ownerEpoch, "active owner epoch");
+      return write((db) => {
+        const current = getRequired(db, sessionId);
+        if (
+          current.state !== "active" ||
+          current.generation !== input.expectedGeneration ||
+          current.environmentId !== environmentId ||
+          current.activeOwnerEpoch !== ownerEpoch ||
+          current.turnClaim !== null ||
+          hasWorkerWorkspacePendingResult(db, sessionId)
+        ) {
+          throw new Error(`Cannot finish stale worker reclaim for session ${sessionId}`);
+        }
+        return updateTransition(db, current, "reclaimed", {}, now());
       });
     },
 
@@ -253,8 +303,13 @@ export function createWorkerSessionPlacementStore(
         ) {
           throw new Error(`Cannot reconcile stale worker placement for session ${sessionId}`);
         }
-        // The caller has already fenced the environment. Clear its last claim
-        // in the same CAS that opens the post-worker reconciliation phase.
+        if (hasWorkerWorkspacePendingResult(db, sessionId)) {
+          throw new Error(
+            `Cannot reconcile session ${sessionId} with a pending cloud workspace result`,
+          );
+        }
+        // Clear the last claim in the same CAS that opens post-worker
+        // reconciliation. Pending results block this authority fence.
         const releasedClaim = current.turnClaim !== null;
         const values = transitionValues(current, "reconciling", {}, now());
         const update = query(db)

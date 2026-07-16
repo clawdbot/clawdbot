@@ -584,7 +584,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}">
+    <div
+      class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}"
+      data-chat-row-key=${parts[0]?.key ?? nothing}
+    >
       ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
@@ -622,13 +625,13 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  * the turn's done indicator; the expanded groups render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { durationMs: number | null; hasError: boolean },
+  item: { key: string; durationMs: number | null; hasError: boolean },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
   const duration = formatDurationCompact(item.durationMs, { spaced: true });
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
-    <div class="chat-group tool chat-group--work">
+    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
       <span class="chat-work-group__gutter" aria-hidden="true"></span>
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
@@ -787,7 +790,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
     return html`
-      <div class="chat-group tool chat-group--activity">
+      <div class="chat-group tool chat-group--activity" data-chat-row-key=${group.key}>
         ${renderChatAvatar(
           group.role,
           {
@@ -865,7 +868,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
       ${renderChatAvatar(
         group.role,
         {
@@ -2116,10 +2119,10 @@ function renderGroupedMessage(
   );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = markdownBase;
+  const markdown = extractedText?.trim() ? extractedText : null;
   const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
   };
@@ -2131,7 +2134,6 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    "fade-in",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2429,3 +2431,4 @@ function renderMarkdownText(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

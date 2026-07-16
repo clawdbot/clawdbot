@@ -1313,3 +1313,4 @@ function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): Sto
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

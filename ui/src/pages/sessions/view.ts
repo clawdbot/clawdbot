@@ -50,6 +50,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
+import { parseFilterInteger } from "./page-state.ts";
 
 export type TranscriptSearchState =
   | { status: "idle" }
@@ -692,8 +693,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 }
 
 function hasPositiveNumberFilter(value: string): boolean {
-  const parsed = Number(value.trim());
-  return Number.isFinite(parsed) && parsed > 0;
+  return parseFilterInteger(value) !== undefined;
 }
 
 function hasActiveFilters(props: SessionsProps): boolean {
@@ -1842,3 +1842,4 @@ function renderSessionDetailsRow(params: {
     </td>
   </tr>`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

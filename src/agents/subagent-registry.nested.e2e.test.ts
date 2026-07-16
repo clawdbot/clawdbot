@@ -25,11 +25,11 @@ vi.mock("./subagent-registry.store.js", () => ({
   saveSubagentRegistryToDisk: vi.fn(() => {}),
 }));
 
-let subagentRegistry: typeof import("./subagent-registry.js");
+let subagentRegistry: typeof import("./subagent-registry.test-helpers.js");
 
 describe("subagent registry nested agent tracking", () => {
   beforeAll(async () => {
-    subagentRegistry = await import("./subagent-registry.js");
+    subagentRegistry = await import("./subagent-registry.test-helpers.js");
   });
 
   afterEach(() => {

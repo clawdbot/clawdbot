@@ -1444,3 +1444,4 @@ async function emitToolResultMessage(
   await emit({ type: "message_start", message: toolResultMessage });
   await emit({ type: "message_end", message: toolResultMessage });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

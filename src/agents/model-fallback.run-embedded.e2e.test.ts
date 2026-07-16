@@ -210,20 +210,26 @@ function expectFailureCount(
   expect(failureCounts?.[reason]).toBe(expected);
 }
 
-async function writeMultiProfileAuthStore(agentDir: string) {
+async function writeMultiProfileAuthStore(
+  agentDir: string,
+  options?: { openAiProfileCount?: 2 | 3 },
+) {
+  const includeThirdOpenAiProfile = options?.openAiProfileCount !== 2;
   saveAuthProfileStore(
     {
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
         "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
-        "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
+        ...(includeThirdOpenAiProfile
+          ? { "openai:p3": { type: "api_key" as const, provider: "openai", key: "placeholder" } }
+          : {}),
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
-        "openai:p3": { lastUsed: 3 },
+        ...(includeThirdOpenAiProfile ? { "openai:p3": { lastUsed: 3 } } : {}),
         "groq:p1": { lastUsed: 4 },
       },
     },
@@ -980,6 +986,41 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.model).toBe("mock-2");
 
       expectProviderAttemptCounts({ openai: 2, groq: 1 });
+    });
+  });
+
+  it("rotates Codex profiles on structured prompt rate limits before model fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir, { openAiProfileCount: 2 });
+      mockPrimaryFailureThenFallbackSuccess(() => {
+        return makeEmbeddedRunnerAttempt({
+          promptError: Object.assign(
+            new Error("You've reached your Codex subscription usage limit."),
+            { status: 429 as const },
+          ),
+          promptErrorSource: "prompt",
+        });
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:codex-structured-prompt-rate-limit",
+        runId: "run:codex-structured-prompt-rate-limit",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expectProviderAttemptCounts({ openai: 2, groq: 1 });
+      const primaryCalls = runEmbeddedAttemptMock.mock.calls
+        .map(([params]) => params as EmbeddedAttemptParams)
+        .filter((params) => params.provider === "openai");
+      expect(primaryCalls.map((params) => params.authProfileId)).toStrictEqual([
+        "openai:p1",
+        "openai:p2",
+      ]);
+      expect(primaryCalls.map((params) => params.modelId)).toStrictEqual(["mock-1", "mock-1"]);
     });
   });
 

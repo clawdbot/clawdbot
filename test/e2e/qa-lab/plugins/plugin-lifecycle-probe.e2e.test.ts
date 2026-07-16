@@ -43,7 +43,7 @@ async function waitForFile(pathToCheck: string, timeoutMs: number): Promise<void
     if (existsSync(pathToCheck)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`Timed out waiting for ${pathToCheck}`);
 }

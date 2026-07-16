@@ -1277,7 +1277,7 @@ function armRunningRecheckTimer(state: CronServiceState) {
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */
-export async function onTimer(state: CronServiceState) {
+async function onTimer(state: CronServiceState) {
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -2051,7 +2051,7 @@ async function applyStartupCatchupOutcomes(
 }
 
 /** Executes a cron job without mutating persisted job state. */
-export async function executeJobCore(
+async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
@@ -2456,3 +2456,11 @@ export function stopTimer(state: CronServiceState) {
   }
   state.timer = null;
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronTimerTestApi")] = {
+    executeJobCore,
+    onTimer,
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

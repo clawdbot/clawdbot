@@ -17,7 +17,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentDir } from "../config.js";
 
 /** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
-export interface AppKeybindings {
+interface AppKeybindings {
   "app.interrupt": true;
   "app.clear": true;
   "app.exit": true;
@@ -69,7 +69,7 @@ declare module "@earendil-works/pi-tui" {
 }
 
 /** Complete keybinding definition map consumed by the TUI keybinding manager. */
-export const KEYBINDINGS = {
+const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
   "app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
   "app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
@@ -386,4 +386,4 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 }
 
-export type { Keybinding, KeyId, KeybindingsConfig };
+export type { KeybindingsConfig };

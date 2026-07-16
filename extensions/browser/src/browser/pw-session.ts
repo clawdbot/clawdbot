@@ -55,7 +55,7 @@ import {
   type BrowserDownloadCaptureOptions,
   type PlaywrightDownload,
 } from "./pw-download-capture.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
 
@@ -2429,22 +2429,7 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  try {
-    await page.bringToFront();
-  } catch (err) {
-    try {
-      await withPageScopedCdpClient({
-        cdpUrl: opts.cdpUrl,
-        page,
-        targetId: opts.targetId,
-        fn: async (send) => {
-          await send("Page.bringToFront");
-        },
-      });
-    } catch {
-      throw err;
-    }
-  }
+  await page.bringToFront();
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
@@ -2460,3 +2445,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

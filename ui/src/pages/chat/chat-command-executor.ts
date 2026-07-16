@@ -738,6 +738,7 @@ async function executeSteer(
         ...selectedGlobalScope(resolved.key, context),
         message: resolved.message,
         deliver: false,
+        queueMode: "steer",
         idempotencyKey: generateUUID(),
       }),
     );
@@ -788,3 +789,4 @@ async function executeRedirect(
     return { content: `Failed to redirect: ${String(err)}`, failed: true };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

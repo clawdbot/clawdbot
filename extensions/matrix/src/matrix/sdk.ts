@@ -11,6 +11,7 @@ import {
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
+import type { Room } from "matrix-js-sdk/lib/models/room.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -880,16 +881,7 @@ export class MatrixClient {
   }
 
   hasSyncedJoinedRoomMember(roomId: string, userId: string): boolean {
-    const room = (
-      this.client as {
-        getRoom?: (roomId: string) => {
-          currentState?: {
-            getMember?: (userId: string) => { membership?: string | null } | null;
-          };
-        } | null;
-      }
-    ).getRoom?.(roomId);
-    return room?.currentState?.getMember?.(userId)?.membership === "join";
+    return this.client.getRoom(roomId)?.getMember(userId)?.membership === "join";
   }
 
   async getRoomStateEvent(
@@ -2132,17 +2124,12 @@ export class MatrixClient {
     });
   }
 
-  private emitMembershipForRoom(room: unknown): void {
-    const roomObj = room as {
-      roomId?: string;
-      getMyMembership?: () => string | null | undefined;
-      selfMembership?: string | null | undefined;
-    };
-    const roomId = roomObj.roomId?.trim();
+  private emitMembershipForRoom(room: Room): void {
+    const roomId = room.roomId.trim();
     if (!roomId) {
       return;
     }
-    const membership = roomObj.getMyMembership?.() ?? roomObj.selfMembership ?? undefined;
+    const membership = room.getMyMembership();
     const selfUserId = this.client.getUserId() ?? this.selfUserId ?? "";
     if (!selfUserId) {
       return;
@@ -2166,15 +2153,7 @@ export class MatrixClient {
   }
 
   private emitOutstandingInviteEvents(): void {
-    const listRooms = (this.client as { getRooms?: () => unknown[] }).getRooms;
-    if (typeof listRooms !== "function") {
-      return;
-    }
-    const rooms = listRooms.call(this.client);
-    if (!Array.isArray(rooms)) {
-      return;
-    }
-    for (const room of rooms) {
+    for (const room of this.client.getRooms()) {
       this.emitMembershipForRoom(room);
     }
   }
@@ -2198,3 +2177,4 @@ export class MatrixClient {
     return true;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

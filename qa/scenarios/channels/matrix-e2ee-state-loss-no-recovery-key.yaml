@@ -1,0 +1,35 @@
+title: Matrix E2EE total state loss without a recovery key fails closed
+scenario:
+  id: matrix-e2ee-state-loss-no-recovery-key
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-state-loss-no-recovery-key
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE State Loss No Key Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeStateLossNoRecoveryKeyScenario
+  args:
+    - expr: "scenarioContext"

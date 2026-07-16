@@ -45,7 +45,7 @@ export type ContextEngineFactoryContext = {
 export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
-export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
 type ContextEngineRegistration = {
   factory: ContextEngineFactory;
@@ -518,7 +518,7 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
   return quarantines;
 }
 
-export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
+function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
@@ -581,14 +581,6 @@ export function registerContextEngine(
   return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
 }
 
-/**
- * Return the factory for a registered engine, or undefined.
- */
-export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  const registration = getContextEngineRegistration(id);
-  return registration?.lifecycle === "runtime" ? registration.factory : undefined;
-}
-
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
 export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
   return getContextEngineRegistryState().engines.get(id);
@@ -597,7 +589,7 @@ export function getContextEngineRegistration(id: string): ContextEngineRegistrat
 /**
  * List all registered engine ids.
  */
-export function listContextEngineIds(): string[] {
+function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
@@ -1073,3 +1065,4 @@ async function resolveDefaultContextEngine(
     engineId: defaultEngineId,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

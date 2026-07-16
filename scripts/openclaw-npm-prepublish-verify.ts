@@ -15,6 +15,11 @@ import {
   resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import {
+  assertPreparedOpenClawNpmShrinkwrap,
+  npmTarballIntegrity,
+  readTarballJson,
+} from "./prepare-openclaw-npm-shrinkwrap.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
@@ -99,6 +104,15 @@ function main(argv = process.argv.slice(2)): void {
     let binaryInvocation: NpmVerifyCommandInvocation;
     let packageRoot: string;
     if (usesPreparedLocalDependencyInstall(args.dependencyTarballPaths.length)) {
+      const aiTarballPath = realpathSync(
+        expectDefined(args.dependencyTarballPaths[0], "prepared dependency tarball"),
+      );
+      assertPreparedOpenClawNpmShrinkwrap({
+        aiIntegrity: npmTarballIntegrity(aiTarballPath),
+        aiManifest: readTarballJson(aiTarballPath, "package/package.json"),
+        rootManifest: readTarballJson(args.tarballPath, "package/package.json"),
+        shrinkwrap: readTarballJson(args.tarballPath, "package/npm-shrinkwrap.json"),
+      });
       mkdirSync(prefixDir, { recursive: true });
       writeFileSync(
         join(prefixDir, "package.json"),
@@ -106,11 +120,7 @@ function main(argv = process.argv.slice(2)): void {
           {
             private: true,
             dependencies: {
-              "@openclaw/ai": pathToFileURL(
-                realpathSync(
-                  expectDefined(args.dependencyTarballPaths[0], "prepared dependency tarball"),
-                ),
-              ).href,
+              "@openclaw/ai": pathToFileURL(aiTarballPath).href,
               openclaw: pathToFileURL(realpathSync(args.tarballPath)).href,
             },
           },

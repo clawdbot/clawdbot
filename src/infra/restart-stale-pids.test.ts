@@ -1395,3 +1395,4 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

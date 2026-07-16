@@ -4,39 +4,27 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
-import {
-  buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
-  resolveGatewayInstallEntrypoint,
-} from "../../daemon/gateway-entrypoint.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   resolvePostSyncPluginUpdateSkipIds,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command-plugins.js";
+} from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import {
-  formatPostUpdateGatewayRecoveryInstructions,
-  recoverInstalledLaunchAgentAfterUpdate,
-  recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   shouldPrepareUpdatedInstallRestart,
-  shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service.js";
-
-describe("resolveGatewayInstallEntrypointCandidates", () => {
-  it("prefers index.js before legacy entry.js", () => {
-    expect(resolveGatewayInstallEntrypointCandidates("/tmp/openclaw-root")).toEqual([
-      path.join("/tmp/openclaw-root", "dist", "index.js"),
-      path.join("/tmp/openclaw-root", "dist", "index.mjs"),
-      path.join("/tmp/openclaw-root", "dist", "entry.js"),
-      path.join("/tmp/openclaw-root", "dist", "entry.mjs"),
-    ]);
-  });
-});
+import {
+  formatPostUpdateGatewayRecoveryInstructions,
+  recoverInstalledLaunchAgentAfterUpdate,
+  recoverLaunchAgentAndRecheckGatewayHealth,
+  shouldUseLegacyProcessRestartAfterUpdate,
+} from "./update-command-service.test-support.js";
 
 describe("resolveGatewayInstallEntrypoint", () => {
   it("prefers dist/index.js over dist/entry.js when both exist", async () => {

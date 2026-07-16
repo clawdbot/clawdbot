@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
     release: vi.fn(async () => {}),
   })),
   resolveCopilotApiToken: vi.fn(),
+  configureCopilotTokenCacheStore: vi.fn<(openStore: () => unknown) => void>(),
 }));
 
 function requireAuthMethod<T>(methods: readonly T[], index: number): T {
@@ -51,6 +52,10 @@ vi.mock("./register.runtime.js", () => ({
   resolveCopilotApiToken: mocks.resolveCopilotApiToken,
   githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
+}));
+
+vi.mock("./token.js", () => ({
+  configureCopilotTokenCacheStore: mocks.configureCopilotTokenCacheStore,
 }));
 
 import plugin from "./index.js";
@@ -170,6 +175,34 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
+  it("binds a lazy provider-scoped token store", () => {
+    const store = {};
+    const openSyncKeyedStore = vi.fn(() => store);
+    plugin.register(
+      createTestPluginApi({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        source: "test",
+        config: {},
+        runtime: { state: { openSyncKeyedStore } } as never,
+      }),
+    );
+
+    const openStore = requireFirstMockArg<() => unknown>(
+      mocks.configureCopilotTokenCacheStore,
+      "token cache store binding",
+    );
+    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+    expect(openStore()).toBe(store);
+    expect(openStore()).toBe(store);
+    expect(openSyncKeyedStore).toHaveBeenCalledOnce();
+    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+      namespace: "token",
+      maxEntries: 8,
+      overflowPolicy: "evict-oldest",
+    });
+  });
+
   it("owns Claude replay thinking cleanup", () => {
     const provider = registerProviderWithPluginConfig({});
     const messages = [
@@ -1467,3 +1500,4 @@ describe("github-copilot plugin", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

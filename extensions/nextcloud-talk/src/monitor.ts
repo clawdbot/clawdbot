@@ -61,13 +61,6 @@ const WEBHOOK_ERRORS = {
   internalServerError: "Internal server error",
 } as const;
 
-export class NextcloudTalkRetryableWebhookError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "NextcloudTalkRetryableWebhookError";
-  }
-}
-
 export async function processNextcloudTalkReplayGuardedMessage(params: {
   replayGuard: NextcloudTalkReplayGuard;
   accountId: string;
@@ -92,22 +85,13 @@ export async function processNextcloudTalkReplayGuardedMessage(params: {
     });
     return "processed";
   } catch (error) {
-    if (error instanceof NextcloudTalkRetryableWebhookError) {
-      params.replayGuard.releaseMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-        error,
-      });
-    } else {
-      // Generic failures are treated as non-retryable because the handler may already
-      // have produced a visible side effect, and replaying the webhook would duplicate it.
-      await params.replayGuard.commitMessage({
-        accountId: params.accountId,
-        roomToken: params.message.roomToken,
-        messageId: params.message.messageId,
-      });
-    }
+    // Failures are treated as non-retryable because the handler may already
+    // have produced a visible side effect, and replaying the webhook would duplicate it.
+    await params.replayGuard.commitMessage({
+      accountId: params.accountId,
+      roomToken: params.message.roomToken,
+      messageId: params.message.messageId,
+    });
     throw error;
   }
 }
@@ -231,10 +215,7 @@ function payloadToInboundMessage(
   };
 }
 
-export function readNextcloudTalkWebhookBody(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-): Promise<string> {
+function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number): Promise<string> {
   return readRequestBodyWithLimit(req, {
     // This read happens before signature verification, so keep the unauthenticated
     // body budget bounded even if the operator-configured post-parse limit is larger.

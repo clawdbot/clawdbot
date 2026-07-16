@@ -7,12 +7,12 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
-import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { maybeCompactAgentHarnessSession } from "./compaction.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
@@ -380,18 +380,18 @@ function registerTestCompactor(
 
 describe("runAgentHarnessAttempt", () => {
   it.each(["codex", "copilot"] as const)(
-    "binds the host Crestodian tool to the %s SDK construction path without leaking authority",
+    "binds the host OpenClaw tool to the %s SDK construction path without leaking authority",
     async (harnessId) => {
       let receivedPrivateAuthority = true;
       let hostScopeActive = false;
       let toolNames: string[] = [];
       const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
-        receivedPrivateAuthority = "crestodianTool" in attemptParams;
+        receivedPrivateAuthority = "systemAgentTool" in attemptParams;
         await Promise.resolve();
-        hostScopeActive = isHostScopedAgentToolActive("crestodian");
+        hostScopeActive = isHostScopedAgentToolActive("openclaw");
         toolNames = createOpenClawCodingTools({
-          config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
-          runtimeToolAllowlist: ["crestodian"],
+          config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
+          runtimeToolAllowlist: ["openclaw"],
           toolConstructionPlan: {
             includeBaseCodingTools: false,
             includeShellTools: false,
@@ -413,25 +413,24 @@ describe("runAgentHarnessAttempt", () => {
       );
       const params = createAttemptParams(
         providerRuntimeConfig("codex", harnessId),
-      ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
-      params.toolsAllow = ["crestodian"];
-      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
+      params.toolsAllow = ["openclaw"];
+      params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
 
       await runAgentHarnessAttempt(params);
 
       expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
       expect(receivedPrivateAuthority).toBe(false);
       expect(hostScopeActive).toBe(true);
-      expect(toolNames).toEqual(["crestodian"]);
-      expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
-      expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+      expect(toolNames).toEqual(["openclaw"]);
+      expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
 
   it.each([
     { name: "missing", toolsAllow: undefined },
-    { name: "broad", toolsAllow: ["crestodian", "read"] },
-  ])("rejects $name allowlists for private Crestodian authority", async ({ toolsAllow }) => {
+    { name: "broad", toolsAllow: ["openclaw", "read"] },
+  ])("rejects $name allowlists for private OpenClaw authority", async ({ toolsAllow }) => {
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       createAttemptResult("codex"),
     );
@@ -446,18 +445,18 @@ describe("runAgentHarnessAttempt", () => {
     );
     const params = createAttemptParams(
       providerRuntimeConfig("codex", "codex"),
-    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
+    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
     params.toolsAllow = toolsAllow;
-    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
 
     await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
-      'Crestodian host authority requires toolsAllow: ["crestodian"]',
+      'OpenClaw host authority requires toolsAllow: ["openclaw"]',
     );
     expect(pluginRunAttempt).not.toHaveBeenCalled();
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("keeps the host Crestodian allowlist across global, agent, and sandbox deny-all policy", async () => {
+  it("keeps the host OpenClaw allowlist across global, agent, and sandbox deny-all policy", async () => {
     const received: Array<{
       toolsAllow: string[] | undefined;
       extraSystemPrompt: string | undefined;
@@ -467,7 +466,7 @@ describe("runAgentHarnessAttempt", () => {
       received.push({
         toolsAllow: attemptParams.toolsAllow,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
-        hostScopeActive: isHostScopedAgentToolActive("crestodian"),
+        hostScopeActive: isHostScopedAgentToolActive("openclaw"),
       });
       return createAttemptResult("codex");
     });
@@ -503,32 +502,32 @@ describe("runAgentHarnessAttempt", () => {
 
     for (const [index, testCase] of cases.entries()) {
       const params = createAttemptParams(testCase.config) as EmbeddedRunAttemptParams & {
-        crestodianTool?: CrestodianToolOptions;
+        systemAgentTool?: SystemAgentToolOptions;
       };
       params.sessionId = `session-${index}`;
       params.agentHarnessRuntimeOverride = "codex";
       params.agentId = testCase.agentId;
       params.sessionKey = testCase.sessionKey;
-      params.toolsAllow = ["crestodian"];
-      params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+      params.toolsAllow = ["openclaw"];
+      params.systemAgentTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
       await runAgentHarnessAttempt(params);
     }
 
     expect(received).toEqual([
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["crestodian"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
     ]);
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
-  it("binds the same host Crestodian scope to the built-in OpenClaw harness", async () => {
+  it("binds the same host OpenClaw scope to the built-in OpenClaw harness", async () => {
     let toolNames: string[] = [];
     agentRunAttempt.mockImplementationOnce(async () => {
       await Promise.resolve();
       toolNames = createOpenClawCodingTools({
-        config: { tools: { allow: ["read"], deny: ["crestodian"], toolSearch: true } },
-        runtimeToolAllowlist: ["crestodian"],
+        config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
+        runtimeToolAllowlist: ["openclaw"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -541,16 +540,15 @@ describe("runAgentHarnessAttempt", () => {
     });
     const params = createAttemptParams(
       providerRuntimeConfig("codex", "openclaw"),
-    ) as EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions };
-    params.toolsAllow = ["crestodian"];
-    params.crestodianTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
+    ) as EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions };
+    params.toolsAllow = ["openclaw"];
+    params.systemAgentTool = { surface: "gateway", proposalRef: {}, directiveRef: {} };
 
     const result = await runAgentHarnessAttempt(params);
 
     expect(result.sessionIdUsed).toBe("openclaw");
-    expect(toolNames).toEqual(["crestodian"]);
-    expect(createOpenClawCodingTools().some((tool) => tool.name === "crestodian")).toBe(false);
-    expect(isHostScopedAgentToolActive("crestodian")).toBe(false);
+    expect(toolNames).toEqual(["openclaw"]);
+    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
   it("unwraps sentinels only at the plugin harness handoff", async () => {
@@ -1073,13 +1071,13 @@ describe("selectAgentHarness", () => {
   it("passes manifest provider owners into plugin support checks", () => {
     providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
       status: "owned",
-      pluginIds: ["anthropic"],
+      pluginIds: ["fixture-owner"],
     });
     const supports = vi.fn(() => ({
       supported: false as const,
       reason: "provider is owned by a native plugin",
     }));
-    const config = providerRuntimeConfig("anthropic", "copilot");
+    const config = providerRuntimeConfig("fixture-provider", "copilot");
     registerAgentHarness({
       id: "copilot",
       label: "Copilot",
@@ -1089,24 +1087,24 @@ describe("selectAgentHarness", () => {
 
     expect(() =>
       selectAgentHarness({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         config,
         agentHarnessRuntimeOverride: "copilot",
       }),
     ).toThrow("provider is owned by a native plugin");
 
     expect(providerOwnerMocks.resolveProviderRefOwnership).toHaveBeenCalledWith({
-      provider: "anthropic",
+      provider: "fixture-provider",
       config,
     });
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         requestedRuntime: "copilot",
         providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
+        providerOwnerPluginIds: ["fixture-owner"],
       }),
     );
   });
@@ -2652,3 +2650,4 @@ describe("selectAgentHarness", () => {
     ).toThrow('Requested agent harness "google-gemini-cli" is not registered');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

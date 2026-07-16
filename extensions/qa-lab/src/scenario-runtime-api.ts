@@ -25,7 +25,7 @@ export type QaScenarioRuntimeEnv<
   transport: TTransport;
 };
 
-export type QaScenarioRuntimeDeps = {
+type QaScenarioRuntimeDeps = {
   fs: typeof NodeFs;
   path: typeof NodePath;
   sleep: (ms?: number) => Promise<unknown>;
@@ -105,7 +105,7 @@ export type QaScenarioRuntimeDeps = {
   hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
 
-export type QaScenarioRuntimeConstants = {
+type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;

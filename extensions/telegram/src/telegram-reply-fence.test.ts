@@ -1,11 +1,11 @@
 // Telegram tests cover telegram reply fence plugin behavior.
 import { describe, expect, it } from "vitest";
+import { resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests } from "./runtime.test-support.js";
 import {
   beginTelegramReplyFence,
   buildTelegramNonInterruptingReplyFenceKey,
   isTelegramReplyFenceSuperseded,
   releaseTelegramReplyFenceAbortController,
-  resetTelegramReplyFenceForTests,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";

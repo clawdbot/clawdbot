@@ -155,6 +155,18 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 }
 
 describe("upgrade survivor assertions", () => {
+  it("lists the dependency-free scenario contract", () => {
+    const scenarios = JSON.parse(
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "list-scenarios"], {
+        encoding: "utf8",
+      }),
+    ) as string[];
+
+    expect(scenarios).toContain("base");
+    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(new Set(scenarios).size).toBe(scenarios.length);
+  });
+
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
     try {

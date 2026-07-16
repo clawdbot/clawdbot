@@ -1246,3 +1246,4 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(`${content}\n`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

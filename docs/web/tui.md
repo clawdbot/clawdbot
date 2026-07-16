@@ -138,9 +138,9 @@ Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
 
-Crestodian:
+OpenClaw:
 
-- `/crestodian [request]` returns from the normal agent TUI to the [Crestodian](#crestodian-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
+- `/openclaw [request]` returns from the normal agent TUI to the [OpenClaw](#openclaw-setup-and-repair-helper) setup/repair chat, optionally forwarding one request.
 
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
 
@@ -152,19 +152,19 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - Local shell commands receive `OPENCLAW_SHELL=tui-local` in their environment.
 - A lone `!` is sent as a normal message; leading spaces do not trigger local exec.
 
-## Crestodian setup and repair helper
+## OpenClaw setup and repair helper
 
-Crestodian is the ring-zero setup/repair assistant, exposed as `openclaw crestodian` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to Crestodian's typed, approval-gated operations:
+OpenClaw is the ring-zero setup/repair assistant, exposed as `openclaw setup` after the configured default model passes a live inference check. If inference is unavailable, an interactive invocation returns to inference onboarding and automation fails with repair guidance. It runs inside the same local TUI shell as `openclaw tui --local`, backed by an AI agent restricted to OpenClaw's typed, approval-gated operations:
 
 ```bash
-openclaw crestodian                       # start interactively
-openclaw crestodian -m "status"           # run one request and exit
-openclaw crestodian -m "set default model openai/gpt-5.2" --yes   # apply a config write
+openclaw setup                       # start interactively
+openclaw setup -m "status"           # run one request and exit
+openclaw setup -m "set default model openai/gpt-5.2" --yes   # apply a config write
 ```
 
 - Persistent config writes need approval: either confirm interactively or pass `--yes`.
 - `--json` prints the startup overview as JSON instead of starting the chat.
-- From inside Crestodian, an `open-tui` request (for example, asking to talk to a normal agent) exits Crestodian and opens the regular agent TUI; use `/crestodian` there to come back.
+- From inside OpenClaw, an `open-tui` request (for example, asking to talk to a normal agent) exits OpenClaw and opens the regular agent TUI; use `/openclaw` there to come back.
 
 Use local mode when the current config already validates and you want the embedded agent to inspect it on the same machine, compare it against the docs, and help repair drift without depending on a running Gateway.
 

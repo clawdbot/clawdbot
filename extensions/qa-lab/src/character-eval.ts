@@ -56,7 +56,7 @@ type QaCharacterEvalRun = {
   error?: string;
 };
 
-export type QaCharacterEvalJudgment = {
+type QaCharacterEvalJudgment = {
   model: string;
   rank: number;
   score: number;
@@ -106,7 +106,7 @@ type RunJudgeFn = (params: {
   timeoutMs: number;
 }) => Promise<string | null>;
 
-export type QaCharacterEvalParams = {
+type QaCharacterEvalParams = {
   repoRoot?: string;
   outputDir?: string;
   models: string[];
@@ -243,8 +243,6 @@ function formatDuration(ms: number) {
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
   return prettyMilliseconds(roundedMs, {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 0,
     unitCount: 2,
   });
 }

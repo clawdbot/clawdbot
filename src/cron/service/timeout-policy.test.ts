@@ -2,11 +2,10 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.js";
-import {
-  AGENT_TURN_SAFETY_TIMEOUT_MS,
-  DEFAULT_JOB_TIMEOUT_MS,
-  resolveCronJobTimeoutMs,
-} from "./timeout-policy.js";
+import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
+
+const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000;
+const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000;
 
 function makeJob(payload: CronJob["payload"]): CronJob {
   const sessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";

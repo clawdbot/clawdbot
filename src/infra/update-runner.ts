@@ -281,17 +281,19 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
 
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
-  const cwd = normalizeDir(opts.cwd);
-  if (cwd) {
-    dirs.push(cwd);
-  }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
+    // Keep the lexical shim path ahead of a module-derived cwd. pnpm 11 module
+    // realpaths can point into a shared store that does not identify the owner.
     dirs.push(path.dirname(argv1));
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);
     }
+  }
+  const cwd = normalizeDir(opts.cwd);
+  if (cwd) {
+    dirs.push(cwd);
   }
   let proc: string | null;
   try {
@@ -1872,3 +1874,4 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     durationMs: Date.now() - startedAt,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

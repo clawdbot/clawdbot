@@ -24,7 +24,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 });
 
 import { mattermostPlugin } from "./channel.js";
-import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
@@ -575,12 +574,10 @@ describe("mattermostPlugin", () => {
   });
 
   describe("messageActions", () => {
-    beforeEach(() => {
-      resetMattermostReactionBotUserCacheForTests();
-    });
+    let reactionActionSequence = 0;
 
     const runReactAction = async (params: Record<string, unknown>, fetchMode: "add" | "remove") => {
-      const cfg = createMattermostTestConfig();
+      const cfg = createMattermostTestConfig(`message-action-${++reactionActionSequence}`);
       const fetchImpl = createMattermostReactionFetchMock({
         mode: fetchMode,
         postId: "POST1",
@@ -1506,3 +1503,4 @@ describe("mattermostPlugin", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

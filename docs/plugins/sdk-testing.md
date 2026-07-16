@@ -46,12 +46,12 @@ import {
 import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 ```
 
-Prefer these focused subpaths for new bundled plugin tests. The broad
-`openclaw/plugin-sdk/testing` barrel and `openclaw/plugin-sdk/test-utils` alias
-are legacy compatibility only: `pnpm run lint:plugins:no-extension-test-core-imports`
-(`scripts/check-no-extension-test-core-imports.ts`) rejects new imports of
-either from extension test files, and both remain solely for
-compatibility-record tests.
+Use these focused subpaths for bundled plugin tests. The former
+`openclaw/plugin-sdk/testing` barrel was repo-local, excluded from shipped
+packages, and has been removed. The legacy `openclaw/plugin-sdk/test-utils`
+alias remains repo-local; `pnpm run lint:plugins:no-extension-test-core-imports`
+(`scripts/check-no-extension-test-core-imports.ts`) rejects new extension-test
+imports of that alias.
 
 ### Available exports
 
@@ -335,11 +335,11 @@ pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 `scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
 import-boundary checks in CI; each can also be run standalone locally:
 
-| Command                                                        | Enforces                                                                                                                    |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.                                             |
-| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`).                                 |
-| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `openclaw/plugin-sdk/testing`, `plugin-sdk/test-utils`, or other core-only test helpers. |
+| Command                                                        | Enforces                                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.             |
+| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`). |
+| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `plugin-sdk/test-utils` or other core-only test helpers. |
 
 External plugins are not subject to these lint rules, but following the same
 patterns is recommended.

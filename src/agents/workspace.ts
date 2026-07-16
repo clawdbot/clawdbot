@@ -1326,3 +1326,4 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   return { files, diagnostics };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

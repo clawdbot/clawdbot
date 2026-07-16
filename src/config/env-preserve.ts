@@ -833,3 +833,4 @@ export function restoreEnvVarRefs(
   // Mismatched types or primitives — keep incoming
   return incoming;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,7 +12,6 @@ vi.mock("./model-selection.runtime.js", () => ({
 }));
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import {
-  createDefaultQaRunSelection,
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
   normalizeQaRunSelection,
@@ -60,7 +59,7 @@ describe("qa run config", () => {
   });
 
   it("creates a live-by-default selection that arms flow scenarios", () => {
-    expect(createDefaultQaRunSelection(scenarios)).toEqual({
+    expect(normalizeQaRunSelection({}, scenarios)).toEqual({
       providerMode: "live-frontier",
       primaryModel: DEFAULT_LIVE_FRONTIER_MODEL,
       alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
@@ -186,7 +185,7 @@ describe("qa run config", () => {
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
-    expect(createDefaultQaRunSelection(scenarios)).toEqual({
+    expect(normalizeQaRunSelection({}, scenarios)).toEqual({
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-luna",

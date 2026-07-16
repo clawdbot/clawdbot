@@ -1476,3 +1476,4 @@ describe("redactConfigSnapshot", () => {
     expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

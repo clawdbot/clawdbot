@@ -1,10 +1,10 @@
-// Qa Lab plugin module implements scenario catalog behavior.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
+import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -72,15 +72,17 @@ const qaScenarioTransportPolicySchema = z.object({
   topLevelReplies: z.literal(true).optional(),
 });
 
-const qaFlowScenarioExecutionSchema = z.object({
-  kind: z.literal("flow").default("flow"),
-  summary: z.string().trim().min(1).optional(),
-  channel: qaScenarioChannelSchema.optional(),
-  suiteIsolation: z.literal("isolated").optional(),
-  isolationReason: z.string().trim().min(1).optional(),
-  transportPolicy: qaScenarioTransportPolicySchema.optional(),
-  config: qaScenarioConfigSchema.optional(),
-});
+const qaFlowScenarioExecutionSchema = z
+  .object({
+    kind: z.literal("flow").default("flow"),
+    summary: z.string().trim().min(1).optional(),
+    channel: qaScenarioChannelSchema.optional(),
+    suiteIsolation: z.literal("isolated").optional(),
+    isolationReason: z.string().trim().min(1).optional(),
+    transportPolicy: qaScenarioTransportPolicySchema.optional(),
+    config: qaScenarioConfigSchema.optional(),
+  })
+  .extend(qaScenarioModuleFlow.executionShape);
 
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
@@ -306,12 +308,11 @@ const qaSeedScenarioBodySchema = z.object({
 const qaSeedScenarioSchema = qaSeedScenarioBodySchema.extend({
   title: z.string().trim().min(1),
 });
-
 const qaScenarioFileSchema = z
   .object({
     title: z.string().trim().min(1),
-    scenario: qaSeedScenarioBodySchema,
-    flow: qaFlowSchema.optional(),
+    scenario: qaSeedScenarioBodySchema.partial({ objective: true, successCriteria: true }),
+    flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
   })
   .superRefine((file, ctx) => {
     if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
@@ -322,7 +323,6 @@ const qaScenarioFileSchema = z
       });
     }
   });
-
 const qaScenarioPackSchema = z.object({
   version: z.number().int().positive(),
   agent: z
@@ -334,7 +334,6 @@ const qaScenarioPackSchema = z.object({
     }),
   kickoffTask: z.string().trim().min(1),
 });
-
 const qaScenarioPackFileSchema = z.object({
   title: z.string().trim().min(1),
   pack: qaScenarioPackSchema,
@@ -429,9 +428,8 @@ export function readQaScenarioPack(): QaScenarioPack {
   }
   const packYaml = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packYaml) {
-    // The QA scenario pack is optional in npm distributions.  Return an empty
-    // pack so completion cache updates and other consumers don't crash when
-    // the qa/scenarios/ directory is not shipped with the package.
+    // The QA scenario pack is absent from some npm distributions. Return an
+    // empty pack so completion cache updates and other consumers remain safe.
     qaScenarioPackCache = {
       version: 1,
       agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },
@@ -447,24 +445,26 @@ export function readQaScenarioPack(): QaScenarioPack {
   const scenarios = listQaScenarioYamlPaths().map((relativePath) =>
     (() => {
       const parsedScenarioFile = parseQaYamlFileWithContext(qaScenarioFileSchema, relativePath);
-      const parsedScenario = {
-        ...parsedScenarioFile.scenario,
-        title: parsedScenarioFile.title,
-      };
+      const parsedScenario = qaScenarioModuleFlow.normalizeMetadata(
+        parsedScenarioFile.scenario,
+        parsedScenarioFile.title,
+      );
       const execution = parseQaYamlWithContext(
         qaScenarioExecutionSchema,
         parsedScenario.execution ?? {},
         relativePath,
       );
-      if (execution.kind === "flow" && !parsedScenarioFile.flow) {
-        throw new Error(`${relativePath}: flow scenarios must define a top-level flow block`);
-      }
+      const flow = qaScenarioModuleFlow.resolveFlow(
+        parsedScenarioFile.flow,
+        parsedScenarioFile.title,
+      );
+      qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
       return {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          ...(parsedScenarioFile.flow ? { flow: parsedScenarioFile.flow } : {}),
+          ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
     })(),

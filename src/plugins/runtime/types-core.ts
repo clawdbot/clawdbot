@@ -36,6 +36,9 @@ type DeepReadonly<T> = T extends (...args: never[]) => unknown
 
 type RuntimeConfigAfterWrite = import("../../config/config.js").ConfigWriteAfterWrite;
 type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplaceResult;
+type RuntimeProviderListParams = {
+  config?: import("../../config/types.openclaw.js").OpenClawConfig;
+};
 type RuntimeConfigMutationContext = {
   snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
   previousHash: string | null;
@@ -367,29 +370,29 @@ export type PluginRuntimeCore = {
       params: import("../../image-generation/runtime-types.js").GenerateImageParams,
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
-      params?: import("../../image-generation/runtime-types.js").ListRuntimeImageGenerationProvidersParams,
-    ) => import("../../image-generation/runtime-types.js").RuntimeImageGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
       params: import("../../video-generation/runtime-types.js").GenerateVideoParams,
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
-      params?: import("../../video-generation/runtime-types.js").ListRuntimeVideoGenerationProvidersParams,
-    ) => import("../../video-generation/runtime-types.js").RuntimeVideoGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (
       params: import("../../music-generation/runtime-types.js").GenerateMusicParams,
     ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
     listProviders: (
-      params?: import("../../music-generation/runtime-types.js").ListRuntimeMusicGenerationProvidersParams,
-    ) => import("../../music-generation/runtime-types.js").RuntimeMusicGenerationProvider[];
+      params?: RuntimeProviderListParams,
+    ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
     listProviders: (
-      params?: import("../../web-search/runtime-types.js").ListWebSearchProvidersParams,
-    ) => import("../../web-search/runtime-types.js").RuntimeWebSearchProviderEntry[];
+      params?: RuntimeProviderListParams,
+    ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
     search: (
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;

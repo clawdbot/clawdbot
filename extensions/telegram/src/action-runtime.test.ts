@@ -8,12 +8,13 @@ import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import { setTelegramRuntime } from "./runtime.js";
 import {
-  getTopicName,
-  resetTopicNameCacheForTest,
-  resolveTopicNameCacheScope,
-  setTelegramTopicNameStoreFactoryForTest,
-} from "./topic-name-cache.js";
+  clearTelegramRuntimeForTest,
+  resetTelegramTopicNameCacheForTest,
+} from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
+import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -199,24 +200,29 @@ const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntryForTest
 
 function installTopicNameStoreForTest() {
   topicNameStoresForTest.clear();
-  setTelegramTopicNameStoreFactoryForTest((namespace) => {
-    const entries = topicNameStoresForTest.get(namespace) ?? new Map();
-    topicNameStoresForTest.set(namespace, entries);
-    return {
-      async register(key, value) {
-        entries.set(key, value);
-      },
-      async entries() {
-        return Array.from(entries, ([key, value]) => ({ key, value }));
-      },
-      async delete(key) {
-        return entries.delete(key);
-      },
-      async clear() {
-        entries.clear();
-      },
-    };
-  });
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (({ namespace }: { namespace: string }) => {
+        const entries = topicNameStoresForTest.get(namespace) ?? new Map();
+        topicNameStoresForTest.set(namespace, entries);
+        return {
+          async register(key: string, value: TopicNameEntryForTest) {
+            entries.set(key, value);
+          },
+          async entries() {
+            return Array.from(entries, ([key, value]) => ({ key, value }));
+          },
+          async delete(key: string) {
+            return entries.delete(key);
+          },
+          async clear() {
+            entries.clear();
+          },
+        };
+      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
 }
 
 type MockCallSource = {
@@ -311,7 +317,7 @@ describe("handleTelegramAction", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "TELEGRAM_BOT_TOKEN"]);
-    resetTopicNameCacheForTest();
+    resetTelegramTopicNameCacheForTest();
     installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
@@ -341,8 +347,8 @@ describe("handleTelegramAction", () => {
   });
 
   afterEach(() => {
-    setTelegramTopicNameStoreFactoryForTest(undefined);
-    resetTopicNameCacheForTest();
+    clearTelegramRuntimeForTest();
+    resetTelegramTopicNameCacheForTest();
     topicNameStoresForTest.clear();
     envSnapshot.restore();
   });
@@ -2150,3 +2156,4 @@ describe("handleTelegramAction per-account gating", () => {
     expect(options.accountId).toBe("media");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -64,6 +64,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import ai.openclaw.app.ui.design.agentAvatarSource
+import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -110,12 +111,14 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
@@ -659,16 +662,126 @@ private fun VoiceSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val context = LocalContext.current
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
+  val voiceWakeEnabled by viewModel.voiceWakeEnabled.collectAsState()
+  val voiceWakeAvailable by viewModel.voiceWakeAvailable.collectAsState()
+  val voiceWakeIsListening by viewModel.voiceWakeIsListening.collectAsState()
+  val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
+  val voiceWakeWords by viewModel.voiceWakeWords.collectAsState()
+  val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
+  val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
+  val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
+  var wakeWordDrafts by remember(voiceWakeWords) {
+    mutableStateOf(voiceWakeWords)
+  }
+
+  val microphonePermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      viewModel.refreshVoiceWakePermission()
+      if (granted) viewModel.setVoiceWakeEnabled(true)
+    }
+
+  fun setVoiceWake(checked: Boolean) {
+    if (!checked) {
+      viewModel.setVoiceWakeEnabled(false)
+    } else if (hasPermission(context, Manifest.permission.RECORD_AUDIO)) {
+      viewModel.refreshVoiceWakePermission()
+      viewModel.setVoiceWakeEnabled(true)
+    } else {
+      microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+  }
 
   LaunchedEffect(isConnected) {
     if (isConnected) viewModel.refreshTalkSetupReadiness()
   }
 
-  SettingsDetailFrame(title = nativeString("Talk Provider Setup"), subtitle = nativeString("Configure voice, transport, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Text(text = nativeString("Voice Wake"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      SettingsTogglePanel(
+        rows =
+          listOf(
+            SettingsToggleRow(
+              title = nativeString("Listen for wake words"),
+              subtitle =
+                if (voiceWakeAvailable) {
+                  nativeString("Runs on-device while OpenClaw is visible.")
+                } else {
+                  nativeString("On-device speech recognition is unavailable.")
+                },
+              icon = Icons.Default.Mic,
+              checked = voiceWakeEnabled,
+              onCheckedChange = ::setVoiceWake,
+              enabled = voiceWakeAvailable || voiceWakeEnabled,
+            ),
+          ),
+      )
+      VoiceSetupActionRow(
+        title = nativeString("Wake listener"),
+        subtitle =
+          voiceWakeLastCommand?.let { command -> nativeString("Last command: \$command", command) }
+            ?: nativeString("Pauses during other voice activity."),
+        icon = Icons.Default.GraphicEq,
+        statusText = voiceWakeStatusText,
+        ready = voiceWakeIsListening,
+      )
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+          Text(text = nativeString("Wake words"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(
+            text = nativeString("Add one wake word or phrase per field. Then say one before your command."),
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+          wakeWordDrafts.forEachIndexed { index, value ->
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              ClawTextField(
+                value = value,
+                onValueChange = { updated ->
+                  wakeWordDrafts = wakeWordDrafts.toMutableList().also { it[index] = updated }
+                },
+                placeholder = nativeString("Wake word or phrase"),
+                enabled = voiceWakeAvailable && !voiceWakeWordsSaving,
+                modifier = Modifier.weight(1f),
+              )
+              if (voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size > 1) {
+                ClawPlainIconButton(
+                  icon = Icons.Default.Delete,
+                  contentDescription = nativeString("Remove wake phrase"),
+                  onClick = {
+                    wakeWordDrafts = wakeWordDrafts.filterIndexed { draftIndex, _ -> draftIndex != index }
+                  },
+                )
+              }
+            }
+          }
+          ClawSecondaryButton(
+            text = nativeString("Add wake phrase"),
+            onClick = { wakeWordDrafts = wakeWordDrafts + "" },
+            enabled = voiceWakeAvailable && !voiceWakeWordsSaving && wakeWordDrafts.size < VoiceWakePreferences.maxWords,
+            icon = Icons.Default.Add,
+            modifier = Modifier.fillMaxWidth(),
+          )
+          ClawSecondaryButton(
+            text = if (voiceWakeWordsSaving) nativeString("Saving…") else nativeString("Save wake words"),
+            onClick = { viewModel.setVoiceWakeWords(wakeWordDrafts) },
+            enabled = voiceWakeAvailable && isConnected && !voiceWakeWordsSaving && wakeWordDrafts.any(String::isNotBlank),
+            modifier = Modifier.fillMaxWidth(),
+          )
+          (voiceWakeWordsNoticeText ?: if (!isConnected) nativeString("Connect to a Gateway to save wake words") else null)?.let { notice ->
+            Text(text = notice, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+        }
+      }
+      Text(text = nativeString("Talk Provider Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       VoiceSetupPanel(talkSetupReadiness)
       Text(text = nativeString("Audio Test"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = nativeString("Check that OpenClaw can speak clearly on this phone."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -867,9 +980,15 @@ private fun NotificationSettingsScreen(
       rows =
         listOf(
           SettingsToggleRow(nativeString("Forward Notifications"), if (enabled) nativeString("OpenClaw can receive selected alerts.") else nativeString("Alerts stay on this phone."), Icons.Default.Notifications, enabled, ::setForwarding),
-          SettingsToggleRow(nativeString("Quiet Hours"), nativeString("\$quietStart to \$quietEnd", quietStart, quietEnd), Icons.Default.Bolt, quietEnabled) { checked ->
-            viewModel.setNotificationForwardingQuietHours(enabled = checked, start = quietStart, end = quietEnd)
-          },
+          SettingsToggleRow(
+            nativeString("Quiet Hours"),
+            nativeString("\$quietStart to \$quietEnd", quietStart, quietEnd),
+            Icons.Default.Bolt,
+            quietEnabled,
+            onCheckedChange = { checked ->
+              viewModel.setNotificationForwardingQuietHours(enabled = checked, start = quietStart, end = quietEnd)
+            },
+          ),
         ),
     )
     SettingsMetricPanel(
@@ -2154,6 +2273,7 @@ private data class SettingsToggleRow(
   val icon: ImageVector,
   val checked: Boolean,
   val onCheckedChange: (Boolean) -> Unit,
+  val enabled: Boolean = true,
 )
 
 /**
@@ -2864,7 +2984,7 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
       Modifier
         .fillMaxWidth()
         .heightIn(min = 56.dp)
-        .clickable { row.onCheckedChange(!row.checked) }
+        .clickable(enabled = row.enabled) { row.onCheckedChange(!row.checked) }
         .padding(horizontal = 10.dp, vertical = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -2874,7 +2994,7 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
       Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
       Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
-    Switch(checked = row.checked, onCheckedChange = row.onCheckedChange)
+    Switch(checked = row.checked, onCheckedChange = row.onCheckedChange, enabled = row.enabled)
   }
 }
 

@@ -5,7 +5,8 @@ import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { log } from "../logger.js";
-import { cloneHookMessages, flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
+import { cloneHookMessages } from "./attempt-hook-messages.js";
+import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 

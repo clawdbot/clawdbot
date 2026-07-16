@@ -93,17 +93,33 @@ export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEn
  * Mirrors `git rev-parse --show-toplevel` discovery without spawning git, so UI
  * capability checks and create-preflights cannot diverge from the worktree service.
  */
-export function insideGitCheckout(start: string): boolean {
+export function findGitCheckoutRoot(start: string): string | null {
   let current = path.resolve(start);
   for (;;) {
     if (existsSync(path.join(current, ".git"))) {
-      return true;
+      return current;
     }
     const parent = path.dirname(current);
     if (parent === current) {
-      return false;
+      return null;
     }
     current = parent;
+  }
+}
+
+export function insideGitCheckout(start: string): boolean {
+  return findGitCheckoutRoot(start) !== null;
+}
+
+export async function hasSelfContainedGitMetadata(checkoutRoot: string): Promise<boolean> {
+  try {
+    const marker = await fs.lstat(path.join(checkoutRoot, ".git"));
+    return marker.isDirectory();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
   }
 }
 

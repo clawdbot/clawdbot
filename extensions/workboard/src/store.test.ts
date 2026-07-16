@@ -5,15 +5,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
-import {
-  WorkboardStore,
-  type PersistedWorkboardAttachment,
-  type PersistedWorkboardBoard,
-  type PersistedWorkboardCard,
-  type PersistedWorkboardNotificationSubscription,
-  type WorkboardKeyedStore,
-} from "./store.js";
+import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;
@@ -50,6 +50,88 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
 }
 
 describe("WorkboardStore", () => {
+  it("emits one monotonic change after each visible mutation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    const card = await store.create({ title: "Track changes" });
+    await store.update(card.id, { notes: "updated" });
+    await store.list();
+    await expect(store.update("missing", { notes: "failed" })).rejects.toThrow("card not found");
+
+    expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2]);
+    expect(changes.mock.calls[1]?.[0].epoch).toBe(changes.mock.calls[0]?.[0].epoch);
+  });
+
+  it("does not emit for no-op commands and isolates listener failures", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const changes = vi.fn(() => {
+      throw new Error("listener failed");
+    });
+    store.subscribeChanges(changes);
+
+    const card = await store.create({ title: "Idempotent", idempotencyKey: "same" });
+    await store.create({ title: "Duplicate", idempotencyKey: "same" });
+    await store.delete("missing");
+
+    expect(card.title).toBe("Idempotent");
+    expect(changes).toHaveBeenCalledOnce();
+  });
+
+  it("announces an epoch and reports failed commands that partially committed", async () => {
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    subscriptions.entries = async () => {
+      throw new Error("subscription cleanup failed");
+    };
+    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+    store.announceChangeEpoch();
+    const card = await store.create({ title: "Partial delete" });
+
+    await expect(store.delete(card.id)).rejects.toThrow("subscription cleanup failed");
+
+    expect(changes.mock.calls.map(([change]) => change.revision)).toEqual([1, 2, 3]);
+    await expect(store.get(card.id)).resolves.toBeUndefined();
+  });
+
+  it("emits when another sqlite connection commits", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-change-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const readerStores = createWorkboardSqliteStores({ dbPath });
+    const writerStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const reader = new WorkboardStore(readerStores.cards, {
+        boards: readerStores.boards,
+        subscriptions: readerStores.subscriptions,
+        attachments: readerStores.attachments,
+        dataVersion: readerStores.dataVersion,
+      });
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+        dataVersion: writerStores.dataVersion,
+      });
+      const changes = vi.fn();
+      reader.subscribeChanges(changes);
+
+      expect(reader.reconcileExternalChanges()).toBe(false);
+      await writer.create({ title: "External" });
+      expect(reader.reconcileExternalChanges()).toBe(true);
+      expect(reader.reconcileExternalChanges()).toBe(false);
+      expect(changes).toHaveBeenCalledOnce();
+      await expect(reader.list()).resolves.toEqual([
+        expect.objectContaining({ title: "External" }),
+      ]);
+    } finally {
+      writerStores.close();
+      readerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
     const dbPath = path.join(dir, "workboard.sqlite");
@@ -345,6 +427,38 @@ describe("WorkboardStore", () => {
       scheduledAt: 20_000,
       maxRuntimeSeconds: 120,
     });
+  });
+
+  it("only accepts workspace authority from trusted top-level provenance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Restricted card",
+      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      metadata: {
+        automation: { workspaceAccess: { unrestricted: true } },
+      },
+    });
+
+    expect(card.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const updated = await store.update(card.id, {
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(updated.metadata?.automation?.workspaceAccess).toEqual({
+      unrestricted: false,
+      roots: ["/workspace"],
+      writable: true,
+    });
+
+    const untrusted = await store.create({
+      title: "Untrusted metadata",
+      metadata: { automation: { workspaceAccess: { unrestricted: true } } },
+    });
+    expect(untrusted.metadata?.automation?.workspaceAccess).toBeUndefined();
   });
 
   it("moves cards and records lifecycle timestamps", async () => {
@@ -1006,6 +1120,74 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+
+    const tokenCard = await store.create({ title: "Token-authorized worker", status: "todo" });
+    const tokenClaim = await store.claim(tokenCard.id, { ownerId: "main", ttlSeconds: 60 });
+
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    await expect(
+      store.heartbeat(tokenCard.id, { ownerId: "other", token: tokenClaim.token }),
+    ).resolves.toMatchObject({ metadata: { claim: { ownerId: "main" } } });
+
+    await expect(
+      store.releaseClaim(tokenCard.id, { ownerId: "other", token: "wrong-token" }),
+    ).rejects.toThrow(/token does not match/);
+    const tokenReleased = await store.releaseClaim(tokenCard.id, {
+      ownerId: "other",
+      token: tokenClaim.token,
+    });
+    expect(tokenReleased.metadata?.claim).toBeUndefined();
+  });
+
+  it("atomically guards and adopts dispatcher workspace authority", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Legacy dispatch", status: "ready" });
+    const expectedAuthority = {
+      agentId: card.agentId,
+      workspace: card.metadata?.automation?.workspace,
+      workspaceAccess: card.metadata?.automation?.workspaceAccess,
+    };
+    await store.update(card.id, {
+      workspace: { kind: "dir", path: "/restricted" },
+      workspaceAccess: { unrestricted: false, roots: ["/restricted"], writable: true },
+    });
+
+    await expect(
+      store.claim(
+        card.id,
+        { ownerId: "dispatcher" },
+        { expectedAuthority, adoptWorkspaceAccess: { unrestricted: true } },
+      ),
+    ).rejects.toThrow("card workspace authority changed before claim");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          workspaceAccess: {
+            unrestricted: false,
+            roots: ["/restricted"],
+            writable: true,
+          },
+        },
+      },
+    });
+
+    const legacy = await store.create({ title: "Legacy scratch", status: "ready" });
+    const claimed = await store.claim(
+      legacy.id,
+      { ownerId: "dispatcher" },
+      {
+        expectedAuthority: {
+          agentId: legacy.agentId,
+          workspace: legacy.metadata?.automation?.workspace,
+          workspaceAccess: legacy.metadata?.automation?.workspaceAccess,
+        },
+        adoptWorkspaceAccess: { unrestricted: true },
+      },
+    );
+    expect(claimed.card.metadata?.automation?.workspaceAccess).toEqual({ unrestricted: true });
   });
 
   it("reports an active claim after a dependency-backed card starts running", async () => {
@@ -1828,6 +2010,44 @@ describe("WorkboardStore", () => {
       store.addComment(card.id, { body: "owner write" }, { ownerId: "main" }),
     ).resolves.toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "owner write" })] },
+    });
+  });
+
+  it("lets operators override claims while enforcing agent-scoped moves", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Scoped move", status: "todo" });
+    await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
+
+    await expect(store.move(card.id, "review", undefined, { ownerId: "agent-b" })).rejects.toThrow(
+      "card is claimed by agent-a",
+    );
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "running" });
+
+    await expect(store.move(card.id, "review", undefined)).resolves.toMatchObject({
+      status: "review",
+    });
+  });
+
+  it("checks matching claim tokens inside queued card writes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Token-scoped mutation" });
+    await store.claim(card.id, { ownerId: "main", token: "test-auth-token" });
+
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "rejected write" },
+        { ownerId: "other", token: "test-token-placeholder" },
+      ),
+    ).rejects.toThrow(/claimed by main/);
+    await expect(
+      store.addComment(
+        card.id,
+        { body: "accepted write" },
+        { ownerId: "other", token: "test-auth-token" },
+      ),
+    ).resolves.toMatchObject({
+      metadata: { comments: [expect.objectContaining({ body: "accepted write" })] },
     });
   });
 
@@ -2818,3 +3038,4 @@ describe("WorkboardStore", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

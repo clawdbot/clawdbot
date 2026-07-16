@@ -111,19 +111,6 @@ export function resolveConnectChallengeTimeoutMs(
   return clampConnectChallengeTimeoutMs(configuredPreauthTimeoutMs, maxTimeoutMs);
 }
 
-/** Reads the preauth handshake timeout override from environment variables. */
-export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
-  const configuredTimeout =
-    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  if (configuredTimeout) {
-    const parsed = parseStrictPositiveInteger(configuredTimeout);
-    if (parsed !== undefined) {
-      return resolveSafeTimeoutDelayMs(parsed);
-    }
-  }
-  return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
-}
-
 /** Resolves the server preauth timeout from env, explicit config, or default. */
 export function resolvePreauthHandshakeTimeoutMs(params?: {
   env?: NodeJS.ProcessEnv;

@@ -10,7 +10,7 @@ import { registerBuiltInApiProviders, resetApiProviders } from "@openclaw/ai/pro
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
 function getRegisteredTestProvider() {
   const provider = getApiProvider("test-custom-api");
@@ -56,10 +56,11 @@ describe("ensureCustomApiRegistered", () => {
   });
 
   it("adapts async stream factories to the synchronous provider contract", async () => {
-    const message = buildAssistantMessageWithZeroUsage({
+    const message = buildAssistantMessage({
       model: { api: "test-custom-api", provider: "custom", id: "m" },
       content: [{ type: "text", text: "done" }],
       stopReason: "stop",
+      usage: buildUsageWithNoCost({}),
     });
     const streamFn = vi.fn(async () => {
       await Promise.resolve();

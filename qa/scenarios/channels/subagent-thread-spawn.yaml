@@ -33,7 +33,7 @@ scenario:
     - docs/tools/subagents.md
   codeRefs:
     - src/agents/tools/sessions-spawn-tool.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix

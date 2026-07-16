@@ -1,7 +1,7 @@
 // Covers the compaction planning worker boundary and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.js";
+import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.test-support.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
 

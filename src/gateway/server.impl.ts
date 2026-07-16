@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Gateway server implementation builds runtime state, method registries, HTTP
-// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
@@ -30,7 +28,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
-  setRuntimeConfigSnapshot,
+  setAppliedRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
@@ -50,7 +48,6 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import {
   type GatewayRestartEmitter,
@@ -154,7 +151,6 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
-
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
@@ -656,11 +652,11 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    channelAutostartSuppression: opts.channelAutostartSuppression,
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
   });
-
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
@@ -844,7 +840,7 @@ export async function startGatewayServer(
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
   }
-  setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,
@@ -952,8 +948,9 @@ export async function startGatewayServer(
         })
       : undefined;
   // Without configured profiles, existing placements still reconcile but new dispatches stay off.
+  const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = hasConfiguredWorkerProfiles
-    ? workerPlacementRuntime?.dispatchService
+    ? workerPlacementControlAvailable
     : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -973,7 +970,9 @@ export async function startGatewayServer(
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
-      (method) => workerPlacementDispatchAvailable || method !== "sessions.dispatch",
+      (method) =>
+        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -1068,7 +1067,7 @@ export async function startGatewayServer(
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
-  const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
+  const systemAgentSessions: GatewayRequestContext["systemAgentSessions"] = new Map();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -1132,6 +1131,8 @@ export async function startGatewayServer(
     clients,
     broadcast,
     broadcastToConnIds,
+    broadcastPluginEvent,
+    getBufferedAmount,
     agentRunSeq,
     dedupe,
     chatRunState,
@@ -1245,12 +1246,9 @@ export async function startGatewayServer(
   watchNodeRequestHandler.current = watchNodeHttpRuntime.handleRequest;
   const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
     await import("./terminal/session-manager.js");
-  // One PTY store per gateway. Emits each session's bytes only to the owning
-  // connection so terminals stay private to the operator that opened them.
-  // Startup config is enough here: gateway.terminal.* changes restart the
-  // gateway (config-reload-plan), so the grace period never drifts at runtime.
+  const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
   const terminalSessions = new TerminalSessionManager({
-    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+    ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
@@ -1544,20 +1542,17 @@ export async function startGatewayServer(
       await import("./operator-approval-session-events.js");
     // Managers publish through this runtime, while replay routes durable
     // expiry back through the owning manager to release its parked waiter once.
-    const approvalManagersForReplay: {
-      exec?: ExecApprovalManager;
-      plugin?: ExecApprovalManager<PluginApprovalRequestPayload>;
-    } = {};
+    const approvalManagersForReplay = new Map<
+      string,
+      Pick<ExecApprovalManager, "reconcileDurableTerminal">
+    >();
     const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
       clients,
       sessionMessageSubscribers,
       broadcastToConnIds,
       controlUiBasePath,
       reconcileTerminal: (record) => {
-        const manager =
-          record.kind === "exec"
-            ? approvalManagersForReplay.exec
-            : approvalManagersForReplay.plugin;
+        const manager = approvalManagersForReplay.get(record.kind);
         return manager?.reconcileDurableTerminal(record) ?? false;
       },
     });
@@ -1566,6 +1561,7 @@ export async function startGatewayServer(
       execApprovalManager,
       forwardPluginApprovalRequest,
       pluginApprovalManager,
+      systemAgentApprovalManager,
       extraHandlers,
       coreGatewayHandlers,
     } = await startupTrace.measure("gateway.handlers", async () => {
@@ -1587,8 +1583,9 @@ export async function startGatewayServer(
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
-    approvalManagersForReplay.exec = execApprovalManager;
-    approvalManagersForReplay.plugin = pluginApprovalManager;
+    approvalManagersForReplay.set("exec", execApprovalManager);
+    approvalManagersForReplay.set("plugin", pluginApprovalManager);
+    approvalManagersForReplay.set("system-agent", systemAgentApprovalManager);
     revokeWorkerDispatchSessionAuthority = ({ sessionId, sessionKeys }) => {
       const keys = new Set(sessionKeys);
       for (const sessionKey of keys) {
@@ -1627,7 +1624,8 @@ export async function startGatewayServer(
           (workerEnvironmentService ||
             (descriptor.name !== "environments.create" &&
               descriptor.name !== "environments.destroy")) &&
-          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch"),
+          (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+          (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
       );
       return createGatewayMethodRegistry([
         ...coreDescriptors,
@@ -1803,6 +1801,7 @@ export async function startGatewayServer(
         registry: loaded.pluginRegistry,
         config: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
+        broadcastPluginEvent,
       });
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
@@ -1843,6 +1842,7 @@ export async function startGatewayServer(
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
+          systemAgentApprovalManager,
           listSessionPendingApprovals: approvalSessionEvents.replay,
           loadGatewayModelCatalog,
           loadGatewayModelCatalogSnapshot,
@@ -1877,8 +1877,8 @@ export async function startGatewayServer(
           ...(workerPlacementRuntime
             ? { workerSessionPlacementService: workerPlacementRuntime.placements }
             : {}),
-          ...(workerPlacementDispatchAvailable
-            ? { workerPlacementDispatchService: workerPlacementDispatchAvailable }
+          ...(workerPlacementControlAvailable
+            ? { workerPlacementDispatchService: workerPlacementControlAvailable }
             : {}),
           terminalSessions,
           agentRunSeq,
@@ -1906,7 +1906,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
-          crestodianSessions,
+          systemAgentSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,
@@ -2051,6 +2051,7 @@ export async function startGatewayServer(
             isNixMode,
             startupStartedAt: opts.startupStartedAt,
             broadcast,
+            broadcastPluginEvent,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
             serviceName: tailscaleConfig.serviceName,
@@ -2338,3 +2339,4 @@ export async function startGatewayServer(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

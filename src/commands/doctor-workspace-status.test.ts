@@ -17,7 +17,6 @@ import {
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  buildWorkspaceSkillStatus: vi.fn(),
   buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
@@ -27,10 +26,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (...args: unknown[]) => mocks.resolveAgentWorkspaceDir(...args),
   resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
-}));
-
-vi.mock("../skills/discovery/status.js", () => ({
-  buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -61,9 +56,6 @@ async function runNoteWorkspaceStatusForTest(
   const cfg: OpenClawConfig = opts?.cfg ?? {};
   mocks.resolveDefaultAgentId.mockReturnValue("default");
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-  mocks.buildWorkspaceSkillStatus.mockReturnValue({
-    skills: [],
-  });
   mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
@@ -111,7 +103,7 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  it("surfaces bundle plugin capabilities in the plugins note", async () => {
+  it("omits healthy plugin inventory", async () => {
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
         plugins: [
@@ -127,36 +119,52 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
-      expect(pluginCalls).toHaveLength(1);
-      const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
-      expect(body).toContain("Bundle plugins: 1");
-      expect(body).toContain("agents, commands, skills");
+      expect(noteSpy.mock.calls.filter(([, title]) => title === "Plugins")).toHaveLength(0);
     } finally {
       noteSpy.mockRestore();
     }
   });
 
-  it("includes imported plugin counts in the plugins note", async () => {
+  it("lists only errored plugin ids in deterministic order with truncation", async () => {
+    const pluginIds = [
+      "zulu",
+      "bravo",
+      "alpha",
+      "lima",
+      "charlie",
+      "kilo",
+      "delta",
+      "juliet",
+      "echo",
+      "india",
+      "foxtrot",
+      "hotel",
+    ];
     const noteSpy = await runNoteWorkspaceStatusForTest(
       createPluginLoadResult({
-        plugins: [
-          createPluginRecord({
-            id: "imported-plugin",
-            imported: true,
-          }),
-          createPluginRecord({
-            id: "cold-plugin",
-            imported: false,
-          }),
-        ],
+        plugins: pluginIds.map((id) => createPluginRecord({ id, status: "error" })),
       }),
     );
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
       const [body] = expectDefined(pluginCalls[0], "(pluginCalls)[0] test invariant");
-      expect(body).toContain("Imported: 1");
+      expect(body).toBe(
+        [
+          "Errors: 12",
+          "- alpha",
+          "- bravo",
+          "- charlie",
+          "- delta",
+          "- echo",
+          "- foxtrot",
+          "- hotel",
+          "- india",
+          "- juliet",
+          "- kilo",
+          "- ...",
+        ].join("\n"),
+      );
     } finally {
       noteSpy.mockRestore();
     }
@@ -231,6 +239,13 @@ describe("noteWorkspaceStatus", () => {
         syncMode: "managed",
         status: "blocked",
         blockedTaskId: "task-missing",
+      },
+      {
+        flowId: "flow-history",
+        syncMode: "task_mirrored",
+        status: "blocked",
+        blockedTaskId: "task-pruned",
+        endedAt: 100,
       },
     ]);
     mocks.listTasksForFlowId.mockReturnValue([]);
@@ -475,64 +490,6 @@ describe("noteWorkspaceStatus", () => {
       const [body] = expectDefined(recoveryCalls[0], "(recoveryCalls)[0] test invariant");
       expect(body).toContain("flow-123");
       expect(body).toContain("openclaw tasks flow show <flow-id>");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  const makeSkill = (
-    skillKey: string,
-    fields: { eligible: boolean; platformIncompatible: boolean },
-  ) =>
-    ({
-      skillKey,
-      disabled: false,
-      blockedByAllowlist: false,
-      eligible: fields.eligible,
-      platformIncompatible: fields.platformIncompatible,
-    }) as never;
-
-  async function runWithSkills(skills: unknown[]) {
-    mocks.resolveDefaultAgentId.mockReturnValue("default");
-    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-    mocks.buildWorkspaceSkillStatus.mockReturnValue({ skills });
-    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-      workspaceDir: "/workspace",
-      ...createPluginLoadResult(),
-    });
-    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
-    mocks.listTaskFlowRecords.mockReturnValue([]);
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    noteWorkspaceStatus({});
-    return noteSpy;
-  }
-
-  it("surfaces a platform-incompatible rollup and keeps those skills out of Missing requirements", async () => {
-    const noteSpy = await runWithSkills([
-      makeSkill("mac-only", { eligible: false, platformIncompatible: true }),
-      makeSkill("broken", { eligible: false, platformIncompatible: false }),
-    ]);
-    try {
-      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
-      expect(skillsCall).toBeDefined();
-      const [body] = skillsCall as [string, string];
-      expect(body).toContain("Incompatible (platform mismatch, auto-skipped): 1");
-      expect(body).toContain("Missing requirements: 1");
-    } finally {
-      noteSpy.mockRestore();
-    }
-  });
-
-  it("omits the platform-incompatible rollup when the count is zero", async () => {
-    const noteSpy = await runWithSkills([
-      makeSkill("broken", { eligible: false, platformIncompatible: false }),
-    ]);
-    try {
-      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
-      expect(skillsCall).toBeDefined();
-      const [body] = skillsCall as [string, string];
-      expect(body).not.toContain("Incompatible (platform mismatch");
-      expect(body).toContain("Missing requirements: 1");
     } finally {
       noteSpy.mockRestore();
     }

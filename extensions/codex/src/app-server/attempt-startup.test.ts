@@ -11,10 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { CodexAppServerClient } from "./client.js";
 import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
 } from "./config.js";
+import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -87,8 +89,12 @@ const bundleMcpThreadConfig = {
 
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
-function readHarnessMessages(writes: string[]): Array<{ id?: number; method?: string }> {
-  return writes.map((write) => JSON.parse(write) as { id?: number; method?: string });
+function readHarnessMessages(
+  writes: string[],
+): Array<{ id?: number; method?: string; params?: unknown }> {
+  return writes.map(
+    (write) => JSON.parse(write) as { id?: number; method?: string; params?: unknown },
+  );
 }
 
 function startThreadWithHarness(
@@ -253,12 +259,14 @@ describe("startCodexAttemptThread", () => {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
+    defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     clearSharedCodexAppServerClient();
+    defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const root of tempRoots) {
@@ -732,6 +740,46 @@ describe("startCodexAttemptThread", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup aborted");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    const deadlinePluginConfig = {
+      appServer: { command: "codex", requestTimeoutMs: 400 },
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          calendar: {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "calendar",
+          },
+        },
+      },
+    } satisfies CodexPluginConfig;
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      pluginConfig: deadlinePluginConfig,
+    });
+    await answerInitialize(harness);
+    const pluginList = await waitForRequest(harness, "plugin/list");
+    expect(
+      readHarnessMessages(harness.writes).find((message) => message.id === pluginList.id),
+    ).toMatchObject({ method: "plugin/list", params: {} });
+
+    const threadStart = await waitForThreadStart(harness);
+    const startMessage = readHarnessMessages(harness.writes).find(
+      (message) => message.id === threadStart.id,
+    ) as { id?: number; params?: { config?: { apps?: unknown } } } | undefined;
+    expect(startMessage?.params?.config?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+    });
+    harness.send({ id: threadStart.id, result: threadStartResult() });
+
+    const result = await run;
+    result.turnRoute.release();
+    result.releaseSharedClientLease();
   });
 
   it("clears the shared app-server when a startup RPC times out", async () => {

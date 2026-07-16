@@ -121,6 +121,17 @@ function normalizeBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+async function readTelegramDiagnosticBody(response: Response, timeoutMs: number): Promise<Buffer> {
+  return await readResponseWithLimit(response, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES, {
+    timeoutMs,
+    chunkTimeoutMs: timeoutMs / 2,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body stalled for ${chunkTimeoutMs}ms`),
+    onTimeout: ({ timeoutMs: resolvedTimeoutMs }) =>
+      new Error(`Telegram diagnostic response body timed out after ${resolvedTimeoutMs}ms`),
+  });
+}
+
 export async function probeTelegram(
   token: string,
   timeoutMs: number,
@@ -193,7 +204,12 @@ export async function probeTelegram(
     }
 
     const meJson = JSON.parse(
-      (await readResponseWithLimit(meRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
+      (
+        await readTelegramDiagnosticBody(
+          meRes,
+          Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+        )
+      ).toString("utf8"),
     ) as {
       ok?: boolean;
       description?: string;
@@ -238,9 +254,12 @@ export async function probeTelegram(
             fetcher,
           );
           const webhookJson = JSON.parse(
-            (await readResponseWithLimit(webhookRes, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString(
-              "utf8",
-            ),
+            (
+              await readTelegramDiagnosticBody(
+                webhookRes,
+                Math.min(timeoutBudgetMs, resolveRemainingBudgetMs()),
+              )
+            ).toString("utf8"),
           ) as {
             ok?: boolean;
             result?: { url?: string; has_custom_certificate?: boolean };

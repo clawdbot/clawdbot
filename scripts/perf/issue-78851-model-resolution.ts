@@ -5,10 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { resolveModelAsync } from "../../src/agents/embedded-agent-runner/model.js";
-import {
-  ensureOpenClawModelsJson,
-  resetModelsJsonReadyCacheForTest,
-} from "../../src/agents/models-config.js";
+import { resetModelsJsonReadyCacheForTest } from "../../src/agents/models-config-state.test-support.js";
+import { ensureOpenClawModelsJson } from "../../src/agents/models-config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   Issue78851CliArgumentError,

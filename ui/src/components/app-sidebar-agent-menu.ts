@@ -37,7 +37,6 @@ const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () 
 /** Above this roster size the chip menu switches to pinned agents + filter. */
 const QUICK_SWITCH_AGENT_LIMIT = 10;
 const AGENT_VALUE_PREFIX = "agent:";
-const NEW_SESSION_VALUE_PREFIX = "new-session:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
@@ -59,7 +58,6 @@ type SidebarAgentMenuParams = {
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
-  onOpenNewSession: (agentId: string) => void;
   onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -151,16 +149,6 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
           ></span>`
         : nothing}
     </wa-dropdown-item>
-    <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__new"
-      value=${`${NEW_SESSION_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
-      ?disabled=${!params.connected}
-    >
-      <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.plus}</span>
-      <span class="sidebar-customize-menu__text">
-        ${t("chat.runControls.newSession")} — ${label}
-      </span>
-    </wa-dropdown-item>
   `;
 }
 
@@ -223,12 +211,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           params.onClose(false);
           if (value.startsWith(AGENT_VALUE_PREFIX)) {
             params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
-            return;
-          }
-          if (value.startsWith(NEW_SESSION_VALUE_PREFIX)) {
-            params.onOpenNewSession(
-              decodeURIComponent(value.slice(NEW_SESSION_VALUE_PREFIX.length)),
-            );
             return;
           }
           if (value.startsWith(LINK_VALUE_PREFIX)) {

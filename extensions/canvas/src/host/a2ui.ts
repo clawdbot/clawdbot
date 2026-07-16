@@ -10,13 +10,7 @@ import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce
 import { A2UI_PATH, injectCanvasRuntime, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 
-export {
-  A2UI_PATH,
-  CANVAS_HOST_PATH,
-  CANVAS_WS_PATH,
-  injectCanvasRuntime,
-  isA2uiPath,
-} from "./a2ui-shared.js";
+export { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./a2ui-shared.js";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
@@ -150,23 +144,6 @@ async function handleA2uiHttpRequestWithRootResolver(
   } finally {
     await result.handle.close().catch(() => {});
   }
-}
-
-/** Creates an HTTP handler for a specific hosted A2UI asset root. */
-export function createA2uiHttpRequestHandler(params: {
-  rootDir: string;
-  liveReload?: boolean;
-}): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
-  let rootRealPromise: Promise<string> | null = null;
-  return async (req, res) => {
-    rootRealPromise ??= fs.realpath(params.rootDir);
-    return await handleA2uiHttpRequestWithRootResolver(
-      req,
-      res,
-      async () => await rootRealPromise,
-      { liveReload: params.liveReload },
-    );
-  };
 }
 
 /** Handles one HTTP request for the hosted A2UI asset surface. */

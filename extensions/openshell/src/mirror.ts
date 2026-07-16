@@ -35,7 +35,7 @@ async function copyTreeWithoutSymlinks(params: {
     return;
   }
   if (stats.isDirectory()) {
-    await runLimitedFs(async () => await fs.mkdir(params.targetPath, { recursive: true }));
+    await runLimitedFs(fs.mkdir, params.targetPath, { recursive: true });
     const entries = await runLimitedFs(async () => await fs.readdir(params.sourcePath));
     await Promise.all(
       entries.map(async (entry) => {
@@ -49,9 +49,7 @@ async function copyTreeWithoutSymlinks(params: {
     return;
   }
   if (stats.isFile()) {
-    await runLimitedFs(
-      async () => await fs.mkdir(path.dirname(params.targetPath), { recursive: true }),
-    );
+    await runLimitedFs(fs.mkdir, path.dirname(params.targetPath), { recursive: true });
     await runLimitedFs(async () => await fs.copyFile(params.sourcePath, params.targetPath));
   }
 }
@@ -74,13 +72,7 @@ export async function replaceDirectoryContents(params: {
         if (stats?.isSymbolicLink()) {
           return;
         }
-        await runLimitedFs(
-          async () =>
-            await fs.rm(targetPath, {
-              recursive: true,
-              force: true,
-            }),
-        );
+        await runLimitedFs(fs.rm, targetPath, { recursive: true, force: true });
       }),
   );
   const sourceEntries = await fs.readdir(params.sourceDir);

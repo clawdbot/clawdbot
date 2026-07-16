@@ -4,7 +4,7 @@ import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { MsgContext } from "../templating.js";
-import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyGroupCtx,
   createGetReplyContinueDirectivesResult,

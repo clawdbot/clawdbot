@@ -10,6 +10,7 @@ import {
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
+import type { QueueMode } from "../../auto-reply/reply/queue/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -34,6 +35,7 @@ type ChatSendRequestParams = {
   thinking?: string;
   fastMode?: FastMode;
   fastAutoOnSeconds?: number;
+  queueMode?: QueueMode;
   deliver?: boolean;
   originatingChannel?: string;
   originatingTo?: string;

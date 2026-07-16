@@ -4,14 +4,11 @@
  * Validates theme JSON, resolves color variables, watches custom theme files, and exposes terminal styling helpers.
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../sessions/source-info.js";
-import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
 
 // ============================================================================
@@ -456,21 +453,6 @@ export class Theme {
 // Theme Loading
 // ============================================================================
 
-let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
-
-function getBuiltinThemes(): Record<string, ThemeJson> {
-  if (!BUILTIN_THEMES) {
-    const themesDir = getThemesDir();
-    const darkPath = path.join(themesDir, "dark.json");
-    const lightPath = path.join(themesDir, "light.json");
-    BUILTIN_THEMES = {
-      dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-      light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
-    };
-  }
-  return BUILTIN_THEMES;
-}
-
 function parseThemeJson(label: string, json: unknown): ThemeJson {
   if (!validateThemeJson.Check(json)) {
     const errors = Array.from(validateThemeJson.Errors(json));
@@ -522,31 +504,6 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
   return parseThemeJson(label, json);
 }
 
-function loadThemeJson(name: string): ThemeJson {
-  const builtinThemes = getBuiltinThemes();
-  if (name in builtinThemes) {
-    const builtinTheme = builtinThemes[name];
-    if (builtinTheme) {
-      return builtinTheme;
-    }
-  }
-  const registeredTheme = registeredThemes.get(name);
-  if (registeredTheme?.sourcePath) {
-    const content = fs.readFileSync(registeredTheme.sourcePath, "utf-8");
-    return parseThemeJsonContent(registeredTheme.sourcePath, content);
-  }
-  if (registeredTheme) {
-    throw new Error(`Theme "${name}" does not have a source path for export`);
-  }
-  const customThemesDir = getCustomThemesDir();
-  const themePath = path.join(customThemesDir, `${name}.json`);
-  if (!fs.existsSync(themePath)) {
-    throw new Error(`Theme not found: ${name}`);
-  }
-  const content = fs.readFileSync(themePath, "utf-8");
-  return parseThemeJsonContent(name, content);
-}
-
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
   const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
@@ -579,15 +536,6 @@ export function loadThemeFromPath(themePath: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode, themePath);
 }
 
-function loadTheme(name: string, mode?: ColorMode): Theme {
-  const registeredTheme = registeredThemes.get(name);
-  if (registeredTheme) {
-    return registeredTheme;
-  }
-  const themeJson = loadThemeJson(name);
-  return createTheme(themeJson, mode);
-}
-
 // ============================================================================
 // Global Theme Instance
 // ============================================================================
@@ -606,116 +554,6 @@ export const theme: Theme = new Proxy({} as Theme, {
     return (t as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
-
-function setGlobalTheme(t: Theme): void {
-  (globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
-}
-
-let currentThemeName: string | undefined;
-let themeWatcher: fs.FSWatcher | undefined;
-let themeReloadTimer: NodeJS.Timeout | undefined;
-const registeredThemes = new Map<string, Theme>();
-
-export function setTheme(
-  name: string,
-  enableWatcher = false,
-): { success: boolean; error?: string } {
-  currentThemeName = name;
-  try {
-    setGlobalTheme(loadTheme(name));
-    if (enableWatcher) {
-      startThemeWatcher();
-    }
-    return { success: true };
-  } catch (error) {
-    // Theme is invalid - fall back to dark theme
-    currentThemeName = "dark";
-    setGlobalTheme(loadTheme("dark"));
-    // Don't start watcher for fallback theme
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function startThemeWatcher(): void {
-  stopThemeWatcher();
-
-  // Only watch if it's a custom theme (not built-in)
-  if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
-    return;
-  }
-
-  const customThemesDir = getCustomThemesDir();
-  const watchedThemeName = currentThemeName;
-  const watchedFileName = `${watchedThemeName}.json`;
-  const themeFile = path.join(customThemesDir, watchedFileName);
-
-  // Only watch if the file exists
-  if (!fs.existsSync(themeFile)) {
-    return;
-  }
-
-  const scheduleReload = () => {
-    if (themeReloadTimer) {
-      clearTimeout(themeReloadTimer);
-    }
-    themeReloadTimer = setTimeout(() => {
-      themeReloadTimer = undefined;
-
-      // Ignore stale timers after switching themes or stopping the watcher
-      if (currentThemeName !== watchedThemeName) {
-        return;
-      }
-
-      // Keep the last successfully loaded theme active if the file is temporarily missing
-      if (!fs.existsSync(themeFile)) {
-        return;
-      }
-
-      try {
-        // Reload the theme from disk and refresh the registry cache
-        const reloadedTheme = loadThemeFromPath(themeFile);
-        registeredThemes.set(watchedThemeName, reloadedTheme);
-        setGlobalTheme(reloadedTheme);
-      } catch {
-        // Ignore errors (file might be in invalid state while being edited)
-      }
-    }, 100);
-  };
-
-  themeWatcher =
-    watchWithErrorHandler(
-      customThemesDir,
-      (_eventType, filename) => {
-        if (currentThemeName !== watchedThemeName) {
-          return;
-        }
-        if (!filename) {
-          scheduleReload();
-          return;
-        }
-        if (filename !== watchedFileName) {
-          return;
-        }
-        scheduleReload();
-      },
-      () => {
-        closeWatcher(themeWatcher);
-        themeWatcher = undefined;
-      },
-    ) ?? undefined;
-}
-
-function stopThemeWatcher(): void {
-  if (themeReloadTimer) {
-    clearTimeout(themeReloadTimer);
-    themeReloadTimer = undefined;
-  }
-  closeWatcher(themeWatcher);
-  themeWatcher = undefined;
-}
 
 // ============================================================================
 // HTML Export Helpers

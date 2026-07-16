@@ -2,6 +2,7 @@
  * Status-safe channel account projection helpers for CLI, status APIs, and plugin SDK callers.
  * This file is the redaction boundary between runtime account objects and public snapshots.
  */
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { stripUrlUserInfo } from "@openclaw/net-policy/url-userinfo";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -19,6 +20,24 @@ const CREDENTIAL_STATUS_KEYS = [
 ] as const;
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
+
+/** Redacts a plugin-provided base URL after status hooks have produced their final record. */
+export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
+  if (!isRecord(summary) || typeof summary.baseUrl !== "string" || !summary.baseUrl) {
+    return summary;
+  }
+  const redactedBaseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(summary.baseUrl));
+  return redactedBaseUrl === summary.baseUrl
+    ? summary
+    : ({ ...summary, baseUrl: redactedBaseUrl } as T);
+}
+
+/** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
+export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
+  snapshot: T,
+): T {
+  return redactChannelStatusSummaryBaseUrl(snapshot);
+}
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   return asBoolean(record[key]);
@@ -253,8 +272,8 @@ export function projectSafeChannelAccountSnapshotFields(
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
-    // Base URLs are useful diagnostics, but embedded userinfo would expose credentials.
-    ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
+    // Base URLs are useful diagnostics, but embedded credentials must not cross this boundary.
+    ...(baseUrl ? { baseUrl: stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl)) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
       : {}),

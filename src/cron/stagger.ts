@@ -21,7 +21,7 @@ function hasRecurringWildcardHour(field: string): boolean {
 }
 
 /** Returns whether a cron expression fires recurring jobs exactly at the top of an hour. */
-export function isRecurringTopOfHourCronExpr(expr: string) {
+function isRecurringTopOfHourCronExpr(expr: string) {
   const fields = parseCronFields(expr);
   if (fields.length === 5) {
     const [minuteField, hourField] = fields;

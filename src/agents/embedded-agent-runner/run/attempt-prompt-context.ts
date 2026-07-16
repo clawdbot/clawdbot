@@ -85,7 +85,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
   messages: AgentMessage[];
-  preparedUserTurnTimestamp?: number;
+  preparedUserTurnMessage?: AgentMessage;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -95,6 +95,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }): EmbeddedAttemptPromptContext {
   const { attempt } = input;
+  const preparedUserTurnTimestamp = (
+    input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
+  )?.timestamp;
   let sessionMessages = filterHeartbeatTranscriptArtifacts(
     input.messages,
     input.prompt.heartbeatSummary?.ackMaxChars,
@@ -187,9 +190,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       })
     : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
   const currentUserTimestampOverride =
-    !input.isRawModelRun && typeof input.preparedUserTurnTimestamp === "number"
+    !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
-          timestamp: input.preparedUserTurnTimestamp,
+          timestamp: preparedUserTurnTimestamp,
           text: promptForSession,
           ...(promptForModel !== promptForSession ? { alternateText: promptForModel } : {}),
         }
@@ -221,8 +224,8 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-    ...(typeof input.preparedUserTurnTimestamp === "number"
-      ? { currentUserTimestamp: input.preparedUserTurnTimestamp }
+    ...(typeof preparedUserTurnTimestamp === "number"
+      ? { currentUserTimestamp: preparedUserTurnTimestamp }
       : {}),
   });
   if (input.systemPromptReport) {
@@ -241,8 +244,13 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-    ...(typeof input.preparedUserTurnTimestamp === "number"
-      ? { currentUserTimestamp: input.preparedUserTurnTimestamp }
+    ...(typeof preparedUserTurnTimestamp === "number"
+      ? { currentUserTimestamp: preparedUserTurnTimestamp }
+      : {}),
+    // Admission must count the same persisted sender block that provider
+    // conversion projects after the active user turn is written.
+    ...(!input.isRawModelRun && input.preparedUserTurnMessage
+      ? { currentUserTranscriptMessage: input.preparedUserTurnMessage }
       : {}),
   });
 

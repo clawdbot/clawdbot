@@ -18,6 +18,7 @@ import {
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
@@ -282,9 +283,17 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
-    // Default Telegram delivery reparses this result as Markdown; use its bold and strike delimiters.
-    sanitizeText: ({ text }) =>
-      sanitizeForPlainText(sanitizeAssistantVisibleText(text), { style: "markdown" }),
+    // Default Telegram delivery reparses this result as Markdown; use its bold
+    // and strike delimiters. Rich accounts must keep the agent's HTML islands
+    // (<details>, <tg-math-block>, checkbox lists) intact — the blocks emitter
+    // owns them and keeps unsupported tags visibly literal, so tag-stripping
+    // here would silently flatten the advertised rich contract.
+    sanitizeText: ({ text, cfg, accountId }) =>
+      cfg &&
+      mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg))
+        .richMessages === true
+        ? sanitizeAssistantVisibleText(text)
+        : sanitizeForPlainText(sanitizeAssistantVisibleText(text), { style: "markdown" }),
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,

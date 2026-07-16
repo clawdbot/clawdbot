@@ -935,3 +935,4 @@ export async function validateReplayTurns(params: {
     : params.messages;
   return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

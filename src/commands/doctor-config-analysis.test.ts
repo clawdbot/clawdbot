@@ -1,14 +1,25 @@
 // Doctor config analysis tests cover schema analysis, model fallback values, and issue generation.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import {
-  collectImplicitFallbackClobberWarnings,
   formatConfigPath,
+  noteImplicitFallbackClobberWarnings,
   resolveConfigPathTarget,
   stripUnknownConfigKeys,
 } from "./doctor-config-analysis.js";
+
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
+
+function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+  noteMock.mockClear();
+  noteImplicitFallbackClobberWarnings(cfg);
+  const body = noteMock.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body.split(/\n(?=- )/) : [];
+}
 
 describe("doctor config analysis helpers", () => {
   it("formats config paths predictably", () => {

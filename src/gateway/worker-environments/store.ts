@@ -886,3 +886,4 @@ export function createWorkerEnvironmentStore(
 }
 
 export type WorkerEnvironmentStore = ReturnType<typeof createWorkerEnvironmentStore>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

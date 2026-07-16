@@ -1464,3 +1464,4 @@ describe("deviceHandlers", () => {
     expect(call[2]?.message).toContain("invalid device.pair.rename params");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

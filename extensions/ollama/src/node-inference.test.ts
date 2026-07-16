@@ -6,9 +6,12 @@ import {
   createOllamaNodeHostCommands,
   createOllamaNodeInferenceTool,
   createOllamaNodeInvokePolicy,
-  OLLAMA_CHAT_COMMAND,
-  OLLAMA_MODELS_COMMAND,
 } from "./node-inference.js";
+
+const [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] = createOllamaNodeInvokePolicy().commands;
+if (!OLLAMA_MODELS_COMMAND || !OLLAMA_CHAT_COMMAND) {
+  throw new Error("Ollama node inference policy must register models and chat commands");
+}
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -224,7 +227,7 @@ describe("Ollama node host inference", () => {
     const policy = createOllamaNodeInvokePolicy();
     const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
 
-    expect(policy.commands).toEqual([OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND]);
+    expect(policy.commands).toEqual(["ollama.models", "ollama.chat"]);
     expect(policy.defaultPlatforms).toEqual(["macos", "linux", "windows"]);
     await expect(policy.handle({ invokeNode } as never)).resolves.toEqual({
       ok: true,

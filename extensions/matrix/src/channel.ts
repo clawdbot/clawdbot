@@ -473,6 +473,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       messaging: {
         defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
+        targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
           resolveMatrixInboundConversation({ to, conversationId, threadId }),

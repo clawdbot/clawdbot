@@ -1205,3 +1205,4 @@ describe("reconcileSkillsAgentId", () => {
     expect(state.skillOperation).toEqual({ kind: "clawhub", slug: "calendar" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

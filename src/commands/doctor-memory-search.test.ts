@@ -266,6 +266,38 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn or request NONE_API_KEY for intentional FTS-only mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      fallback: "none",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("still reports a missing memory backend in intentional FTS-only mode", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "none",
+      fallback: "none",
+      local: {},
+      remote: {},
+    });
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledWith(
+      "No active memory plugin is registered for the current config.",
+      "Memory search",
+    );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("reports last-known llama.cpp runtime facts from the gateway", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -1580,3 +1612,4 @@ describe("formatRootMemoryFilesWarning", () => {
     expect(message).toContain("doctor --fix");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

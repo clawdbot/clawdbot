@@ -934,3 +934,4 @@ export async function snapshotRoleViaCdp(opts: {
     { commandTimeoutMs: opts.timeoutMs ?? 5000 },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

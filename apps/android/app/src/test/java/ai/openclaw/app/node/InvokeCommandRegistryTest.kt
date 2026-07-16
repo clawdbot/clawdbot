@@ -40,6 +40,7 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.CallLog.rawValue,
       OpenClawCapability.Motion.rawValue,
       OpenClawCapability.Photos.rawValue,
+      OpenClawCapability.VoiceWake.rawValue,
     )
 
   private val coreCommands =
@@ -99,6 +100,7 @@ class InvokeCommandRegistryTest {
           photosAvailable = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
+          voiceWakeEnabled = true,
         ),
       )
 
@@ -273,6 +275,7 @@ class InvokeCommandRegistryTest {
     motionPedometerAvailable: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
     debugBuild: Boolean = false,
+    voiceWakeEnabled: Boolean = false,
   ): NodeRuntimeFlags =
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled,
@@ -286,6 +289,7 @@ class InvokeCommandRegistryTest {
       motionPedometerAvailable = motionPedometerAvailable,
       installedAppsSharingEnabled = installedAppsSharingEnabled,
       debugBuild = debugBuild,
+      voiceWakeEnabled = voiceWakeEnabled,
     )
 
   private fun assertContainsAll(

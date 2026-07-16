@@ -935,3 +935,4 @@ function normalizeRequired(value: string, label: string): string {
 function toPortableRelativePath(relativePath: string): string {
   return relativePath.split(path.sep).join("/");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

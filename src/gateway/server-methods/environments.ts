@@ -14,6 +14,7 @@ import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentState } from "../worker-environments/state.js";
+import { formatForLog } from "../ws-log.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -98,6 +99,18 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
+function listWorkerProfiles(context: GatewayRequestContext) {
+  if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
+    return [];
+  }
+  const profiles = context.getRuntimeConfig().cloudWorkers?.profiles ?? {};
+  return Object.entries(profiles)
+    .flatMap(([id, profile]) => {
+      const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
+      return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
 async function respondWorkerMutation(
   respond: RespondFn,
   run: () => Promise<WorkerEnvironmentServiceRecord>,
@@ -129,7 +142,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      respond(true, { environments }, undefined);
+      const profiles = listWorkerProfiles(context);
+      respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },
   "environments.status": async ({ params, respond, context }) => {
@@ -193,7 +207,27 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondWorkerMutation(
       respond,
-      () => service.destroy(params.environmentId),
+      async () => {
+        const placementService = context.workerPlacementDispatchService;
+        if (params.force && !placementService?.forceDestroyEnvironment) {
+          throw new Error("cloud worker placement control is unavailable");
+        }
+        const destroyed = params.force
+          ? await placementService!.forceDestroyEnvironment!(params.environmentId)
+          : await service.destroyUnattached(params.environmentId);
+        // Destruction is authoritative. Project the dead worker into its owning
+        // placement before returning, or immediate session deletion stays fenced.
+        try {
+          await context.workerPlacementDispatchService?.reconcileActive?.(params.environmentId);
+        } catch (error) {
+          // The provider mutation has committed. Keep its success authoritative;
+          // the periodic recovery sweep will retry this projection.
+          context.logGateway.warn(
+            `worker placement reconciliation after destroy failed: ${formatForLog(error)}`,
+          );
+        }
+        return destroyed;
+      },
       ["environment_not_found", "invalid_state"],
       "worker environment destruction failed",
     );

@@ -13,7 +13,7 @@ describe("QA Docker E2E lane fixture", () => {
     expect(listQaDockerE2eLaneNames()).toEqual(
       expect.arrayContaining([
         "agent-bundle-mcp-tools",
-        "crestodian-first-run",
+        "system-agent-first-run",
         "gateway-network",
         "release-plugin-marketplace",
         "update-migration",

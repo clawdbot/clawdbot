@@ -22,7 +22,6 @@ import { mcpContentBlockToAgentContent } from "./mcp-content.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
-
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
 }
@@ -385,9 +384,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
     }
   }
 
-  // Sort tools deterministically by name so the tools block in API requests is stable across
-  // turns (defensive — listTools() order is usually stable but not guaranteed).
-  // Cannot fix name collisions: collision suffixes above are order-dependent.
+  // Sort deterministically by name: keeps the API tools block stable across turns
+  // (listTools() order is not guaranteed). Collision suffixes above stay order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
   return tools;
 }
@@ -422,7 +420,9 @@ export async function materializeBundleMcpToolsForRun(params: {
         toolName: tool.toolName,
         result,
       });
-      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+      // Requester-scoped servers never mint app views (outlive run; no requester id on view boundary).
+      const scopedServer = params.runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
         const allowedAppToolNames = allowedAppToolsByServer
           ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
           : undefined;

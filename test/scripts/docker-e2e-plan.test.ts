@@ -1,11 +1,12 @@
 // Docker E2E Plan tests cover docker e2e plan script behavior.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LIVE_RETRIES,
   RELEASE_PATH_PROFILE,
+  findLaneByName,
   parseLaneSelection,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mjs";
@@ -21,10 +22,25 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts?: Record<string, string>;
 };
 
+function writeFrozenScenarioContract(targetRoot: string, scenarios: string[]): string {
+  const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  mkdirSync(dirname(assertionsFile), { recursive: true });
+  writeFileSync(
+    assertionsFile,
+    [
+      `const scenarios = ${JSON.stringify(scenarios)};`,
+      'if (process.argv[2] !== "list-scenarios") throw new Error("unknown command");',
+      "process.stdout.write(`${JSON.stringify(scenarios)}\\n`);",
+    ].join("\n"),
+  );
+  return assertionsFile;
+}
+
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
 ): ReturnType<typeof resolveDockerE2ePlan>["plan"] {
   return resolveDockerE2ePlan({
+    allowFrozenTargetScenarioOmissions: true,
     includeOpenWebUI: false,
     liveMode: "all",
     liveRetries: DEFAULT_LIVE_RETRIES,
@@ -104,6 +120,12 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("finds a named lane through the expanded catalog", () => {
+    expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
+      "plugin-binding-command-escape",
+    );
+  });
+
   it("routes live Docker scripts through the nested trusted release harness", () => {
     const sourceLane = allReleasePathLanes({ releaseProfile: "beta" }).find(
       (candidate) => candidate.name === "live-codex-npm-plugin",
@@ -763,6 +785,253 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("omits trusted-current scenarios unsupported by a frozen target harness", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-upgrade-harness-");
+    writeFrozenScenarioContract(targetRoot, [
+      "base",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "tilde-log-path",
+      "versioned-runtime-deps",
+    ]);
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.11",
+      "published-upgrade-survivor-2026.6.11-feishu-channel",
+      "published-upgrade-survivor-2026.6.11-bootstrap-persona",
+      "published-upgrade-survivor-2026.6.11-channel-post-core-restore",
+      "published-upgrade-survivor-2026.6.11-plugin-deps-cleanup",
+      "published-upgrade-survivor-2026.6.11-configured-plugin-installs",
+      "published-upgrade-survivor-2026.6.11-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.6.11-tilde-log-path",
+      "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+    ]);
+  });
+
+  it("reads content-addressed scenario catalogs from pre-command frozen targets", () => {
+    const targetRoot = tempDirs.make("openclaw-legacy-frozen-upgrade-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    const legacyScenarios = [
+      "base",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "tilde-log-path",
+      "versioned-runtime-deps",
+    ];
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      [
+        "const SCENARIOS = new Set([",
+        ...legacyScenarios.map((scenario) => `  "${scenario}",`),
+        "]);",
+        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
+      ].join("\n"),
+    );
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+    ]);
+  });
+
+  it("omits survivor lanes when the target exposes none of the requested scenarios", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-empty-upgrade-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor-2026.6.11");
+    expect(plan.omittedUnsupportedLanes).toContain(
+      "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
+    );
+  });
+
+  it("omits baseline-only survivor lanes when the target lacks the implicit base scenario", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-no-base-upgrade-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor-2026.6.11"]);
+  });
+
+  it("omits an unconfigured survivor lane when the target lacks the implicit base scenario", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-default-base-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["published-upgrade-survivor"]);
+  });
+
+  it("reports an unsupported survivor lane beside runnable selected lanes", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mixed-upgrade-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor", "plugin-binding-command-escape"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+    expect(plan.omittedUnsupportedLanes).toContain(
+      "published-upgrade-survivor-versioned-runtime-deps",
+    );
+  });
+
+  it("reports an explicitly selected expanded survivor lane as unsupported", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-expanded-upgrade-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const selectedLane = "published-upgrade-survivor-2026.6.11";
+    const plan = planFor({
+      selectedLaneNames: [selectedLane],
+      upgradeSurvivorBaselines: "2026.6.11",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual([selectedLane]);
+  });
+
+  it("omits unsupported scenario-only survivor lanes without explicit baselines", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-scenario-only-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+  });
+
+  it("does not fall back to base when an unsupported scenario is baseline-incompatible", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-incompatible-scenario-harness-");
+    writeFrozenScenarioContract(targetRoot, ["unrelated"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.21",
+      upgradeSurvivorScenarios: "acpx-openclaw-tools-bridge",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
+  });
+
+  it("fails closed when an unknown legacy scenario catalog lacks the command", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-failed-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      [
+        'const SCENARIOS = new Set(["base"]);',
+        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
+      ].join("\n"),
+    );
+
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorScenarios: "reported-issues",
+        upgradeSurvivorTargetRoot: targetRoot,
+      }),
+    ).toThrow("unknown upgrade-survivor assertion command: list-scenarios");
+  });
+
+  it("fails closed when a frozen target scenario command returns non-JSON output", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-non-json-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'process.stdout.write("base");\n');
+
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorScenarios: "reported-issues",
+        upgradeSurvivorTargetRoot: targetRoot,
+      }),
+    ).toThrow("list-scenarios did not return JSON");
+  });
+
+  it("fails closed when a frozen target scenario command returns an invalid catalog", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-invalid-scenario-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'process.stdout.write("[\\"base\\",\\"base\\"]");\n');
+
+    expect(() =>
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorScenarios: "reported-issues",
+        upgradeSurvivorTargetRoot: targetRoot,
+      }),
+    ).toThrow("list-scenarios returned an invalid catalog");
+  });
+
+  it("does not inspect a frozen survivor contract for unrelated selected lanes", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-unrelated-lane-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(assertionsFile, 'throw new Error("must not run");\n');
+
+    const plan = planFor({
+      selectedLaneNames: ["plugin-binding-command-escape"],
+      upgradeSurvivorScenarios: "reported-issues",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
+  });
+
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
@@ -1090,8 +1359,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "mcp-code-mode-gateway",
         "cron-mcp-cleanup",
         "agent-bundle-mcp-tools",
-        "crestodian-first-run",
-        "crestodian-rescue",
+        "system-agent-first-run",
+        "system-agent-rescue",
         "config-reload",
         "plugin-update",
         "plugins",
@@ -1119,8 +1388,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "mcp-code-mode-gateway", stateScenario: "empty" },
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
       { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
-      { name: "crestodian-first-run", stateScenario: "empty" },
-      { name: "crestodian-rescue", stateScenario: "empty" },
+      { name: "system-agent-first-run", stateScenario: "empty" },
+      { name: "system-agent-rescue", stateScenario: "empty" },
       { name: "config-reload", stateScenario: "empty" },
       { name: "plugin-update", stateScenario: "empty" },
       { name: "plugins", stateScenario: "empty" },
@@ -1143,7 +1412,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
+          'OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-install-sh-e2e-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "install-e2e-openai",
@@ -1153,7 +1422,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
-          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
+          'OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-install-sh-e2e-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "install-e2e-anthropic",

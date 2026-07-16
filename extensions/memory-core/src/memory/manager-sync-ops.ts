@@ -2953,3 +2953,4 @@ export abstract class MemoryManagerSyncOps {
     this.lastMetaSerialized = value;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

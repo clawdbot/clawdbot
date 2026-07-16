@@ -2,10 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   VoiceCallConfigSchema,
-  resolveVoiceCallAgentSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
-  resolveVoiceCallNumberRouteKey,
   resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   validateProviderConfig,
@@ -17,6 +15,19 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function resolveVoiceCallAgentSessionKey(params: {
+  config: VoiceCallConfig;
+  sessionKey: string;
+  coreSession?: Parameters<typeof resolveVoiceCallSessionKey>[0]["coreSession"];
+}): string {
+  return resolveVoiceCallSessionKey({
+    config: params.config,
+    callId: "test-call",
+    explicitSessionKey: params.sessionKey,
+    coreSession: params.coreSession,
+  });
 }
 
 function envRef(id: string) {
@@ -570,7 +581,6 @@ describe("resolveVoiceCallConfig session routing", () => {
       },
     });
 
-    expect(resolveVoiceCallNumberRouteKey(config, "+1 (555) 000-1111")).toBe("+15550001111");
     const effective = resolveVoiceCallEffectiveConfig(config, "+1 (555) 000-1111");
 
     expect(effective.numberRouteKey).toBe("+15550001111");

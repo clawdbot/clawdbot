@@ -35,7 +35,7 @@ type ReplaySafeToolCallBlock = {
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
-export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
+function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
     if (mode === "strict9") {
       return "defaultid";
@@ -203,18 +203,6 @@ function collectReplaySafeThinkingToolIds(
     }
   }
   return { reservedIds: reserved, preservedIndexes };
-}
-
-export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
-  if (!id || typeof id !== "string") {
-    return false;
-  }
-  if (mode === "strict9") {
-    return /^[a-zA-Z0-9]{9}$/.test(id);
-  }
-  // Strictly alphanumeric for providers with tighter tool ID constraints,
-  // plus native IDs we intentionally preserve for replay compatibility.
-  return /^[a-zA-Z0-9]+$/.test(id) || isNativeKimiToolCallId(id);
 }
 
 function shortHash(text: string, length = 8): string {

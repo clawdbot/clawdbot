@@ -27,11 +27,11 @@ type CachedManifestSuppressionResolver = {
 let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
 
 /** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
-export function clearModelSuppressionResolverCacheForTest(): void {
+function clearModelSuppressionResolverCache(): void {
   cachedManifestSuppressionResolver = undefined;
 }
 
-registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCacheForTest);
+registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCache);
 
 function resolveCachedManifestSuppressionResolver(params: {
   config?: OpenClawConfig;

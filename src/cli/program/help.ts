@@ -44,6 +44,23 @@ const EXAMPLES = [
   ],
 ] as const;
 
+export function formatProgramHelpOutput(str: string): string {
+  // Commander emits plain section labels; decorate them after command-specific help renders.
+  let output = str;
+  const isRootHelp = new RegExp(
+    `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
+    "m",
+  ).test(output);
+  if (isRootHelp && /^Commands:/m.test(output)) {
+    output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
+  }
+
+  return output
+    .replace(/^Usage:/gm, theme.heading("Usage:"))
+    .replace(/^Options:/gm, theme.heading("Options:"))
+    .replace(/^Commands:/gm, theme.heading("Commands:"));
+}
+
 export function configureProgramHelp(
   program: Command,
   ctx: ProgramContext,
@@ -92,29 +109,12 @@ export function configureProgramHelp(
     },
   });
 
-  const formatHelpOutput = (str: string) => {
-    // Commander emits plain section labels; decorate them after command-specific help renders.
-    let output = str;
-    const isRootHelp = new RegExp(
-      `^Usage:\\s+${CLI_NAME_PATTERN}\\s+\\[options\\]\\s+\\[command\\]\\s*$`,
-      "m",
-    ).test(output);
-    if (isRootHelp && /^Commands:/m.test(output)) {
-      output = output.replace(/^Commands:/m, `Commands:\n  ${theme.muted(ROOT_COMMANDS_HINT)}`);
-    }
-
-    return output
-      .replace(/^Usage:/gm, theme.heading("Usage:"))
-      .replace(/^Options:/gm, theme.heading("Options:"))
-      .replace(/^Commands:/gm, theme.heading("Commands:"));
-  };
-
   program.configureOutput({
     writeOut: (str) => {
-      process.stdout.write(formatHelpOutput(str));
+      process.stdout.write(formatProgramHelpOutput(str));
     },
     writeErr: (str) => {
-      process.stderr.write(formatHelpOutput(str));
+      process.stderr.write(formatProgramHelpOutput(str));
     },
     outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });

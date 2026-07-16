@@ -1061,7 +1061,7 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   }
 }
 
-export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
+function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   for (const entry of sessionFileOwnerState.owners.values()) {
     for (const waiter of entry.waiters) {
       waiter.reject(
@@ -1075,6 +1075,12 @@ export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   ownedSessionFileWrites.clear();
   trustedSessionFileStates.clear();
   ownedSessionFileWriteGeneration = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedAttemptSessionFileOwnersTestApi")
+  ] = { resetEmbeddedAttemptSessionFileOwnersForTest };
 }
 
 function resolveOwnedSessionFileWriteHistory(sessionFileKey: string): OwnedSessionFileWriteHistory {
@@ -2207,3 +2213,4 @@ export function installPromptSubmissionLockRelease(params: {
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

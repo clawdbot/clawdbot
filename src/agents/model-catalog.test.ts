@@ -2225,3 +2225,4 @@ describe("loadModelCatalog", () => {
     expect(modelSupportsInput(catalog[2], "image")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

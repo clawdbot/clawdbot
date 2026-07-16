@@ -49,7 +49,7 @@ export function collectSmsStartupWarnings(account: ResolvedSmsAccount): string[]
   return warnings;
 }
 
-export function registerSmsWebhookRoute(params: {
+function registerSmsWebhookRoute(params: {
   cfg: SmsWebhookHandlerParams["cfg"];
   account: ResolvedSmsAccount;
   channelRuntime: SmsWebhookHandlerParams["channelRuntime"];

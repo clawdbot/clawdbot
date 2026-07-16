@@ -1,18 +1,20 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
   ActivateSetupInferenceResult,
   SetupInferenceCandidate,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
-} from "../crestodian/setup-inference.js";
-import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
-import type { RuntimeEnv } from "../runtime.js";
+} from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
@@ -20,18 +22,20 @@ import {
 import type { OnboardOptions } from "./onboard-types.js";
 
 type ActivateSetupInference =
-  typeof import("../crestodian/setup-inference.js").activateSetupInference;
-type DetectSetupInference = typeof import("../crestodian/setup-inference.js").detectSetupInference;
+  typeof import("../system-agent/setup-inference.js").activateSetupInference;
+type DetectSetupInference =
+  typeof import("../system-agent/setup-inference.js").detectSetupInference;
 
 export type GuidedOnboardingDeps = {
   detect?: DetectSetupInference;
   activate?: ActivateSetupInference;
-  runCrestodianChat?: (
+  runSystemAgentChat?: (
     workspace: string,
     runtime: RuntimeEnv,
     acceptRisk: boolean,
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
+  persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<void>;
 };
 
 type GuidedOnboardingHandoff = { workspace: string };
@@ -40,14 +44,14 @@ type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
   | { kind: "failure" };
 
-async function openCrestodianChat(
+async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
   workspace: string,
   runtime: RuntimeEnv,
   acceptRisk: boolean,
 ): Promise<void> {
   const runChat =
-    deps.runCrestodianChat ??
+    deps.runSystemAgentChat ??
     (async (setupWorkspace: string, chatRuntime: RuntimeEnv, riskAccepted: boolean) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
       await runConversationalOnboarding(
@@ -127,43 +131,68 @@ async function tryCandidate(params: {
 async function runManualStage(params: {
   detection: SetupInferenceDetection;
   autoAttemptedKinds: ReadonlySet<SetupInferenceCandidate["kind"]>;
+  config: OpenClawConfig;
   workspace: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
-}): Promise<string[]> {
-  const options = [
-    ...params.detection.candidates.map((candidate) => ({
-      value: `candidate:${candidate.kind}`,
-      label: t(
-        params.autoAttemptedKinds.has(candidate.kind)
-          ? "wizard.guided.retryCandidate"
-          : "wizard.guided.tryCandidate",
-        {
-          label: candidate.label,
-          detail: candidate.detail,
-        },
-      ),
-    })),
-    ...params.detection.manualProviders.map((provider) => ({
-      value: `manual:${provider.id}`,
-      label: t("wizard.guided.enterApiKey", { label: provider.label }),
-      ...(provider.hint ? { hint: provider.hint } : {}),
-    })),
-  ];
-  if (options.length === 0) {
+}): Promise<string[] | null> {
+  const allowedChoices = new Set([
+    ...params.detection.manualProviders.map((provider) => provider.id),
+    ...params.detection.authOptions.map((option) => option.id),
+  ]);
+  const detectedOptions = params.detection.candidates.map((candidate) => ({
+    value: `candidate:${candidate.kind}`,
+    label: t(
+      params.autoAttemptedKinds.has(candidate.kind)
+        ? "wizard.guided.retryCandidate"
+        : "wizard.guided.tryCandidate",
+      {
+        label: candidate.label,
+        detail: candidate.detail,
+      },
+    ),
+  }));
+  if (detectedOptions.length === 0 && allowedChoices.size === 0) {
     await params.prompter.note(
       t("wizard.guided.noInferenceOptions"),
       t("wizard.guided.aiAccessTitle"),
     );
     throw new WizardCancelledError("no inference setup options");
   }
+  const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
+    ? [
+        {
+          value: "detected-ai",
+          label: t("wizard.guided.detectedTitle"),
+          options: detectedOptions,
+        },
+      ]
+    : [];
+  const [{ ensureAuthProfileStore }, { promptAuthChoiceGrouped }] = await Promise.all([
+    import("../agents/auth-profiles.runtime.js"),
+    import("./auth-choice-prompt.js"),
+  ]);
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
   while (true) {
-    const choice = await params.prompter.select({
-      message: t("wizard.guided.manualChoice"),
-      options,
+    const choice = await promptAuthChoiceGrouped({
+      prompter: params.prompter,
+      store,
+      includeSkip: true,
+      assistantVisibleOnly: false,
+      allowedChoices,
+      additionalGroups,
+      config: params.config,
+      workspaceDir: params.workspace,
     });
 
+    if (choice === "skip") {
+      await params.prompter.note(
+        t("wizard.guided.nextStepsWithoutAi", { workspace: params.workspace }),
+        t("wizard.guided.nextStepsTitle"),
+      );
+      return null;
+    }
     if (choice.startsWith("candidate:")) {
       const kind = choice.slice("candidate:".length);
       const candidate = params.detection.candidates.find((item) => item.kind === kind);
@@ -183,8 +212,30 @@ async function runManualStage(params: {
       continue;
     }
 
-    const providerId = choice.slice("manual:".length);
-    const provider = params.detection.manualProviders.find((item) => item.id === providerId);
+    const authOption = params.detection.authOptions.find((item) => item.id === choice);
+    if (authOption) {
+      const result = await withConsoleSubsystemsSuppressed(() =>
+        params.activate({
+          kind: "provider-auth",
+          authChoice: authOption.id,
+          workspace: params.workspace,
+          surface: "cli",
+          runtime: params.runtime,
+          prompter: params.prompter,
+        }),
+      );
+      if (result.ok) {
+        return activationLines(result);
+      }
+      await noteActivationFailure({
+        prompter: params.prompter,
+        label: authOption.label,
+        result,
+      });
+      continue;
+    }
+
+    const provider = params.detection.manualProviders.find((item) => item.id === choice);
     if (!provider) {
       continue;
     }
@@ -219,6 +270,22 @@ function activationLines(result: Extract<ActivateSetupInferenceResult, { ok: tru
     ...result.lines,
     t("wizard.guided.repliedIn", { seconds: (result.latencyMs / 1000).toFixed(1) }),
   ];
+}
+
+async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<void> {
+  const securityAcknowledgedAt = config.wizard?.securityAcknowledgedAt;
+  if (!securityAcknowledgedAt) {
+    return;
+  }
+  const { mutateConfigFileWithRetry } = await import("../config/config.js");
+  await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      if (draft.wizard?.securityAcknowledgedAt) {
+        return;
+      }
+      draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
+    },
+  });
 }
 
 async function runGuidedOnboardingFlow(
@@ -258,19 +325,26 @@ async function runGuidedOnboardingFlow(
   }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
-  await requireRiskAcknowledgement({ opts, prompter, config: existingConfig });
+  const acknowledgedConfig = await requireRiskAcknowledgement({
+    opts,
+    prompter,
+    config: existingConfig,
+  });
+  if (!existingConfig.wizard?.securityAcknowledgedAt) {
+    await (deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement)(acknowledgedConfig);
+  }
 
-  // Inference is the only prerequisite for Crestodian. Use the caller's or
-  // current default workspace as isolated probe context; Crestodian owns any
+  // Inference is the only prerequisite for OpenClaw. Use the caller's or
+  // current default workspace as isolated probe context; OpenClaw owns any
   // workspace choice and persistence after the live completion succeeds.
   const workspace = resolveUserPath(
     opts.workspace?.trim() ||
-      existingConfig.agents?.defaults?.workspace?.trim() ||
+      acknowledgedConfig.agents?.defaults?.workspace?.trim() ||
       onboardHelpers.DEFAULT_WORKSPACE,
   );
 
   const detect =
-    deps.detect ?? (await import("../crestodian/setup-inference.js")).detectSetupInference;
+    deps.detect ?? (await import("../system-agent/setup-inference.js")).detectSetupInference;
   const detectionProgress = prompter.progress(t("wizard.guided.detecting"));
   const detection = await detect();
   detectionProgress.stop(t("wizard.guided.detected"));
@@ -287,7 +361,7 @@ async function runGuidedOnboardingFlow(
   }
 
   const activate =
-    deps.activate ?? (await import("../crestodian/setup-inference.js")).activateSetupInference;
+    deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
   const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
   let resultLines: string[] | undefined;
   // Logged-out CLIs stay visible as manual choices, but auto-testing them would
@@ -308,14 +382,21 @@ async function runGuidedOnboardingFlow(
       break;
     }
   }
-  resultLines ??= await runManualStage({
-    detection,
-    autoAttemptedKinds,
-    workspace,
-    runtime,
-    prompter,
-    activate,
-  });
+  if (!resultLines) {
+    const manualResult = await runManualStage({
+      detection,
+      autoAttemptedKinds,
+      config: existingConfig,
+      workspace,
+      runtime,
+      prompter,
+      activate,
+    });
+    if (!manualResult) {
+      return null;
+    }
+    resultLines = manualResult;
+  }
 
   await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
   return { workspace };
@@ -338,7 +419,7 @@ export async function runGuidedOnboarding(
   const handoff = state.handoff;
   if (handoff) {
     // The live completion makes conversational setup safe. Start only after
-    // the wizard lifecycle restores stdin so Crestodian receives a clean TTY.
-    await openCrestodianChat(deps, handoff.workspace, runtime, true);
+    // the wizard lifecycle restores stdin so OpenClaw receives a clean TTY.
+    await openSystemAgentChat(deps, handoff.workspace, runtime, true);
   }
 }

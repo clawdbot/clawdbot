@@ -10,7 +10,11 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { describe, expect, it, vi } from "vitest";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
@@ -30,6 +34,10 @@ import {
 } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
+
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 const testing = {
   flushPendingCodexNativeHookRelayUnregistersForTests(): void {
@@ -55,6 +63,70 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
+  it("relays native tool results through Codex result middleware", async () => {
+    const middleware = vi.fn(async () => undefined);
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["post_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["hooks.PostToolUse"]).not.toEqual([]);
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "pnpm test" },
+        tool_response: { output: "ok", exit_code: 0 },
+      },
+    });
+
+    expect(middleware).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCallId: "native-call-1",
+        toolName: "exec",
+        args: { command: "pnpm test" },
+        result: {
+          content: [
+            {
+              type: "text",
+              text: '{\n  "output": "ok",\n  "exit_code": 0\n}',
+            },
+          ],
+          details: { output: "ok", exit_code: 0 },
+        },
+      }),
+      expect.objectContaining({ runtime: "codex" }),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -94,6 +166,33 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
     nativeHookRelayUnregisterQueue.flush();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("omits the loop-detection PreToolUse subprocess when Codex config disables it", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = { tools: { loopDetection: { enabled: true } } } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { loopDetectionPreToolUseRelay: false },
+      },
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
   });
 
   it("forwards command approval requests through the active native hook relay", async () => {

@@ -475,7 +475,7 @@ async function runGitUpdate(params: {
         : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
+      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation, updateRoot),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -1499,3 +1499,4 @@ async function updateCommandInternal(
     defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

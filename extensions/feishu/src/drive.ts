@@ -898,3 +898,4 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     { name: "feishu_drive" },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

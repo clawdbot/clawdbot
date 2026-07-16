@@ -69,7 +69,7 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   );
 }
 
-export function formatModelOverrideResetEvent(params: {
+function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
   reason?: "disallowed" | "stale";

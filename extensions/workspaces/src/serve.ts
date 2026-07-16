@@ -28,7 +28,7 @@ export const WIDGETS_ROUTE_PREFIX = "/plugins/workspaces/widgets";
 // only by the Control UI. Custom code receives only static workspace values: a
 // sandboxed child can navigate itself, so privileged RPC/file data stays in the
 // trusted built-in renderers.
-export const WIDGET_CSP =
+const WIDGET_CSP =
   "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; " +
   "style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
@@ -96,7 +96,7 @@ function isWidgetRoutePath(pathname: string): boolean {
  * Returns null when the pathname is not under the prefix or is malformed. Each
  * segment is URL-decoded; a decode failure yields null (→ 404).
  */
-export function parseWidgetRequestPath(
+function parseWidgetRequestPath(
   pathname: string,
 ): { frameToken: string; name: string; logicalPath: string } | null {
   const prefix = `${WIDGETS_ROUTE_PREFIX}/`;

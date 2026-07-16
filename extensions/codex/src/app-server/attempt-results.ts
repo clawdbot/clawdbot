@@ -104,6 +104,7 @@ export function resolveCodexAppServerReplayBlockedReason(
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
+  promptError?: unknown;
   messagesSnapshot: AgentMessage[];
   systemPromptReport: CodexSystemPromptReport;
 }): EmbeddedRunAttemptResult {
@@ -114,7 +115,7 @@ export function buildCodexTurnStartFailureResult(params: {
     idleTimedOut: false,
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
-    promptError: params.message,
+    promptError: params.promptError ?? params.message,
     promptErrorSource: "prompt",
     sessionIdUsed: params.params.sessionId,
     messagesSnapshot: params.messagesSnapshot,

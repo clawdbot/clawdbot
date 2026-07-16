@@ -81,7 +81,7 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
 }
 
 /** List pending completion payloads that should be steered into a requester turn. */
-export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
+function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
   now?: number;
@@ -114,7 +114,7 @@ export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Build the merged runtime prompt for one or more pending steering items. */
-export function buildMergedAgentSteeringPrompt(
+function buildMergedAgentSteeringPrompt(
   items: readonly AgentSteeringQueueItem[],
 ): string | undefined {
   const sections: string[] = [];

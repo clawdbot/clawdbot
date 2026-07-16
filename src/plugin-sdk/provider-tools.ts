@@ -179,6 +179,17 @@ const OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS = new Set([
   "properties",
 ]);
 
+// Annotation-only keywords whose null values can be dropped without changing
+// what the schema accepts; null constraint keywords must stay so projection
+// quarantines the tool instead of widening it.
+const OPENAI_NULLABLE_ANNOTATION_KEYS = new Set([
+  "default",
+  "description",
+  "examples",
+  "format",
+  "title",
+]);
+
 const OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS = new Set([
   "additionalProperties",
   "allOf",
@@ -234,8 +245,23 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
 
   const record = schema as Record<string, unknown>;
   let changed = false;
+  let hadNullType = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
+    // Repair only null-valued entries that carry no constraint semantics:
+    // annotation keywords, and `type: null` when the shape inference below can
+    // supply the real type. Null constraint keywords (additionalProperties,
+    // required, enum, ...) stay put so projection quarantines instead of
+    // silently accepting arguments the plugin never declared.
+    if (value === null && OPENAI_NULLABLE_ANNOTATION_KEYS.has(key)) {
+      changed = true;
+      continue;
+    }
+    if (value === null && key === "type") {
+      hadNullType = true;
+      changed = true;
+      continue;
+    }
     const next = OPENAI_STRICT_COMPAT_SCHEMA_MAP_KEYS.has(key)
       ? normalizeOpenAIStrictCompatSchemaMap(value)
       : OPENAI_STRICT_COMPAT_SCHEMA_NESTED_KEYS.has(key)
@@ -260,14 +286,19 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   }
 
   const hasObjectShapeHints =
-    !("type" in normalized) &&
-    ((normalized.properties &&
+    (normalized.properties &&
       typeof normalized.properties === "object" &&
       !Array.isArray(normalized.properties)) ||
-      Array.isArray(normalized.required));
-  if (hasObjectShapeHints) {
-    normalized.type = "object";
+    Array.isArray(normalized.required);
+  const hasArrayShapeHints = "items" in normalized;
+  if (!("type" in normalized) && hasObjectShapeHints !== hasArrayShapeHints) {
+    normalized.type = hasObjectShapeHints ? "object" : "array";
     changed = true;
+  } else if (hadNullType && !("type" in normalized)) {
+    // Inference failed (no hints, or ambiguous object+array hints): restore the
+    // invalid `type: null` so downstream projection quarantines the tool
+    // instead of shipping an unconstrained schema.
+    normalized.type = null;
   }
   if (normalized.type === "object" && !("properties" in normalized)) {
     normalized.properties = {};

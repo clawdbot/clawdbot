@@ -214,7 +214,8 @@ export async function waitForHttpBodyDeltas(
   notifications: Array<{ method: string; params?: unknown }>,
   count: number,
 ): Promise<unknown[]> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  // Preserve the 500 ms failure budget while checking completed streams sooner.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     const deltas = notifications
       .filter((notification) => notification.method === "http/request/bodyDelta")
       .map((notification) => notification.params);
@@ -222,7 +223,7 @@ export async function waitForHttpBodyDeltas(
       return deltas;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`expected ${count} http body deltas`);

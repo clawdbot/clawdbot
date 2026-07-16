@@ -255,17 +255,71 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
   });
 
+  it("keeps the document root scroll-locked in the Settings takeover", async () => {
+    const page = await openPage({ webChrome: true });
+    const response = await page.goto(`${server.baseUrl}settings/general`);
+    expect(response?.status()).toBe(200);
+    await page.locator(".settings-sidebar").waitFor({ state: "visible" });
+
+    // WKWebView scrolls the document whenever it overflows, dragging the
+    // settings sidebar and content along. Force overflow the way stray
+    // content would, then confirm the root refuses to move.
+    const metrics = await page.evaluate(() => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "3000px";
+      document.body.append(spacer);
+      window.scrollTo(0, 500);
+      document.documentElement.scrollTop = 500;
+      document.body.scrollTop = 500;
+      return {
+        bodyScrollTop: document.body.scrollTop,
+        htmlScrollTop: document.documentElement.scrollTop,
+        rootScrollY: window.scrollY,
+      };
+    });
+    expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
+  });
+
   it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
   });
 
-  it("keeps the drawer hamburger at narrow widths in web titlebar chrome", async () => {
-    const page = await openPage({ webChrome: true, width: 900 });
-    // The web toolbar hides below the drawer breakpoint, so the hamburger is
-    // the only remaining sidebar toggle there.
+  it("keeps the sidebar rail beside a half-width native link browser", async () => {
+    const page = await openPage({ webChrome: true, width: 620 });
+    await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-resizer").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(false);
+
+    await page.setViewportSize({ width: 560, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
+    await page.setViewportSize({ width: 620, height: 900 });
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--mobile-nav");
+    await expect.poll(() => page.locator(".shell-nav").isVisible()).toBe(true);
+  });
+
+  it("uses the drawer below the native minimum main-pane width", async () => {
+    const page = await openPage({ webChrome: true, width: 560 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(false);
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--mobile-nav");
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    // The native traffic-light cluster ends around x=78. Keep the brand aligned
+    // with the desktop titlebar controls' 92px inset so the groups stay distinct.
+    await expect
+      .poll(() =>
+        page.locator(".topbar-brand").evaluate((element) => element.getBoundingClientRect().x),
+      )
+      .toBe(92);
   });
 
   it("hides the drawer hamburger at narrow widths when the native toggle is present", async () => {

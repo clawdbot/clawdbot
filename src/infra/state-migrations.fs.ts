@@ -1,6 +1,6 @@
 // Filesystem primitives used by legacy state migration code.
 import fs from "node:fs";
-import JSON5 from "json5";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 /** Minimal session-store entry shape needed by state migration ordering and repair logic. */
 export type SessionEntryLike = {
@@ -60,15 +60,7 @@ export function parseSessionStoreJson5(raw: string): {
   ok: boolean;
 } {
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { store: parsed as Record<string, SessionEntryLike>, ok: true };
-    }
-  } catch {
-    // Fall through to JSON5 for legacy/operator-edited stores.
-  }
-  try {
-    const parsed = JSON5.parse(raw);
+    const parsed = parseJsonWithJson5Fallback(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { store: parsed as Record<string, SessionEntryLike>, ok: true };
     }

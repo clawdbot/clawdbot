@@ -1,7 +1,7 @@
 // QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
-import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
+import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
 const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
@@ -76,15 +76,11 @@ export async function renderQrPngBase64(
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
   const qrCode = await loadQrCodeRuntime();
-  const dataUrl = await qrCode.toDataURL(normalizeQrText(input), {
+  const png = await qrCode.toBuffer(input, {
     margin: marginModules,
     scale,
-    type: "image/png",
   });
-  if (!dataUrl.startsWith(QR_PNG_DATA_URL_PREFIX)) {
-    throw new Error("Expected qrcode to return a PNG data URL.");
-  }
-  return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
+  return png.toString("base64");
 }
 
 /** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */

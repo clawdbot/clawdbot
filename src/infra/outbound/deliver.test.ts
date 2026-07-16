@@ -3,11 +3,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
@@ -64,7 +61,7 @@ const internalHookMocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn(async () => {}),
 }));
 const queueMocks = vi.hoisted(() => ({
-  enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  enqueueDelivery: vi.fn(async (_params: unknown) => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn(async () => {}),
@@ -135,6 +132,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 type DeliverModule = typeof import("./deliver.js");
 
 let deliverOutboundPayloads: DeliverModule["deliverOutboundPayloads"];
+let deliverOutboundPayloadsInternal: DeliverModule["deliverOutboundPayloadsInternal"];
 let resolveOutboundDurableFinalDeliverySupport: DeliverModule["resolveOutboundDurableFinalDeliverySupport"];
 
 const matrixChunkConfig: OpenClawConfig = {
@@ -305,13 +303,15 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
-    ({ deliverOutboundPayloads, resolveOutboundDurableFinalDeliverySupport } =
-      await import("./deliver.js"));
+    ({
+      deliverOutboundPayloads,
+      deliverOutboundPayloadsInternal,
+      resolveOutboundDurableFinalDeliverySupport,
+    } = await import("./deliver.js"));
   });
 
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -354,7 +354,6 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
@@ -3908,18 +3907,27 @@ describe("deliverOutboundPayloads", () => {
       ]),
     );
 
-    await deliverOutboundPayloads({
+    await deliverOutboundPayloadsInternal({
       cfg: { channels: { matrix: { textChunkLimit: 4000 } } } as OpenClawConfig,
       channel: "matrix",
       to: "!room",
       payloads: [{ text: "line one\nline two" }],
       replyToId: "reply-1",
       replyToMode: "first",
+      conversationReadOrigin: "direct-operator",
       formatting: { maxLinesPerMessage: 1 },
     });
 
     expect(sendText.mock.calls.map((call) => call[0]?.text)).toEqual(["line one", "line two"]);
     expect(sendText.mock.calls.map((call) => call[0]?.replyToId)).toEqual(["reply-1", undefined]);
+    expect(
+      sendText.mock.calls.map(
+        (call) => (call[0] as { conversationReadOrigin?: string })?.conversationReadOrigin,
+      ),
+    ).toEqual(["direct-operator", "direct-operator"]);
+    expect(queueMocks.enqueueDelivery.mock.calls[0]?.[0]).not.toHaveProperty(
+      "conversationReadOrigin",
+    );
   });
 
   it("drops text payloads after adapter sanitization removes all content", async () => {
@@ -5615,3 +5623,4 @@ const defaultRegistry = createTestRegistry([
     source: "test",
   },
 ]);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

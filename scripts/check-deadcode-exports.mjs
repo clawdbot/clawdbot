@@ -1,17 +1,7 @@
 #!/usr/bin/env node
-// Enforces a ratcheting baseline for Knip's unused exports.
-import { writeFile } from "node:fs/promises";
+// Enforces a hard-zero policy for Knip's unused exports.
 import { fileURLToPath } from "node:url";
-import {
-  KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE,
-  KNIP_UNUSED_EXPORT_BASELINE,
-} from "./deadcode-exports.baseline.mjs";
-import {
-  compareStringListToAllowlist,
-  isLikelyRepoFilePath,
-  runKnip,
-  uniqueSorted,
-} from "./deadcode-knip-runner.mjs";
+import { isLikelyRepoFilePath, runKnip, uniqueSorted } from "./deadcode-knip-runner.mjs";
 
 const KNIP_ARGS = [
   "--config",
@@ -24,10 +14,6 @@ const KNIP_ARGS = [
   "exports,types,enumMembers",
   "--no-config-hints",
 ];
-
-const BASELINE_HEADER = `// Pre-existing unused exports awaiting deletion.
-// New entries fail CI. After deleting dead code, run \`pnpm deadcode:exports:update\`.
-// Do not add entries to avoid fixing new findings.`;
 
 /** Parses compact Knip export sections into one path-and-symbol entry per finding. */
 export function parseKnipCompactUnusedExportsResult(output) {
@@ -77,90 +63,24 @@ export function parseKnipCompactUnusedExports(output) {
   return parseKnipCompactUnusedExportsResult(output).entries;
 }
 
-/** Compares detected unused exports against the checked-in baseline. */
-export function compareUnusedExportsToBaseline(
-  actualEntries,
-  baselineEntries,
-  optionalBaselineEntries = [],
-) {
-  return compareStringListToAllowlist(actualEntries, baselineEntries, optionalBaselineEntries);
-}
-
-function formatUnusedExportComparison(comparison) {
-  const lines = [];
-  if (!comparison.allowlistIsSorted) {
-    lines.push("deadcode unused-export baseline is not sorted.");
-  }
-  if (comparison.duplicateAllowedCount > 0) {
-    lines.push(
-      `deadcode unused-export baseline contains ${comparison.duplicateAllowedCount} duplicate entr${
-        comparison.duplicateAllowedCount === 1 ? "y" : "ies"
-      }.`,
-    );
-  }
-  if (comparison.unexpected.length > 0) {
-    lines.push("Unexpected unused exports:");
-    lines.push(...comparison.unexpected.map((entry) => `  ${entry}`));
-  }
-  if (comparison.stale.length > 0) {
-    lines.push("Stale required baseline entries:");
-    lines.push(...comparison.stale.map((entry) => `  ${entry}`));
-  }
-  if (lines.length > 0) {
-    lines.push("Run `pnpm deadcode:exports:update` after removing dead code.");
-  }
-  return lines.join("\n");
-}
-
-function formatArrayExport(name, entries) {
-  if (entries.length === 0) {
-    return `export const ${name} = [];`;
-  }
-  return `export const ${name} = [\n${entries.map((entry) => `  ${JSON.stringify(entry)},`).join("\n")}\n];`;
-}
-
-/** Emits the checked-in baseline module used by --update. */
-export function formatUnusedExportBaseline(
-  requiredEntries,
-  optionalEntries = KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE,
-) {
-  // Optional entries are platform-variant: promoting one into the required
-  // list would make CI stale-fail on platforms where it is legitimately absent.
-  const optionalSet = new Set(uniqueSorted(optionalEntries));
-  return `${BASELINE_HEADER}\n${formatArrayExport(
-    "KNIP_UNUSED_EXPORT_BASELINE",
-    uniqueSorted(requiredEntries).filter((entry) => !optionalSet.has(entry)),
-  )}\n\n// Platform-variant findings. Allowed when present; never required.\n${formatArrayExport(
-    "KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE",
-    uniqueSorted(optionalEntries),
-  )}\n`;
-}
-
-/** Checks Knip output against the current baseline. */
-export function checkUnusedExports(
-  output,
-  baselineEntries = KNIP_UNUSED_EXPORT_BASELINE,
-  optionalBaselineEntries = KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE,
-) {
-  const actual = parseKnipCompactUnusedExports(output);
-  const comparison = compareUnusedExportsToBaseline(
-    actual,
-    baselineEntries,
-    optionalBaselineEntries,
-  );
+/** Rejects every unused export reported by Knip. */
+export function checkUnusedExports(output) {
+  const entries = parseKnipCompactUnusedExports(output);
   return {
-    ok:
-      comparison.allowlistIsSorted &&
-      comparison.duplicateAllowedCount === 0 &&
-      comparison.unexpected.length === 0 &&
-      comparison.stale.length === 0,
-    comparison,
-    message: formatUnusedExportComparison(comparison),
+    ok: entries.length === 0,
+    entries,
+    message:
+      entries.length === 0
+        ? ""
+        : [
+            "Unused exports are not allowed:",
+            ...entries.map((entry) => `  ${entry}`),
+            "Delete the exports or model their real production consumers in Knip.",
+          ].join("\n"),
   };
 }
 
 async function main() {
-  const update = process.argv.slice(2).includes("--update");
   const result = await runKnip(KNIP_ARGS, { scanName: "unused-export scan" });
   if (result.errorCode || result.status === null) {
     console.error(
@@ -188,25 +108,13 @@ async function main() {
     return;
   }
 
-  const actual = parsed.entries;
-  if (update) {
-    const baselinePath = fileURLToPath(new URL("./deadcode-exports.baseline.mjs", import.meta.url));
-    await writeFile(
-      baselinePath,
-      formatUnusedExportBaseline(actual, KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE),
-      "utf8",
-    );
-    console.log(`[deadcode] Updated unused-export baseline with ${actual.length} entries.`);
-    return;
-  }
-
   const check = checkUnusedExports(result.output);
   if (!check.ok) {
     console.error(check.message);
     process.exitCode = 1;
     return;
   }
-  console.log(`[deadcode] Knip unused-export baseline matched ${actual.length} entries.`);
+  console.log("[deadcode] Knip unused-export check passed with 0 entries.");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

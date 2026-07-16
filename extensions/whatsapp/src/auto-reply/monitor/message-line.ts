@@ -23,7 +23,7 @@ function formatReplyTarget(replyTo: WhatsAppReplyContext | null) {
   return `[Replying to ${sender}${idPart}]\n${replyTo.body}\n[/Replying]`;
 }
 
-export function formatReplyContext(msg: AdmittedWebInboundMessage) {
+function formatReplyContext(msg: AdmittedWebInboundMessage) {
   return formatReplyTarget(getReplyContext(msg));
 }
 

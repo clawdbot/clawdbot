@@ -57,6 +57,7 @@ import {
   assertEnterpriseSlackDmPolicy,
   assertEnterpriseSlackPolicyConfig,
   assertNoEnterpriseSlackBindings,
+  resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
 } from "./enterprise-install.js";
@@ -422,6 +423,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(warn(authIdentityWarning));
   }
 
+  const identityHealth = resolveSlackIdentityHealth({
+    installationIdentity,
+    botUserId,
+    authTestError,
+    authIdentityWarning,
+  });
+
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
     runtime.error?.(
       `slack token mismatch: bot token app_id=${apiAppId} but app token looks like app_id=${expectedApiAppIdFromAppToken}`,
@@ -671,10 +679,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             abortSignal: opts.abortSignal,
             onStarted: () => {
               reconnectAttempts = 0;
-              publishSlackConnectedStatus(opts.setStatus);
+              publishSlackConnectedStatus(opts.setStatus, identityHealth);
               if (!hasLoggedSocketConnected) {
                 hasLoggedSocketConnected = true;
-                runtime.log?.("slack socket mode connected");
+                runtime.log?.(
+                  identityHealth.healthState === "degraded"
+                    ? "slack socket mode connected (degraded identity)"
+                    : "slack socket mode connected",
+                );
               }
             },
           });
@@ -775,3 +787,4 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 }
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

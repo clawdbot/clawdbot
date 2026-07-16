@@ -12,7 +12,6 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
-import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 
@@ -43,6 +42,7 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       });
     }
     if (
+      flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
       !tasks.some((task) => task.taskId === flow.blockedTaskId)
@@ -184,62 +184,24 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
   note(lines.join("\n"), "Plugin version drift");
 }
 
-/** Emits workspace, skills, plugin, and TaskFlow recovery status notes for doctor. */
+/** Emits plugin and TaskFlow recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const skillsReport = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
-  const platformIncompatibleCount = skillsReport.skills.filter(
-    (s) => s.platformIncompatible && !s.disabled && !s.blockedByAllowlist,
-  ).length;
-  note(
-    [
-      `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
-      `Missing requirements: ${
-        skillsReport.skills.filter(
-          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.platformIncompatible,
-        ).length
-      }`,
-      platformIncompatibleCount > 0
-        ? `Incompatible (platform mismatch, auto-skipped): ${platformIncompatibleCount}`
-        : null,
-      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n"),
-    "Skills status",
-  );
-
   const pluginRegistry = buildPluginRegistrySnapshotReport({
     config: cfg,
     workspaceDir,
   });
-  if (pluginRegistry.plugins.length > 0) {
-    const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
-    const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
-    const imported = pluginRegistry.plugins.filter((p) => p.imported);
-
+  const errored = pluginRegistry.plugins
+    .filter((plugin) => plugin.status === "error")
+    .toSorted((a, b) => a.id.localeCompare(b.id));
+  if (errored.length > 0) {
     const lines = [
-      `Loaded: ${loaded.length}`,
-      `Imported: ${imported.length}`,
-      `Disabled: ${disabled.length}`,
       `Errors: ${errored.length}`,
-      errored.length > 0
-        ? `- ${errored
-            .slice(0, 10)
-            .map((p) => p.id)
-            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`
-        : null,
-    ].filter((line): line is string => Boolean(line));
-
-    const bundlePlugins = loaded.filter(
-      (p) => p.format === "bundle" && (p.bundleCapabilities?.length ?? 0) > 0,
-    );
-    if (bundlePlugins.length > 0) {
-      const allCaps = new Set(bundlePlugins.flatMap((p) => p.bundleCapabilities ?? []));
-      lines.push(`Bundle plugins: ${bundlePlugins.length} (${[...allCaps].toSorted().join(", ")})`);
-    }
-
+      `- ${errored
+        .slice(0, 10)
+        .map((plugin) => plugin.id)
+        .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`,
+    ];
     note(lines.join("\n"), "Plugins");
   }
   notePluginVersionDrift(options.pluginVersionDrift);

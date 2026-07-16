@@ -37,11 +37,13 @@ vi.mock("../infra/json-files.js", async (importOriginal) => {
 import {
   detectSessionSnapshotHealthIssues,
   noteSessionSnapshotHealth,
-  resolveSessionSnapshotBundledSkillsDir,
-  scanSessionStoreForStaleRuntimeSnapshotPaths,
   sessionSnapshotIssueToHealthFinding,
   sessionSnapshotIssueToRepairEffect,
 } from "./doctor-session-snapshots.js";
+import {
+  resolveSessionSnapshotBundledSkillsDir,
+  scanSessionStoreForStaleRuntimeSnapshotPaths,
+} from "./doctor-session-snapshots.test-support.js";
 
 function sessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   return {

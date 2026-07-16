@@ -191,7 +191,7 @@ export function registerOnboardCommand(program: Command): void {
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Open inference-gated Crestodian (kept for compatibility)", false)
+    .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
     .option(
       "--accept-risk",
@@ -244,7 +244,7 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.error(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
-              "Run those setup options without --modern, or remove them to open Crestodian.",
+              "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
           defaultRuntime.exit(1);
@@ -261,9 +261,9 @@ export function registerOnboardCommand(program: Command): void {
           defaultRuntime.exit(1);
           return;
         }
-        const { runCrestodianWithInference } =
-          await import("../../commands/crestodian-with-inference.js");
-        await runCrestodianWithInference(
+        const { runSystemAgentWithInference } =
+          await import("../../commands/system-agent-with-inference.js");
+        await runSystemAgentWithInference(
           {
             yes: false,
             json: Boolean(opts.json),

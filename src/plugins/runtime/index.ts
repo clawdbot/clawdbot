@@ -1,3 +1,4 @@
+import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 // Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -240,6 +241,14 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
 function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
   const loadService = () => import("../../agents/worktrees/service.js");
   return {
+    async resolveCheckoutRoot(params) {
+      const { findGitCheckoutRoot } = await import("../../agents/worktrees/git.js");
+      return findGitCheckoutRoot(params.path) ?? undefined;
+    },
+    async hasSelfContainedCheckoutMetadata(params) {
+      const { hasSelfContainedGitMetadata } = await import("../../agents/worktrees/git.js");
+      return await hasSelfContainedGitMetadata(params.path);
+    },
     async create(params) {
       const { managedWorktrees } = await loadService();
       const record = await managedWorktrees.create(params);
@@ -252,7 +261,41 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
     },
     async removeIfLossless(params) {
       const { managedWorktrees } = await loadService();
-      return managedWorktrees.removeIfLosslessByPath(params.path);
+      return managedWorktrees.removeIfLosslessByPath(params.path, {
+        ownerKind: params.ownerKind,
+        ownerId: params.ownerId,
+      });
+    },
+  };
+}
+
+function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["sandbox"] {
+  const resolveWorkspaceAuthority = (
+    params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0],
+  ) =>
+    resolveSandboxWorkspaceAuthority({
+      ...params,
+      sessionEntry: agent.session.getSessionEntry({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }),
+    });
+  return {
+    resolveWorkspaceAuthority,
+    async prepareWorkspaceAuthority(params) {
+      const authority = resolveWorkspaceAuthority(params);
+      if (!authority.sandboxed || authority.confinementError) {
+        return authority;
+      }
+      const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
+      await resolveSandboxContext({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        requireCurrentConfig: true,
+      });
+      return authority;
     },
   };
 }
@@ -264,18 +307,20 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   const tasks = createRuntimeTasks({
     legacyTaskFlow: taskFlow,
   });
+  const agent = createRuntimeAgent();
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
-    agent: createRuntimeAgent(),
+    agent,
     subagent: createLateBindingSubagent(
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
     ),
     nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),

@@ -1683,3 +1683,4 @@ describe("exportTrajectoryBundle", () => {
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

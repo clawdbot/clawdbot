@@ -7,12 +7,16 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
-import { createClaudeSessionNodeHostCommands } from "./session-catalog-node-commands.js";
+import {
+  createClaudeSessionNodeHostCommands,
+  createClaudeSessionNodeInvokePolicies,
+} from "./session-catalog-node-commands.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
+  CLAUDE_TERMINAL_RESUME_COMMAND,
   listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
@@ -21,6 +25,53 @@ import {
 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
+const originalPath = process.env.PATH;
+const nodeHostMocks = vi.hoisted(() => ({
+  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
+  userShellPaths: new Map<string, string>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
+  return {
+    ...actual,
+    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
+    resolveNodeHostExecutable: (
+      command: string,
+      options: {
+        env?: NodeJS.ProcessEnv;
+        pathEnv?: string;
+        includeExtensionless?: boolean;
+        strategy: "direct" | "fallback" | "prefer";
+      },
+    ) => {
+      const env = options.env ?? process.env;
+      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
+      const direct = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      if (direct && options.strategy !== "prefer") {
+        return direct;
+      }
+      const shellPath = nodeHostMocks.userShellPaths.get(command);
+      if (!shellPath) {
+        return direct;
+      }
+      const shellExecutable = actual.resolveNodeHostExecutable(command, {
+        env,
+        pathEnv: shellPath,
+        includeExtensionless: options.includeExtensionless,
+        strategy: "direct",
+      });
+      return shellExecutable
+        ? { executable: shellExecutable.executable, pathEnv: shellPath }
+        : direct;
+    },
+  };
+});
 
 async function createHome(): Promise<string> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-catalog-"));
@@ -89,7 +140,10 @@ function message(
 }
 
 afterEach(async () => {
+  nodeHostMocks.runNodePtyCommand.mockClear();
+  nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
+  process.env.PATH = originalPath;
   await Promise.all(homes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })));
 });
 
@@ -201,9 +255,18 @@ describe("Claude session catalog", () => {
 
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
-    ).resolves.toEqual({
-      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
-    });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: {
+          kind: "claude-cli",
+          ref: {
+            filePath: expect.stringContaining(`${sessionId}.jsonl`),
+          },
+          marker: { offset: expect.any(Number) },
+        },
+      }),
+    );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         spawnedCwd: "/work/source",
@@ -447,9 +510,12 @@ describe("Claude session catalog", () => {
     ]);
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
-    ).resolves.toEqual({
-      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
-    });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: expect.objectContaining({ kind: "claude-cli" }),
+      }),
+    );
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         initialEntry: expect.objectContaining({
@@ -467,24 +533,26 @@ describe("Claude session catalog", () => {
       sessionId: "adopted-node-session",
       entry: { sessionId: "adopted-node-session", updatedAt: 1 },
     }));
+    const commands = [
+      CLAUDE_SESSIONS_LIST_COMMAND,
+      CLAUDE_SESSION_READ_COMMAND,
+      CLAUDE_CLI_NODE_RUN_COMMAND,
+      CLAUDE_TERMINAL_RESUME_COMMAND,
+    ];
+    const authorizedCommands = new Set(
+      createClaudeSessionNodeInvokePolicies().flatMap((policy) => policy.commands),
+    );
+    expect(authorizedCommands).toEqual(new Set(commands));
     const nodes = [
       {
         nodeId: "node-a",
         displayName: "Node A",
         connected: true,
-        commands: [
-          CLAUDE_SESSIONS_LIST_COMMAND,
-          CLAUDE_SESSION_READ_COMMAND,
-          CLAUDE_CLI_NODE_RUN_COMMAND,
-        ],
-        invocableCommands: [
-          CLAUDE_SESSIONS_LIST_COMMAND,
-          CLAUDE_SESSION_READ_COMMAND,
-          CLAUDE_CLI_NODE_RUN_COMMAND,
-        ],
+        commands,
+        invocableCommands: commands.filter((command) => authorizedCommands.has(command)),
       },
     ];
-    const invoke = vi.fn(async ({ command }: { command: string }) => {
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => {
       if (command === CLAUDE_SESSIONS_LIST_COMMAND) {
         return {
           payloadJSON: JSON.stringify({
@@ -533,10 +601,24 @@ describe("Claude session catalog", () => {
     expect(hosts?.[0]?.sessions[0]).toMatchObject({
       threadId,
       canContinue: true,
+      canOpenTerminal: true,
+    });
+    await expect(
+      provider?.openTerminal?.({ hostId: "node:node-a", threadId }),
+    ).resolves.toMatchObject({
+      kind: "node",
+      nodeId: "node-a",
+      command: CLAUDE_TERMINAL_RESUME_COMMAND,
+      cwd: "/work/on-node",
     });
     await expect(provider?.continueSession?.({ hostId: "node:node-a", threadId })).resolves.toEqual(
       {
         sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+        upstream: {
+          kind: "claude-cli",
+          ref: { nodeId: "node-a", threadId },
+          marker: { uuid: "history-1" },
+        },
       },
     );
     expect(createSessionEntry).toHaveBeenCalledWith(
@@ -559,7 +641,25 @@ describe("Claude session catalog", () => {
       }),
     );
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ command: CLAUDE_SESSION_READ_COMMAND }),
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        scopes: ["operator.write"],
+      }),
+    );
+    expect(invoke.mock.calls.every(([request]) => request.scopes?.includes("operator.write"))).toBe(
+      true,
+    );
+
+    nodes[0]!.invocableCommands = [
+      CLAUDE_SESSIONS_LIST_COMMAND,
+      CLAUDE_SESSION_READ_COMMAND,
+      CLAUDE_CLI_NODE_RUN_COMMAND,
+    ];
+    await expect(provider?.list({ hostIds: ["node:node-a"] })).resolves.toMatchObject([
+      { sessions: [{ threadId, canOpenTerminal: false }] },
+    ]);
+    await expect(provider?.openTerminal?.({ hostId: "node:node-a", threadId })).rejects.toThrow(
+      "paired-node Claude terminal is unavailable",
     );
   });
 
@@ -830,18 +930,60 @@ describe("Claude session catalog", () => {
     expect(older.nextCursor).toBeUndefined();
   });
 
-  it("registers read-only node commands only when a Claude store exists", async () => {
+  it("advertises terminal resume only when the store and Claude binary exist", async () => {
     const home = await createHome();
     const commands = createClaudeSessionNodeHostCommands();
     expect(commands.map((command) => command.command)).toEqual([
       CLAUDE_SESSIONS_LIST_COMMAND,
       CLAUDE_SESSION_READ_COMMAND,
+      CLAUDE_TERMINAL_RESUME_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
+    const policy = createClaudeSessionNodeInvokePolicies()[0];
+    expect(policy?.commands).toEqual([
+      CLAUDE_SESSIONS_LIST_COMMAND,
+      CLAUDE_SESSION_READ_COMMAND,
+      CLAUDE_CLI_NODE_RUN_COMMAND,
+      CLAUDE_TERMINAL_RESUME_COMMAND,
+    ]);
+    if (!policy) {
+      throw new Error("expected Claude node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: "listed" }));
+    expect(policy.handle({ command: CLAUDE_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual(
+      { ok: true },
+    );
+    expect(invokeNode).not.toHaveBeenCalled();
+    await expect(
+      policy.handle({ command: CLAUDE_SESSIONS_LIST_COMMAND, invokeNode } as never),
+    ).resolves.toEqual({ ok: true, payload: "listed" });
+    expect(invokeNode).toHaveBeenCalledOnce();
     const availabilityContext = { config: {}, env: { HOME: home } } as never;
     expect(commands.every((command) => command.isAvailable?.(availabilityContext))).toBe(false);
     await fs.mkdir(path.join(home, ".claude", "projects"), { recursive: true });
-    expect(commands.every((command) => command.isAvailable?.(availabilityContext))).toBe(true);
+    expect(
+      commands.slice(0, 2).every((command) => command.isAvailable?.(availabilityContext)),
+    ).toBe(true);
+    expect(commands[2]?.isAvailable?.(availabilityContext)).toBe(false);
+    const binDir = path.join(home, "bin");
+    await fs.mkdir(binDir);
+    await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
+    await fs.chmod(path.join(binDir, "claude"), 0o755);
+    expect(
+      commands[2]?.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } } as never),
+    ).toBe(true);
+
+    const terminalCommand = commands[2];
+    if (!terminalCommand || terminalCommand.duplex !== true) {
+      throw new Error("expected duplex Claude terminal command");
+    }
+    await expect(
+      terminalCommand.handle(JSON.stringify({ threadId: "--bad", cols: 80, rows: 24 }), {
+        signal: new AbortController().signal,
+        emitChunk: async () => {},
+        onInput: () => {},
+      }),
+    ).rejects.toThrow("threadId must be a Claude session id");
 
     const registerSessionCatalog = vi.fn();
     const api = {
@@ -852,6 +994,145 @@ describe("Claude session catalog", () => {
     expect(registerSessionCatalog).toHaveBeenCalledWith(
       expect.objectContaining({ id: "claude", label: "Claude Code" }),
     );
+  });
+
+  it("resolves Claude terminal eligibility and cwd from the node-owned catalog", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const threadId = "node-owned-session";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId: threadId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${threadId}.jsonl`),
+          projectPath: "/node/catalog/cwd",
+          summary: "Node-owned session",
+        },
+      ],
+      transcripts: { [threadId]: [message(threadId, "user", "hello", 1)] },
+    });
+    const binDir = path.join(home, "bin");
+    await fs.mkdir(binDir);
+    const daemonExecutable = path.join(
+      binDir,
+      process.platform === "win32" ? "claude.cmd" : "claude",
+    );
+    await fs.writeFile(
+      daemonExecutable,
+      process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 1\n",
+    );
+    if (process.platform !== "win32") {
+      await fs.chmod(daemonExecutable, 0o755);
+    }
+    process.env.PATH = binDir;
+    const shellBinDir = path.join(home, "shell-bin");
+    await fs.mkdir(shellBinDir);
+    const shellExecutable = path.join(
+      shellBinDir,
+      process.platform === "win32" ? "claude.cmd" : "claude",
+    );
+    await fs.writeFile(
+      shellExecutable,
+      process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n",
+    );
+    if (process.platform !== "win32") {
+      await fs.chmod(shellExecutable, 0o755);
+    }
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const command = createClaudeSessionNodeHostCommands().find(
+      (candidate) => candidate.command === CLAUDE_TERMINAL_RESUME_COMMAND,
+    );
+    if (!command || command.duplex !== true) {
+      throw new Error("expected duplex Claude terminal command");
+    }
+
+    await command.handle(JSON.stringify({ threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }), {
+      signal: new AbortController().signal,
+      emitChunk: async () => {},
+      onInput: () => {},
+    });
+
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: shellExecutable,
+        cwd: "/node/catalog/cwd",
+        pathEnv: shellBinDir,
+      }),
+      expect.any(Object),
+    );
+    await expect(
+      command.handle(JSON.stringify({ threadId: "missing", cols: 80, rows: 24 }), {
+        signal: new AbortController().signal,
+        emitChunk: async () => {},
+        onInput: () => {},
+      }),
+    ).rejects.toThrow("Claude session cannot be resumed in a terminal");
+  });
+
+  it("prefers the login-shell Claude binary for local terminal capability and plans", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-session-1";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: home,
+          summary: "Resume session",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
+    });
+    const daemonBinDir = path.join(home, "daemon-bin");
+    const shellBinDir = path.join(home, "shell-bin");
+    await fs.mkdir(daemonBinDir);
+    await fs.mkdir(shellBinDir);
+    const daemonExecutable = path.join(
+      daemonBinDir,
+      process.platform === "win32" ? "claude.cmd" : "claude",
+    );
+    await fs.writeFile(
+      daemonExecutable,
+      process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 1\n",
+    );
+    if (process.platform !== "win32") {
+      await fs.chmod(daemonExecutable, 0o755);
+    }
+    process.env.PATH = daemonBinDir;
+    let provider: SessionCatalogProvider | undefined;
+    registerClaudeSessionCatalog({
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        nodes: { list: async () => ({ nodes: [] }) },
+        agent: { session: { listSessionEntries: () => [] } },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi);
+
+    await fs.writeFile(path.join(shellBinDir, "claude"), "#!/bin/sh\n");
+    await fs.chmod(path.join(shellBinDir, "claude"), 0o755);
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    await expect(provider?.list({})).resolves.toMatchObject([
+      { sessions: [{ threadId: sessionId, canOpenTerminal: true }] },
+    ]);
+    await expect(
+      provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).resolves.toMatchObject({
+      kind: "local",
+      argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
+      cwd: home,
+      pathEnv: shellBinDir,
+    });
+    await expect(
+      provider?.openTerminal?.({ hostId: "gateway:local", threadId: "missing" }),
+    ).rejects.toThrow("Claude session is unavailable");
   });
 
   it("keeps one failed node isolated from healthy hosts", async () => {
@@ -889,6 +1170,29 @@ describe("Claude session catalog", () => {
     expect(result.hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
+    ]);
+  });
+
+  it("keeps the underlying paired-node list failure", async () => {
+    const runtime = {
+      nodes: {
+        list: vi.fn().mockRejectedValue(new Error("paired store is unreadable")),
+      },
+    } as unknown as PluginRuntime;
+
+    const result = await listClaudeSessionCatalog({
+      runtime,
+      query: { hostIds: ["node:registry"] },
+    });
+
+    expect(result.hosts).toEqual([
+      expect.objectContaining({
+        hostId: "node:registry",
+        error: {
+          code: "NODE_LIST_FAILED",
+          message: "Paired nodes could not be listed: paired store is unreadable",
+        },
+      }),
     ]);
   });
 
@@ -931,3 +1235,4 @@ describe("Claude session catalog", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

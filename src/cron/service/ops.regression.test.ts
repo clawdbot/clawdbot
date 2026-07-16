@@ -26,7 +26,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { enqueueRun, remove, run, start } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
-import { onTimer } from "./timer.js";
+import { onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
 const opsRegressionFixtures = setupCronRegressionFixtures({

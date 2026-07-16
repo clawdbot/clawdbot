@@ -10,6 +10,8 @@ import {
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
+const NGROK_ERROR_MARKER = "ERR_NGROK";
+const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 
 function listenForChildStreamErrors(
@@ -60,7 +62,7 @@ export interface TunnelResult {
  * console.log('Public URL:', tunnel.publicUrl);
  * // Later: await tunnel.stop();
  */
-export async function startNgrokTunnel(config: {
+async function startNgrokTunnel(config: {
   port: number;
   path: string;
   authToken?: string;
@@ -88,6 +90,9 @@ export async function startNgrokTunnel(config: {
     let closed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
+    // Keep only enough UTF-16-safe suffix to recognize an error marker split
+    // at the next stream chunk boundary; otherwise the caller loses the code.
+    let stderrTail = "";
 
     const timeout = setTimeout(() => {
       if (!resolved) {
@@ -185,16 +190,16 @@ export async function startNgrokTunnel(config: {
       }
     });
     proc.stderr.on("data", (data: Buffer) => {
-      const msg = data.toString();
-      // Check for common errors
-      if (msg.includes("ERR_NGROK")) {
+      const combined = stderrTail + data.toString();
+      if (combined.includes(NGROK_ERROR_MARKER)) {
         rejectIfPending(
           `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), msg),
+            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
           )}`,
           true,
         );
       }
+      stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });
     listenForChildStreamErrors(proc, (stream, error) => {
       rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
@@ -240,7 +245,7 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 /**
  * Start a Tailscale serve/funnel tunnel.
  */
-export async function startTailscaleTunnel(config: {
+async function startTailscaleTunnel(config: {
   mode: "serve" | "funnel";
   port: number;
   path: string;

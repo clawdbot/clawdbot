@@ -240,7 +240,7 @@ function hasAuthProfileTypeForProvider(params: {
 }
 
 /** Returns whether a provider has direct API-key-capable auth for model-backed tools. */
-export function hasDirectProviderApiKeyAuthForTool(params: {
+function hasDirectProviderApiKeyAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -270,6 +270,12 @@ export function hasDirectProviderApiKeyAuthForTool(params: {
     authStore: params.authStore,
     type: "api_key",
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelConfigHelpersTestApi")] = {
+    hasDirectProviderApiKeyAuthForTool,
+  };
 }
 
 function hasCanonicalOpenAiCodexAuthSignal(params: {

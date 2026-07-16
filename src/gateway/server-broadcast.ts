@@ -12,6 +12,9 @@ import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
+  GatewayBufferedAmountFn,
+  GatewayPluginEventBroadcastFn,
+  GatewayPluginEventScope,
 } from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -32,6 +35,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   heartbeat: [],
   "plugin.approval.requested": [APPROVALS_SCOPE],
   "plugin.approval.resolved": [APPROVALS_SCOPE],
+  "openclaw.approval.requested": [APPROVALS_SCOPE],
+  "openclaw.approval.resolved": [APPROVALS_SCOPE],
   presence: [],
   shutdown: [],
   tick: [],
@@ -72,9 +77,25 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
-function hasEventScope(client: GatewayWsClient, event: string): boolean {
+function hasEventScope(
+  client: GatewayWsClient,
+  event: string,
+  explicitPluginScope?: GatewayPluginEventScope,
+): boolean {
   if (client.connectionKind === "worker") {
     return false;
+  }
+  if (explicitPluginScope) {
+    if ((client.connect.role ?? "operator") !== "operator") {
+      return false;
+    }
+    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
+    if (scopes.includes(ADMIN_SCOPE)) {
+      return true;
+    }
+    return explicitPluginScope === READ_SCOPE
+      ? scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : explicitPluginScope === WRITE_SCOPE && scopes.includes(WRITE_SCOPE);
   }
   const required = EVENT_SCOPE_GUARDS[event];
   // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
@@ -117,6 +138,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     payload: unknown,
     opts?: GatewayBroadcastOpts,
     targetConnIds?: ReadonlySet<string>,
+    explicitPluginScope?: GatewayPluginEventScope,
   ) => {
     if (params.clients.size === 0) {
       return;
@@ -161,7 +183,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
       }
-      if (!hasEventScope(c, event)) {
+      if (!hasEventScope(c, event, explicitPluginScope)) {
         continue;
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
@@ -216,5 +238,24 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
     broadcastInternal(event, payload, opts, connIds);
   };
 
-  return { broadcast, broadcastToConnIds };
+  const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
+    for (const client of params.clients) {
+      if (client.connId === connId) {
+        return client.socket.bufferedAmount;
+      }
+    }
+    return undefined;
+  };
+
+  const broadcastPluginEvent: GatewayPluginEventBroadcastFn = (event, payload, scope) => {
+    if (!event.startsWith("plugin.") || event.startsWith("plugin.approval.")) {
+      throw new Error(`invalid plugin gateway event: ${event}`);
+    }
+    if (scope !== READ_SCOPE && scope !== WRITE_SCOPE && scope !== ADMIN_SCOPE) {
+      throw new Error("invalid plugin gateway event scope");
+    }
+    broadcastInternal(event, payload, undefined, undefined, scope);
+  };
+
+  return { broadcast, broadcastToConnIds, broadcastPluginEvent, getBufferedAmount };
 }

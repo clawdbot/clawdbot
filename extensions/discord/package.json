@@ -8,6 +8,7 @@
   },
   "type": "module",
   "dependencies": {
+    "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
     "discord-api-types": "0.38.49",
     "libopus-wasm": "0.2.0",
@@ -71,7 +72,16 @@
       "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.7.2",
+      "staticAssets": [
+        {
+          "source": "./assets/embedded-app-sdk.mjs",
+          "output": "assets/embedded-app-sdk.mjs"
+        }
+      ]
+    },
+    "assetScripts": {
+      "build": "node ../../scripts/build-discord-activity-sdk.mjs"
     },
     "release": {
       "publishToClawHub": true,

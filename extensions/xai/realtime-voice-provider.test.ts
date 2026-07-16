@@ -1748,3 +1748,4 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(session.tool_choice).toBe("auto");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

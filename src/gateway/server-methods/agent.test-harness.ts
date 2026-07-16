@@ -7,13 +7,15 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.js";
+} from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { agentHandlers } from "./agent.js";
 import { suspendHandlers } from "./suspend.js";
@@ -437,20 +439,22 @@ export async function flushScheduledDispatchStep() {
   await Promise.resolve();
 }
 
-export async function waitForAcceptedRunDispatch(respond: ReturnType<typeof vi.fn>) {
+export async function waitForAcceptedRunDispatch(params: {
+  respond: ReturnType<typeof vi.fn>;
+  commandCallCount: number;
+}) {
+  const { respond } = params;
   const accepted = respond.mock.calls.some(([ok, payload]) => {
     return ok === true && (payload as { status?: string } | undefined)?.status === "accepted";
   });
   if (!accepted) {
     return;
   }
-
-  const commandCallCount = mocks.agentCommand.mock.calls.length;
   const respondCallCount = respond.mock.calls.length;
   for (let attempt = 0; attempt < 50; attempt++) {
     await flushScheduledDispatchStep();
     if (
-      mocks.agentCommand.mock.calls.length > commandCallCount ||
+      mocks.agentCommand.mock.calls.length > params.commandCallCount ||
       respond.mock.calls.length > respondCallCount
     ) {
       return;
@@ -863,6 +867,7 @@ export async function invokeAgent(
   },
 ) {
   const respond = options?.respond ?? vi.fn();
+  const commandCallCount = mocks.agentCommand.mock.calls.length;
   // Most cases only need to cross the accepted-ack timer; keep tests that own
   // timer semantics on their explicit clock while avoiding a real sleep here.
   const ownsDispatchTimers = options?.flushDispatch !== false && !vi.isFakeTimers();
@@ -882,7 +887,7 @@ export async function invokeAgent(
       },
     );
     if (options?.flushDispatch !== false) {
-      await waitForAcceptedRunDispatch(respond);
+      await waitForAcceptedRunDispatch({ respond, commandCallCount });
     }
   } finally {
     if (ownsDispatchTimers) {
@@ -1003,3 +1008,4 @@ export function prime(sessionId = "existing-session-id", cfg: Record<string, unk
   mockMainSessionEntry({ sessionId }, cfg);
   mocks.updateSessionStore.mockResolvedValue(undefined);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

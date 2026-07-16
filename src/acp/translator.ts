@@ -85,8 +85,6 @@ import {
   buildSessionMetadata,
   buildSessionPresentation,
   buildSessionUsageSnapshot,
-  normalizeClientCapabilities,
-  type ClientCapabilityState,
   type GatewaySessionPresentationRow,
   type SessionSnapshot,
 } from "./translator.presentation.js";
@@ -134,11 +132,6 @@ const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientproto
 async function getAvailableCommandsForAcp() {
   const { getAvailableCommands } = await loadAcpCommandsModule();
   return getAvailableCommands();
-}
-
-async function getAcpProtocolVersion() {
-  const { PROTOCOL_VERSION } = await loadAcpSdkModule();
-  return PROTOCOL_VERSION;
 }
 
 type DisconnectContext = {
@@ -257,8 +250,6 @@ export class AcpGatewayAgent implements Agent {
   private pendingPrompts = new Map<string, PendingPrompt>();
   private settlingPromptKeys = new Set<string>();
   private approvalRelays = new Map<string, PendingApprovalRelay>();
-  private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
-  private clientInfo: InitializeRequest["clientInfo"] = null;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
@@ -315,22 +306,6 @@ export class AcpGatewayAgent implements Agent {
     this.clearDisconnectTimer();
   }
 
-  supportsClientReadTextFile(): boolean {
-    return this.clientCapabilities.readTextFile;
-  }
-
-  supportsClientWriteTextFile(): boolean {
-    return this.clientCapabilities.writeTextFile;
-  }
-
-  supportsClientTerminal(): boolean {
-    return this.clientCapabilities.terminal;
-  }
-
-  getClientInfo(): InitializeRequest["clientInfo"] {
-    return this.clientInfo;
-  }
-
   handleGatewayReconnect(): void {
     this.log("gateway reconnected");
     const disconnectContext = this.activeDisconnectContext;
@@ -372,11 +347,9 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
-    this.clientCapabilities = normalizeClientCapabilities(params.clientCapabilities);
-    this.clientInfo = params.clientInfo ?? null;
+  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     return {
-      protocolVersion: await getAcpProtocolVersion(),
+      protocolVersion: (await loadAcpSdkModule()).PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: {
@@ -1781,3 +1754,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -61,7 +61,7 @@ async function offerLiveModelVerification(params: {
     return params.config;
   }
 
-  const { verifySetupInference } = await import("../crestodian/setup-inference.js");
+  const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const verify = async () => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const result = await withConsoleSubsystemsSuppressed(() =>

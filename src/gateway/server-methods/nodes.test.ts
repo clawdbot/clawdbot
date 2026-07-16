@@ -13,7 +13,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
-import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.js";
+import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

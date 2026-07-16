@@ -849,6 +849,19 @@ describe("validateWakeParams", () => {
 });
 
 describe("validateChatEvent", () => {
+  it("accepts an explicitly yielded final turn", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-yielded",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts v4 chat delta text and replacement markers", () => {
     expect(
       validateChatEvent({
@@ -938,6 +951,19 @@ describe("validateChatSendParams", () => {
     ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
+  });
+
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
   });
 });
 

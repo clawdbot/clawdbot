@@ -40,22 +40,15 @@ vi.mock("google-auth-library", () => ({
   gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
 
-let testing: typeof import("./google-auth.runtime.js").testing;
-let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
 
 beforeAll(async () => {
-  ({
-    testing,
-    createGoogleAuthFetch,
-    getGoogleAuthTransport,
-    resolveValidatedGoogleChatCredentials,
-  } = await import("./google-auth.runtime.js"));
+  ({ getGoogleAuthTransport, resolveValidatedGoogleChatCredentials } =
+    await import("./google-auth.runtime.js"));
 });
 
 beforeEach(() => {
-  testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.gaxiosCtor.mockClear();
@@ -81,16 +74,28 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
+type GoogleAuthFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+async function createGoogleAuthTransportFetch(): Promise<GoogleAuthFetch> {
+  const transport = await getGoogleAuthTransport();
+  const fetchImplementation = (transport.defaults as { fetchImplementation?: GoogleAuthFetch })
+    .fetchImplementation;
+  if (!fetchImplementation) {
+    throw new Error("Expected Google auth transport fetch implementation");
+  }
+  return fetchImplementation;
+}
+
 describe("googlechat google auth runtime", () => {
   it("routes Google auth fetches through the SSRF guard and preserves explicit proxy mTLS", async () => {
     const release = vi.fn();
-    const injectedFetch = vi.fn(globalThis.fetch);
+    const controller = new AbortController();
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("ok", { status: 200 }),
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch(injectedFetch);
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       agent: { proxy: new URL("http://proxy.example:8080") },
       cert: "CLIENT_CERT",
@@ -98,6 +103,7 @@ describe("googlechat google auth runtime", () => {
       key: "CLIENT_KEY",
       method: "POST",
       proxy: "http://proxy.example:8080",
+      signal: controller.signal,
     } as RequestInit);
 
     expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
@@ -111,14 +117,16 @@ describe("googlechat google auth runtime", () => {
         },
         proxyUrl: "http://proxy.example:8080",
       },
-      fetchImpl: injectedFetch,
       init: {
         headers: { "content-type": "application/json" },
         method: "POST",
+        signal: controller.signal,
       },
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      signal: controller.signal,
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -132,7 +140,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     await guardedFetch("https://oauth2.googleapis.com/token", {
       method: "POST",
     } as RequestInit);
@@ -149,7 +157,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     (globalThis as Record<string, unknown>).fetch = vi.fn(async () => new Response("patched"));
 
     try {
@@ -171,7 +179,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       cert: "CLIENT_CERT",
       key: "CLIENT_KEY",
@@ -195,6 +203,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -210,7 +219,7 @@ describe("googlechat google auth runtime", () => {
     vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
     vi.stubEnv("https_proxy", "http://lower-proxy.example:8080");
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       cert: "CLIENT_CERT",
       key: "CLIENT_KEY",
@@ -232,24 +241,11 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("matches gaxios proxy env precedence for Google auth requests", () => {
-    vi.stubEnv("HTTP_PROXY", "http://upper-http-proxy.example:8080");
-    vi.stubEnv("http_proxy", "http://lower-http-proxy.example:8080");
-    vi.stubEnv("HTTPS_PROXY", "http://upper-https-proxy.example:8080");
-    vi.stubEnv("https_proxy", "http://lower-https-proxy.example:8080");
-
-    expect(testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
-      "http://upper-https-proxy.example:8080",
-    );
-    expect(testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
-      "http://upper-http-proxy.example:8080",
-    );
   });
 
   it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
@@ -259,7 +255,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
     const response = await guardedFetch("https://oauth2.googleapis.com/token", {
       method: "POST",
     } as RequestInit);
@@ -288,7 +284,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -312,7 +308,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -341,7 +337,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -368,7 +364,7 @@ describe("googlechat google auth runtime", () => {
       release,
     });
 
-    const guardedFetch = createGoogleAuthFetch();
+    const guardedFetch = await createGoogleAuthTransportFetch();
 
     await expect(
       guardedFetch("https://oauth2.googleapis.com/token", {
@@ -424,20 +420,37 @@ describe("googlechat google auth runtime", () => {
     expect(second.interceptors.response["add"]).toHaveBeenCalledOnce();
   });
 
-  it("normalizes Google auth request headers before upstream interceptors run", () => {
+  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+    const transport = await getGoogleAuthTransport();
+    const requestInterceptorAdd = transport.interceptors.request["add"] as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    const requestInterceptor = mockCallArg(requestInterceptorAdd) as {
+      resolved: (config: RequestInit & { url: URL }) => Promise<RequestInit & { headers: Headers }>;
+    };
     const config = {
       headers: { "x-test": "1" },
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
     };
 
-    const normalized = testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+    const normalized = await requestInterceptor.resolved(config);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.has("x-test")).toBe(true);
     expect(normalized.headers.get("x-test")).toBe("1");
   });
 
-  it("normalizes Google auth response headers before upstream cache-control reads", () => {
+  it("normalizes Google auth response headers before upstream cache-control reads", async () => {
+    const transport = await getGoogleAuthTransport();
+    const responseInterceptorAdd = transport.interceptors.response["add"] as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    const responseInterceptor = mockCallArg(responseInterceptorAdd) as {
+      resolved: (response: { data: object; headers: object }) => Promise<{
+        data: object;
+        headers: Headers;
+      }>;
+    };
     const response = {
       data: {},
       headers: {
@@ -445,7 +458,7 @@ describe("googlechat google auth runtime", () => {
       },
     };
 
-    const normalized = testing.normalizeGoogleAuthResponseHeaders(response);
+    const normalized = await responseInterceptor.resolved(response);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");

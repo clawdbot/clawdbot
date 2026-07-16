@@ -91,19 +91,13 @@ export async function convertSilkToWav(
   }
 
   const strippedBuf = stripAmrHeader(fileBuf);
-  const rawData = new Uint8Array(
-    strippedBuf.buffer,
-    strippedBuf.byteOffset,
-    strippedBuf.byteLength,
-  );
-
   const silk = await loadSilkWasm();
-  if (!silk || !silk.isSilk(rawData)) {
+  if (!silk || !silk.isSilk(strippedBuf)) {
     return null;
   }
 
   const sampleRate = 24000;
-  const result = await silk.decode(rawData, sampleRate);
+  const result = await silk.decode(strippedBuf, sampleRate);
   const wavBuffer = pcmToWav(result.data, sampleRate);
 
   const dir = outputDir || path.dirname(inputPath);
@@ -217,25 +211,9 @@ export async function audioFileToSilkBase64(
     return buf.toString("base64");
   }
 
-  if ([".slk", ".slac"].includes(ext)) {
-    const stripped = stripAmrHeader(buf);
-    const raw = new Uint8Array(stripped.buffer, stripped.byteOffset, stripped.byteLength);
-    const silk = await loadSilkWasm();
-    if (silk?.isSilk(raw)) {
-      debugLog(`[audio-convert] SILK file, direct use: ${filePath} (${buf.length} bytes)`);
-      return buf.toString("base64");
-    }
-  }
-
-  const rawCheck = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  const strippedCheck = stripAmrHeader(buf);
-  const strippedRaw = new Uint8Array(
-    strippedCheck.buffer,
-    strippedCheck.byteOffset,
-    strippedCheck.byteLength,
-  );
-  const silkForCheck = await loadSilkWasm();
-  if (silkForCheck?.isSilk(rawCheck) || silkForCheck?.isSilk(strippedRaw)) {
+  const stripped = stripAmrHeader(buf);
+  const silk = await loadSilkWasm();
+  if (silk?.isSilk(buf) || silk?.isSilk(stripped)) {
     debugLog(`[audio-convert] SILK detected by header: ${filePath} (${buf.length} bytes)`);
     return buf.toString("base64");
   }
@@ -245,15 +223,14 @@ export async function audioFileToSilkBase64(
   debugLog(`[audio-convert] fallback: trying WASM decoders for ${ext}`);
 
   if (ext === ".pcm") {
-    const pcmBuf = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-    const { silkBuffer } = await pcmToSilk(pcmBuf, targetRate);
+    const silkBuffer = await pcmToSilk(buf, targetRate);
     return silkBuffer.toString("base64");
   }
 
   if (ext === ".wav" || (buf.length >= 4 && buf.toString("ascii", 0, 4) === "RIFF")) {
     const wavInfo = parseWavFallback(buf);
     if (wavInfo) {
-      const { silkBuffer } = await pcmToSilk(wavInfo, targetRate);
+      const silkBuffer = await pcmToSilk(wavInfo, targetRate);
       return silkBuffer.toString("base64");
     }
   }
@@ -261,7 +238,7 @@ export async function audioFileToSilkBase64(
   if (ext === ".mp3" || ext === ".mpeg") {
     const pcmBuf = await wasmDecodeMp3ToPCM(buf, targetRate);
     if (pcmBuf) {
-      const { silkBuffer } = await pcmToSilk(pcmBuf, targetRate);
+      const silkBuffer = await pcmToSilk(pcmBuf, targetRate);
       debugLog(`[audio-convert] WASM: MP3 → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     }
@@ -356,20 +333,13 @@ export async function waitForFile(
 }
 
 /** Encode PCM s16le data into SILK format. */
-async function pcmToSilk(
-  pcmBuffer: Buffer,
-  sampleRate: number,
-): Promise<{ silkBuffer: Buffer; duration: number }> {
+async function pcmToSilk(pcmBuffer: Buffer, sampleRate: number): Promise<Buffer> {
   const silk = await loadSilkWasm();
   if (!silk) {
     throw new Error("silk-wasm is not available; cannot encode PCM to SILK");
   }
-  const pcmData = new Uint8Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength);
-  const result = await silk.encode(pcmData, sampleRate);
-  return {
-    silkBuffer: Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength),
-    duration: result.duration,
-  };
+  const result = await silk.encode(pcmBuffer, sampleRate);
+  return Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength);
 }
 
 /** Decode MP3 to PCM via mpg123-decoder WASM. */

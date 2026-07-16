@@ -480,7 +480,6 @@ vi.mock("./inbound/runtime-api.js", () => ({
 vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
-  finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
@@ -510,7 +509,6 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   },
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
-  finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: formatInboundEnvelopeMock,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   isControlCommandMessage: () => false,

@@ -40,7 +40,6 @@ export {
   maybeDeliverTaskTerminalUpdate,
   recordTaskProgressByRunId,
   resolveTaskForLookupToken,
-  resetTaskRegistryForTests,
   isParentFlowLinkError,
   setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,

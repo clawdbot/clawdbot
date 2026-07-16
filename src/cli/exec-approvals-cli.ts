@@ -908,3 +908,4 @@ export const testing = {
   formatCliError,
   readStdin,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

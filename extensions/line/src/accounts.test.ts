@@ -2,14 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveLineAccount,
-  resolveDefaultLineAccountId,
-  normalizeAccountId,
-  DEFAULT_ACCOUNT_ID,
-} from "./accounts.js";
+import { resolveLineAccount, resolveDefaultLineAccountId, normalizeAccountId } from "./accounts.js";
 
 describe("LINE accounts", () => {
   const tempDirs: string[] = [];

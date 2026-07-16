@@ -1,7 +1,24 @@
 // Sms tests cover accounts plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { listSmsAccountIds, resolveSmsAccount } from "./accounts.js";
-import { SmsConfigSchema } from "./config-schema.js";
+import { SmsChannelConfigSchema } from "./config-schema.js";
+import type { SmsChannelConfig } from "./types.js";
+
+const smsRuntimeConfigSchema = (() => {
+  const schema = SmsChannelConfigSchema.runtime;
+  if (!schema) {
+    throw new Error("expected SMS runtime config schema");
+  }
+  return schema;
+})();
+
+function parseSmsConfig(value: unknown): SmsChannelConfig {
+  const parsed = smsRuntimeConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(parsed.issues.map((issue) => issue.message).join("; "));
+  }
+  return parsed.data as SmsChannelConfig;
+}
 
 const ENV_KEYS = [
   "TWILIO_ACCOUNT_SID",
@@ -94,7 +111,7 @@ describe("SMS account config", () => {
       },
     };
 
-    expect(SmsConfigSchema.parse(cfg.channels.sms).allowFrom).toEqual([1_555_333_4444]);
+    expect(parseSmsConfig(cfg.channels.sms).allowFrom).toEqual([1_555_333_4444]);
     expect(resolveSmsAccount(cfg)).toMatchObject({
       allowFrom: ["+15553334444"],
     });
@@ -189,7 +206,7 @@ describe("SMS account config", () => {
   });
 
   it("coerces numeric allowFrom entries accepted by the config schema", () => {
-    const parsed = SmsConfigSchema.parse({
+    const parsed = parseSmsConfig({
       accountSid: "AC123",
       authToken: "token",
       fromNumber: "+15550001111",
@@ -242,7 +259,7 @@ describe("SMS account config", () => {
 
   it("accepts secret references for Twilio auth tokens", () => {
     expect(() =>
-      SmsConfigSchema.parse({
+      parseSmsConfig({
         accountSid: "AC123",
         authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
         fromNumber: "+15550001111",

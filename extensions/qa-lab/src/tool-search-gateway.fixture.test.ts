@@ -276,6 +276,7 @@ describe("tool search gateway e2e lane result", () => {
         workspaceDir: tempRoot,
       },
       mock: { baseUrl: "http://mock-openai.test" },
+      outputDir: path.join(tempRoot, "output"),
       primaryModel: "openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       repoRoot: tempRoot,

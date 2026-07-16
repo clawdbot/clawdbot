@@ -1212,3 +1212,4 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

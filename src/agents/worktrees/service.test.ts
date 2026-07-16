@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,10 +36,14 @@ async function gitWithInput(cwd: string, args: string[], input: string): Promise
   });
 }
 
-async function initializeRepository(root: string, name = "repo"): Promise<string> {
+async function initializeRepository(
+  root: string,
+  gitTemplate: string,
+  name = "repo",
+): Promise<string> {
   const repo = path.join(root, name);
   await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
+  await git(repo, "init", "-b", "main", `--template=${gitTemplate}`);
   await git(repo, "config", "user.name", "OpenClaw Test");
   await git(repo, "config", "user.email", "openclaw-test@example.invalid");
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
@@ -59,6 +64,7 @@ async function addRemote(root: string, repo: string): Promise<string> {
 describe("ManagedWorktreeService", () => {
   let templateRoot: string;
   let templateRepo: string;
+  let gitTemplate: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
@@ -68,7 +74,11 @@ describe("ManagedWorktreeService", () => {
   beforeAll(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
-    templateRepo = await initializeRepository(templateRoot);
+    gitTemplate = path.join(templateRoot, "git-template");
+    // Keep the hooks directory expected by hook-safety coverage without copying
+    // the host's sample hooks into every per-test repository.
+    await fs.mkdir(path.join(gitTemplate, "hooks"), { recursive: true });
+    templateRepo = await initializeRepository(templateRoot, gitTemplate);
   });
 
   afterAll(async () => {
@@ -79,7 +89,10 @@ describe("ManagedWorktreeService", () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-"));
     repo = path.join(root, "repo");
-    await fs.cp(templateRepo, repo, { recursive: true });
+    await fs.cp(templateRepo, repo, {
+      mode: fsConstants.COPYFILE_FICLONE,
+      recursive: true,
+    });
     repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     now = 1_700_000_000_000;
@@ -101,6 +114,23 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
+  });
+
+  it("does not remove a worktree owned by another caller", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "session-owned",
+      ownerKind: "session",
+      ownerId: "session-1",
+    });
+
+    await expect(
+      service.removeIfLosslessByPath(created.path, {
+        ownerKind: "workboard",
+        ownerId: "card-1",
+      }),
+    ).resolves.toBe(false);
+    await expect(fs.stat(created.path)).resolves.toBeDefined();
   });
 
   it("lists repository branches default-first with deterministic ordering", async () => {
@@ -436,6 +466,27 @@ describe("ManagedWorktreeService", () => {
     ).toEqual([repo, created.path, ""]);
   });
 
+  it("does not execute repository hooks or setup scripts when setup is disabled", async () => {
+    const hookMarker = path.join(root, "checkout-hook-ran");
+    const setupMarker = path.join(root, "setup-script-ran");
+    await fs.writeFile(
+      path.join(repo, ".git", "hooks", "post-checkout"),
+      `#!/bin/sh\nprintf ran > "${hookMarker}"\n`,
+      { mode: 0o755 },
+    );
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\nprintf ran > "${setupMarker}"\n`,
+      { mode: 0o755 },
+    );
+
+    await service.create({ repoRoot: repo, name: "no-repo-code", runSetupScript: false });
+
+    await expect(fs.access(hookMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(setupMarker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("removes the worktree and branch when setup fails", async () => {
     await fs.mkdir(path.join(repo, ".openclaw"));
     const script = path.join(repo, ".openclaw", "worktree-setup.sh");
@@ -509,7 +560,7 @@ describe("ManagedWorktreeService", () => {
 
   it("fails closed when a nested repository cannot be captured in full", async () => {
     const created = await service.create({ repoRoot: repo, name: "nested-repository" });
-    const nested = await initializeRepository(created.path, "nested");
+    const nested = await initializeRepository(created.path, gitTemplate, "nested");
     await fs.writeFile(path.join(nested, "untracked-secret.txt"), "do not lose\n");
 
     await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(
@@ -599,15 +650,15 @@ describe("ManagedWorktreeService", () => {
       ownerId: "agent:main:inactive",
     });
     now += IDLE_GC_MS + 1;
-    const isOwnerActive = vi.fn(
+    const shouldProtectOwner = vi.fn(
       (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
     );
 
-    const result = await service.gc({ isOwnerActive });
+    const result = await service.gc({ shouldProtectOwner });
 
     expect(result.removed).toEqual([inactive.id]);
-    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:active");
-    expect(isOwnerActive).toHaveBeenCalledWith("session", "agent:main:inactive");
+    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:active");
+    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:inactive");
     expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
   });
@@ -637,7 +688,7 @@ describe("ManagedWorktreeService", () => {
       name: "nested-idle",
       ownerKind: "workboard",
     });
-    await initializeRepository(nestedRecord.path, "nested");
+    await initializeRepository(nestedRecord.path, gitTemplate, "nested");
     now += IDLE_GC_MS + 1;
 
     const result = await service.gc();
@@ -648,7 +699,7 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeRepository(root, "other-repo");
+    const otherRepo = await initializeRepository(root, gitTemplate, "other-repo");
     const removable = await service.create({
       repoRoot: otherRepo,
       name: "other-removable",
@@ -730,11 +781,11 @@ describe("ManagedWorktreeService", () => {
       ownerKind: "session",
       ownerId: "agent:main:idle",
     });
-    const isOwnerActive = vi.fn(
+    const shouldProtectOwner = vi.fn(
       (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
     );
 
-    const result = await service.gc({ limits: { maxCount: 1 }, isOwnerActive });
+    const result = await service.gc({ limits: { maxCount: 1 }, shouldProtectOwner });
 
     expect(result.removed).toEqual([idle.id]);
     expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();

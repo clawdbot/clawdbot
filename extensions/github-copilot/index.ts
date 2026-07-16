@@ -9,6 +9,7 @@ import {
   type UnifiedModelCatalogEntry,
   type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   applyAuthProfileConfig,
   coerceSecretRef,
@@ -29,6 +30,12 @@ import {
   sanitizeGithubCopilotReplayHistory,
 } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
+import {
+  COPILOT_TOKEN_CACHE_MAX_ENTRIES,
+  COPILOT_TOKEN_CACHE_NAMESPACE,
+  type CachedCopilotToken,
+} from "./token-cache.js";
+import { configureCopilotTokenCacheStore } from "./token.js";
 
 const COPILOT_ENV_VARS: [string, string, string] = [
   "COPILOT_GITHUB_TOKEN",
@@ -334,6 +341,16 @@ export default definePluginEntry({
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
+    let tokenCacheStore: PluginStateSyncKeyedStore<CachedCopilotToken> | undefined;
+    const openTokenCacheStore = () => {
+      tokenCacheStore ??= api.runtime.state.openSyncKeyedStore<CachedCopilotToken>({
+        namespace: COPILOT_TOKEN_CACHE_NAMESPACE,
+        maxEntries: COPILOT_TOKEN_CACHE_MAX_ENTRIES,
+        overflowPolicy: "evict-oldest",
+      });
+      return tokenCacheStore;
+    };
+    configureCopilotTokenCacheStore(openTokenCacheStore);
 
     function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
       const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");

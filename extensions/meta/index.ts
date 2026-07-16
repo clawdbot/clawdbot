@@ -2,7 +2,7 @@
  * Meta provider plugin entrypoint.
  */
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyMetaConfig, META_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMetaProvider } from "./provider-catalog.js";
 import { wrapMetaProviderStream } from "./stream.js";
@@ -40,7 +40,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMetaProvider,
       buildStaticProvider: buildMetaProvider,
     },
-    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapMetaProviderStream,
     resolveThinkingProfile: ({ modelId }) => resolveMetaThinkingProfile(modelId),
   },

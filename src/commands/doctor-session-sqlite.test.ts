@@ -19,6 +19,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
+  resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -138,6 +139,131 @@ describe("runDoctorSessionSqlite", () => {
       });
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a dormant historical agent database before all-agent import compaction", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const agentIds = ["dormant", "current"] as const;
+    for (const agentId of agentIds) {
+      const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+    }
+    const dormantPath = createHistoricalV1AgentDatabase({ agentId: "dormant", env });
+    const currentPath = openOpenClawAgentDatabase({ agentId: "current", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const currentBefore = new sqlite.DatabaseSync(currentPath);
+    const currentUpdatedAt = expectDefined(
+      currentBefore
+        .prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'")
+        .get() as { updated_at?: number } | undefined,
+      "current schema metadata",
+    ).updated_at;
+    currentBefore.close();
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: agentIds.map((id) => ({ id })) } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 0,
+      issues: 0,
+      targets: 2,
+    });
+    expect(report.targets.find((target) => target.agentId === "dormant")?.compact).toMatchObject({
+      skipped: false,
+    });
+    const dormantAfter = new sqlite.DatabaseSync(dormantPath);
+    const currentAfter = new sqlite.DatabaseSync(currentPath);
+    try {
+      expect(dormantAfter.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(
+        dormantAfter
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+      expect(
+        dormantAfter
+          .prepare("PRAGMA table_info(sessions)")
+          .all()
+          .map((column) => (column as { name?: unknown }).name),
+      ).toContain("session_scope");
+      expect(
+        dormantAfter
+          .prepare("PRAGMA table_info(memory_index_sources)")
+          .all()
+          .map((column) => (column as { name?: unknown }).name),
+      ).toEqual(["id", "path", "source", "hash", "mtime", "size"]);
+      expect(dormantAfter.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(dormantAfter.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        currentAfter
+          .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        updated_at: currentUpdatedAt,
+      });
+    } finally {
+      dormantAfter.close();
+      currentAfter.close();
+    }
+  });
+
+  it("keeps mismatched older agent schema versions blocking during all-agent import", async () => {
+    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
+    const stateDir = path.join(tempDir, "state");
+    const sessionsDir = path.join(stateDir, "agents", "drifted", "sessions");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}\n", { mode: 0o600 });
+    const sqlitePath = openOpenClawAgentDatabase({ agentId: "drifted", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const sqlite = nodeSqlite.requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      database.exec("PRAGMA user_version = 1;");
+      database
+        .prepare("UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary'")
+        .run();
+    } finally {
+      database.close();
+    }
+
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: { agents: { list: [{ id: "drifted" }] } },
+      env,
+      mode: "import",
+    });
+
+    expect(report.targets[0]?.issues).toEqual([
+      expect.objectContaining({
+        code: "sqlite_compact_failed",
+        message: expect.stringMatching(/uses schema version 1/iu),
+      }),
+    ]);
+    const after = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(
+        after.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: 2 });
+    } finally {
+      after.close();
     }
   });
 
@@ -2278,6 +2404,92 @@ async function createImportedStoreForCompaction(): Promise<{
   return { sqlitePath, store };
 }
 
+// Build the physical v1 layout directly so the doctor path, not the runtime
+// opener, owns the upgrade. Empty session tables preserve the dormant-agent
+// reproduction: import has no rows to open before its compact step.
+function createHistoricalV1AgentDatabase(params: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const sqlitePath = resolveOpenClawAgentSqlitePath(params);
+  fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+  const sqlite = nodeSqlite.requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE sessions (
+        session_id TEXT NOT NULL PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_entries (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE memory_index_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        revision INTEGER NOT NULL
+      );
+      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
+      CREATE TABLE memory_index_sources (
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT,
+        session_id TEXT,
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        PRIMARY KEY (source_kind, source_key),
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      CREATE TABLE memory_index_chunks (
+        id TEXT PRIMARY KEY,
+        source_kind TEXT NOT NULL DEFAULT 'memory',
+        source_key TEXT NOT NULL,
+        path TEXT NOT NULL,
+        session_id TEXT,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding BLOB NOT NULL,
+        embedding_dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (source_kind, source_key)
+          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      PRAGMA user_version = 1;
+    `);
+    database
+      .prepare(
+        `
+          INSERT INTO schema_meta
+            (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)
+        `,
+      )
+      .run(params.agentId);
+  } finally {
+    database.close();
+  }
+  return sqlitePath;
+}
+
 function createUnsafeIndexDrift(sqlitePath: string): void {
   const sqlite = nodeSqlite.requireNodeSqlite();
   const database = new sqlite.DatabaseSync(sqlitePath);
@@ -2462,3 +2674,4 @@ function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined
   }
   process.env[key] = value;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

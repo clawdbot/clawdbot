@@ -28,6 +28,7 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./shared/configured-runtime-plugin-installs.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
@@ -155,6 +156,9 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
+        // A host-version-bound runtime can be absent between core swap and package
+        // convergence. Preserve its allow, deny, and explicit enable/disable policy.
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
       }),
     );
   }

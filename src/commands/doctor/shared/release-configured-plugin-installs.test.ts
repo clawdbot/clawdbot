@@ -1,5 +1,6 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
 const mocks = vi.hoisted(() => ({
   detectPluginAutoEnableCandidates: vi.fn(),
@@ -49,6 +50,38 @@ function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCal
   return call;
 }
 
+async function shouldRunConfiguredPluginInstallReleaseStepThroughDoctor(params: {
+  currentVersion?: string | null;
+  touchedVersion?: string | null;
+}): Promise<boolean> {
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: {},
+    env: {},
+    ...params,
+  });
+  return result.completed;
+}
+
+async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
+  cfg: Parameters<typeof maybeRunConfiguredPluginInstallReleaseStep>[0]["cfg"];
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ pluginIds: string[]; channelIds: string[] }> {
+  mocks.repairMissingPluginInstallsForIds.mockClear();
+  await maybeRunConfiguredPluginInstallReleaseStep({
+    ...params,
+    currentVersion: "2026.5.2",
+    touchedVersion: "2026.5.1",
+  });
+  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
+    [MissingPluginInstallRepairCall]
+  >;
+  const call = calls[0]?.[0];
+  return {
+    pluginIds: call?.pluginIds ?? [],
+    channelIds: call?.channelIds ?? [],
+  };
+}
+
 vi.mock("../../../config/plugin-auto-enable.js", () => ({
   detectPluginAutoEnableCandidates: mocks.detectPluginAutoEnableCandidates,
 }));
@@ -82,41 +115,38 @@ describe("configured plugin install release step", () => {
   });
 
   it("runs only for configs last touched before 2026.5.2", async () => {
-    const { shouldRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
-
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.1",
         touchedVersion: "2026.4.30",
       }),
     ).toBe(false);
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.2-beta.1",
         touchedVersion: "2026.5.1",
       }),
     ).toBe(true);
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.2",
         touchedVersion: "2026.5.1",
       }),
     ).toBe(true);
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.2",
         touchedVersion: "2026.5.2",
       }),
     ).toBe(false);
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.3",
         touchedVersion: "2026.5.3",
       }),
     ).toBe(false);
     expect(
-      shouldRunConfiguredPluginInstallReleaseStep({
+      await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
         currentVersion: "2026.5.2",
         touchedVersion: "not-a-version",
       }),
@@ -139,10 +169,7 @@ describe("configured plugin install release step", () => {
         providerId: "unused",
       },
     ]);
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         auth: {
           profiles: {
@@ -182,9 +209,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects Codex from the configured agent runtime even without integration discovery", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         agents: {
           defaults: {
@@ -210,10 +235,7 @@ describe("configured plugin install release step", () => {
         providerId: "anthropic",
       },
     ]);
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         channels: {
           modelByChannel: {
@@ -237,10 +259,7 @@ describe("configured plugin install release step", () => {
         providerId: "anthropic",
       },
     ]);
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         channels: {
           modelByChannel: {
@@ -258,9 +277,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects external speech and web-fetch plugins selected by config", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         agents: {
           defaults: {
@@ -291,9 +308,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects an external media-understanding plugin selected only by media config", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         tools: {
           media: {
@@ -311,9 +326,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects an external speech plugin selected only by voiceModel", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         agents: {
           defaults: {
@@ -329,9 +342,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects env-only web provider plugins before auto-detection", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {},
       env: {
         EXA_API_KEY: "exa-key",
@@ -344,9 +355,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("does not collect env-only web provider plugins when search is disabled", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         tools: {
           web: {
@@ -370,9 +379,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects Firecrawl for env-only web fetch when search is disabled", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         tools: {
           web: {
@@ -392,9 +399,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects env-only external provider plugins before model discovery", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {},
       env: {
         GROQ_API_KEY: "groq-key",
@@ -414,10 +419,7 @@ describe("configured plugin install release step", () => {
         providerAliases: ["gmi-cloud", "gmicloud"],
       },
     ]);
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         agents: {
           defaults: {
@@ -449,9 +451,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         agents: {
           defaults: {
@@ -470,9 +470,7 @@ describe("configured plugin install release step", () => {
   });
 
   it("collects external web search and ACP runtime plugins from config-only usage", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         acp: {
           enabled: true,
@@ -494,43 +492,42 @@ describe("configured plugin install release step", () => {
   });
 
   it("does not collect channel ids when the matching plugin id is blocked", async () => {
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-
     expect(
-      collectReleaseConfiguredPluginIds({
-        cfg: {
-          channels: {
-            matrix: { accessToken: "test" },
+      (
+        await collectReleaseConfiguredPluginIdsThroughDoctor({
+          cfg: {
+            channels: {
+              matrix: { accessToken: "test" },
+            },
+            plugins: {
+              deny: ["matrix"],
+            },
           },
-          plugins: {
-            deny: ["matrix"],
-          },
-        },
-        env: {},
-      }).channelIds,
+          env: {},
+        })
+      ).channelIds,
     ).toStrictEqual([]);
 
     expect(
-      collectReleaseConfiguredPluginIds({
-        cfg: {
-          channels: {
-            matrix: { accessToken: "test" },
-          },
-          plugins: {
-            entries: {
-              matrix: { enabled: false },
+      (
+        await collectReleaseConfiguredPluginIdsThroughDoctor({
+          cfg: {
+            channels: {
+              matrix: { accessToken: "test" },
+            },
+            plugins: {
+              entries: {
+                matrix: { enabled: false },
+              },
             },
           },
-        },
-        env: {},
-      }).channelIds,
+          env: {},
+        })
+      ).channelIds,
     ).toStrictEqual([]);
   });
 
   it("marks the release step complete when there is nothing to install", async () => {
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {},
       currentVersion: "2026.5.2",
@@ -552,9 +549,6 @@ describe("configured plugin install release step", () => {
       changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         agents: {
@@ -584,9 +578,6 @@ describe("configured plugin install release step", () => {
       warnings: [],
       notices: [reviewNotice],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         agents: {
@@ -619,9 +610,6 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         agents: {
@@ -670,9 +658,6 @@ describe("configured plugin install release step", () => {
       changes: ['Removed stale managed install record for bundled plugin "matrix".'],
       warnings: [],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         plugins: {
@@ -707,9 +692,6 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         plugins: {
@@ -755,9 +737,6 @@ describe("configured plugin install release step", () => {
       changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         plugins: {
@@ -788,9 +767,6 @@ describe("configured plugin install release step", () => {
       changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {
         channels: {
@@ -823,9 +799,6 @@ describe("configured plugin install release step", () => {
       changes: [],
       warnings: ["install failed"],
     });
-
-    const { maybeRunConfiguredPluginInstallReleaseStep } =
-      await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
       cfg: {},
       currentVersion: "2026.5.2",
@@ -848,10 +821,7 @@ describe("configured plugin install release step", () => {
       }
       return undefined;
     });
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         plugins: {
           allow: ["lobster", "unofficial-custom"],
@@ -871,10 +841,7 @@ describe("configured plugin install release step", () => {
       }
       return undefined;
     });
-
-    const { collectReleaseConfiguredPluginIds } =
-      await import("./release-configured-plugin-installs.js");
-    const result = collectReleaseConfiguredPluginIds({
+    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         plugins: {
           allow: ["lobster"],

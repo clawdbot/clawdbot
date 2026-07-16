@@ -248,6 +248,9 @@ export async function resumeMainSession(params: {
       idempotencyKey: recoveryRunId,
       deliver: Boolean(deliveryContext),
       lane: CommandLane.Main,
+      ...(params.entry.restartRecoverySourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
+        : {}),
       ...(params.forceRestartSafeTools ? { forceRestartSafeTools: true } : {}),
     };
     if (deliveryContext) {

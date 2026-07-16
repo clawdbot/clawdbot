@@ -518,23 +518,6 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Fade-in animation for new messages */
-.chat-bubble.fade-in {
-  animation: fade-in 200ms ease-out;
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* ── Message metadata (tokens, cost, model, context %) ── */
 .msg-meta {
   display: inline-flex;

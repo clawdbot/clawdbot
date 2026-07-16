@@ -68,7 +68,7 @@ vi.mock("./subagent-registry.store.js", async () => {
   };
 });
 
-let mod: typeof import("./subagent-registry.js");
+let mod: typeof import("./subagent-registry.test-helpers.js");
 let callGatewayModule: typeof import("../gateway/call.js");
 let agentEventsModule: typeof import("../infra/agent-events.js");
 
@@ -97,7 +97,7 @@ describe("subagent registry persistence resume", () => {
 
   beforeAll(async () => {
     vi.resetModules();
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
     callGatewayModule = await import("../gateway/call.js");
     agentEventsModule = await import("../infra/agent-events.js");
   });

@@ -64,6 +64,46 @@ describe("workspace data binding resolver", () => {
     });
   });
 
+  it("rejects noncanonical array indices in JSON pointers", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await fs.mkdir(path.join(stateDir, "workspaces", "data"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "workspaces", "data", "items.json"),
+        JSON.stringify({ items: ["zero", "one"], lookup: { "01": "object-key" } }),
+      );
+
+      await expect(
+        resolveBinding({ source: "file", path: "items.json", pointer: "/items/0" }, { stateDir }),
+      ).resolves.toBe("zero");
+      await expect(
+        resolveBinding({ source: "file", path: "items.json", pointer: "/items/1" }, { stateDir }),
+      ).resolves.toBe("one");
+      await expect(
+        resolveBinding({ source: "file", path: "items.json", pointer: "/lookup/01" }, { stateDir }),
+      ).resolves.toBe("object-key");
+
+      for (const segment of [
+        "",
+        " ",
+        "00",
+        "01",
+        "+1",
+        "-0",
+        "1.0",
+        "1e0",
+        "0x1",
+        "9007199254740993",
+      ]) {
+        await expect(
+          resolveBinding(
+            { source: "file", path: "items.json", pointer: `/items/${segment}` },
+            { stateDir },
+          ),
+        ).rejects.toMatchObject({ code: "binding_not_found" });
+      }
+    });
+  });
+
   it("rejects file traversal and oversized files with typed errors", async () => {
     await withTempStateDir(async (stateDir) => {
       await expect(

@@ -39,6 +39,11 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+  "base64",
+);
+
 vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
   createMediaAttachmentCache: mocks.createMediaAttachmentCache,
@@ -522,6 +527,28 @@ describe("media-understanding runtime", () => {
     });
   });
 
+  it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: PNG_1X1 });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: PNG_1X1,
+        fileName: "sample.jpg",
+        mime: "image/png",
+      }),
+    );
+  });
+
   it("normalizes local HEIC explicit image descriptions before provider execution", async () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
 
@@ -565,6 +592,34 @@ describe("media-understanding runtime", () => {
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers fetched image MIME over conflicting explicit metadata", async () => {
+    mocks.getBuffer.mockResolvedValue({
+      buffer: PNG_1X1,
+      fileName: "photo.jpg",
+      mime: "image/png",
+      size: PNG_1X1.length,
+    });
+
+    await describeImageFileWithModel({
+      filePath: "https://example.com/photo.jpg",
+      mediaUrl: "https://example.com/photo.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: PNG_1X1,
+        fileName: "photo.jpg",
+        mime: "image/png",
+      }),
+    );
   });
 
   it("fetches remote explicit image descriptions through the media attachment cache", async () => {

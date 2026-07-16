@@ -941,3 +941,4 @@ export function safeJsonString(value: unknown): string | undefined {
   const raw = serializeJson(value);
   return raw ?? undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

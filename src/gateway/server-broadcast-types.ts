@@ -25,3 +25,15 @@ export type GatewayBroadcastToConnIdsFn = (
   connIds: ReadonlySet<string>,
   opts?: GatewayBroadcastOpts,
 ) => void;
+
+/** Current queued outbound bytes for one live gateway connection. */
+export type GatewayBufferedAmountFn = (connId: string) => number | undefined;
+
+export type GatewayPluginEventScope = "operator.read" | "operator.write" | "operator.admin";
+
+/** Broadcasts a namespaced plugin event under an explicit operator scope. */
+export type GatewayPluginEventBroadcastFn = (
+  event: string,
+  payload: unknown,
+  scope: GatewayPluginEventScope,
+) => void;

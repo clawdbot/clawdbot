@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
+  compareCommitPageCount,
   HOSTED_GATE_MAX_AGE_HOURS,
   parseArgs,
   parseWorkflowRunPage,
@@ -176,6 +177,92 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("accepts a recent green fork head when GitHub omits pull request links", () => {
+    const headBranch = "fix/token-listener";
+    const headRepository = "contributor/openclaw";
+    const evidence = collectHostedGateEvidence({
+      sha,
+      pullRequestCommitShas: [previousSha, sha],
+      pullRequestHeadBranch: headBranch,
+      pullRequestHeadRepository: headRepository,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          head_sha: previousSha,
+          head_branch: headBranch,
+          head_repository: { full_name: headRepository },
+          pull_requests: [],
+        },
+        {
+          ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+          head_branch: headBranch,
+          head_repository: { full_name: headRepository },
+          pull_requests: [],
+          conclusion: "failure",
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      evidenceHeadSha: previousSha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+    });
+  });
+
+  it("rejects an unlinked fork run whose head is absent from the PR commit list", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        pullRequestCommitShas: [sha],
+        pullRequestHeadBranch: "fix/token-listener",
+        pullRequestHeadRepository: "other/openclaw",
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+            head_branch: "fix/token-listener",
+            head_repository: { full_name: "other/openclaw" },
+            pull_requests: [],
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion: "failure",
+          },
+        ],
+      }),
+    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  });
+
+  it("rejects a commit-list run explicitly linked to another PR", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        pullRequestCommitShas: [previousSha, sha],
+        pullRequestHeadBranch: "fix/token-listener",
+        pullRequestHeadRepository: "contributor/openclaw",
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+            pull_requests: [{ number: pr + 1 }],
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion: "failure",
+          },
+        ],
+      }),
+    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  });
+
+  it("paginates comparisons beyond the pull-request endpoint's 250-commit cap", () => {
+    expect(compareCommitPageCount(0)).toBe(1);
+    expect(compareCommitPageCount(250)).toBe(3);
+    expect(compareCommitPageCount(251)).toBe(3);
+    expect(compareCommitPageCount(301)).toBe(4);
+  });
+
   it("requires recent evidence for scheduled gates observed on the target head", () => {
     const targetArmRun = {
       ...successfulRun("Blacksmith ARM Testbox", 3, "2026-06-17T10:54:00Z"),
@@ -217,24 +304,28 @@ describe("verify-pr-hosted-gates", () => {
   });
 
   it.each(["failure", "cancelled", "skipped"])(
-    "does not reuse older green evidence after a current-head %s run",
+    "reuses recent same-PR green evidence after a current-head %s run",
     (conclusion) => {
-      expect(() =>
-        collectHostedGateEvidence({
-          sha,
-          recentSha: previousSha,
-          workflowRuns: [
-            {
-              ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-              head_sha: previousSha,
-            },
-            {
-              ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
-              conclusion,
-            },
-          ],
-        }),
-      ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+      const evidence = collectHostedGateEvidence({
+        sha,
+        recentSha: previousSha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            conclusion,
+          },
+        ],
+      });
+
+      expect(evidence).toEqual({
+        headSha: sha,
+        evidenceHeadSha: previousSha,
+        workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+      });
     },
   );
 
@@ -307,30 +398,34 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(`Missing successful recent Blacksmith ARM Testbox workflow for ${previousSha}`);
   });
 
-  it("does not reuse pre-rebase green evidence after a failed current-head manual gate", () => {
-    expect(() =>
-      collectHostedGateEvidence({
-        sha,
-        recentSha: previousSha,
-        workflowRuns: [
-          {
-            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
-            head_sha: previousSha,
-          },
-          {
-            ...successfulRun("CI", 2, "2026-06-17T10:53:00Z"),
-            status: "in_progress",
-            conclusion: null,
-          },
-          {
-            ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:54:00Z"),
-            event: "workflow_dispatch",
-            display_title: `CI release gate ${sha}`,
-            conclusion: "failure",
-          },
-        ],
-      }),
-    ).toThrow(`Missing successful recent CI workflow for ${sha}`);
+  it("reuses pre-rebase green evidence after a failed current-head manual gate", () => {
+    const evidence = collectHostedGateEvidence({
+      sha,
+      recentSha: previousSha,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          head_sha: previousSha,
+        },
+        {
+          ...successfulRun("CI", 2, "2026-06-17T10:53:00Z"),
+          status: "in_progress",
+          conclusion: null,
+        },
+        {
+          ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:54:00Z"),
+          event: "workflow_dispatch",
+          display_title: `CI release gate ${sha}`,
+          conclusion: "failure",
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      evidenceHeadSha: previousSha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+    });
   });
 
   it("rejects stale or unrecorded fallback heads", () => {

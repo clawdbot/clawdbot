@@ -51,7 +51,7 @@ export function buildAssistantMessage(params: {
   };
 }
 
-export function buildAssistantMessageWithZeroUsage(params: {
+function buildAssistantMessageWithZeroUsage(params: {
   model: StreamModelDescriptor;
   content: AssistantMessage["content"];
   stopReason: StopReason;

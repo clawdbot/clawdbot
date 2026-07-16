@@ -1,7 +1,10 @@
 // ACP manager task state helper resets task flow state for ACP tests.
-import { resetTaskFlowRegistryForTests } from "../../src/tasks/task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "../../src/tasks/task-flow-registry.store.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../../src/tasks/task-registry.js";
+import { findTaskByRunId } from "../../src/tasks/task-registry.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../../src/tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../src/test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";

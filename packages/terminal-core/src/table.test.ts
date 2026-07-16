@@ -720,7 +720,7 @@ describe("wrapNoteMessage", () => {
       },
     } as unknown as NodeJS.WriteStream;
 
-    clackNote(wrapped, "Session locks", { output, format: (line) => line });
+    clackNote(wrapped, "Session locks", { output });
 
     const rendered = writes.join("");
     expect(rendered).toContain(".jsonl.lock");

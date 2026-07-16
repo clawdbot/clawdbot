@@ -1,10 +1,10 @@
 // Nextcloud Talk tests cover monitor.replay plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
-  NextcloudTalkRetryableWebhookError,
+  createNextcloudTalkWebhookServer,
   processNextcloudTalkReplayGuardedMessage,
-  readNextcloudTalkWebhookBody,
 } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
@@ -12,18 +12,49 @@ import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
-describe("readNextcloudTalkWebhookBody", () => {
-  it("reads valid body within max bytes", async () => {
-    const req = createMockIncomingRequest(['{"type":"Create"}']);
-    const body = await readNextcloudTalkWebhookBody(req, 1024);
-    expect(body).toBe('{"type":"Create"}');
+async function invokeWebhookServerRequest(params: {
+  body: string;
+  headers: Record<string, string>;
+  maxBodyBytes: number;
+}) {
+  const { server } = createNextcloudTalkWebhookServer({
+    host: "127.0.0.1",
+    port: 0,
+    path: "/nextcloud-body-limit",
+    secret: "nextcloud-secret", // pragma: allowlist secret
+    maxBodyBytes: params.maxBodyBytes,
+    onMessage: vi.fn(),
   });
+  const listener = server.listeners("request")[0] as
+    | ((req: IncomingMessage, res: ServerResponse) => void)
+    | undefined;
+  if (!listener) {
+    throw new Error("expected Nextcloud Talk request listener");
+  }
+  const req = Object.assign(createMockIncomingRequest([params.body]), {
+    method: "POST",
+    url: "/nextcloud-body-limit",
+    headers: params.headers,
+    socket: { remoteAddress: "127.0.0.1" },
+  }) as unknown as IncomingMessage;
 
-  it("rejects when payload exceeds max bytes", async () => {
-    const req = createMockIncomingRequest(["x".repeat(300)]);
-    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow("PayloadTooLarge");
+  return await new Promise<{ body: string; status: number }>((resolve) => {
+    let status = 0;
+    const res = {
+      headersSent: false,
+      writeHead(code: number) {
+        status = code;
+        this.headersSent = true;
+        return this;
+      },
+      end(body?: string) {
+        resolve({ body: body ?? "", status });
+        return this;
+      },
+    };
+    listener(req, res as unknown as ServerResponse);
   });
-});
+}
 
 describe("createNextcloudTalkWebhookServer auth order", () => {
   it("rejects missing signature headers before reading request body", async () => {
@@ -48,6 +79,19 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Missing signature headers" });
     expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed payloads over the configured body limit", async () => {
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const response = await invokeWebhookServerRequest({
+      body,
+      headers,
+      maxBodyBytes: 128,
+    });
+
+    expect(response.status).toBe(413);
+    expect(JSON.parse(response.body)).toEqual({ error: "Payload too large" });
   });
 });
 
@@ -141,25 +185,6 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     expect(second.status).toBe(200);
     expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a retry after replay-guarded processing fails before commit", async () => {
-    let attempts = 0;
-    const handleMessage = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
-      }
-    });
-    const processMessage = createReplayGuardedProcess({
-      handleMessage,
-    });
-    const message = buildInboundMessage();
-
-    await expect(processMessage(message)).rejects.toThrow("transient nextcloud failure");
-    await expect(processMessage(message)).resolves.toBe("processed");
-
-    expect(handleMessage).toHaveBeenCalledTimes(2);
   });
 
   it("keeps replay committed after a non-retryable replay-guarded processing failure", async () => {

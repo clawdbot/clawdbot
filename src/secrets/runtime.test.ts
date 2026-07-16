@@ -1,7 +1,7 @@
 /** Tests runtime SecretRef resolution across core config and auth-profile surfaces. */
 import { afterEach, describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
-import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();

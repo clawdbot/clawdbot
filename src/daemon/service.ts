@@ -53,7 +53,6 @@ import {
 } from "./systemd.js";
 export type {
   GatewayServiceCommandConfig,
-  GatewayServiceControlArgs,
   GatewayServiceInstallArgs,
   GatewayServiceStartRepairIssue,
   GatewayServiceState,

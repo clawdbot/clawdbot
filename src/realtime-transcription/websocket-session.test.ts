@@ -5,10 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
-import {
-  createRealtimeTranscriptionWebSocketSession,
-  REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
-} from "./websocket-session.js";
+import { createRealtimeTranscriptionWebSocketSession } from "./websocket-session.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -530,7 +527,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("drops an oversized inbound message before it reaches the provider parser", async () => {
     // ws rejects a message above maxPayload with an error + 1009 close, so an
     // oversized upstream message never reaches onMessage/JSON parse.
-    const oversized = "x".repeat(REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES + 1);
+    const oversized = "x".repeat(16 * 1024 * 1024 + 1);
     const server = await createRealtimeServer({ initialText: oversized });
     const onError = vi.fn();
     const onMessage = vi.fn(() => {

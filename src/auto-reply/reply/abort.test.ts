@@ -13,7 +13,6 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { getAbortMemory } from "./abort-primitives.js";
 import {
-  testing as abortTesting,
   formatAbortReplyText,
   isAbortRequestText,
   isAbortTrigger,
@@ -21,14 +20,12 @@ import {
   stopSubagentsForRequester,
   tryFastAbortFromMessage,
 } from "./abort.js";
-import { testing as acpResetTargetTesting } from "./acp-reset-target.js";
+import { testing as abortTesting } from "./abort.test-support.js";
+import { testing as acpResetTargetTesting } from "./acp-reset-target.test-support.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
-import { testing as queueCleanupTesting } from "./queue/cleanup.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  testing as replyRunRegistryTesting,
-} from "./reply-run-registry.js";
+import { testing as queueCleanupTesting } from "./queue/cleanup.test-support.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/embedded-agent.js", () => ({
@@ -1593,3 +1590,4 @@ describe("abort detection", () => {
     expect(subagentRegistryMocks.markSubagentRunTerminated).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

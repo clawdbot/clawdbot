@@ -22,7 +22,7 @@ import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-d
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
 import { extractAssistantText } from "./embedded-agent-utils.js";
-import { collectAnthropicApiKeys } from "./live-auth-keys.js";
+import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
@@ -1772,7 +1772,9 @@ describeLive("live models (profile keys)", () => {
         );
         return;
       }
-      const anthropicKeys = collectAnthropicApiKeys();
+      const anthropicKeys = process.env.ANTHROPIC_OAUTH_TOKEN?.trim()
+        ? []
+        : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
         process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
@@ -2378,3 +2380,4 @@ describeLive("live models (profile keys)", () => {
     LIVE_TEST_TIMEOUT_MS,
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

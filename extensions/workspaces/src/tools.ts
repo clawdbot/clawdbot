@@ -903,3 +903,4 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
     },
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,6 +5,8 @@ import {
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
   validateSessionsDispatchResult,
+  validateSessionsReclaimParams,
+  validateSessionsReclaimResult,
 } from "../index.js";
 
 const placementStates = [
@@ -58,6 +60,15 @@ describe("session dispatch protocol schemas", () => {
         task: "run remotely",
       }),
     ).toBe(false);
+  });
+
+  it("accepts only a session selector for worker reclaim", () => {
+    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
+      true,
+    );
+    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
+      false,
+    );
   });
 
   it("keeps placement states closed", () => {
@@ -238,6 +249,25 @@ describe("session dispatch protocol schemas", () => {
           ...basePlacement,
           recoveryError: "worker admission failed",
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only reclaimed ownership in successful reclaim results", () => {
+    expect(
+      validateSessionsReclaimResult({
+        ok: true,
+        key: "agent:main:dispatch",
+        sessionId: "session-1",
+        placement: { state: "reclaimed", ...basePlacement, ...workerOwnedFields },
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsReclaimResult({
+        ok: true,
+        key: "agent:main:dispatch",
+        sessionId: "session-1",
+        placement: { state: "active", ...basePlacement, ...workerOwnedFields },
       }),
     ).toBe(false);
   });

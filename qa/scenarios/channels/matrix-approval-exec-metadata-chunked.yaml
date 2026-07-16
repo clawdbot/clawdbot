@@ -1,0 +1,30 @@
+title: Matrix exec approval prompt fallback keeps metadata on the first chunk
+scenario:
+  id: matrix-approval-exec-metadata-chunked
+  surface: channels
+  coverage:
+    primary:
+      - channels.native-approval-prompts
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        approvalForwarding:
+          exec: true
+        dm:
+          enabled: true
+        execApprovals:
+          enabled: true
+          target: channel
+        chunkMode: length
+        textChunkLimit: 280
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  call: runApprovalExecMetadataChunkedScenario
+  args:
+    - expr: "scenarioContext"

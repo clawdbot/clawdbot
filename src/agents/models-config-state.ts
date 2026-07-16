@@ -31,9 +31,3 @@ export const MODELS_JSON_STATE = (() => {
   }
   return globalState[MODELS_JSON_STATE_KEY];
 })();
-
-/** Clear models.json write/ready caches for tests. */
-export function resetModelsJsonReadyCacheForTest(): void {
-  MODELS_JSON_STATE.writeQueue = new KeyedAsyncQueue();
-  MODELS_JSON_STATE.readyCache.clear();
-}

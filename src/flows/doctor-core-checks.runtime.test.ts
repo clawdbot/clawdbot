@@ -1161,3 +1161,4 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

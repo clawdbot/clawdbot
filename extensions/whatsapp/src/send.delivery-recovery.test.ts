@@ -1,9 +1,9 @@
 // Whatsapp tests cover the durable outbound handoff across startup recovery.
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -76,15 +76,18 @@ describe("WhatsApp delivery recovery", () => {
 
   it("keeps pre-connect recovery replayable, then sends exactly once after connect", async () => {
     await withStateDirEnv("openclaw-whatsapp-delivery-recovery-", async ({ stateDir }) => {
-      const initialError = await deliverOutboundPayloads({
+      const initialResult = await sendDurableMessageBatch({
         cfg,
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "queued before listener startup" }],
-        queuePolicy: "required",
-      }).catch((err: unknown) => err);
-      expect(initialError).toMatchObject({
-        cause: expect.any(PlatformMessageNotDispatchedError),
+        durability: "required",
+      });
+      expect(initialResult).toMatchObject({
+        status: "failed",
+        error: {
+          cause: expect.any(PlatformMessageNotDispatchedError),
+        },
       });
 
       const preConnectLog = await drainDefaultWhatsAppDeliveries(stateDir);

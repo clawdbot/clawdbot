@@ -1993,3 +1993,4 @@ function buildMissingProviderModelRegistrationHint(params: {
   }
   return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}", "name": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

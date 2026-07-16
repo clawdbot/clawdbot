@@ -130,13 +130,14 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
-    expect(
-      buildToolMutationState("subagents", { action: "kill", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
-    expect(
-      buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
-    ).toBe(true);
+    for (const action of ["cancel", "kill", "steer"]) {
+      expect(
+        buildToolMutationState("subagents", { action, target: "worker-1" }).mutatingAction,
+      ).toBe(true);
+    }
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "group_list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("sessions", { action: "patch" }).mutatingAction).toBe(true);
     expect(
       buildToolMutationState("sessions_spawn", { task: "inspect the failure" }).mutatingAction,
     ).toBe(true);
@@ -477,6 +478,7 @@ describe("tool mutation helpers", () => {
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
+    expect(isLikelyMutatingToolName("sessions")).toBe(true);
     expect(isLikelyMutatingToolName("computer")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);

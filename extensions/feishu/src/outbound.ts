@@ -13,6 +13,8 @@ import {
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -24,12 +26,18 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
+import {
+  chunkFeishuMarkdown,
+  chunkFeishuPostMarkdown,
+  materializeFeishuPostMarkdownSoftBreaks,
+} from "./markdown.js";
 import {
   sendMediaFeishu,
   shouldSuppressFeishuTextForVoiceMedia,
@@ -40,7 +48,7 @@ import {
   resolveFeishuCardTemplate,
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
-import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+import type { ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCardElements,
@@ -386,6 +394,9 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
+  // Decide card routing on the original text so card content is never
+  // modified by post-md newline normalization. Only the post path below
+  // materializes CommonMark soft breaks for Feishu rendering.
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
     return sendMarkdownCardFeishu({
       cfg,
@@ -397,7 +408,48 @@ async function sendOutboundText(params: {
     });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
+  // Tables need contiguous source rows, so convert them before the parser
+  // materializes prose soft breaks for Feishu post rendering.
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const tableConvertedText = convertMarkdownTables(text, tableMode);
+  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(tableConvertedText);
+
+  // Core chunks raw text before channel rendering. Re-chunk after expansion
+  // and keep each fenced-code chunk independently valid Markdown.
+  const postLimit = resolveTextChunkLimit(cfg, "feishu", accountId, {
+    fallbackLimit: FEISHU_TEXT_CHUNK_LIMIT,
+  });
+  const subChunks = chunkFeishuPostMarkdown({
+    text: normalizedText,
+    limit: postLimit,
+    mode: resolveChunkMode(cfg, "feishu", accountId),
+  });
+  if (subChunks.length <= 1) {
+    return sendMessageFeishu({
+      cfg,
+      to,
+      text: subChunks[0] ?? normalizedText,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+    });
+  }
+
+  let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
+  const preserveThread = replyInThread === true;
+  for (const [i, chunk] of subChunks.entries()) {
+    // Thread roots must accompany every chunk. Ordinary quoted replies remain
+    // first-chunk-only so implicit reply ids are consumed once per fanout.
+    lastResult = await sendMessageFeishu({
+      cfg,
+      to,
+      text: chunk,
+      accountId,
+      replyToMessageId: preserveThread || i === 0 ? replyToMessageId : undefined,
+      replyInThread: preserveThread ? true : i === 0 ? replyInThread : undefined,
+    });
+  }
+  return lastResult!;
 }
 
 async function sendFeishuFallbackPayload(params: {
@@ -408,7 +460,7 @@ async function sendFeishuFallbackPayload(params: {
   const ctx = { ...params.ctx, payload: params.payload };
   const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(params.payload));
   const text = params.payload.text ?? "";
-  const textChunks = text ? chunkTextForOutbound(text, FEISHU_TEXT_CHUNK_LIMIT) : [];
+  const textChunks = text ? chunkFeishuMarkdown(text, FEISHU_TEXT_CHUNK_LIMIT) : [];
   const shouldSeparate =
     mediaUrls.length > 0 && (params.separateMediaAndText === true || textChunks.length > 1);
   if (!shouldSeparate) {
@@ -462,7 +514,7 @@ async function sendFeishuFallbackPayload(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {
@@ -824,3 +876,4 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     },
   }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

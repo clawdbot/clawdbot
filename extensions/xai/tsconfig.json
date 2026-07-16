@@ -57,9 +57,6 @@
       "openclaw/plugin-sdk/test-node-mocks": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
       ],
-      "openclaw/plugin-sdk/testing": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/testing.d.ts"
-      ],
       "openclaw/plugin-sdk/plugin-state-test-runtime": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-test-runtime.d.ts"
       ],
@@ -260,6 +257,9 @@
       ],
       "@openclaw/retry": [
         "../../dist/plugin-sdk/packages/retry/src/index.d.ts"
+      ],
+      "@openclaw/workboard-contract": [
+        "../../packages/workboard-contract/src/index.ts"
       ],
       "@openclaw/acp-core": [
         "../../dist/plugin-sdk/packages/acp-core/src/index.d.ts"

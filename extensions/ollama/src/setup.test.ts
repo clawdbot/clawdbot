@@ -3,7 +3,6 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetOllamaModelShowInfoCacheForTest } from "./provider-models.js";
 import {
   checkOllamaCloudAuth,
   configureOllamaNonInteractive,
@@ -126,7 +125,6 @@ describe("ollama setup", () => {
     vi.unstubAllEnvs();
     upsertAuthProfileWithLock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
-    resetOllamaModelShowInfoCacheForTest();
   });
 
   it("puts suggested local model first in local mode", async () => {

@@ -8,9 +8,10 @@ import {
   getFleetCell,
   listFleetCells,
   reserveFleetCell,
-  type ReserveFleetCellParams,
   updateFleetCellImage,
 } from "./registry.js";
+
+type ReserveFleetCellParams = Parameters<typeof reserveFleetCell>[1];
 
 describe("fleet cell registry", () => {
   let root: string | undefined;

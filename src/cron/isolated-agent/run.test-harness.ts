@@ -393,10 +393,8 @@ vi.mock("./model-preflight.runtime.js", () => ({
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
-  pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
-  pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
   resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
@@ -840,3 +838,4 @@ export async function loadRunCronIsolatedAgentTurn() {
   const { runCronIsolatedAgentTurn } = await import("./run.js");
   return runCronIsolatedAgentTurn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

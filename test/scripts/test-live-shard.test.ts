@@ -101,10 +101,10 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
-      "src/crestodian/rescue-channel.live.test.ts",
       "src/gateway/android-node.capabilities.live.test.ts",
       "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
       "src/gateway/gateway-trajectory-export.live.test.ts",
+      "src/system-agent/rescue-channel.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
       "src/infra/push-apns-http2.live.test.ts",
@@ -568,7 +568,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 

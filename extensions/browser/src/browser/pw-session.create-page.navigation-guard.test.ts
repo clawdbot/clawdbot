@@ -1220,3 +1220,4 @@ describe("pw-session selected-page interaction request guard", () => {
     ).rejects.toBe(cleanupError);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

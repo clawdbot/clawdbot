@@ -19,12 +19,16 @@ type TerminalLaunchBlock =
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
 /** Resolved plan for a host terminal session. */
-type TerminalLaunchPlan = {
+export type TerminalLaunchPlan = {
   agentId: string;
   cwd: string;
   shell: string;
   args: string[];
+  initialCommand?: string[];
+  cwdOverride?: string;
 };
+
+export type TerminalSpawnPlan = Pick<TerminalLaunchPlan, "agentId" | "shell" | "args" | "cwd">;
 
 /** Terminal launch resolution result: either a runnable plan or a block reason. */
 export type TerminalLaunchResolution =
@@ -283,6 +287,37 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+/** Converts a policy-approved plan into the exact local PTY spawn. */
+export function resolveTerminalSpawnPlan(
+  plan: TerminalLaunchPlan,
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+): TerminalSpawnPlan {
+  const env = options.env ?? process.env;
+  const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
+  const command = plan.initialCommand;
+  if (!command || command.length === 0) {
+    return { agentId: plan.agentId, shell: plan.shell, args: plan.args, cwd };
+  }
+  if ((options.platform ?? process.platform) === "win32") {
+    return {
+      agentId: plan.agentId,
+      shell: command[0] ?? plan.shell,
+      args: command.slice(1),
+      cwd,
+    };
+  }
+  return {
+    agentId: plan.agentId,
+    shell: plan.shell,
+    args: ["-il", "-c", command.map(shellQuote).join(" ")],
+    cwd,
+  };
 }
 
 // A workspace dir that has not been created yet would make the PTY spawn fail;

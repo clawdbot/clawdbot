@@ -16,7 +16,7 @@ Dashboard workboard for agent-owned issues and sessions.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 

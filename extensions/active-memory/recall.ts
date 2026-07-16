@@ -1,4 +1,6 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeActiveMemoryFastMode } from "./config.js";
 import { getModelRef } from "./query.js";
 import { runRecallSubagent } from "./recall-run.js";
 import {
@@ -17,6 +19,7 @@ import {
   buildPersistedDebugSummary,
   buildPluginStatusLine,
   persistPluginStatusLines,
+  resolveCanonicalSessionKeyFromSessionId,
 } from "./session.js";
 import {
   buildSubagentRecallResult,
@@ -26,11 +29,63 @@ import {
 import { watchTerminalMemorySearchResult } from "./transcript-watch.js";
 import type {
   ActiveMemorySearchDebug,
+  ActiveMemoryFastMode,
   ActiveMemoryTranscriptSource,
   ActiveRecallResult,
   ResolvedActiveRecallPluginConfig,
   TerminalMemorySearchWatch,
 } from "./types.js";
+
+function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined): string {
+  return fastMode === undefined
+    ? "inherit"
+    : fastMode === true
+      ? "on"
+      : fastMode === false
+        ? "off"
+        : "auto";
+}
+
+function prepareRecallRunContext(params: {
+  api: OpenClawPluginApi;
+  config: ResolvedActiveRecallPluginConfig;
+  agentId: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): {
+  parentSessionKey?: string;
+  storePath: string;
+  fastMode?: ActiveMemoryFastMode;
+} {
+  const parentSessionKey =
+    params.sessionKey ??
+    resolveCanonicalSessionKeyFromSessionId({
+      api: params.api,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
+  const storePath = params.api.runtime.agent.session.resolveStorePath(
+    params.api.config.session?.store,
+    { agentId: params.agentId },
+  );
+  if (params.config.fastMode !== undefined) {
+    return { parentSessionKey, storePath, fastMode: params.config.fastMode };
+  }
+  const sessionFastMode = parentSessionKey
+    ? params.api.runtime.agent.session.getSessionEntry({
+        agentId: params.agentId,
+        sessionKey: parentSessionKey,
+        storePath,
+        readConsistency: "latest",
+      })?.fastMode
+    : undefined;
+  const fastMode =
+    normalizeActiveMemoryFastMode(sessionFastMode) ??
+    normalizeActiveMemoryFastMode(
+      resolveAgentConfig(params.api.config, params.agentId)?.fastModeDefault,
+    );
+  return { parentSessionKey, storePath, fastMode };
+}
 
 async function maybeResolveActiveRecall(params: {
   api: OpenClawPluginApi;
@@ -59,16 +114,20 @@ async function maybeResolveActiveRecall(params: {
     modelProviderId: params.currentModelProviderId,
     modelId: params.currentModelId,
   });
-  const logPrefix = [
-    `active-memory: agent=${toSingleLineLogValue(params.agentId)}`,
-    `session=${toSingleLineLogValue(params.sessionKey ?? params.sessionId ?? "none")}`,
-    ...(resolvedModelRef?.provider
-      ? [`activeProvider=${toSingleLineLogValue(resolvedModelRef.provider)}`]
-      : []),
-    ...(resolvedModelRef?.model
-      ? [`activeModel=${toSingleLineLogValue(resolvedModelRef.model)}`]
-      : []),
-  ].join(" ");
+  const buildLogPrefix = (fastMode: ActiveMemoryFastMode | undefined) =>
+    [
+      `active-memory: agent=${toSingleLineLogValue(params.agentId)}`,
+      `session=${toSingleLineLogValue(params.sessionKey ?? params.sessionId ?? "none")}`,
+      ...(resolvedModelRef?.provider
+        ? [`activeProvider=${toSingleLineLogValue(resolvedModelRef.provider)}`]
+        : []),
+      ...(resolvedModelRef?.model
+        ? [`activeModel=${toSingleLineLogValue(resolvedModelRef.model)}`]
+        : []),
+      `thinking=${params.config.thinking}`,
+      `fast=${formatActiveMemoryFastMode(fastMode)}`,
+    ].join(" ");
+  let logPrefix = buildLogPrefix(params.config.fastMode);
   if (cached) {
     params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
@@ -138,6 +197,9 @@ async function maybeResolveActiveRecall(params: {
     return result;
   }
 
+  const runContext = prepareRecallRunContext(params);
+  logPrefix = buildLogPrefix(runContext.fastMode);
+
   if (params.config.logging) {
     params.api.logger.info?.(
       `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(
@@ -182,6 +244,9 @@ async function maybeResolveActiveRecall(params: {
     const subagentPromise = runRecallSubagent({
       ...params,
       modelRef: resolvedModelRef,
+      parentSessionKey: runContext.parentSessionKey,
+      storePath: runContext.storePath,
+      fastMode: runContext.fastMode,
       abortSignal: controller.signal,
       onTranscriptSources: (sources) => {
         transcriptSources = sources;

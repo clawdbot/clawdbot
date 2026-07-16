@@ -2690,3 +2690,4 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messages[2]?.parentId).toBe("legacy-second");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

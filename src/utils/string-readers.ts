@@ -42,3 +42,20 @@ export function readTrimmedStringAlias(
   }
   return undefined;
 }
+
+export function stripChannelPrefix(
+  value: string | undefined,
+  channelId: string,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const genericPrefixes = ["channel:", "chat:", "user:"];
+  for (const prefix of genericPrefixes) {
+    if (value.startsWith(prefix)) {
+      return value.slice(prefix.length);
+    }
+  }
+  const prefix = `${channelId}:`;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}

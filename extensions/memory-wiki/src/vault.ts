@@ -11,7 +11,7 @@ import { appendMemoryWikiLog } from "./log.js";
 import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
-export const WIKI_VAULT_DIRECTORIES = [
+const WIKI_VAULT_DIRECTORIES = [
   "entities",
   "concepts",
   "syntheses",

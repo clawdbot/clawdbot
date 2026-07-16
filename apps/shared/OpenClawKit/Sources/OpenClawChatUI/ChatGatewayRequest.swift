@@ -149,17 +149,6 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: Double(requestTimeoutMs))
     }
 
-    public static func patchSessionModel(
-        sessionKey: String,
-        agentID: String?,
-        model: String?) -> OpenClawChatGatewayRequest
-    {
-        self.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            model: .some(model))
-    }
-
     public static func patchSessionPreferences(
         sessionKey: String,
         agentID: String?,

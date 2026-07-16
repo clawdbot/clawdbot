@@ -2,7 +2,7 @@
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
-import { requireMSTeamsSharePointSiteId, uploadToSharePoint } from "./graph-upload.js";
+import { requireMSTeamsSharePointSiteId, uploadAndShareSharePoint } from "./graph-upload.js";
 
 type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
 
@@ -30,6 +30,27 @@ function bodyOnlyErrorResponse(body: string, status = 500): Response {
     headers: new Headers(),
     body: new Response(body).body,
   } as unknown as Response;
+}
+
+type UploadToSharePointParams = Omit<
+  Parameters<typeof uploadAndShareSharePoint>[0],
+  "chatId" | "usePerUserSharing"
+>;
+
+async function uploadToSharePoint(params: UploadToSharePointParams) {
+  const uploadFetch = params.fetchFn ?? fetch;
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith("/createLink")) {
+      return new Response(JSON.stringify({ link: { webUrl: "https://example.com/share" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return await uploadFetch(input, init);
+  };
+  const result = await uploadAndShareSharePoint({ ...params, fetchFn });
+  return { id: result.itemId, webUrl: result.webUrl, name: result.name };
 }
 
 describe("graph upload helpers", () => {

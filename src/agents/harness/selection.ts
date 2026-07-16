@@ -30,7 +30,7 @@ import {
 } from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
-import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
@@ -444,7 +444,7 @@ export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const internalParams = params as EmbeddedRunAttemptParams & {
-    crestodianTool?: CrestodianToolOptions;
+    systemAgentTool?: SystemAgentToolOptions;
   };
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
@@ -467,13 +467,13 @@ export async function runAgentHarnessAttempt(
     preparedModelProvider: params.runtimePlan?.auth !== undefined,
   });
   const harness = selection.harness;
-  if (internalParams.crestodianTool && !isCrestodianOnlyAllowlist(internalParams.toolsAllow)) {
-    throw new Error('Crestodian host authority requires toolsAllow: ["crestodian"]');
+  if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
+    throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const ringZeroTools = internalParams.crestodianTool
+  const ringZeroTools = internalParams.systemAgentTool
     ? [
-        (await import("../tools/crestodian-tool.js")).createCrestodianTool(
-          internalParams.crestodianTool,
+        (await import("../tools/system-agent-tool.js")).createSystemAgentTool(
+          internalParams.systemAgentTool,
         ),
       ]
     : [];
@@ -509,17 +509,17 @@ export async function runAgentHarnessAttempt(
   }
 }
 
-function isCrestodianOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "crestodian";
+function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions },
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "crestodianTool")) {
+  if (!Object.hasOwn(params, "systemAgentTool")) {
     return params;
   }
-  const { crestodianTool: _crestodianTool, ...pluginParams } = params;
+  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
   return pluginParams;
 }
 
@@ -543,9 +543,9 @@ function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
   if (
-    isHostScopedAgentToolActive("crestodian") &&
+    isHostScopedAgentToolActive("openclaw") &&
     params.toolsAllow?.length === 1 &&
-    normalizeToolName(params.toolsAllow[0] ?? "") === "crestodian"
+    normalizeToolName(params.toolsAllow[0] ?? "") === "openclaw"
   ) {
     return params;
   }
@@ -771,3 +771,4 @@ function logAgentHarnessSelection(
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
   return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

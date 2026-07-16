@@ -1216,3 +1216,4 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter((line): line is string => Boolean(line))
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

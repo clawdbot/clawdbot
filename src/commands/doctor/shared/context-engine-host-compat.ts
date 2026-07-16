@@ -191,7 +191,7 @@ function runtimeHostCandidate(params: {
 }
 
 /** Collect effective agent-run host candidates from provider/model runtime policy. */
-export function collectConfiguredContextEngineAgentRunHosts(params: {
+function collectConfiguredContextEngineAgentRunHosts(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): HostCandidate[] {

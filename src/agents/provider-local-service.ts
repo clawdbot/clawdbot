@@ -217,7 +217,7 @@ export async function ensureProviderLocalService(
 
   validateLocalServiceConfig(service, target.providerId);
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
-  const healthHeaders = filterHealthProbeHeaders(target.headers);
+  const healthHeaders = buildHealthProbeHeaders(target.headers, undefined);
   const key = localServiceKey(target.providerId, service, healthUrl);
   installExitHandler();
   const managed = services.get(key) ?? { active: 0 };
@@ -355,10 +355,6 @@ function buildHealthProbeHeaders(
   return [...headers].length > 0 ? headers : undefined;
 }
 
-function filterHealthProbeHeaders(headers: HeadersInit | undefined): Headers | undefined {
-  return buildHealthProbeHeaders(headers, undefined);
-}
-
 async function probeHealth(
   url: string,
   headers: HeadersInit | undefined,
@@ -418,6 +414,9 @@ async function startAndWaitForLocalService(params: {
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
+  // The last lease can disappear while the health probe or restart settles.
+  // Recheck at the spawn boundary so cleanup cannot orphan a newly created child.
+  throwIfAborted(signal);
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
@@ -784,3 +783,4 @@ export function hasLocalServiceProcessExited(
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

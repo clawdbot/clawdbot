@@ -268,7 +268,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
-        process.env.OPENAI_API_KEY ||
+        process.env.OPENAI_API_KEY?.trim() ||
         isProviderAuthProfileConfigured({ provider: "openai", cfg, profileTypes: ["api_key"] }),
       ),
     createSession: (req) => {

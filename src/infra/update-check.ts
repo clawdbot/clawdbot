@@ -107,10 +107,12 @@ function parseNpmPackageTargetMetadata(raw: string): {
   } catch (err) {
     throw new Error(`npm view returned invalid JSON: ${String(err)}`, { cause: err });
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  // npm 12 wraps `npm view --json` results in a singleton array.
+  const entry = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return { version: null, nodeEngine: null };
   }
-  const rec = parsed as Record<string, unknown>;
+  const rec = entry as Record<string, unknown>;
   const engines = rec.engines && typeof rec.engines === "object" ? rec.engines : null;
   const nodeEngine =
     toOptionalTrimmedString(rec["engines.node"]) ??

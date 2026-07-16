@@ -1,7 +1,7 @@
 import {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
+  stopWorkboardLiveRefresh,
   type WorkboardUiState,
 } from "./index.ts";
 
@@ -33,7 +33,7 @@ export function createWorkboardCapability(): WorkboardCapability {
     },
     dispose() {
       disposed = true;
-      stopWorkboardPolling(capability);
+      stopWorkboardLiveRefresh(capability);
       stopWorkboardLifecycleRefresh(capability);
       listeners.clear();
     },

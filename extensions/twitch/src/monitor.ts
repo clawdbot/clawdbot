@@ -15,12 +15,12 @@ import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
-export type TwitchRuntimeEnv = {
+type TwitchRuntimeEnv = {
   log?: (message: string) => void;
   error?: (message: string) => void;
 };
 
-export type TwitchMonitorOptions = {
+type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown; // OpenClawConfig
@@ -29,7 +29,7 @@ export type TwitchMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type TwitchMonitorResult = {
+type TwitchMonitorResult = {
   stop: () => void;
 };
 
@@ -302,5 +302,3 @@ export async function monitorTwitchProvider(
 
   return { stop };
 }
-
-export const testing = { deliverTwitchReply };

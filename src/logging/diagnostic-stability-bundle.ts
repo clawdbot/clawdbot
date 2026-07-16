@@ -1421,3 +1421,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
 export function resetDiagnosticStabilityBundleForTest(): void {
   uninstallDiagnosticStabilityFatalHook();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

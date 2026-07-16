@@ -6,7 +6,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import type { DiscordRetryRunner } from "./retry.js";
-import type { VoiceMessageMetadata } from "./voice-message.js";
+
+type VoiceMessageMetadata = Awaited<
+  ReturnType<typeof import("./voice-message.js").getVoiceMessageMetadata>
+>;
 
 const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
 

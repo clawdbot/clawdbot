@@ -4,17 +4,7 @@ import acpProtocolSchema from "@agentclientprotocol/sdk/schema/schema.json" with
 import { describe, expect, it } from "vitest";
 import { type JsonSchemaValue, validateJsonSchemaValue } from "../plugins/schema-validator.js";
 
-type AcpSchemaName =
-  | "CloseSessionRequest"
-  | "InitializeRequest"
-  | "ListSessionsRequest"
-  | "LoadSessionRequest"
-  | "NewSessionRequest"
-  | "PromptRequest"
-  | "ResumeSessionRequest"
-  | "SessionNotification";
-
-function acpSchema(name: AcpSchemaName): JsonSchemaValue {
+function acpSchema(name: keyof typeof acpProtocolSchema.$defs): JsonSchemaValue {
   return {
     ...acpProtocolSchema.$defs[name],
     $defs: acpProtocolSchema.$defs,

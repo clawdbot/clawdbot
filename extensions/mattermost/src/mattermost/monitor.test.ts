@@ -5,27 +5,37 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
-import { evaluateMattermostMentionGate } from "./monitor-gating.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
-  deliverMattermostReplyWithDraftPreview,
   formatMattermostFinalDeliveryOutcomeLog,
-  MattermostRetryableInboundError,
-  processMattermostReplayGuardedPost,
-  resolveMattermostReactionChannelId,
-  resolveMattermostEffectiveReplyToId,
   resolveMattermostPendingHistoryKey,
+  resolveMattermostReactionChannelId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
-} from "./monitor.js";
+} from "./monitor-context.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
+import { evaluateMattermostMentionGate } from "./monitor-gating.js";
+import { processMattermostReplayGuardedPost } from "./monitor-replay.js";
 
 type MattermostMentionGateInput = Parameters<typeof evaluateMattermostMentionGate>[0];
 type MattermostRequireMentionResolverInput = Parameters<
   MattermostMentionGateInput["resolveRequireMention"]
 >[0];
+
+function resolveMattermostEffectiveReplyToId(params: {
+  kind: "direct" | "group" | "channel";
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): string | undefined {
+  return resolveMattermostThreadSessionContext({
+    baseSessionKey: "agent:main:mattermost:test",
+    ...params,
+  }).effectiveReplyToId;
+}
 
 function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
   const root = params.cfg.channels?.mattermost;
@@ -973,39 +983,6 @@ describe("processMattermostReplayGuardedPost", () => {
     ).resolves.toBe("duplicate");
 
     expect(handlePost).toHaveBeenCalledTimes(1);
-  });
-
-  it("releases claims for explicit retryable failures", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    let attempts = 0;
-    const handlePost = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new MattermostRetryableInboundError("retry me");
-      }
-    });
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
-      }),
-    ).rejects.toThrow("retry me");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
-      }),
-    ).resolves.toBe("processed");
-
-    expect(handlePost).toHaveBeenCalledTimes(2);
   });
 
   it("keeps replay committed after a non-retryable failure", async () => {

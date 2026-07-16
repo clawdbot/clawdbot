@@ -1732,3 +1732,4 @@ afterEach(() => {
   approveDevicePairing.mockResolvedValue(undefined);
   summarizeDeviceTokens.mockReturnValue(undefined);
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

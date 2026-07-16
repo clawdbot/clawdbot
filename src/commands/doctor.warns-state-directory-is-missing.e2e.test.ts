@@ -1123,3 +1123,4 @@ describe("doctor command", () => {
     expect(warned).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

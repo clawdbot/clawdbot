@@ -23,6 +23,42 @@ const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 /** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
 
+/** Camera artifact label; Linux V4L2 devices do not expose a reliable facing. */
+export type CameraArtifactFacing = CameraFacing | "unknown";
+
+type CameraSnapTarget = {
+  requestFacing?: CameraFacing;
+  artifactFacing: CameraArtifactFacing;
+};
+
+type CameraClipTarget = CameraSnapTarget;
+
+/** Resolve one or two snap requests without inventing a facing for Linux V4L2 devices. */
+export function resolveCameraSnapTargets(params: {
+  facing: CameraFacing | "both";
+  platform?: string;
+  deviceId?: string;
+}): CameraSnapTarget[] {
+  if (params.platform?.toLowerCase() === "linux") {
+    return [{ artifactFacing: "unknown" }];
+  }
+  const facings: CameraFacing[] = params.facing === "both" ? ["front", "back"] : [params.facing];
+  if (params.deviceId && facings.length > 1) {
+    throw new Error("facing=both is not allowed when deviceId is set");
+  }
+  return facings.map((facing) => ({ requestFacing: facing, artifactFacing: facing }));
+}
+
+/** Keep Linux clip requests and artifact labels honest when V4L2 position is unknown. */
+export function resolveCameraClipTarget(params: {
+  facing: CameraFacing;
+  platform?: string;
+}): CameraClipTarget {
+  return params.platform?.toLowerCase() === "linux"
+    ? { artifactFacing: "unknown" }
+    : { requestFacing: params.facing, artifactFacing: params.facing };
+}
+
 /** Validated still-image payload from `nodes camera snap`. */
 type CameraSnapPayload = {
   format: string;
@@ -78,7 +114,7 @@ export function parseCameraClipPayload(value: unknown): CameraClipPayload {
 /** Build a deterministic temp path for a camera artifact. */
 export function cameraTempPath(opts: {
   kind: "snap" | "clip";
-  facing?: CameraFacing;
+  facing?: CameraArtifactFacing;
   ext: string;
   tmpDir?: string;
   id?: string;
@@ -94,11 +130,7 @@ export function cameraTempPath(opts: {
 }
 
 /** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
-export async function writeUrlToFile(
-  filePath: string,
-  url: string,
-  opts: { expectedHost: string },
-) {
+async function writeUrlToFile(filePath: string, url: string, opts: { expectedHost: string }) {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
@@ -258,7 +290,7 @@ export async function writeCameraPayloadToFile(params: {
 /** Write a camera clip payload to a generated temp file and return its path. */
 export async function writeCameraClipPayloadToFile(params: {
   payload: CameraClipPayload;
-  facing: CameraFacing;
+  facing: CameraArtifactFacing;
   tmpDir?: string;
   id?: string;
   expectedHost?: string;

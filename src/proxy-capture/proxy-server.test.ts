@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
-import { parseConnectTarget, startDebugProxyServer } from "./proxy-server.js";
+import { startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
@@ -230,28 +230,6 @@ async function postThroughProxy(params: {
 
 afterEach(async () => {
   await cleanupTestRoot();
-});
-
-describe("parseConnectTarget", () => {
-  it("parses bracketed IPv6 CONNECT targets safely", () => {
-    expect(parseConnectTarget("[::1]:8443")).toEqual({
-      hostname: "::1",
-      port: 8443,
-    });
-  });
-
-  it("parses unbracketed host:port CONNECT targets", () => {
-    expect(parseConnectTarget("api.openai.com:443")).toEqual({
-      hostname: "api.openai.com",
-      port: 443,
-    });
-  });
-
-  it("rejects invalid CONNECT ports", () => {
-    expect(() => parseConnectTarget("[::1]:99999")).toThrow("Invalid CONNECT target port");
-    expect(() => parseConnectTarget("api.openai.com:1e3")).toThrow("Invalid CONNECT target port");
-    expect(() => parseConnectTarget("api.openai.com:0x50")).toThrow("Invalid CONNECT target port");
-  });
 });
 
 describe("startDebugProxyServer", () => {

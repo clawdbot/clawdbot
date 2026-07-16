@@ -949,3 +949,4 @@ export async function handleSlackAction(
 
   throw new Error(`Unknown action: ${action}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

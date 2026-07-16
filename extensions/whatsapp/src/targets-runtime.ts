@@ -75,7 +75,7 @@ export type JidToE164Options = {
   logMissing?: boolean;
 };
 
-export type LidLookup = {
+type LidLookup = {
   getLIDForPN?: (jid: string) => Promise<string | null>;
   getPNForLID?: (jid: string) => Promise<string | null>;
 };

@@ -6,6 +6,7 @@ export type NamedCommandDescriptor = {
   name: string;
   description: string;
   hasSubcommands: boolean;
+  hidden?: boolean;
   parentDefaultHelp?: boolean;
 };
 

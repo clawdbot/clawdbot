@@ -813,3 +813,4 @@ export async function scanDirectoryWithSummary(
     findings: allFindings,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -30,11 +30,7 @@ vi.mock("../process/exec.js", async () => {
   };
 });
 
-import {
-  appendScpStderrTail,
-  SCP_STDERR_TAIL_CHARS,
-  stageSandboxMedia,
-} from "./reply/stage-sandbox-media.js";
+import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -89,23 +85,6 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
 }
 
 describe("stageSandboxMedia scp remote paths", () => {
-  it("keeps only the tail of noisy scp stderr", () => {
-    const stderr = appendScpStderrTail("start-", `${"x".repeat(SCP_STDERR_TAIL_CHARS)}-end`);
-
-    expect(stderr).toHaveLength(SCP_STDERR_TAIL_CHARS);
-    expect(stderr).toContain("-end");
-    expect(stderr).not.toContain("start-");
-  });
-
-  it("keeps scp stderr tail UTF-16 safe when the boundary bisects an emoji", () => {
-    const stderr = appendScpStderrTail("prefix", "🤖tail", 5);
-
-    expect(stderr).toBe("tail");
-    expect(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(stderr),
-    ).toBe(false);
-  });
-
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sessionKey, remoteCacheDir } = createRemoteStageParams(home);

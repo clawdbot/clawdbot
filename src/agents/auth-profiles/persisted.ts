@@ -830,3 +830,4 @@ export function loadPersistedAuthProfileStore(
 export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
   return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

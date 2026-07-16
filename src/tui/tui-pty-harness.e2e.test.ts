@@ -300,10 +300,34 @@ async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true, aborted: true };
         }
 
-        async loadHistory() {
-          record("loadHistory");
-          if (startupDelayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, startupDelayMs));
+        async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
+          const sessionKey = opts?.sessionKey ?? "main";
+          record("loadHistory", { sessionKey });
+          const rapidSwitchMarker = sessionKey.endsWith("switch-a")
+            ? "A"
+            : sessionKey.endsWith("switch-b")
+              ? "B"
+              : null;
+          const delayMs =
+            rapidSwitchMarker === "A" ? 500 : rapidSwitchMarker === "B" ? 40 : startupDelayMs;
+          if (delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+          if (rapidSwitchMarker) {
+            record("loadHistoryResolved", { sessionKey });
+            return {
+              sessionId: "session-" + rapidSwitchMarker,
+              sessionInfo: {
+                key: sessionKey,
+                sessionId: "session-" + rapidSwitchMarker,
+                model: currentModel,
+                modelProvider: "fixture-provider",
+                contextTokens: 128,
+                fastMode,
+                thinkingLevels: [],
+              },
+              messages: [{ role: "user", content: rapidSwitchMarker + "_HISTORY_MARKER" }],
+            };
           }
           return { messages: [], fastMode };
         }
@@ -780,6 +804,29 @@ describe.sequential("TUI PTY harness", () => {
         const key = (entry.payload as Record<string, unknown>).key;
         return typeof key === "string" && (key === "main" || key.startsWith("agent:main:"));
       });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the newer session when a rapid switch's history resolves last",
+    async () => {
+      await fixture.run.write("/session agent:main:switch-a\r", { delay: false });
+      await fixture.run.write("/session agent:main:switch-b\r", { delay: false });
+      await fixture.run.waitForOutput("B_HISTORY_MARKER");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "loadHistoryResolved" &&
+          objectFieldEquals(entry, "sessionKey", "agent:main:switch-a"),
+      );
+
+      await fixture.run.write("after switch\r", { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "after switch"),
+      );
+      expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
+      expect(fixture.run.output()).not.toContain("A_HISTORY_MARKER");
     },
     TEST_TIMEOUT_MS,
   );

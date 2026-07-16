@@ -20,6 +20,34 @@ function expectNoNodeStack(stderr: string): void {
   expect(stderr).not.toContain("\n    at ");
 }
 
+function runStartupMemoryCheckWithHelpSamples(helpSamplesMb: number[]) {
+  const tempRoot = makeTempRoot();
+  let sampleIndex = 0;
+  return testing.runStartupMemoryCheck(
+    [
+      "--json",
+      path.join(tempRoot, "startup-memory.json"),
+      "--summary",
+      path.join(tempRoot, "summary.md"),
+    ],
+    {
+      platform: "linux",
+      spawnSync: () => {
+        const caseIndex = Math.floor(sampleIndex / testing.sampleCount);
+        const caseSampleIndex = sampleIndex % testing.sampleCount;
+        sampleIndex += 1;
+        const rssMb = caseIndex === 0 ? (helpSamplesMb[caseSampleIndex] ?? 1) : 1;
+        return {
+          signal: null,
+          status: 0,
+          stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
+          stdout: "",
+        };
+      },
+    },
+  );
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -65,6 +93,33 @@ describe("check-cli-startup-memory", () => {
 
   it("keeps status startup headroom above Linux runner RSS variance", () => {
     expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
+  });
+
+  it("uses the median of three cold-start RSS samples", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const helpSamplesMb = [120, 80, 85];
+    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb);
+
+    expect(result.results[0]).toMatchObject({
+      maxRssMb: 85,
+      rssSamplesMb: helpSamplesMb,
+      status: "pass",
+    });
+  });
+
+  it("still fails when most cold-start RSS samples exceed the budget", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const helpSamplesMb = [120, 110, 80];
+
+    expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
+      "--help median max RSS 110.0 MB exceeded 100 MB",
+    );
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {
@@ -241,6 +296,7 @@ describe("check-cli-startup-memory", () => {
 
     const tempRoot = makeTempRoot();
     const seenArgs: string[][] = [];
+    const seenHomes: string[] = [];
 
     const result = testing.runStartupMemoryCheck(
       [
@@ -251,8 +307,13 @@ describe("check-cli-startup-memory", () => {
       ],
       {
         platform: "linux",
-        spawnSync: (_command: string, args: string[]) => {
+        spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
           seenArgs.push(args);
+          const home = options.env.HOME;
+          if (!home) {
+            throw new Error("benchmark HOME was not set");
+          }
+          seenHomes.push(home);
           return {
             error: null,
             signal: null,
@@ -265,7 +326,8 @@ describe("check-cli-startup-memory", () => {
     );
 
     expect(result.skipped).toBe(false);
-    expect(seenArgs).toHaveLength(testing.cases.length);
+    expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
+    expect(new Set(seenHomes).size).toBe(seenArgs.length);
     for (const args of seenArgs) {
       expect(args[0]).toBe("--import");
       expect(args[1]).toMatch(/^file:/u);

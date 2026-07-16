@@ -11,7 +11,7 @@ import {
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-import { testing as sessionsResolutionTesting } from "./sessions-resolution.js";
+import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {

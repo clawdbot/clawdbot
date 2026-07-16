@@ -6,7 +6,7 @@ import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
-import { createOpenAICompletionsTransportStreamFn, testing } from "./openai-transport-stream.js";
+import { createOpenAICompletionsTransportStreamFn } from "./openai-transport-stream.js";
 import {
   parseTransportChunkUsage,
   type CapturedStreamEvent,
@@ -18,6 +18,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("openai transport stream", () => {
   it("passes provider request timeouts to OpenAI SDK clients", () => {
@@ -2064,3 +2065,4 @@ describe("openai transport stream", () => {
     ).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,13 +4,15 @@
  * Cover the computer.act wire mapping and node resolution / arming behavior.
  */
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
 
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
+const sleepMock = vi.hoisted(() => vi.fn());
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const COMPUTER_ACT_COMMAND = "computer.act";
 
 function imageIdentity(data: string, mimeType = "image/png") {
   return createHash("sha256")
@@ -28,17 +30,12 @@ vi.mock("./gateway.js", async (importOriginal) => {
   return { ...actual, callGatewayTool: callGatewayToolMock };
 });
 
-const {
-  buildComputerActParams,
-  createComputerTool,
-  invalidateComputerFrameIfMissing,
-  COMPUTER_ACT_COMMAND,
-  COMPUTER_REF_WIDTH,
-  testing,
-} = await import("./computer-tool.js");
+vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
+
+const { createComputerTool, invalidateComputerFrameIfMissing } = await import("./computer-tool.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
 // With no config the reference width is capped at the default sanitization limit.
-const EFFECTIVE_REF_WIDTH = Math.min(COMPUTER_REF_WIDTH, DEFAULT_IMAGE_MAX_DIMENSION_PX);
+const EFFECTIVE_REF_WIDTH = Math.min(1280, DEFAULT_IMAGE_MAX_DIMENSION_PX);
 
 function macComputerNode(overrides?: Record<string, unknown>) {
   return {
@@ -70,6 +67,30 @@ function readFrameId(result: { details?: unknown }): string {
     throw new Error("missing frameId");
   }
   return frameId;
+}
+
+function readLastComputerActParams(): Record<string, unknown> {
+  const call = callGatewayToolMock.mock.calls.findLast(
+    (entry) => (entry[2] as { command?: string }).command === COMPUTER_ACT_COMMAND,
+  );
+  const body = call?.[2] as { params?: Record<string, unknown> } | undefined;
+  if (!body?.params) {
+    throw new Error("missing computer.act request");
+  }
+  return body.params;
+}
+
+async function executeComputerAction(params: Record<string, unknown>) {
+  listNodesMock.mockResolvedValue([macComputerNode()]);
+  callGatewayToolMock.mockResolvedValue(screenshotPayload());
+  const tool = createComputerTool({ modelHasVision: true });
+  const actionParams = { ...params };
+  if (Object.hasOwn(params, "coordinate") || Object.hasOwn(params, "startCoordinate")) {
+    const screenshot = await tool.execute("shot", { action: "screenshot" });
+    actionParams.frameId = readFrameId(screenshot);
+  }
+  await tool.execute("act", actionParams);
+  return readLastComputerActParams();
 }
 
 function computerToolResult(
@@ -180,166 +201,6 @@ describe("computer screenshot context binding", () => {
   });
 });
 
-describe("buildComputerActParams", () => {
-  it("maps a left_click with coordinate and modifier text", () => {
-    const wire = buildComputerActParams({
-      action: "left_click",
-      input: { coordinate: [12, 34], text: "shift" },
-      screenIndex: 0,
-      displayFrameId: "display-0-frame",
-    });
-    expect(wire).toEqual({
-      action: "left_click",
-      displayFrameId: "display-0-frame",
-      x: 12,
-      y: 34,
-      modifiers: "shift",
-      screenIndex: 0,
-      refWidth: COMPUTER_REF_WIDTH,
-    });
-  });
-
-  it("requires a coordinate for click actions", () => {
-    expect(() =>
-      buildComputerActParams({ action: "double_click", input: {}, screenIndex: 0 }),
-    ).toThrow(/coordinate/);
-  });
-
-  it("maps left_click_drag with start and end coordinates", () => {
-    const wire = buildComputerActParams({
-      action: "left_click_drag",
-      input: { startCoordinate: [1, 2], coordinate: [3, 4] },
-      screenIndex: 1,
-    });
-    expect(wire).toMatchObject({
-      action: "left_click_drag",
-      fromX: 1,
-      fromY: 2,
-      x: 3,
-      y: 4,
-      screenIndex: 1,
-    });
-  });
-
-  it("maps scroll direction and clamps amount", () => {
-    const wire = buildComputerActParams({
-      action: "scroll",
-      input: { scrollDirection: "Down", scrollAmount: 999, text: "cmd" },
-      screenIndex: 0,
-    });
-    expect(wire).toMatchObject({
-      action: "scroll",
-      scrollDirection: "down",
-      scrollAmount: 100,
-      modifiers: "cmd",
-    });
-  });
-
-  it.each([0, -1, 1.5, true, "many"])("rejects malformed scrollAmount %#", (scrollAmount) => {
-    expect(() =>
-      buildComputerActParams({
-        action: "scroll",
-        input: { scrollDirection: "down", scrollAmount },
-        screenIndex: 0,
-      }),
-    ).toThrow(/scrollAmount must be a positive integer/);
-  });
-
-  it("rejects scroll without a valid direction", () => {
-    expect(() => buildComputerActParams({ action: "scroll", input: {}, screenIndex: 0 })).toThrow(
-      /scrollDirection/,
-    );
-  });
-
-  it("maps type text and key combos", () => {
-    expect(
-      buildComputerActParams({ action: "type", input: { text: "hello" }, screenIndex: 0 }).text,
-    ).toBe("hello");
-    expect(
-      buildComputerActParams({ action: "key", input: { text: "cmd+shift+t" }, screenIndex: 0 })
-        .keys,
-    ).toBe("cmd+shift+t");
-  });
-
-  it("maps hold_key duration to milliseconds", () => {
-    const wire = buildComputerActParams({
-      action: "hold_key",
-      input: { text: "space", duration: 2 },
-      screenIndex: 0,
-    });
-    expect(wire).toMatchObject({ action: "hold_key", keys: "space", durationMs: 2000 });
-  });
-
-  it("enforces hold_key duration independently from the longer wait limit", () => {
-    expect(
-      buildComputerActParams({
-        action: "hold_key",
-        input: { text: "space", duration: 10 },
-        screenIndex: 0,
-      }),
-    ).toMatchObject({ durationMs: 10_000 });
-    expect(() =>
-      buildComputerActParams({
-        action: "hold_key",
-        input: { text: "space", duration: 0 },
-        screenIndex: 0,
-      }),
-    ).toThrow(/duration must be >0 and <=10 seconds/);
-    expect(() =>
-      buildComputerActParams({
-        action: "hold_key",
-        input: { text: "space", duration: 11 },
-        screenIndex: 0,
-      }),
-    ).toThrow(/duration must be >0 and <=10 seconds/);
-    expect(() =>
-      buildComputerActParams({
-        action: "hold_key",
-        input: { text: "space", duration: true },
-        screenIndex: 0,
-      }),
-    ).toThrow(/duration must be >0 and <=10 seconds/);
-  });
-
-  it("does not attach modifiers for keyboard actions", () => {
-    const wire = buildComputerActParams({
-      action: "type",
-      input: { text: "hi", coordinate: [5, 6] },
-      screenIndex: 0,
-    });
-    expect(wire.modifiers).toBeUndefined();
-    // Keyboard actions ignore coordinate context.
-    expect(wire.x).toBeUndefined();
-  });
-
-  it.each([
-    { coordinate: [null, 2] },
-    { coordinate: [false, 2] },
-    { coordinate: ["1", 2] },
-    { coordinate: [-1, 2] },
-    { coordinate: [1.5, 2] },
-    { coordinate: [1] },
-    { coordinate: [1, 2, 3] },
-  ])("rejects malformed coordinate input %#", (input) => {
-    expect(() => buildComputerActParams({ action: "left_click", input, screenIndex: 0 })).toThrow(
-      /coordinate/,
-    );
-  });
-
-  it.each([null, "1,2", [1], [1, 2, 3], [1, false]])(
-    "rejects a malformed optional coordinate %# instead of acting at the cursor",
-    (coordinate) => {
-      expect(() =>
-        buildComputerActParams({
-          action: "left_mouse_down",
-          input: { coordinate },
-          screenIndex: 0,
-        }),
-      ).toThrow(/coordinate/);
-    },
-  );
-});
-
 describe("createComputerTool schema", () => {
   it("publishes Codex-compatible fixed-size coordinate arrays", () => {
     const properties = (
@@ -369,13 +230,130 @@ describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
     callGatewayToolMock.mockReset();
-    // Mapping and state tests do not need the real desktop's 500ms settle.
-    testing.setWaitForPostActionSettleForTest(async (signal) => signal?.throwIfAborted());
+    sleepMock.mockReset();
+    sleepMock.mockImplementation((ms: number, signal?: AbortSignal) => {
+      if (signal?.aborted) {
+        return Promise.reject(new Error("Aborted"));
+      }
+      if (ms === 500 || !signal) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+      });
+    });
   });
 
-  afterEach(() => {
-    testing.setWaitForPostActionSettleForTest();
+  it.each([
+    [
+      "left click",
+      { action: "left_click", coordinate: [12, 34], text: "shift" },
+      {
+        action: "left_click",
+        displayFrameId: "display-0-frame",
+        x: 12,
+        y: 34,
+        modifiers: "shift",
+        screenIndex: 0,
+        refWidth: EFFECTIVE_REF_WIDTH,
+      },
+    ],
+    [
+      "drag",
+      { action: "left_click_drag", startCoordinate: [1, 2], coordinate: [3, 4] },
+      {
+        action: "left_click_drag",
+        displayFrameId: "display-0-frame",
+        fromX: 1,
+        fromY: 2,
+        x: 3,
+        y: 4,
+        screenIndex: 0,
+        refWidth: EFFECTIVE_REF_WIDTH,
+      },
+    ],
+  ])("maps %s through the computer.act execution path", async (_label, params, expected) => {
+    await expect(executeComputerAction(params)).resolves.toEqual(expected);
   });
+
+  it.each([
+    [
+      "scroll",
+      { action: "scroll", scrollDirection: "Down", scrollAmount: 999, text: "cmd" },
+      {
+        action: "scroll",
+        screenIndex: 0,
+        refWidth: EFFECTIVE_REF_WIDTH,
+        scrollDirection: "down",
+        scrollAmount: 100,
+        modifiers: "cmd",
+      },
+    ],
+    [
+      "type",
+      { action: "type", text: "hello", coordinate: [5, 6] },
+      { action: "type", screenIndex: 0, refWidth: EFFECTIVE_REF_WIDTH, text: "hello" },
+    ],
+    [
+      "key",
+      { action: "key", text: "cmd+shift+t" },
+      { action: "key", screenIndex: 0, refWidth: EFFECTIVE_REF_WIDTH, keys: "cmd+shift+t" },
+    ],
+    [
+      "hold key",
+      { action: "hold_key", text: "space", duration: 10 },
+      {
+        action: "hold_key",
+        screenIndex: 0,
+        refWidth: EFFECTIVE_REF_WIDTH,
+        keys: "space",
+        durationMs: 10_000,
+      },
+    ],
+  ])("maps %s input without leaking pointer fields", async (_label, params, expected) => {
+    await expect(executeComputerAction(params)).resolves.toEqual(expected);
+  });
+
+  it("requires coordinates through the public execution path", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const tool = createComputerTool({ modelHasVision: true });
+    const screenshot = await tool.execute("shot", { action: "screenshot" });
+
+    await expect(
+      tool.execute("act", { action: "double_click", frameId: readFrameId(screenshot) }),
+    ).rejects.toThrow(/coordinate/);
+    expect(() => readLastComputerActParams()).toThrow(/missing computer\.act request/);
+  });
+
+  it.each([
+    { coordinate: [null, 2] },
+    { coordinate: [false, 2] },
+    { coordinate: ["1", 2] },
+    { coordinate: [-1, 2] },
+    { coordinate: [1.5, 2] },
+    { coordinate: [1] },
+    { coordinate: [1, 2, 3] },
+  ])("rejects malformed required coordinate input %#", async ({ coordinate }) => {
+    await expect(executeComputerAction({ action: "left_click", coordinate })).rejects.toThrow(
+      /coordinate/,
+    );
+  });
+
+  it.each([
+    { coordinate: null },
+    { coordinate: "1,2" },
+    { coordinate: [1] },
+    { coordinate: [1, 2, 3] },
+    { coordinate: [1, false] },
+  ])(
+    "rejects malformed optional coordinate input %# instead of acting at the cursor",
+    async ({ coordinate }) => {
+      await expect(
+        executeComputerAction({ action: "left_mouse_down", coordinate }),
+      ).rejects.toThrow(/coordinate/);
+    },
+  );
 
   it("errors when no computer-capable node is connected", async () => {
     listNodesMock.mockResolvedValue([
@@ -576,26 +554,54 @@ describe("createComputerTool node resolution", () => {
 
   it.each([
     [
-      "scroll",
+      "fractional scroll amount",
       { action: "scroll", scrollDirection: "down", scrollAmount: 1.5 },
       /scrollAmount must be a positive integer/,
     ],
     [
-      "hold_key",
+      "zero scroll amount",
+      { action: "scroll", scrollDirection: "down", scrollAmount: 0 },
+      /scrollAmount must be a positive integer/,
+    ],
+    [
+      "negative scroll amount",
+      { action: "scroll", scrollDirection: "down", scrollAmount: -1 },
+      /scrollAmount must be a positive integer/,
+    ],
+    [
+      "boolean scroll amount",
+      { action: "scroll", scrollDirection: "down", scrollAmount: true },
+      /scrollAmount must be a positive integer/,
+    ],
+    [
+      "string scroll amount",
+      { action: "scroll", scrollDirection: "down", scrollAmount: "many" },
+      /scrollAmount must be a positive integer/,
+    ],
+    ["missing scroll direction", { action: "scroll" }, /scrollDirection/],
+    [
+      "boolean hold duration",
       { action: "hold_key", text: "space", duration: true },
       /duration must be >0 and <=10 seconds/,
     ],
-    ["wait", { action: "wait", duration: true }, /duration must be 0-100 seconds for wait/],
-  ])(
-    "rejects malformed %s numeric input before invoking the node",
-    async (_action, params, error) => {
-      listNodesMock.mockResolvedValue([macComputerNode()]);
-      const tool = createComputerTool({ modelHasVision: true });
+    [
+      "zero hold duration",
+      { action: "hold_key", text: "space", duration: 0 },
+      /duration must be >0 and <=10 seconds/,
+    ],
+    [
+      "oversized hold duration",
+      { action: "hold_key", text: "space", duration: 11 },
+      /duration must be >0 and <=10 seconds/,
+    ],
+    ["boolean wait duration", { action: "wait", duration: true }, /duration must be 0-100 seconds/],
+  ])("rejects invalid %s before invoking the node", async (_label, params, error) => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    const tool = createComputerTool({ modelHasVision: true });
 
-      await expect(tool.execute("call", params)).rejects.toThrow(error);
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
-    },
-  );
+    await expect(tool.execute("call", params)).rejects.toThrow(error);
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
 
   it("targets the last screenshot's display when a coordinate action omits screenIndex", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);

@@ -53,6 +53,26 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
+  it("does not open plugin state while registering with the base runtime", () => {
+    const openSyncKeyedStore = vi.fn(() => {
+      throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
+    });
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          runtime: { state: { openSyncKeyedStore } } as never,
+        }),
+      ),
+    ).not.toThrow();
+    expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
   it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
@@ -136,6 +156,42 @@ describe("codex plugin", () => {
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
+  });
+
+  it("lets native session discovery be disabled without disabling the Codex plugin", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerProvider = vi.fn();
+    const registerSessionCatalog = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { sessionCatalog: { enabled: false } },
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerNodeHostCommand,
+        registerProvider,
+        registerSessionCatalog,
+        registerTool: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerProvider).toHaveBeenCalledOnce();
+    const nodeCommands = registerNodeHostCommand.mock.calls.map(
+      ([command]) => (command as { command: string }).command,
+    );
+    expect(nodeCommands).toEqual(["codex.cli.sessions.list", "codex.cli.session.resume"]);
+    expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
+    expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
+    expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
@@ -376,7 +432,13 @@ describe("codex plugin", () => {
     );
     const sessionEnd = on.mock.calls.find(([name]) => name === "session_end")?.[1] as
       | ((
-          event: { sessionId: string; sessionKey?: string; reason?: string },
+          event: {
+            sessionId: string;
+            sessionKey?: string;
+            reason?: string;
+            nextSessionId?: string;
+            nextSessionKey?: string;
+          },
           ctx: { agentId?: string; sessionId: string; sessionKey?: string },
         ) => Promise<void>)
       | undefined;
@@ -410,6 +472,62 @@ describe("codex plugin", () => {
       );
       await expect(bindingStore.read(identity)).resolves.toBeUndefined();
     }
+
+    // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
+    // binding must survive because the successor lives under a different key and
+    // owns its own Codex thread. Use a fresh parent key (session-1 above is now
+    // permanently retired). See #106778.
+    const parent = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "parent-1",
+      sessionKey: "agent:worker:parent-1",
+    });
+    await bindingStore.mutate(parent, {
+      kind: "set",
+      binding: { threadId: "thread-parent", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "child-1",
+        nextSessionKey: "agent:worker:dashboard:child-1",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    // A same-key replacement that still names the successor id (physical rollover)
+    // has no distinct nextSessionKey, so it retires as before.
+    await sessionEnd(
+      {
+        sessionId: "parent-1",
+        sessionKey: "agent:worker:parent-1",
+        reason: "new",
+        nextSessionId: "parent-2",
+      },
+      { agentId: "worker", sessionId: "parent-1" },
+    );
+    await expect(bindingStore.read(parent)).resolves.toBeUndefined();
+
+    // Unknown current key: a handoff cannot be proven, so a successor key alone
+    // must not skip cleanup — the conservative path retires as before #106778.
+    const keyless = sessionBindingIdentity({ agentId: "worker", sessionId: "keyless-1" });
+    await bindingStore.mutate(keyless, {
+      kind: "set",
+      binding: { threadId: "thread-keyless", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "keyless-1",
+        reason: "new",
+        nextSessionId: "child-2",
+        nextSessionKey: "agent:worker:dashboard:child-2",
+      },
+      { agentId: "worker", sessionId: "keyless-1" },
+    );
+    await expect(bindingStore.read(keyless)).resolves.toBeUndefined();
   });
 
   it("adopts compaction successors before delayed lifecycle cleanup", async () => {

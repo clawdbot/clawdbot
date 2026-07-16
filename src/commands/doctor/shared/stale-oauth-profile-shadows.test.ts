@@ -17,11 +17,11 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import {
-  testing,
   collectStaleOAuthProfileShadowWarnings,
   repairStaleOAuthProfileShadows,
   scanStaleOAuthProfileShadows,
 } from "./stale-oauth-profile-shadows.js";
+import { testing } from "./stale-oauth-profile-shadows.test-support.js";
 
 function oauthCredential(overrides: Partial<OAuthCredential>): OAuthCredential {
   return {

@@ -28,17 +28,6 @@ import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
-import {
-  resolveConfigDir,
-  resolveUserPath,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-utility-runtime";
-import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
@@ -57,7 +46,18 @@ import {
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
   type TtsConfigResolutionContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/speech-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import {
+  resolveConfigDir,
+  resolveUserPath,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-utility-runtime";
 import { withSpeakerSelectionCompat } from "../speaker.js";
 import {
   resolvePrimaryVoiceProviderCandidate,
@@ -2136,3 +2136,4 @@ export const testApi = {
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

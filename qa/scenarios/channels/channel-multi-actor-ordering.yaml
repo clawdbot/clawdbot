@@ -17,7 +17,7 @@ scenario:
     - docs/channels/group-messages.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     summary: Preserve actor order across a blocked observer turn and a successful driver turn.

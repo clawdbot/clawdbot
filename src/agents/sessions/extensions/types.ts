@@ -1694,3 +1694,4 @@ export interface ExtensionError {
   error: string;
   stack?: string;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

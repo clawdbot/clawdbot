@@ -121,7 +121,7 @@ describe("gateway control-plane write rate limit", () => {
     expect(logWarn).toHaveBeenCalledTimes(1);
   });
 
-  it("allows the Crestodian inference ladder to probe more than 3 candidates", async () => {
+  it("allows the OpenClaw inference ladder to probe more than 3 candidates", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
       handlerCalls(opts);
@@ -134,7 +134,7 @@ describe("gateway control-plane write rate limit", () => {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       responses.push(
         await runRequest({
-          method: "crestodian.setup.activate",
+          method: "openclaw.setup.activate",
           context,
           client,
           handler,

@@ -56,9 +56,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 const SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES = 16 * 1024;
 const SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-// Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
-// Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
-const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Receive envelopes contain metadata only; cap frames, and do not let upgrades block reconnect.
+const WS_MAX_PAYLOAD = 1024 * 1024;
+const WS_HANDSHAKE_MS = 30_000;
 // Outbound file paths are converted to base64 before posting to the container. Cap
 // reads to the same default the native signal send path uses (8 MiB) so a path to a
 // huge or symlinked file cannot OOM the gateway before encoding.
@@ -217,7 +217,7 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
+      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD });
     } catch (err) {
       settle({
         ok: false,
@@ -261,7 +261,7 @@ function containerReceiveCheck(
 /**
  * Make a REST API request to bbernhard container.
  */
-export async function containerRestRequest<T = unknown>(
+async function containerRestRequest<T = unknown>(
   endpoint: string,
   opts: ContainerRpcOptions,
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
@@ -312,7 +312,7 @@ export async function containerRestRequest<T = unknown>(
 /**
  * Fetch attachment binary from bbernhard container.
  */
-export async function containerFetchAttachment(
+async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,
 ): Promise<Buffer | null> {
@@ -377,7 +377,7 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
+      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
     } catch (err) {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
@@ -532,7 +532,7 @@ function normalizeContainerQuoteText(raw: unknown): string | undefined {
 /**
  * Send message via bbernhard container REST API.
  */
-export async function containerSendMessage(params: {
+async function containerSendMessage(params: {
   baseUrl: string;
   account: string;
   recipients: string[];
@@ -590,7 +590,7 @@ export async function containerSendMessage(params: {
 /**
  * Send typing indicator via bbernhard container REST API.
  */
-export async function containerSendTyping(params: {
+async function containerSendTyping(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -610,7 +610,7 @@ export async function containerSendTyping(params: {
 /**
  * Send read receipt via bbernhard container REST API.
  */
-export async function containerSendReceipt(params: {
+async function containerSendReceipt(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -634,7 +634,7 @@ export async function containerSendReceipt(params: {
 /**
  * Send a reaction to a message via bbernhard container REST API.
  */
-export async function containerSendReaction(params: {
+async function containerSendReaction(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -668,7 +668,7 @@ export async function containerSendReaction(params: {
 /**
  * Remove a reaction from a message via bbernhard container REST API.
  */
-export async function containerRemoveReaction(params: {
+async function containerRemoveReaction(params: {
   baseUrl: string;
   account: string;
   recipient: string;
@@ -862,3 +862,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessionStore from "../config/sessions.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -20,6 +21,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  createWebPushVapidKeyPair,
+  hashWebPushEndpoint,
+  listWebPushSubscriptions,
+  readPersistedVapidKeyPair,
+} from "./push-web-store.js";
 import {
   autoMigrateLegacyState,
   autoMigrateLegacyPluginDoctorState,
@@ -2068,6 +2075,118 @@ describe("state migrations", () => {
     await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
   });
 
+  it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const endpoint = "https://push.example.com/doctor-integration";
+    const subscription = {
+      subscriptionId: "c0a80101-0000-4000-8000-000000000001",
+      endpoint,
+      keys: { p256dh: "doctor-p256dh", auth: "doctor-auth" },
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    };
+    const pushDir = path.join(stateDir, "push");
+    const subscriptionsPath = path.join(pushDir, "web-push-subscriptions.json");
+    const vapidKeysPath = path.join(pushDir, "vapid-keys.json");
+    await fs.mkdir(pushDir, { recursive: true });
+    await fs.writeFile(
+      subscriptionsPath,
+      JSON.stringify({
+        subscriptionsByEndpointHash: {
+          [hashWebPushEndpoint(endpoint)]: subscription,
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      vapidKeysPath,
+      JSON.stringify(
+        createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
+      ),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.webPush.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(listWebPushSubscriptions(stateDir)).toStrictEqual([subscription]);
+    expect(readPersistedVapidKeyPair(stateDir)).toStrictEqual(
+      createWebPushVapidKeyPair("doctor-public", "doctor-private", "https://openclaw.ai"),
+    );
+    await expectMissingPath(subscriptionsPath);
+    await expectMissingPath(vapidKeysPath);
+  });
+
+  it("routes explicit Doctor repair through the node-host SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const sourcePath = path.join(stateDir, "node.json");
+    const fixtureDigest = ["fixture", "digest"].join("-");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        nodeId: "doctor-node",
+        token: "test-token-placeholder",
+        displayName: "Doctor Node",
+        gateway: {
+          host: "gateway.example",
+          port: 18443,
+          tls: true,
+          tlsFingerprint: fixtureDigest,
+          contextPath: "/doctor",
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.nodeHost.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Node-host config: legacy node.json → shared SQLite state",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated node-host config to shared SQLite state.");
+    await expect(loadNodeHostConfig(env)).resolves.toStrictEqual({
+      version: 1,
+      nodeId: "doctor-node",
+      displayName: "Doctor Node",
+      gateway: {
+        host: "gateway.example",
+        port: 18443,
+        tls: true,
+        tlsFingerprint: fixtureDigest,
+        contextPath: "/doctor",
+      },
+    });
+    await expectMissingPath(sourcePath);
+  });
+
   it("migrates legacy update-check JSON into shared SQLite state", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -2104,6 +2223,28 @@ describe("state migrations", () => {
     });
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("2.0.0");
+
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        lastCheckedAt: "2026-01-18T09:30:00.000Z",
+        lastAvailableVersion: "3.0.0",
+        lastAvailableTag: "latest",
+      }),
+      "utf8",
+    );
+    const conflictResult = await runLegacyStateMigrations({ detected, config: cfg });
+    expect(conflictResult.warnings).toStrictEqual([]);
+    expect(conflictResult.notices).toEqual([
+      expect.stringContaining("Kept shared SQLite update-check state because legacy cache differs"),
+    ]);
+    expect(readUpdateCheckState(env)?.last_available_version).toBe("2.0.0");
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated.2`, "utf8")).resolves.toContain("3.0.0");
+
+    const convergedResult = await runLegacyStateMigrations({ detected, config: cfg });
+    expect(convergedResult.warnings).toStrictEqual([]);
+    expect(convergedResult.notices).toBeUndefined();
   });
 
   it("migrates legacy config health JSON into shared SQLite state", async () => {
@@ -2853,3 +2994,4 @@ describe("state migrations", () => {
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

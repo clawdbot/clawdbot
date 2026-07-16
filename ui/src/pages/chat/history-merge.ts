@@ -10,6 +10,18 @@ function hasTranscriptMeta(message: unknown): boolean {
   );
 }
 
+export function readTranscriptSequence(message: unknown): number | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const seq = (metadata as Record<string, unknown>).seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
+}
+
 export function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
     return false;

@@ -456,8 +456,12 @@ describe("session store writer queue", () => {
           channel: "discord",
           to: [],
         },
+        restartRecoveryDeliveryMediaUrls: "not-an-array",
+        restartRecoveryDisableMessageTool: "yes",
+        restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
         restartRecoveryTerminalRunIds: [123, "", {}],
       },
       "agent:main:good-pending": {
@@ -482,8 +486,39 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
+        restartRecoveryDeliveryMediaUrls: [" /tmp/proof.png ", "", "/tmp/proof.png"],
+        restartRecoveryDisableMessageTool: true,
+        restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: " terminal-1 ",
+            captured: true,
+            payloads: [{ visible: false }, { visible: true, mediaUrls: [" /tmp/proof.png "] }],
+            deliveryStatus: {
+              status: "partial_failed",
+              payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+            },
+            messagingToolSentTargets: [
+              {
+                provider: " Discord ",
+                to: " channel:123 ",
+                threadId: 42,
+                mediaUrls: [" /tmp/proof.png "],
+                visible: true,
+              },
+              {
+                provider: " Discord ",
+                to: " channel:empty ",
+                visible: false,
+              },
+            ],
+            messagingToolSentTargetsTruncated: true,
+            messagingToolAggregateEvidenceUnaccounted: true,
+            restartUnsafeSideEffectsDetected: true,
+          },
+        ],
         restartRecoveryTerminalRunIds: [" terminal-1 ", "terminal-2", "terminal-1", null],
       },
     } as unknown as Record<string, SessionEntry>);
@@ -505,8 +540,12 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryDeliveryMediaUrls).toBeUndefined();
+    expect(bad?.restartRecoveryDisableMessageTool).toBeUndefined();
+    expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
     expect(good).toMatchObject({
@@ -529,8 +568,39 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
+      restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
+      restartRecoveryDisableMessageTool: true,
+      restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: "terminal-1",
+          captured: true,
+          payloads: [{ visible: false }, { visible: true, mediaUrls: ["/tmp/proof.png"] }],
+          deliveryStatus: {
+            status: "partial_failed",
+            payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+          },
+          messagingToolSentTargets: [
+            {
+              provider: "Discord",
+              to: "channel:123",
+              threadId: "42",
+              mediaUrls: ["/tmp/proof.png"],
+              visible: true,
+            },
+            {
+              provider: "Discord",
+              to: "channel:empty",
+              visible: false,
+            },
+          ],
+          messagingToolSentTargetsTruncated: true,
+          messagingToolAggregateEvidenceUnaccounted: true,
+          restartUnsafeSideEffectsDetected: true,
+        },
+      ],
       restartRecoveryTerminalRunIds: ["terminal-2", "terminal-1"],
     });
   });
@@ -1182,3 +1252,4 @@ describe("resolveAndPersistSessionFile", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

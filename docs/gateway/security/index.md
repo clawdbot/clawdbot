@@ -287,12 +287,12 @@ Slash commands and directives are honored only for authorized senders, derived f
 
 ## Control plane tools
 
-Two built-in tools can make persistent changes:
+Two built-in tools remain control-plane sensitive:
 
-- `gateway` inspects config with `config.schema.lookup` / `config.get`, and mutates with `config.apply`, `config.patch`, and `update.run`.
+- `gateway` reads config with `config.schema.lookup` / `config.get`. It cannot write config, update OpenClaw, or restart the Gateway.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-`gateway config.apply`/`config.patch` are fail-closed by default: only a narrow allowlist of low-risk agent runtime tuning (`agents.defaults.model`, `agents.defaults.thinkingDefault`, per-agent model/thinking/reasoning/fast-mode fields), mention-gating (`channels.*.requireMention` at several nesting depths), and visible-reply settings (`messages.visibleReplies`, `messages.groupChat.visibleReplies`, `messages.groupChat.unmentionedInbound`) are agent-tunable. Any other changed config path is rejected. Prompt overlays stay operator-controlled, and new sensitive config trees are protected unless deliberately added to that allowlist. The tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the equivalent `tools.exec.*` path before the write is checked.
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology. Agents request persistent config or lifecycle changes through the `openclaw` delegation tool; OpenClaw maps them to typed operations and requires human approval before applying them. See [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -304,7 +304,7 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` only blocks restart actions - it does not disable `gateway` config/update actions.
+`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
 
 ## Node execution (`system.run`)
 
@@ -327,8 +327,9 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 Plugins run in-process with the Gateway - treat them as trusted code.
 
 - Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling; restart the Gateway after plugin changes.
-- Installing/updating (`openclaw plugins install <package>`, `openclaw plugins update <id>`) runs untrusted code:
+- Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
+  - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
   - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
@@ -758,7 +759,7 @@ OpenClaw loads workspace-local `.env` files for agents and tools, but never lets
 
 - Provider credential environment variables are blocked from untrusted workspace `.env` files - for example `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, and provider auth keys declared by installed trusted plugins. Put provider credentials in the Gateway process environment, `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`), the config `env` block, or an optional login-shell import instead.
 - Any key starting with `OPENCLAW_` is blocked from untrusted workspace `.env` files, reserving the whole runtime namespace so a future `OPENCLAW_*` control is fail-closed by default rather than silently inheritable from checked-in or attacker-supplied `.env` content.
-- Channel endpoint settings for Matrix, Mattermost, IRC, and Synology Chat are also blocked from workspace `.env` overrides (for example `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`), so a cloned workspace cannot redirect bundled connector traffic through local endpoint config. These must come from the gateway process environment or `env.shellEnv`.
+- Channel and provider endpoint-routing settings are also blocked from workspace `.env` overrides (for example `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`, `AZURE_SPEECH_ENDPOINT`, and other keys ending in `_ENDPOINT`), so a cloned workspace cannot redirect bundled connector traffic through local endpoint config. These must come from the gateway process environment, global runtime dotenv, explicit config, or `env.shellEnv`.
 - Trusted process/OS environment variables, global runtime dotenv, config `env`, and enabled login-shell import still apply - this only constrains workspace `.env` file loading.
 
 Workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools; blocking provider credentials prevents a cloned workspace from substituting attacker-controlled provider accounts.

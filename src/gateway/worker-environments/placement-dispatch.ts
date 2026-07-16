@@ -7,8 +7,15 @@ import {
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import type {
+  WorkerPlacementDispatchRequest,
+  WorkerPlacementReclaimRequest,
+} from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 
 type WorkerLocalDispatchBarrier = (params: {
   sessionId: string;
@@ -17,11 +24,20 @@ type WorkerLocalDispatchBarrier = (params: {
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
 
+type WorkerReclaimedPlacement = Extract<WorkerDispatchPlacement, { state: "reclaimed" }>;
+type WorkerPlacementReclaimBarrier = (
+  params: WorkerPlacementReclaimRequest & {
+    reclaim: (localPath: string) => Promise<WorkerReclaimedPlacement>;
+  },
+) => Promise<WorkerReclaimedPlacement>;
+
 type WorkerPlacementDispatchOptions = {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
   runLocalBarrier: WorkerLocalDispatchBarrier;
   runActivationBarrier: WorkerActivationBarrier;
+  runReclaimBarrier: WorkerPlacementReclaimBarrier;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspacePath: (params: {
     sessionId: string;
     sessionKey: string;
@@ -55,6 +71,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     failure,
     placements,
     runActivationBarrier: options.runActivationBarrier,
+    resolveWorkspacePath: options.resolveWorkspacePath,
+    workspaceOperations: options.workspaceOperations,
   });
 
   const dispatch = async (
@@ -166,8 +184,154 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     }
   };
 
+  const reclaimOnce = async (
+    request: WorkerPlacementReclaimRequest,
+  ): Promise<WorkerReclaimedPlacement> =>
+    await options.runReclaimBarrier({
+      ...request,
+      reclaim: async (localPath) => {
+        const current = placements.get(request.sessionId);
+        if (current?.state !== "active" || current.turnClaim) {
+          throw new Error(
+            `Session ${request.sessionKey} cannot stop cloud worker from placement ${current?.state ?? "missing"}`,
+          );
+        }
+        const environment = environments.get(current.environmentId);
+        if (
+          !environment ||
+          environment.state !== "attached" ||
+          environment.ownerEpoch !== current.activeOwnerEpoch ||
+          environment.attachedSessionIds.length !== 1 ||
+          environment.attachedSessionIds[0] !== current.sessionId
+        ) {
+          throw new Error("Active cloud worker does not match its session placement");
+        }
+        const journalOwner = {
+          sessionId: current.sessionId,
+          environmentId: current.environmentId,
+          ownerEpoch: current.activeOwnerEpoch,
+          placementGeneration: current.generation,
+        };
+        let accepted: Extract<WorkerDispatchPlacement, { state: "active" }> | undefined;
+        const journal = {
+          load: () => placements.loadWorkspaceReconciliation(journalOwner),
+          begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) =>
+            placements.beginWorkspaceReconciliation(journalOwner, next),
+          commit: (manifestRef: string) => {
+            const next = placements.acceptIdleWorkspaceReconciliation({
+              sessionId: current.sessionId,
+              environmentId: current.environmentId,
+              ownerEpoch: current.activeOwnerEpoch,
+              expectedGeneration: current.generation,
+              manifestRef,
+            });
+            if (next.state !== "active") {
+              throw new Error("Cloud worker stop did not accept its reconciled workspace");
+            }
+            accepted = next;
+          },
+          abort: () => placements.abortWorkspaceReconciliation(journalOwner),
+        };
+        const pending = journal.load();
+        if (pending) {
+          await recoverWorkerWorkspaceReconciliation({ root: localPath, journal: pending });
+          journal.abort();
+        }
+        const tunnel = await environments.startTunnel({
+          environmentId: current.environmentId,
+          ownerEpoch: current.activeOwnerEpoch,
+        });
+        const acceptedPlacement = await options.workspaceOperations.run(
+          current.environmentId,
+          async () => {
+            const owned = placements.get(current.sessionId);
+            if (
+              owned?.state !== "active" ||
+              owned.generation !== current.generation ||
+              owned.environmentId !== current.environmentId ||
+              owned.activeOwnerEpoch !== current.activeOwnerEpoch ||
+              owned.turnClaim
+            ) {
+              throw new Error("Cloud worker stop lost its placement owner before reconciliation");
+            }
+            const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+            let destroyed = false;
+            try {
+              const reconciliation = await tunnel.reconcileWorkspace({
+                localPath,
+                remoteWorkspaceDir: current.remoteWorkspaceDir,
+                baseManifestRef: current.workspaceBaseManifestRef,
+                journal,
+              });
+              if (!accepted) {
+                throw new Error("Cloud worker stop did not commit its reconciled workspace");
+              }
+              await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+              await environments.destroy(current.environmentId);
+              destroyed = true;
+              return accepted;
+            } finally {
+              if (!destroyed) {
+                await quiescence.resume();
+              }
+            }
+          },
+        );
+        try {
+          await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
+        } catch {
+          // Provider teardown is authoritative; local tunnel cleanup is best effort.
+        }
+        // Provider teardown is proven. Persist the terminal placement state in
+        // one CAS so restart recovery never strands a successful stop mid-transition.
+        const reclaimed = placements.finishReclaim({
+          sessionId: acceptedPlacement.sessionId,
+          environmentId: acceptedPlacement.environmentId,
+          ownerEpoch: acceptedPlacement.activeOwnerEpoch,
+          expectedGeneration: acceptedPlacement.generation,
+        });
+        if (reclaimed.state !== "reclaimed") {
+          throw new Error("Cloud worker stop did not produce a reclaimed placement");
+        }
+        return reclaimed;
+      },
+    });
+
+  const reclaimInFlight = new Map<string, Promise<WorkerReclaimedPlacement>>();
+  const reclaim = async (
+    request: WorkerPlacementReclaimRequest,
+  ): Promise<WorkerReclaimedPlacement> => {
+    const current = placements.get(request.sessionId);
+    if (current?.state === "reclaimed") {
+      return current;
+    }
+    const inFlight = reclaimInFlight.get(request.sessionId);
+    if (inFlight) {
+      return await inFlight;
+    }
+    const operation = reclaimOnce(request);
+    reclaimInFlight.set(request.sessionId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (reclaimInFlight.get(request.sessionId) === operation) {
+        reclaimInFlight.delete(request.sessionId);
+      }
+    }
+  };
+
   return {
     dispatch,
+    forceDestroyEnvironment: (environmentId: string) =>
+      options.workspaceOperations.run(environmentId, async () => {
+        await forceAbandonWorkerEnvironment({
+          placements,
+          environmentId,
+          resolveWorkspacePath: options.resolveWorkspacePath,
+        });
+        return await environments.destroy(environmentId);
+      }),
+    reclaim,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
   };

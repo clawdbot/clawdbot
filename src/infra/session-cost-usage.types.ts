@@ -45,6 +45,8 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
+  missingCostByModel?: Record<string, number>;
 };
 
 type CostUsageDailyEntry = CostUsageTotals & {

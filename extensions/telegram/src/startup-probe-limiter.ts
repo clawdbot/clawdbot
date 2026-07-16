@@ -92,12 +92,3 @@ export async function withTelegramStartupProbeSlot<T>(
     release();
   }
 }
-
-export function resetTelegramStartupProbeLimiterForTests() {
-  activeStartupProbes = 0;
-  const pending = pendingStartupProbeWaiters.splice(0);
-  for (const waiter of pending) {
-    detachAbortHandler(waiter);
-    waiter.reject(buildStartupProbeAbortError());
-  }
-}

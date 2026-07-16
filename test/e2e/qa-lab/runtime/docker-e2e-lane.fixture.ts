@@ -28,8 +28,8 @@ export const QA_DOCKER_E2E_LANES = {
   "bundled-plugin-install-uninstall": {
     script: "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
   },
-  "crestodian-first-run": {
-    script: "scripts/e2e/crestodian-first-run-docker.sh",
+  "system-agent-first-run": {
+    script: "scripts/e2e/system-agent-first-run-docker.sh",
   },
   "docker-build-image": {
     script: "scripts/e2e/build-image.sh",

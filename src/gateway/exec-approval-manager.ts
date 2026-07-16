@@ -1139,3 +1139,4 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return this.lookupApprovalId(input);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

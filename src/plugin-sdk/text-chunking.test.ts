@@ -2,7 +2,20 @@
  * Tests text and Markdown chunking helpers exported by the plugin SDK.
  */
 import { describe, expect, it } from "vitest";
-import { chunkTextForOutbound, chunkTextRanges } from "./text-chunking.js";
+import { chunkTextForOutbound, chunkTextRanges, tokenizeHtmlTags } from "./text-chunking.js";
+
+describe("tokenizeHtmlTags", () => {
+  it("keeps quoted attribute delimiters inside one tag token", () => {
+    expect([...tokenizeHtmlTags('<a href="https://example.com/?q=>">label</a>')]).toEqual([
+      expect.objectContaining({
+        raw: '<a href="https://example.com/?q=>">',
+        name: "a",
+        closing: false,
+      }),
+      expect.objectContaining({ raw: "</a>", name: "a", closing: true }),
+    ]);
+  });
+});
 
 describe("chunkTextForOutbound", () => {
   it.each([

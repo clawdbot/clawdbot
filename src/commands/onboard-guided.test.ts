@@ -8,7 +8,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
 
@@ -17,8 +17,19 @@ type RemoteGatewayInferenceOnboardingDeps = NonNullable<
 >;
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
+const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
+const ensureAuthProfileStore = vi.hoisted(() =>
+  vi.fn(() => ({ version: 1 as const, profiles: {} })),
+);
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
+
+vi.mock("./auth-choice-prompt.js", async (importActual) => ({
+  ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
+  promptAuthChoiceGrouped,
+}));
+
+vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -91,10 +102,11 @@ function setupDeps(params: {
   prompter: WizardPrompter;
   detect?: GuidedOnboardingDeps["detect"];
   activate?: GuidedOnboardingDeps["activate"];
-  runCrestodianChat?: GuidedOnboardingDeps["runCrestodianChat"];
+  runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
+  persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
 }) {
-  const runCrestodianChat = vi.fn<NonNullable<GuidedOnboardingDeps["runCrestodianChat"]>>(
-    params.runCrestodianChat ?? (async () => {}),
+  const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
+    params.runSystemAgentChat ?? (async () => {}),
   );
   return {
     createPrompter: () => params.prompter,
@@ -107,7 +119,8 @@ function setupDeps(params: {
         latencyMs: 1250,
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
-    runCrestodianChat,
+    persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
+    runSystemAgentChat,
   } satisfies GuidedOnboardingDeps;
 }
 
@@ -118,6 +131,8 @@ describe("runGuidedOnboarding", () => {
 
   beforeEach(() => {
     restoreTerminalState.mockClear();
+    promptAuthChoiceGrouped.mockReset();
+    ensureAuthProfileStore.mockClear();
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -159,13 +174,29 @@ describe("runGuidedOnboarding", () => {
     );
     expect(text).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runCrestodianChat.mock.invocationCallOrder[0]!,
+      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
     );
   });
 
-  it("uses the configured workspace only as inference and Crestodian context", async () => {
+  it("persists the one-time risk acknowledgement before inference detection", async () => {
+    const prompter = createWizardPrompter();
+    const persistRiskAcknowledgement = vi.fn(async () => undefined);
+    const detect = vi.fn(async () => detection());
+    const deps = setupDeps({ prompter, persistRiskAcknowledgement, detect });
+
+    await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
+
+    expect(persistRiskAcknowledgement).toHaveBeenCalledWith({
+      wizard: { securityAcknowledgedAt: expect.any(String) },
+    });
+    expect(persistRiskAcknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
+      detect.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("uses the configured workspace only as inference and OpenClaw context", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -184,7 +215,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/configured" }),
     );
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/configured", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/configured", runtime, true);
   });
 
   it("uses the default workspace as context when none is configured", async () => {
@@ -199,7 +230,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/openclaw-workspace" }),
     );
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/openclaw-workspace", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/openclaw-workspace", runtime, true);
   });
 
   it("live-tests an unverified CLI before automatic setup", async () => {
@@ -275,15 +306,8 @@ describe("runGuidedOnboarding", () => {
 
   it("never replaces a configured model by fallthrough when its check fails", async () => {
     const existingModel = existingModelCandidate();
-    const select = vi.fn(async (params: WizardSelectParams) => {
-      expect(params.options.map((option) => option.value)).toEqual([
-        "candidate:existing-model",
-        "candidate:claude-cli",
-      ]);
-      return "candidate:existing-model";
-    }) as unknown as WizardPrompter["select"];
+    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:existing-model");
     const prompter = createWizardPrompter({
-      select,
       confirm: vi.fn(async () => false),
     });
     const activate = vi
@@ -324,8 +348,8 @@ describe("runGuidedOnboarding", () => {
     ]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
-    expect(select).toHaveBeenCalledOnce();
-    expect(deps.runCrestodianChat).toHaveBeenCalledOnce();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
   });
 
   it("falls through after an auth failure and surfaces both outcomes", async () => {
@@ -368,17 +392,8 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("offers an auto-attempted transient failure for manual retry", async () => {
-    const select = vi.fn(async (params: WizardSelectParams) => {
-      expect(params.options).toContainEqual(
-        expect.objectContaining({
-          value: "candidate:claude-cli",
-          label: "Retry Claude Code (logged in)",
-        }),
-      );
-      return "candidate:claude-cli";
-    }) as unknown as WizardPrompter["select"];
+    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:claude-cli");
     const prompter = createWizardPrompter({
-      select,
       confirm: vi.fn(async () => false),
     });
     const activate = vi
@@ -395,25 +410,35 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(activate).toHaveBeenCalledTimes(2);
-    expect(select).toHaveBeenCalledOnce();
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        additionalGroups: [
+          expect.objectContaining({
+            options: [
+              expect.objectContaining({
+                value: "candidate:claude-cli",
+                label: "Retry Claude Code (logged in)",
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
     const enteredValue = "synthetic-value";
+    promptAuthChoiceGrouped.mockResolvedValueOnce("apiKey");
     const text = vi.fn().mockResolvedValueOnce(enteredValue);
-    const select = vi.fn(
-      async () => "manual:openai-api-key",
-    ) as unknown as WizardPrompter["select"];
     const detect = vi.fn(async () =>
       detection({
         candidates: [],
-        manualProviders: [{ id: "openai-api-key", label: "OpenAI", hint: "API key" }],
+        manualProviders: [{ id: "apiKey", label: "Anthropic", hint: "API key" }],
       }),
     );
     const prompter = createWizardPrompter({
       text: text as WizardPrompter["text"],
-      select,
       confirm: vi.fn(async () => false),
     });
     const activate = vi.fn(async () => ({
@@ -431,10 +456,13 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
+    );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "api-key",
-        authChoice: "openai-api-key",
+        authChoice: "apiKey",
         apiKey: enteredValue,
       }),
     );
@@ -444,6 +472,88 @@ describe("runGuidedOnboarding", () => {
       enteredValue,
     );
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
+  });
+
+  it("offers detected OAuth methods through the grouped provider picker", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai");
+    const text = vi.fn(async () => "unexpected");
+    const select = vi.fn(async () => "unexpected") as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ text, select });
+    const activate = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 500,
+      lines: ["Default model: openai/gpt-5.5"],
+    })) as GuidedOnboardingDeps["activate"];
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [],
+          manualProviders: [],
+          authOptions: [
+            {
+              id: "openai",
+              label: "ChatGPT Login",
+              hint: "Sign in with ChatGPT",
+              groupLabel: "OpenAI",
+              kind: "oauth",
+              featured: true,
+            },
+          ],
+        }),
+      ),
+      activate,
+    });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompter,
+        includeSkip: true,
+        assistantVisibleOnly: false,
+        workspaceDir: "/tmp/work",
+        allowedChoices: new Set(["openai"]),
+      }),
+    );
+    expect(activate).toHaveBeenCalledWith({
+      kind: "provider-auth",
+      authChoice: "openai",
+      workspace: "/tmp/work",
+      surface: "cli",
+      runtime,
+      prompter,
+    });
+    expect(text).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("lets the grouped provider picker skip without opening AI chat", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [],
+          manualProviders: [{ id: "openai-api-key", label: "OpenAI API Key" }],
+        }),
+      ),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSkip: true }),
+    );
+    expect(deps.activate).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Add AI later"),
+      "Next steps",
+    );
   });
 
   it("fails closed without opening an empty inference selector", async () => {
@@ -459,7 +569,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("No inference option is available yet"),
@@ -467,22 +577,18 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("keeps Crestodian unavailable until a manual key passes", async () => {
+  it("keeps OpenClaw unavailable until a manual key passes", async () => {
+    promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     const text = vi.fn().mockResolvedValueOnce("bad-key").mockResolvedValueOnce("good-key");
-    const select = vi.fn(async (params: WizardSelectParams) => {
-      expect(params.options.map((option) => option.value)).toEqual(["manual:openai-api-key"]);
-      return "manual:openai-api-key";
-    }) as unknown as WizardPrompter["select"];
     const prompter = createWizardPrompter({
       text: text as WizardPrompter["text"],
-      select,
       confirm: vi.fn(async () => false),
     });
-    const runCrestodianChat = vi.fn(async () => {});
+    const runSystemAgentChat = vi.fn(async () => {});
     const activate = vi
       .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockImplementationOnce(async () => {
-        expect(runCrestodianChat).not.toHaveBeenCalled();
+        expect(runSystemAgentChat).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "bad key" };
       })
       .mockResolvedValueOnce({
@@ -500,31 +606,31 @@ describe("runGuidedOnboarding", () => {
         }),
       ),
       activate,
-      runCrestodianChat,
+      runSystemAgentChat,
     });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
-    expect(select).toHaveBeenCalledTimes(2);
-    expect(runCrestodianChat).toHaveBeenCalledOnce();
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(runSystemAgentChat).toHaveBeenCalledOnce();
   });
 
-  it("opens Crestodian chat with the explicit workspace after activation", async () => {
+  it("opens OpenClaw chat with the explicit workspace after activation", async () => {
     const text = vi.fn(async () => "unexpected");
     const prompter = createWizardPrompter({ text });
-    const runCrestodianChat = vi.fn(async () => {});
+    const runSystemAgentChat = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
-      runCrestodianChat,
+      runSystemAgentChat,
     });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(text).not.toHaveBeenCalled();
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -561,12 +667,12 @@ describe("runGuidedOnboarding", () => {
       expect.stringContaining("openclaw config validate"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("converges remote inference before remote Crestodian without mutating local config", async () => {
+  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
     const localConfig = {
       wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
       agents: {
@@ -598,7 +704,7 @@ describe("runGuidedOnboarding", () => {
       expect(options.ignoreEnvUrlOverride).toBe(true);
       expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
       order.push(options.method);
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return {
           candidates: [
             {
@@ -623,7 +729,7 @@ describe("runGuidedOnboarding", () => {
           setupComplete: false,
         };
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         expect(options.params).toEqual({
           kind: "claude-cli",
           modelRef: "claude-cli/opus",
@@ -637,11 +743,11 @@ describe("runGuidedOnboarding", () => {
           lines: ["Default model: claude-cli/opus"],
         };
       }
-      if (options.method === "crestodian.setup.verify") {
+      if (options.method === "openclaw.setup.verify") {
         expect(remoteConfig.modelRef).toBe("claude-cli/opus");
         return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
       }
-      if (options.method === "crestodian.chat") {
+      if (options.method === "openclaw.chat") {
         expect(remoteConfig.modelRef).toBe("claude-cli/opus");
         expect(options.params).toEqual({
           sessionId: expect.any(String),
@@ -694,10 +800,10 @@ describe("runGuidedOnboarding", () => {
     );
 
     expect(order).toEqual([
-      "crestodian.setup.detect",
-      "crestodian.setup.activate",
-      "crestodian.setup.verify",
-      "crestodian.chat",
+      "openclaw.setup.detect",
+      "openclaw.setup.activate",
+      "openclaw.setup.verify",
+      "openclaw.chat",
       "tui",
     ]);
     expect(remoteConfig.modelRef).toBe("claude-cli/opus");

@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  testing as beforeToolCallTesting,
-  wrapToolWithBeforeToolCallHook,
-} from "../agents/agent-tools.before-tool-call.js";
+import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +9,8 @@ import { createCronTriggerEvaluator } from "./trigger-script.js";
 type EvaluatorDeps = Parameters<typeof createCronTriggerEvaluator>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
 type PrepareParams = Parameters<NonNullable<EvaluatorDeps["prepareRuntime"]>>[0];
+
+const beforeToolCallTesting = { BEFORE_TOOL_CALL_HOOK_CONTEXT };
 
 function completed(params: { value: unknown; output?: unknown[] }): CodeModeHeadlessResult {
   return {

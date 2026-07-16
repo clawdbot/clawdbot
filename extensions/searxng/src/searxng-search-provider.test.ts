@@ -93,6 +93,28 @@ describe("searxng web search provider", () => {
     });
   });
 
+  it("forwards the execution abort signal to the SearXNG client", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runSearxngSearch).toHaveBeenCalledWith({
+      config: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      categories: undefined,
+      language: undefined,
+      signal: controller.signal,
+    });
+  });
+
   it("rejects fractional and out-of-range counts before searching", async () => {
     const provider = createSearxngWebSearchProvider();
     const tool = provider.createTool({

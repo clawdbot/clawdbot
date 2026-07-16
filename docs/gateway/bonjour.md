@@ -114,12 +114,12 @@ If browsing works but resolving fails, you're usually hitting a LAN policy or mD
 The gateway writes a rolling log file (printed on startup as `gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
-- `bonjour: suppressing ciao cancellation ...`
+- `bonjour: suppressing ciao netmask assertion ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
-- `bonjour: watchdog detected non-announced service ...`
-- `bonjour: disabling advertiser after ... failed restarts ...`
 
-The watchdog treats active `probing`, `announcing`, and fresh conflict-renames as in-progress states. If the service never reaches `announced`, OpenClaw recreates the advertiser and, after repeated failures, disables Bonjour for that gateway process instead of re-advertising forever.
+OpenClaw starts each Bonjour service once and leaves probing, retry, name-conflict resolution, and interface-change republishing to the mDNS responder. This avoids overlapping publish attempts during normal network churn. Repeated internal self-probe messages are suppressed so they cannot flood the gateway log.
+
+When multiple OpenClaw gateways advertise from the same host, Bonjour may append suffixes such as `(2)` or `(3)` to keep service instance names unique. Those suffixes are normal conflict resolution and do not indicate duplicate OCM supervision.
 
 Bonjour uses the system hostname for the advertised `.local` host when it's a valid DNS label. If the system hostname contains spaces, underscores, or another invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set `OPENCLAW_MDNS_HOSTNAME=<name>` before starting the gateway when you need an explicit host label.
 
@@ -202,13 +202,13 @@ If a node no longer auto-discovers the gateway after Docker setup:
    dns-sd -B _openclaw-gw._tcp local.
    ```
 
-   If browsing is empty, or Gateway logs show repeated ciao watchdog cancellations, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
+   If browsing is empty, or Gateway logs show repeated ciao probe failures, restore `OPENCLAW_DISABLE_BONJOUR=1` and use a direct or Tailnet route.
 
 ## Common failure modes
 
 - **Bonjour doesn't cross networks**: use Tailnet or SSH.
 - **Multicast blocked**: some Wi-Fi networks disable mDNS.
-- **Advertiser stuck in probing/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the ciao advertiser in a non-announced state. OpenClaw retries a few times, then disables Bonjour for the current gateway process instead of restarting the advertiser forever.
+- **Advertiser stuck in probing/announcing**: hosts with blocked multicast, container bridges, WSL, or interface churn can leave the responder in a non-announced state. The gateway remains available through direct, SSH, Tailnet, or wide-area DNS-SD routes; disable LAN Bonjour with `discovery.mdns.mode: "off"` or `OPENCLAW_DISABLE_BONJOUR=1` when multicast is unavailable.
 - **Docker bridge networking**: Bonjour auto-disables in detected containers. Set `OPENCLAW_DISABLE_BONJOUR=0` only for host, macvlan, or another mDNS-capable network.
 - **Sleep/interface churn**: macOS may temporarily drop mDNS results; retry.
 - **Browse works but resolve fails**: keep machine names simple (avoid emojis or punctuation), then restart the gateway. The service instance name derives from the host name, so overly complex names can confuse some resolvers.

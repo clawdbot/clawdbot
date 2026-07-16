@@ -256,6 +256,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MATRIX_DTS_INPUTS = [
+  "extensions/matrix/test-api.ts",
+  "extensions/matrix/src",
+  "extensions/matrix/tsconfig.json",
+];
+const MATRIX_DTS_STAMP = "dist/plugin-sdk/extensions/matrix/.boundary-dts.stamp";
+const MATRIX_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/matrix/test-api.d.ts"];
 const DISCORD_DTS_INPUTS = [
   "extensions/discord/api.ts",
   "extensions/discord/src/api.ts",
@@ -742,6 +749,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const matrixDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MATRIX_DTS_INPUTS,
+        outputPaths: [MATRIX_DTS_STAMP, ...MATRIX_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MATRIX_DTS_REQUIRED_OUTPUTS);
     const discordDtsFresh =
       isArtifactSetFresh({
         inputPaths: DISCORD_DTS_INPUTS,
@@ -832,6 +845,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!matrixDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: MATRIX_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "matrix boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/matrix/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/matrix",
+            "--rootDir",
+            "extensions/matrix",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MATRIX_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[matrix boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
         removeIncrementalStateForMissingOutput({

@@ -26,7 +26,7 @@ function quoteLogField(value: string): string {
   return `"${truncated.replace(/["\\]/g, "\\$&")}"`;
 }
 
-export function parseCronRunSessionKey(sessionKey?: string): {
+function parseCronRunSessionKey(sessionKey?: string): {
   agentId?: string;
   cronJobId?: string;
   cronRunId?: string;
@@ -105,7 +105,7 @@ function textFromContent(content: unknown): string | undefined {
   return texts.length ? texts.join(" ") : undefined;
 }
 
-export function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
+function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
   if (!filePath) {
     return undefined;
   }

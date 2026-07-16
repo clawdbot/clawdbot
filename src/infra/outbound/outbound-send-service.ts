@@ -138,6 +138,7 @@ async function sendCoreMessage(params: {
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
     conversationType: params.ctx.conversationType,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,

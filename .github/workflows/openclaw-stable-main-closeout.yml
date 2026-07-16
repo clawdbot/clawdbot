@@ -475,76 +475,77 @@ jobs:
               > "$windows_node_run_json"
             parent_head_sha="$(jq -r '.headSha // empty' "$RUNNER_TEMP/release-publish-run.json")"
             PARENT_HEAD_SHA="$parent_head_sha" \
-              node --input-type=module - "$windows_node_run_json" <<'NODE'
-            import { readFileSync } from "node:fs";
-            const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-            for (const [key, expected] of [
-              ["workflowName", "Windows Node Release"],
-              ["event", "workflow_dispatch"],
-              ["status", "completed"],
-              ["conclusion", "success"],
-              ["headSha", process.env.PARENT_HEAD_SHA],
-            ]) {
-              if (run[key] !== expected) {
-                throw new Error(`Windows Node Release must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+              node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const run = JSON.parse(readFileSync(process.argv[1], "utf8"));
+              for (const [key, expected] of [
+                ["workflowName", "Windows Node Release"],
+                ["event", "workflow_dispatch"],
+                ["status", "completed"],
+                ["conclusion", "success"],
+                ["headSha", process.env.PARENT_HEAD_SHA],
+              ]) {
+                if (run[key] !== expected) {
+                  throw new Error(`Windows Node Release must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+                }
               }
-            }
-            const jobs = (run.jobs ?? []).filter(
-              (job) => job.name === "Promote signed Windows installers" && job.conclusion === "success",
-            );
-            if (jobs.length !== 1) {
-              throw new Error("Windows Node Release must contain one successful signed-installer promotion job.");
-            }
-            for (const name of [
-              "Validate inputs",
-              "Verify Authenticode signatures",
-              "Upload to OpenClaw release",
-              "Verify promoted release asset contract",
-            ]) {
-              const steps = (jobs[0].steps ?? []).filter(
-                (step) => step.name === name && step.conclusion === "success",
+              const jobs = (run.jobs ?? []).filter(
+                (job) => job.name === "Promote signed Windows installers" && job.conclusion === "success",
               );
-              if (steps.length !== 1) {
-                throw new Error(`Windows Node Release is missing successful step: ${name}.`);
+              if (jobs.length !== 1) {
+                throw new Error("Windows Node Release must contain one successful signed-installer promotion job.");
               }
-            }
-            NODE
+              for (const name of [
+                "Validate inputs",
+                "Verify Authenticode signatures",
+                "Upload to OpenClaw release",
+                "Verify promoted release asset contract",
+              ]) {
+                const steps = (jobs[0].steps ?? []).filter(
+                  (step) => step.name === name && step.conclusion === "success",
+                );
+                if (steps.length !== 1) {
+                  throw new Error(`Windows Node Release is missing successful step: ${name}.`);
+                }
+              }
+              ' "$windows_node_run_json"
             windows_node_log="$RUNNER_TEMP/windows-node-release-run.log"
             gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" --log \
               > "$windows_node_log"
-            windows_node_installer_digests="$(node --input-type=module - "$windows_node_log" <<'NODE'
-            import { readFileSync } from "node:fs";
-            const log = readFileSync(process.argv[2], "utf8");
-            const marker = "EXPECTED_INSTALLER_DIGESTS:";
-            const names = [
-              "OpenClawCompanion-Setup-arm64.exe",
-              "OpenClawCompanion-Setup-x64.exe",
-            ];
-            const contracts = new Set();
-            for (const line of log.split(/\r?\n/u)) {
-              const markerIndex = line.indexOf(marker);
-              if (markerIndex === -1) continue;
-              const candidate = line.slice(markerIndex + marker.length).trim();
-              let parsed;
-              try {
-                parsed = JSON.parse(candidate);
-              } catch {
-                continue;
+            windows_node_installer_digests="$(
+              node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const log = readFileSync(process.argv[1], "utf8");
+              const marker = "EXPECTED_INSTALLER_DIGESTS:";
+              const names = [
+                "OpenClawCompanion-Setup-arm64.exe",
+                "OpenClawCompanion-Setup-x64.exe",
+              ];
+              const contracts = new Set();
+              for (const line of log.split(/\r?\n/u)) {
+                const markerIndex = line.indexOf(marker);
+                if (markerIndex === -1) continue;
+                const candidate = line.slice(markerIndex + marker.length).trim();
+                let parsed;
+                try {
+                  parsed = JSON.parse(candidate);
+                } catch {
+                  continue;
+                }
+                const keys = Object.keys(parsed).toSorted((left, right) => left.localeCompare(right));
+                if (
+                  JSON.stringify(keys) !== JSON.stringify(names) ||
+                  !names.every((name) => /^sha256:[0-9a-f]{64}$/u.test(parsed[name] ?? ""))
+                ) {
+                  continue;
+                }
+                contracts.add(JSON.stringify(Object.fromEntries(names.map((name) => [name, parsed[name]]))));
               }
-              const keys = Object.keys(parsed).toSorted((left, right) => left.localeCompare(right));
-              if (
-                JSON.stringify(keys) !== JSON.stringify(names) ||
-                !names.every((name) => /^sha256:[0-9a-f]{64}$/u.test(parsed[name] ?? ""))
-              ) {
-                continue;
+              if (contracts.size !== 1) {
+                throw new Error(`Windows Node Release logs must contain exactly one candidate-approved digest contract, got ${contracts.size}.`);
               }
-              contracts.add(JSON.stringify(Object.fromEntries(names.map((name) => [name, parsed[name]]))));
-            }
-            if (contracts.size !== 1) {
-              throw new Error(`Windows Node Release logs must contain exactly one candidate-approved digest contract, got ${contracts.size}.`);
-            }
-            process.stdout.write([...contracts][0]);
-            NODE
+              process.stdout.write([...contracts][0]);
+              ' "$windows_node_log"
             )"
             {
               echo "WINDOWS_NODE_RELEASE_RUN_ID=$windows_node_run_id"
@@ -687,7 +688,11 @@ jobs:
               }
               return
             fi
-            gh_with_retry release upload "$RELEASE_TAG" "$source_path#$asset_name" --repo "$GITHUB_REPOSITORY"
+            # The #suffix is only a display label. Stage the desired basename so
+            # GitHub stores the versioned asset name used by repair lookups.
+            cp -- "$source_path" "$existing_dir/$asset_name"
+            gh_with_retry release upload "$RELEASE_TAG" \
+              "$existing_dir/$asset_name#$asset_name" --repo "$GITHUB_REPOSITORY"
           }
           attach_or_verify \
             "$CLOSEOUT_DIR/stable-main-closeout.json" \

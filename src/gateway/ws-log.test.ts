@@ -7,6 +7,29 @@ import { formatForLog, summarizeAgentEventForWsLog } from "./ws-log.js";
 describe("gateway ws log helpers", () => {
   test.each([
     {
+      name: "run ID prefix boundary",
+      payload: { runId: `${"a".repeat(11)}🚀${"b".repeat(20)}` },
+      field: "run",
+      expected: `${"a".repeat(11)}…bbbb`,
+    },
+    {
+      name: "tool-call ID suffix boundary",
+      payload: {
+        stream: "tool",
+        data: { toolCallId: `${"a".repeat(25)}🚀bbb` },
+      },
+      field: "call",
+      expected: `${"a".repeat(12)}…bbb`,
+    },
+  ])("summarizeAgentEventForWsLog keeps the $name UTF-16 safe", ({ payload, field, expected }) => {
+    const value = summarizeAgentEventForWsLog(payload)[field];
+
+    expect(value).toBe(expected);
+    expect(value).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
+  test.each([
+    {
       name: "formats Error instances",
       input: Object.assign(new Error("boom"), { name: "TestError" }),
       expected: "TestError: boom",

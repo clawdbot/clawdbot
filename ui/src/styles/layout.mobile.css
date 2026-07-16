@@ -72,191 +72,190 @@
   }
 }
 
-/* Tablet and smaller: switch the left nav to a slide-over drawer. */
-@media (max-width: 1100px) {
-  .shell,
-  .shell--nav-collapsed {
-    --shell-topbar-height: 58px;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
-    grid-template-areas:
-      "topbar"
-      "content";
-    /* The nav collapses to an overlay drawer here, so it no longer reserves a
-       column. Zero the width the docked terminal reads or it would leave a
-       258px gap and waste most of a phone viewport. */
-    --shell-nav-width: 0px;
-  }
+/* The app host chooses this class from the platform-aware drawer breakpoint.
+   Native macOS keeps its rail beside the half-width link browser until 600px;
+   regular browsers retain the 1100px tablet breakpoint. */
+.shell--mobile-nav,
+.shell--mobile-nav.shell--nav-collapsed {
+  --shell-topbar-height: 58px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+  grid-template-areas:
+    "topbar"
+    "content";
+  /* The nav collapses to an overlay drawer here, so it no longer reserves a
+     column. Zero the width the docked terminal reads or it would leave a
+     258px gap and waste most of a phone viewport. */
+  --shell-nav-width: 0px;
+}
 
-  .shell-nav,
-  .shell--nav-collapsed .shell-nav {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 70;
-    width: min(86vw, 320px);
-    min-width: 0;
-    border-right: none;
-    box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
-    transition:
-      transform var(--shell-focus-duration) var(--shell-focus-ease),
-      opacity var(--shell-focus-duration) var(--shell-focus-ease);
-  }
+.shell--mobile-nav .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed .shell-nav {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 70;
+  width: min(86vw, 320px);
+  min-width: 0;
+  border-right: none;
+  box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--shell-focus-duration) var(--shell-focus-ease),
+    opacity var(--shell-focus-duration) var(--shell-focus-ease);
+}
 
-  .sidebar-resizer {
-    display: none;
-  }
+.shell--mobile-nav .sidebar-resizer {
+  display: none;
+}
 
-  .shell--nav-drawer-open .shell-nav,
-  .shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-  }
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav,
+.shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
 
-  .shell-nav-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 65;
-    border: 0;
-    background: color-mix(in srgb, black 52%, transparent);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-  }
+.shell--mobile-nav .shell-nav-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  border: 0;
+  background: color-mix(in srgb, black 52%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
+}
 
-  .shell--nav-drawer-open .shell-nav-backdrop {
-    opacity: 1;
-    pointer-events: auto;
-  }
+.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  opacity: 1;
+  pointer-events: auto;
+}
 
-  /* Inside the drawer there is no Escape key to hint at. */
-  .settings-sidebar__esc {
-    display: none;
-  }
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
-     the desktop rail toggle makes no sense once the sidebar is a drawer. */
-  .topbar .topbar-nav-toggle {
-    display: inline-flex;
-  }
+/* Show the hamburger toggle at the same breakpoint where the drawer takes over;
+   the desktop rail toggle makes no sense once the sidebar is a drawer. */
+.shell--mobile-nav .topbar .topbar-nav-toggle {
+  display: inline-flex;
+}
 
-  .topbar {
-    display: flex;
-  }
+.shell--mobile-nav .topbar {
+  display: flex;
+}
 
-  .topnav-shell {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) 40px;
-    gap: 10px;
-  }
+.shell--mobile-nav .topnav-shell {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  gap: 10px;
+}
 
-  .topnav-shell__content {
-    display: flex;
-    justify-content: center;
-  }
+.shell--mobile-nav .topnav-shell__content {
+  display: flex;
+  justify-content: center;
+}
 
-  .topbar-brand {
-    display: flex;
-  }
+.shell--mobile-nav .topbar-brand {
+  display: flex;
+}
 
-  .topnav-shell__actions {
-    min-width: 0;
-    justify-content: flex-end;
-  }
+.shell--mobile-nav .topnav-shell__actions {
+  min-width: 0;
+  justify-content: flex-end;
+}
 
-  .topbar-search {
-    display: inline-flex;
-    justify-content: center;
-    width: 38px;
-    min-width: 38px;
-    height: 38px;
-    min-height: 38px;
-    padding: 0;
-  }
+.shell--mobile-nav .topbar-search {
+  display: inline-flex;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  padding: 0;
+}
 
-  .sidebar-brand__actions {
-    display: none;
-  }
+.shell--mobile-nav .sidebar-brand__actions {
+  display: none;
+}
 
-  .sidebar {
-    width: 100%;
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-direction: column;
-    align-items: stretch;
-    border-right: none;
-  }
+.shell--mobile-nav .sidebar {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: stretch;
+  border-right: none;
+}
 
-  .sidebar-shell {
-    padding: 18px 16px 14px;
-    border-radius: 0;
-  }
+.shell--mobile-nav .sidebar-shell {
+  padding: 18px 16px 14px;
+  border-radius: 0;
+}
 
-  .sidebar-nav {
-    /* Match the desktop pinned-nav layout so the session list keeps the
-       remaining drawer height. */
-    flex: 0 0 auto;
-    max-height: 60%;
-    display: block;
-    padding: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: none;
-  }
+.shell--mobile-nav .sidebar-nav {
+  /* Match the desktop pinned-nav layout so the session list keeps the
+     remaining drawer height. */
+  flex: 0 0 auto;
+  max-height: 60%;
+  display: block;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
 
-  .sidebar-nav::-webkit-scrollbar {
-    display: none;
-  }
+.shell--mobile-nav .sidebar-nav::-webkit-scrollbar {
+  display: none;
+}
 
-  .nav-item {
-    margin: 0;
-    min-height: 40px;
-    padding: 0 12px;
-    font-size: 13px;
-    border-radius: var(--radius-md);
-    white-space: nowrap;
-    flex: 0 0 auto;
-    width: auto;
-  }
+.shell--mobile-nav .nav-item {
+  margin: 0;
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 13px;
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  width: auto;
 }
 
 /* Native macOS narrow widths (e.g. the in-app link browser splitting the
    window): fold the titlebar clearance into one 58px row instead of stacking
    it. body-qualified + !important outranks the Mac-app-injected topbar rules
    (DashboardWindowController), so shipped apps get the compact row too. The
-   brand moves first and stays non-interactive under the AppKit drag region
-   (x 78-254, y < 46); the drawer toggle and search sit to its right. */
-@media (max-width: 1100px) {
-  html.openclaw-native-macos body .shell {
-    --shell-topbar-height: 58px;
-  }
+   brand moves first, clears the traffic lights, and stays non-interactive
+   under the AppKit drag region (x 78-254, y < 46); the drawer toggle and
+   search sit to its right. */
+html.openclaw-native-macos body .shell--mobile-nav {
+  --shell-topbar-height: 58px;
+}
 
-  html.openclaw-native-macos body .topbar {
-    padding: 0 12px 0 78px !important;
-  }
+html.openclaw-native-macos body .shell--mobile-nav .topbar {
+  padding: 0 12px 0 92px !important;
+}
 
-  html.openclaw-native-macos body .topnav-shell {
-    display: flex;
-    gap: 8px;
-    min-height: 58px;
-  }
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell {
+  display: flex;
+  gap: 8px;
+  min-height: 58px;
+}
 
-  html.openclaw-native-macos body .topnav-shell__content {
-    order: -1;
-    flex: 0 0 auto;
-    min-width: 176px;
-    justify-content: flex-start;
-  }
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__content {
+  order: -1;
+  flex: 0 0 auto;
+  min-width: 176px;
+  justify-content: flex-start;
+}
 
-  html.openclaw-native-macos body .topnav-shell__actions {
-    margin-left: auto;
-  }
+html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
+  margin-left: auto;
 }
 
 /* Mobile-specific styles */
@@ -267,35 +266,35 @@
   }
 
   /* Topbar */
-  .topbar {
+  .shell--mobile-nav .topbar {
     display: flex;
     padding: 10px 12px;
     min-height: auto;
   }
 
-  .topnav-shell {
+  .shell--mobile-nav .topnav-shell {
     gap: 10px;
   }
 
-  .topnav-shell__actions {
+  .shell--mobile-nav .topnav-shell__actions {
     min-width: 0;
     justify-content: flex-end;
   }
 
-  .topnav-shell__content {
+  .shell--mobile-nav .topnav-shell__content {
     display: flex;
     justify-content: center;
   }
 
-  .topbar-brand {
+  .shell--mobile-nav .topbar-brand {
     display: flex;
   }
 
-  .topbar .topbar-nav-toggle {
+  .shell--mobile-nav .topbar .topbar-nav-toggle {
     display: inline-flex;
   }
 
-  .topbar-search {
+  .shell--mobile-nav .topbar-search {
     display: inline-flex;
     justify-content: center;
     width: 38px;
@@ -305,20 +304,20 @@
     padding: 0;
   }
 
-  .sidebar-mode-switch {
+  .shell--mobile-nav .sidebar-mode-switch {
     display: block;
   }
 
-  .shell-nav,
-  .shell--nav-collapsed .shell-nav {
+  .shell--mobile-nav .shell-nav,
+  .shell--mobile-nav.shell--nav-collapsed .shell-nav {
     width: min(92vw, 320px);
   }
 
-  .sidebar-shell {
+  .shell--mobile-nav .sidebar-shell {
     padding: 16px 14px 12px;
   }
 
-  .nav-item {
+  .shell--mobile-nav .nav-item {
     font-size: 12px;
   }
 

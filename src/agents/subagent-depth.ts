@@ -15,6 +15,7 @@ type SessionDepthEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   spawnedBy?: unknown;
+  parentSessionKey?: unknown;
 };
 
 function normalizeSpawnDepth(value: unknown): number | undefined {
@@ -88,7 +89,10 @@ function resolveEntryForSessionKey(params: {
         return entry;
       }
     }
-    return findEntryBySessionId(params.store, params.sessionKey);
+    const entry = findEntryBySessionId(params.store, params.sessionKey);
+    if (entry || !params.cfg) {
+      return entry;
+    }
   }
 
   if (!params.cfg) {
@@ -153,17 +157,18 @@ export function getSubagentDepthFromSessionStore(
       return storedDepth;
     }
 
-    const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
-    if (!spawnedBy) {
+    const parentKey =
+      normalizeOptionalString(entry?.spawnedBy) ?? normalizeOptionalString(entry?.parentSessionKey);
+    if (!parentKey) {
       return undefined;
     }
 
-    const parentDepth = depthFromStore(spawnedBy);
+    const parentDepth = depthFromStore(parentKey);
     if (parentDepth !== undefined) {
       return parentDepth + 1;
     }
 
-    return getSubagentDepth(spawnedBy) + 1;
+    return getSubagentDepth(parentKey) + 1;
   };
 
   return depthFromStore(raw) ?? fallbackDepth;

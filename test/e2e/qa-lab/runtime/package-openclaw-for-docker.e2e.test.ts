@@ -47,7 +47,7 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
         return pid;
       }
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for a positive pid in ${filePath}`);
 }
@@ -58,7 +58,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }

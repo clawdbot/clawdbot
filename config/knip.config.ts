@@ -13,17 +13,31 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
+  "src/agents/compaction-planning.worker.ts!",
+  "scripts/print-cli-backend-live-metadata.ts!",
+  "scripts/repro/code-mode-namespace-live.ts!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
+  // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
+  "src/agents/subagent-orphan-recovery.ts!",
+  // Task cancellation loads this control facade by string path to avoid a registry cycle.
+  "src/tasks/task-registry-control.runtime.ts!",
+  // Human plugin listing lazily loads its formatter to keep JSON startup lean.
+  "src/cli/plugins-list-format.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
   // Jiti virtualizes openclaw/plugin-sdk/agent-sessions through this cycle-safe barrel.
   "src/agents/sessions/extension-sdk.ts!",
+  // Plugin-SDK ACP facades expose the registry's runtime signatures.
+  "src/acp/runtime/registry.ts!",
   "src/plugins/runtime/index.ts!",
   "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
+  // Spawned by generated system-agent MCP configs; this stdio entry is not statically imported.
+  "src/mcp/openclaw-tools-serve.ts!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
@@ -49,6 +63,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
+  "@discord/embedded-app-sdk",
   "@discordjs/opus",
   "@homebridge/ciao",
   "@lit/context",

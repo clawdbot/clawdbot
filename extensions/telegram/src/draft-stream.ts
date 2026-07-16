@@ -11,10 +11,8 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 import {
   escapeTelegramHtml,
   markdownToTelegramChunks,
-  renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
-  type TelegramRichHtmlDegradationReason,
 } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -27,11 +25,14 @@ import {
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import {
-  buildTelegramRichHtmlPlan,
+  inputRichBlocksToPlainText,
+  type TelegramRichBlocksDegradationReason,
+} from "./rich-block-model.js";
+import { splitTelegramRichBlocks } from "./rich-block-split.js";
+import {
+  buildTelegramRichBlocksPlan,
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
-  splitTelegramRichMarkdownChunks,
-  splitTelegramRichMessageTextChunks,
   TELEGRAM_RICH_TEXT_LIMIT,
   type TelegramInputRichMessage,
 } from "./rich-message.js";
@@ -39,7 +40,7 @@ import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
   splitTelegramPlainTextChunks,
-  warnTelegramRichHtmlDegradations,
+  warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
@@ -112,8 +113,8 @@ export type TelegramDraftPreview = {
 type PlannedTelegramDraftPage = TelegramDraftMessageSnapshot & {
   sourceTextMode: "html" | "markdown";
   fullSourceText?: string;
-  richMessage?: Extract<TelegramInputRichMessage, { html: string }>;
-  degradationReasons?: readonly TelegramRichHtmlDegradationReason[];
+  richMessage?: TelegramInputRichMessage;
+  degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
 
 type RetainedTelegramDraftPage = {
@@ -131,49 +132,61 @@ function telegramRichHtmlToParseModeHtml(html: string): string {
   return html.replace(/<br\s*\/?>/giu, "\n");
 }
 
-function buildTelegramDraftRichPlan(preview: TelegramDraftPreview) {
-  const options = preview.richMessage
-    ? { skipEntityDetection: preview.richMessage.skip_entity_detection === true }
-    : undefined;
-  if (preview.richMessage?.html !== undefined) {
-    return buildTelegramRichHtmlPlan(preview.richMessage.html, options);
-  }
-  return buildTelegramRichMarkdownPlan(preview.richMessage?.markdown ?? preview.text, options);
-}
-
 function planTelegramDraftPages(
   preview: TelegramDraftPreview,
   maxChars: number,
   richMessages: boolean,
 ): PlannedTelegramDraftPage[] {
   if (richMessages) {
-    const previews = preview.richMessage
-      ? [preview]
-      : splitTelegramRichMarkdownChunks(preview.text, Number.MAX_SAFE_INTEGER, "length").map(
-          (text) => ({ text }),
-        );
-    const pages: PlannedTelegramDraftPage[] = [];
-    for (const richPreview of previews) {
-      const plan = buildTelegramDraftRichPlan(richPreview);
-      const planPages: PlannedTelegramDraftPage[] = splitTelegramRichMessageTextChunks({
-        text: plan.richMessage.html,
+    const previewRich = preview.richMessage;
+    if (previewRich) {
+      const skipEntityDetection = previewRich.skip_entity_detection === true;
+      return splitTelegramRichBlocks(previewRich.blocks, {
         textLimit: maxChars,
-        textMode: "html",
-        chunkMode: "length",
-        skipEntityDetection: plan.richMessage.skip_entity_detection === true,
-      }).map((page) => ({
+      }).map((blocks) => {
+        const plainText = inputRichBlocksToPlainText(blocks);
+        return {
+          text: plainText,
+          sourceText: plainText,
+          sourceTextMode: "markdown" as const,
+          richMessage: {
+            blocks,
+            ...(skipEntityDetection ? { skip_entity_detection: true } : {}),
+          },
+        };
+      });
+    }
+    const plan = buildTelegramRichMarkdownPlan(preview.text);
+    // Every page carries the plan's document-level skip flag: the render already
+    // committed to that linkify decision, so per-page re-derivation would leave
+    // unprotected file refs in pages without the skip trigger.
+    const planSkip = plan.richMessage.skip_entity_detection === true;
+    const pages = splitTelegramRichBlocks(plan.richMessage.blocks, {
+      textLimit: maxChars,
+    }).map((blocks, index) => {
+      const page = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: planSkip });
+      const planned: PlannedTelegramDraftPage = {
         text: page.plainText,
-        sourceText: page.text,
-        sourceTextMode: page.textMode,
-        richMessage: {
-          html: page.text,
-          ...(page.skipEntityDetection ? { skip_entity_detection: true } : {}),
-        },
-      }));
-      if (planPages[0] && plan.degradationReasons.length > 0) {
-        planPages[0].degradationReasons = plan.degradationReasons;
+        sourceText: page.plainText,
+        sourceTextMode: "markdown",
+        richMessage: page.richMessage,
+      };
+      if (index === 0 && plan.degradationReasons.length > 0) {
+        planned.degradationReasons = plan.degradationReasons;
       }
-      pages.push(...planPages);
+      return planned;
+    });
+    if (pages.length === 0 && preview.text.trim()) {
+      // Mirror the durable funnel: markdown that projects to zero blocks
+      // (link definitions only) still previews as readable source text.
+      return [
+        {
+          text: preview.text,
+          sourceText: preview.text,
+          sourceTextMode: "markdown",
+          richMessage: { blocks: [{ type: "paragraph", text: preview.text }] },
+        },
+      ];
     }
     return pages;
   }
@@ -188,13 +201,10 @@ function planTelegramDraftPages(
       sourceTextMode: "html",
     }));
   }
-  const htmlText = preview.richMessage?.html
-    ? telegramRichHtmlToParseModeHtml(preview.richMessage.html)
-    : preview.richMessage?.markdown
-      ? renderTelegramHtmlText(preview.richMessage.markdown)
-      : preview.parseMode === "HTML"
-        ? telegramRichHtmlToParseModeHtml(preview.text)
-        : undefined;
+  // Non-rich path: progress drafts may still pass parseMode HTML text.
+  // Blocks-only richMessage is ignored here — richMessages must be enabled.
+  const htmlText =
+    preview.parseMode === "HTML" ? telegramRichHtmlToParseModeHtml(preview.text) : undefined;
   if (htmlText === undefined) {
     return splitTelegramPlainTextChunks(preview.text, maxChars)
       .map((chunk, index) => (index === 0 ? chunk.trimEnd() : chunk.trim()))
@@ -205,9 +215,7 @@ function planTelegramDraftPages(
         sourceTextMode: "markdown",
       }));
   }
-  const plainText = preview.richMessage
-    ? preview.text
-    : telegramHtmlToPlainTextFallback(preview.text);
+  const plainText = telegramHtmlToPlainTextFallback(preview.text);
   const htmlPages = splitTelegramHtmlChunks(htmlText, maxChars);
   return htmlPages.map((sourceText) => ({
     text: htmlPages.length === 1 ? plainText : telegramHtmlToPlainTextFallback(sourceText),
@@ -309,7 +317,7 @@ export function createTelegramDraftStream(params: {
     sendMessageParams: ReturnType<typeof reserveReplyTargetForSend>,
   ) => {
     if (page.richMessage) {
-      warnTelegramRichHtmlDegradations({
+      warnTelegramRichBlocksDegradations({
         context: "stream preview",
         reasons: page.degradationReasons ?? [],
         warn: (message) => params.warn?.(message),
@@ -325,7 +333,7 @@ export function createTelegramDraftStream(params: {
         };
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
-          html: page.richMessage.html,
+          plainText: page.text,
           err,
           context: "stream preview",
           warn: (message) => params.warn?.(message),
@@ -372,7 +380,7 @@ export function createTelegramDraftStream(params: {
       streamVisibleSinceMs ??= Date.now();
       let acceptedSnapshot: TelegramDraftMessageSnapshot = page;
       if (page.richMessage) {
-        warnTelegramRichHtmlDegradations({
+        warnTelegramRichBlocksDegradations({
           context: "stream preview edit",
           reasons: page.degradationReasons ?? [],
           warn: (message) => params.warn?.(message),
@@ -385,7 +393,7 @@ export function createTelegramDraftStream(params: {
           });
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
-            html: page.richMessage.html,
+            plainText: page.text,
             err,
             context: "stream preview edit",
             warn: (message) => params.warn?.(message),
@@ -912,3 +920,4 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

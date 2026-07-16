@@ -28,7 +28,7 @@ function useLoggingConfig(name: string, logging: Record<string, unknown>): void 
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 }
 
-function createHistoryToolWithMessage(content: string) {
+function createHistoryToolWithMessage(content: unknown) {
   return createSessionsHistoryTool({
     config: {},
     callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
@@ -121,6 +121,42 @@ describe("sessions_history redaction", () => {
     expect(serialized).not.toContain("internal-ticket-AbC12345");
     expect(serialized).toContain("intern");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "reports decoded bytes for raw image data",
+      content: [
+        {
+          type: "image",
+          data: Buffer.from([0, 1, 2, 3, 4]).toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      expectedBytes: 5,
+    },
+    {
+      name: "replaces stale bytes for empty image data",
+      content: [{ type: "image", data: "", mimeType: "image/png", bytes: 999 }],
+      expectedBytes: 0,
+    },
+    {
+      name: "preserves existing bytes when image data is already omitted",
+      content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
+      expectedBytes: 37,
+    },
+  ])("$name", async ({ content, expectedBytes }) => {
+    const tool = createHistoryToolWithMessage(content);
+
+    const result = await tool.execute("call-1", { sessionKey: "main" });
+    const details = readHistoryDetails(result);
+
+    expect(details.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
+      },
+    ]);
   });
 
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {

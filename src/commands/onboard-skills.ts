@@ -65,7 +65,12 @@ function formatSkillHint(skill: {
   return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
 }
 
-export const testing = { formatSkillHint, summarizeInstallFailure };
+const testing = { formatSkillHint, summarizeInstallFailure };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardSkillsTestApi")] =
+    testing;
+}
 
 const SKIP_REASON_LABELS = {
   brew: "Homebrew",

@@ -48,3 +48,55 @@ export function compareToolCallShape(
   }
   return undefined;
 }
+
+function distinctToolCallShapes(toolCalls: readonly ParityToolCallShape[]) {
+  return toolCalls.filter(
+    (toolCall, index) =>
+      toolCalls.findIndex(
+        (candidate) => candidate.tool === toolCall.tool && candidate.argsHash === toolCall.argsHash,
+      ) === index,
+  );
+}
+
+export function compareCapturedToolCallShape(
+  left: readonly ParityToolCallShape[],
+  right: readonly ParityToolCallShape[],
+) {
+  const exactMatch = compareToolCallShape(left, right);
+  if (exactMatch === undefined) {
+    return undefined;
+  }
+  // Process-global captures can repeat planned rows. The canonical transcript
+  // must remain an ordered subsequence; unknown shapes still fail comparison.
+  let rightIndex = 0;
+  for (const leftCall of left) {
+    const expected = right[rightIndex];
+    if (expected?.tool === leftCall.tool && expected.argsHash === leftCall.argsHash) {
+      rightIndex += 1;
+      continue;
+    }
+    const duplicatedImageShape =
+      leftCall.tool === "image_generate" &&
+      right.some(
+        (candidate) => candidate.tool === leftCall.tool && candidate.argsHash === leftCall.argsHash,
+      );
+    if (!duplicatedImageShape) {
+      return exactMatch;
+    }
+  }
+  return rightIndex === right.length ? undefined : exactMatch;
+}
+
+export function hasSingleDistinctLeftToolCallShape(
+  left: readonly ParityToolCallShape[],
+  right: readonly ParityToolCallShape[],
+) {
+  const distinctLeft = distinctToolCallShapes(left);
+  return (
+    distinctLeft.length <= 1 &&
+    right.length <= 1 &&
+    (distinctLeft.length === 0 ||
+      right.length === 0 ||
+      compareToolCallShape(distinctLeft, right) === undefined)
+  );
+}

@@ -37,7 +37,7 @@ KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
-SCENES=(home chat voice settings gateway)
+SCENES=(home chat voice settings gateway voice-wake)
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
@@ -455,6 +455,7 @@ scene_ready_text() {
     chat) printf '%s\n' "Ready when you are" ;;
     voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
+    voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so
     # wait for the gateway detail's always-visible subtitle instead.
     gateway) printf '%s\n' "Connection between this phone and OpenClaw." ;;

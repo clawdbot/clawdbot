@@ -1,0 +1,17 @@
+title: Slack omitted progress commentary preserves the tool-progress default
+scenario:
+  id: slack-progress-commentary-omitted
+  surface: channels
+  coverage:
+    primary: [channels.streaming]
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-progress-commentary-omitted }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackProgressCommentaryOmittedScenario
+  args: [{ expr: slackScenarioContext }]

@@ -18,6 +18,7 @@ export {
 export {
   hasEnvHttpProxyConfigured,
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,

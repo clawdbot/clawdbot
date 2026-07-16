@@ -38,9 +38,7 @@ function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
   return normalized.replace(/[\\/]+$/u, "");
 }
 
-export function resolveQaWindowsSystemRoot(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveQaWindowsSystemRoot(env: Record<string, string | undefined> = process.env): string {
   return (
     normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
     normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??

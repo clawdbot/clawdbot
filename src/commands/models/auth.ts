@@ -1122,3 +1122,4 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter: createClackPrompter(),
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

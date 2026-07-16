@@ -1,7 +1,6 @@
 // Daemon restart log tests cover restart log formatting and filtering.
 import { describe, expect, it } from "vitest";
 import {
-  GATEWAY_RESTART_LOG_FILENAME,
   renderCmdRestartLogSetup,
   renderPosixRestartLogSetup,
   resolveGatewayLogPaths,
@@ -22,7 +21,7 @@ describe("restart log conventions", () => {
       stderrPath: "/Users/test/.openclaw-work/logs/gateway.err.log",
     });
     expect(resolveGatewayRestartLogPath(env)).toBe(
-      `/Users/test/.openclaw-work/logs/${GATEWAY_RESTART_LOG_FILENAME}`,
+      "/Users/test/.openclaw-work/logs/gateway-restart.log",
     );
   });
 
@@ -32,9 +31,7 @@ describe("restart log conventions", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
     };
 
-    expect(resolveGatewayRestartLogPath(env)).toBe(
-      `/tmp/openclaw-state/logs/${GATEWAY_RESTART_LOG_FILENAME}`,
-    );
+    expect(resolveGatewayRestartLogPath(env)).toBe("/tmp/openclaw-state/logs/gateway-restart.log");
   });
 
   it("keeps macOS LaunchAgent stdout outside the state directory", () => {
@@ -49,7 +46,7 @@ describe("restart log conventions", () => {
       stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
     });
     expect(resolveGatewayRestartLogPath(env)).toBe(
-      `/Volumes/External/openclaw/logs/${GATEWAY_RESTART_LOG_FILENAME}`,
+      "/Volumes/External/openclaw/logs/gateway-restart.log",
     );
   });
 

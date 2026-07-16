@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "@openclaw/workboard-contract": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

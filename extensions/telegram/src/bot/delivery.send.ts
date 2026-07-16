@@ -14,16 +14,19 @@ import {
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
 import {
-  buildTelegramRichMessagePlan,
+  buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
+  isEmptyTelegramRichMessage,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
+  type TelegramInputRichMessage,
 } from "../rich-message.js";
 import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
-  warnTelegramRichHtmlDegradations,
+  warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
@@ -101,6 +104,8 @@ export async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     richMessages?: boolean;
+    richMessage?: TelegramInputRichMessage;
+    richDegradationReasons?: readonly TelegramRichBlocksDegradationReason[];
     linkPreview?: boolean;
     tableMode?: MarkdownTableMode;
     silent?: boolean;
@@ -140,17 +145,25 @@ export async function sendTelegramText(
     return res.message_id;
   };
 
-  if (opts?.richMessages === true) {
-    const richPlan = buildTelegramRichMessagePlan(text, textMode, {
-      skipEntityDetection: opts.linkPreview === false,
-      tableMode: opts.tableMode,
-    });
-    warnTelegramRichHtmlDegradations({
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
+  // newlines, tag-aware chunking) even on rich accounts.
+  if (opts?.richMessages === true && textMode !== "html") {
+    const richPlan = opts.richMessage
+      ? {
+          richMessage: opts.richMessage,
+          plainText: fallbackText,
+          degradationReasons: opts.richDegradationReasons ?? [],
+        }
+      : buildTelegramRichMarkdownPlan(text, {
+          skipEntityDetection: opts.linkPreview === false,
+          tableMode: opts.tableMode,
+        });
+    warnTelegramRichBlocksDegradations({
       context: "sendRichMessage",
       reasons: richPlan.degradationReasons,
       warn: (message) => runtime.log?.(message),
     });
-    if (!richPlan.richMessage.html?.trim()) {
+    if (isEmptyTelegramRichMessage(richPlan.richMessage)) {
       if (!hasFallbackText) {
         throw new Error(
           "telegram sendRichMessage failed: empty rich text and empty plain fallback",
@@ -178,7 +191,7 @@ export async function sendTelegramText(
       return res.message_id;
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
-        html: richPlan.richMessage.html,
+        plainText: richPlan.plainText || fallbackText,
         err,
         context: "sendRichMessage",
         warn: (message) => runtime.log?.(message),

@@ -663,8 +663,7 @@ export class OpenClawChannelBridge {
   }
 }
 
-/** Decide whether startup should wait for a retryable Gateway connect failure to recover. */
-export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
   if (
     error.name === "GatewayClientRequestError" &&
     "retryable" in error &&

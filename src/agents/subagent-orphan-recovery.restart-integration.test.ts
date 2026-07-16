@@ -13,11 +13,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { findTaskByRunId } from "../tasks/task-registry.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
+import {
+  createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   finalizeInterruptedSubagentRun,
@@ -25,12 +33,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
-} from "./subagent-registry.js";
-import {
-  createSubagentRegistryTestDeps,
-  readSubagentSessionStore,
-  writeSubagentSessionEntry,
-} from "./subagent-registry.persistence.test-support.js";
+} from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("../gateway/call.js", () => ({

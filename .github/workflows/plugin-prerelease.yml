@@ -548,7 +548,7 @@ jobs:
       include_release_path_suites: false
       include_openwebui: false
       docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
-      targeted_docker_lane_group_size: 4
+      targeted_docker_lane_group_size: 2
       allow_unreleased_changelog: true
       include_live_suites: false
       live_models_only: false

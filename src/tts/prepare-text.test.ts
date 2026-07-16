@@ -37,6 +37,15 @@ describe("TTS text preparation – stripMarkdown", () => {
     );
   });
 
+  it("keeps explicit link destinations readable by default", () => {
+    expect(stripMarkdown("Read the [download](https://example.com/file)")).toBe(
+      "Read the download (https://example.com/file)",
+    );
+    expect(
+      stripMarkdown("Read the [download](https://example.com/file)", { linkStyle: "label" }),
+    ).toBe("Read the download");
+  });
+
   it("handles a typical LLM reply with mixed markdown", () => {
     const input = `## Heading with **bold** and *italic*
 

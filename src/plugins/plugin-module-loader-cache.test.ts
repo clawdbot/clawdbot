@@ -598,6 +598,36 @@ describe("getCachedPluginModuleLoader", () => {
     ]);
   });
 
+  it("can transform OpenClaw dependencies on a forced source fallback", async () => {
+    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    const nativeStub = vi.fn(() => ({ ok: true, moduleExport: { fromNative: true } }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginSourceModuleLoader } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=forced-source-native-fallback");
+
+    const loader = getCachedPluginSourceModuleLoader({
+      cache: new Map(),
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
+      loaderFilename: "file:///repo/src/plugin-sdk/channel-entry-contract.ts",
+      transformOpenClawDependencies: true,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    expect(loader("/repo/dist/extensions/demo/api.js")).toEqual({
+      fromSourceTransform: true,
+    });
+    const options = requireRecord(callArg(createJiti, 0, 1, "jiti options"), "jiti options");
+    expect(options.tryNative).toBe(false);
+    expect(options.nativeModules).toEqual([]);
+    expect(nativeStub).not.toHaveBeenCalled();
+  });
+
   it("normalizes Windows absolute paths before creating and calling the source transformer", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
@@ -748,35 +778,6 @@ describe("getCachedPluginModuleLoader", () => {
     });
     expect(fromSourceTransformer).toHaveBeenCalledWith(
       "file:///C:/Users/alice/openclaw/extensions/feishu/api.ts",
-    );
-  });
-
-  it("forwards extra loader arguments through to the source-transform fallback", async () => {
-    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
-    const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("./native-module-require.js", () => ({
-      isJavaScriptModulePath: () => true,
-      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
-    }));
-    const { getCachedPluginModuleLoader } = await importFreshModule<
-      typeof import("./plugin-module-loader-cache.js")
-    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-rest-args");
-
-    const cache = new Map();
-    const loader = getCachedPluginModuleLoader({
-      cache,
-      modulePath: "/repo/dist/extensions/demo/api.js",
-      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
-      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
-      createLoader: asPluginModuleLoaderFactory(createJiti),
-    });
-
-    const loose = loader as unknown as (t: string, ...a: unknown[]) => unknown;
-    loose("/repo/dist/extensions/demo/api.js", { hint: "x" }, 42);
-    expect(fromSourceTransformer).toHaveBeenCalledWith(
-      "/repo/dist/extensions/demo/api.js",
-      { hint: "x" },
-      42,
     );
   });
 });

@@ -2,9 +2,12 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
-  resolveToolsBySender,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
+  type ScopeNode,
+  type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
@@ -15,64 +18,63 @@ type SlackChannelPolicyEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
-function resolveSlackChannelPolicyEntry(
-  params: ChannelGroupContext,
-): SlackChannelPolicyEntry | undefined {
+export function buildSlackChannelPolicyScope<T extends ScopeNode>(params: {
+  channels?: Record<string, T>;
+  candidates: readonly string[];
+}) {
+  // Whole-entry selection: an exact channel hides every wildcard field.
+  // The wildcard is a normal scope selected only after all candidates miss.
+  const channels: Record<string, T> = params.channels ?? {};
+  const tree: ScopeTree = { scopes: channels };
+  const matchKey =
+    params.candidates.find(
+      (candidate) => candidate !== "*" && Object.hasOwn(tree.scopes, candidate),
+    ) ?? (Object.hasOwn(tree.scopes, "*") ? "*" : undefined);
+  const matchSource: "direct" | "wildcard" | undefined =
+    matchKey === undefined ? undefined : matchKey === "*" ? "wildcard" : "direct";
+  return {
+    tree,
+    path: matchKey ? [matchKey] : [],
+    entry: matchKey ? channels[matchKey] : undefined,
+    wildcardEntry: channels["*"],
+    matchKey,
+    matchSource,
+  };
+}
+
+function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
   const channels = mergeSlackAccountConfig(params.cfg, accountId).channels as
     | Record<string, SlackChannelPolicyEntry>
     | undefined;
-  const channelMap = channels ?? {};
-  if (Object.keys(channelMap).length === 0) {
-    return undefined;
-  }
   const channelId = params.groupId?.trim();
-  const groupChannel = params.groupChannel;
-  const channelName = groupChannel?.replace(/^#/, "");
-  const normalizedName = normalizeHyphenSlug(channelName);
+  const channelName = params.groupChannel?.replace(/^#/, "");
   const candidates = [
-    channelId ?? "",
-    channelName ? `#${channelName}` : "",
-    channelName ?? "",
-    normalizedName,
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (candidate && channelMap[candidate]) {
-      return channelMap[candidate];
-    }
-  }
-  return channelMap["*"];
-}
-
-function resolveSenderToolsEntry(
-  entry: SlackChannelPolicyEntry | undefined,
-  params: ChannelGroupContext,
-): GroupToolPolicyConfig | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const senderPolicy = resolveToolsBySender({
-    toolsBySender: entry.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  return senderPolicy ?? entry.tools;
+    channelId,
+    channelName ? `#${channelName}` : undefined,
+    channelName,
+    normalizeHyphenSlug(channelName),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  return buildSlackChannelPolicyScope({ channels, candidates });
 }
 
 export function resolveSlackGroupRequireMention(params: ChannelGroupContext): boolean {
-  const resolved = resolveSlackChannelPolicyEntry(params);
-  if (typeof resolved?.requireMention === "boolean") {
-    return resolved.requireMention;
-  }
-  return true;
+  // The adapter intentionally ignores root requireMention; the monitor resolves that default.
+  return resolveScopeRequireMention(resolveSlackGroupPolicyScope(params));
 }
 
 export function resolveSlackGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  return resolveSenderToolsEntry(resolveSlackChannelPolicyEntry(params), params);
+  const scope = resolveSlackGroupPolicyScope(params);
+  // No messageProvider: this path historically never matched channel-prefixed sender keys.
+  return resolveScopeToolsPolicy({
+    ...scope,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
 }

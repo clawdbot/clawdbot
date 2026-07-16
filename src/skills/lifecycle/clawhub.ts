@@ -487,6 +487,7 @@ async function fetchInstallVerificationLock(params: {
   ownerHandle?: string;
   version?: string;
   baseUrl?: string;
+  logger?: Logger;
 }): Promise<ClawHubSkillVerificationLock | undefined> {
   try {
     const verification = await fetchClawHubSkillVerification({
@@ -496,7 +497,10 @@ async function fetchInstallVerificationLock(params: {
       baseUrl: params.baseUrl,
     });
     return snapshotClawHubSkillVerification(verification);
-  } catch {
+  } catch (err) {
+    params.logger?.warn?.(
+      `Skill verification for ${formatClawHubSkillRef(params)} failed: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }
@@ -737,10 +741,11 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   skillDir: string;
   skillKey: string;
   lockRead?: ClawHubSkillsLockfileStatusRead;
+  lockfileScope?: "workspace" | "managed";
 }): ClawHubSkillStatusLink | undefined {
   const originRead = readClawHubSkillOriginStatusSync(params.skillDir);
   const lockRead = params.lockRead ?? readClawHubSkillsLockfileStatusSync(params.workspaceDir);
-
+  const lockfileLabel = `${params.lockfileScope ?? "workspace"} ClawHub lockfile`;
   if (originRead.kind === "missing") {
     let trackedSlug: string;
     try {
@@ -755,7 +760,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" is tracked by the workspace ClawHub lockfile but is missing local ClawHub origin metadata.`,
+      reason: `Skill "${trackedSlug}" is tracked by the ${lockfileLabel} but is missing local ClawHub origin metadata.`,
       slug: trackedSlug,
       installedVersion: locked.version,
       installedAt: locked.installedAt,
@@ -763,7 +768,6 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       lockPath: lockRead.kind === "found" ? lockRead.path : undefined,
     };
   }
-
   if (originRead.kind === "malformed") {
     return {
       status: "invalid",
@@ -795,7 +799,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -807,7 +811,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Malformed workspace ClawHub lockfile at ${lockRead.path}: ${lockRead.error}`,
+      reason: `Malformed ${lockfileLabel} at ${lockRead.path}: ${lockRead.error}`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -821,7 +825,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" has ClawHub origin metadata but is not tracked by the ${lockfileLabel}.`,
       registry: originRead.origin.registry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -872,7 +876,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
     return {
       status: "invalid",
       valid: false,
-      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile.`,
+      reason: `Skill "${trackedSlug}" ClawHub origin metadata does not match the ${lockfileLabel}.`,
       registry: lockedRegistry,
       slug: trackedSlug,
       installedVersion: originRead.origin.installedVersion,
@@ -1472,6 +1476,7 @@ async function performClawHubSkillInstall(
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
           version: verificationVersion,
           baseUrl: params.baseUrl,
+          logger: params.logger,
         }),
       ]);
       const sourceUrl =
@@ -1679,3 +1684,4 @@ export async function untrackClawHubSkill(workspaceDir: string, slug: string): P
   delete lock.skills[trackedSlug];
   await writeClawHubSkillsLockfile(workspaceDir, lock);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -122,12 +122,19 @@ describe("DefaultPackageManager", () => {
   it("keeps auto-discovered project skills inside their skill root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const agentsSkillsRoot = join(root, ".agents", "skills");
-    const insideSkill = join(agentsSkillsRoot, "inside", "SKILL.md");
+    const insideSkill = join(agentsSkillsRoot, "group", "deep", "t", "SKILL.md");
+    const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "i", "SKILL.md");
+    const escapedSkill = join(agentsSkillsRoot, "group", "deep", "!x ", "SKILL.md");
     const outsideRoot = join(root, "outside");
     await mkdir(join(root, ".git"));
-    await mkdir(join(agentsSkillsRoot, "inside"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "t"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "i"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "!x "), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insideSkill, "# Inside\n", "utf-8");
+    await writeFile(ignoredSkill, "# Ignored\n", "utf-8");
+    await writeFile(escapedSkill, "# Ignored\n", "utf-8");
+    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "i/ \nt/\t\n\\!x\\ \n");
     await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
 
     try {
@@ -146,6 +153,8 @@ describe("DefaultPackageManager", () => {
     const skillPaths = resolved.skills.map((skill) => skill.path);
 
     expect(skillPaths).toContain(insideSkill);
+    expect(skillPaths).not.toContain(ignoredSkill);
+    expect(skillPaths).not.toContain(escapedSkill);
     expect(skillPaths.some((skillPath) => skillPath.includes(join("skills", "linked")))).toBe(
       false,
     );

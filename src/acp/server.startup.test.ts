@@ -171,9 +171,13 @@ vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: () => mockState.routeLogsToStderr(),
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: () => mockState.routeLogsToStderr(),
+  };
+});
 
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
@@ -339,6 +343,14 @@ describe("serveAcpGateway startup", () => {
         password: undefined,
       },
     });
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("waits for gateway hello before creating AgentSideConnection", async () => {

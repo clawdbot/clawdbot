@@ -1123,3 +1123,4 @@ describe("session history HTTP endpoints", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

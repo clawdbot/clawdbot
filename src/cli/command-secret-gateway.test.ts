@@ -11,10 +11,8 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
-import {
-  testing as commandSecretGatewayTesting,
-  resolveCommandSecretRefsViaGateway,
-} from "./command-secret-gateway.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { testing as commandSecretGatewayTesting } from "./command-secret-gateway.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -1443,3 +1441,4 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

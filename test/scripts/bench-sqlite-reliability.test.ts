@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import { monitorSqliteWalDuring } from "../../scripts/lib/sqlite-reliability-wal-monitor.js";
 
 const tempDirs: string[] = [];
@@ -126,17 +127,15 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(unknown.stdout).toBe("");
     expect(unknown.stderr.trim()).toBe("error: Unknown argument: --wat");
 
-    const duplicate = runProof(["--profile", "smoke", "--profile", "large"]);
-    expect(duplicate.status).toBe(2);
-    expect(duplicate.stdout).toBe("");
-    expect(duplicate.stderr.trim()).toBe("error: --profile was provided more than once");
-
-    const invalid = runProof(["--profile", "huge"]);
-    expect(invalid.status).toBe(2);
-    expect(invalid.stdout).toBe("");
-    expect(invalid.stderr.trim()).toBe(
-      'error: --profile must be one of smoke, default, large; got "huge"',
+    expect(() => parseSqliteReliabilityCli(["--profile", "smoke", "--profile", "large"])).toThrow(
+      "--profile was provided more than once",
     );
+    expect(() => parseSqliteReliabilityCli(["--profile", "huge"])).toThrow(
+      '--profile must be one of smoke, default, large; got "huge"',
+    );
+    expect(parseSqliteReliabilityCli(["--help", "--profile", "huge"])).toEqual({
+      help: true,
+    });
   });
 
   it("reuses a state directory without stale rows or restore collisions", () => {

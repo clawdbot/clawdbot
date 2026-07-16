@@ -44,9 +44,10 @@ vi.mock("./register.status-health-sessions.js", () => ({
   },
 }));
 
-vi.mock("./register.crestodian.js", () => ({
-  registerCrestodianCommand: (program: Command) => {
-    program.command("crestodian");
+vi.mock("./register.setup.js", () => ({
+  registerSetupCommand: (program: Command) => {
+    program.command("setup");
+    program.command("crestodian", { hidden: true }); // hidden alias
   },
 }));
 
@@ -80,7 +81,8 @@ describe("command-registry", () => {
 
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
-    expect(names).toContain("crestodian");
+    expect(names).toContain("setup");
+    expect(names).toContain("crestodian"); // hidden alias
     expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
@@ -96,7 +98,7 @@ describe("command-registry", () => {
     expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).not.toContain("agent");
-    expect(names).not.toContain("crestodian");
+    expect(names).not.toContain("setup");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
   });

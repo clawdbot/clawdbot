@@ -7,8 +7,6 @@ import { getIMessageRuntime } from "../runtime.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   advanceIMessageRecoveryCursor,
-  IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES,
-  IMESSAGE_RECOVERY_CURSOR_NAMESPACE,
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
@@ -32,8 +30,8 @@ function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): voi
 function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
   getIMessageRuntime()
     .state.openSyncKeyedStore<{ lastRowid: number }>({
-      namespace: IMESSAGE_RECOVERY_CURSOR_NAMESPACE,
-      maxEntries: IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES,
+      namespace: "imessage.recovery-cursor",
+      maxEntries: 64,
     })
     .register(accountId, { lastRowid });
 }

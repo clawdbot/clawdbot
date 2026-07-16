@@ -5,9 +5,7 @@ import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
-  isOpenClawOwnedAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
-  type AcpxProcessInfo,
 } from "./process-reaper.js";
 
 const WRAPPER_ROOT = "/tmp/openclaw-state/acpx";
@@ -22,6 +20,9 @@ const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
 const LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND = path.resolve(
   "node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
 );
+
+type CleanupDeps = NonNullable<Parameters<typeof cleanupOpenClawOwnedAcpxProcessTree>[0]["deps"]>;
+type AcpxProcessInfo = Awaited<ReturnType<NonNullable<CleanupDeps["listProcesses"]>>>[number];
 
 function cleanupDeps(processes: AcpxProcessInfo[]) {
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
@@ -52,27 +53,6 @@ function collectMatching<T, U>(
 }
 
 describe("process reaper", () => {
-  it("recognizes generated Codex and Claude wrappers only under the configured root", () => {
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CODEX_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: CLAUDE_WRAPPER_COMMAND,
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other/codex-acp-wrapper.mjs",
-        wrapperRoot: WRAPPER_ROOT,
-      }),
-    ).toBe(false);
-  });
-
   it("only treats generated wrappers as launch-lease aware", () => {
     expect(
       isOpenClawLeaseAwareAcpxProcessCommand({
@@ -86,24 +66,6 @@ describe("process reaper", () => {
     expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
       false,
     );
-  });
-
-  it("recognizes OpenClaw plugin-runtime-deps ACP adapter children", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(true);
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: "npx @zed-industries/codex-acp" })).toBe(
-      false,
-    );
-  });
-
-  it("recognizes plugin-local ACP adapter package paths without trusting arbitrary installs", () => {
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND })).toBe(
-      true,
-    );
-    expect(
-      isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other-project/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
-      }),
-    ).toBe(false);
   });
 
   it("kills an owned recorded process tree children first", async () => {

@@ -1,0 +1,21 @@
+title: Matrix reactions on bot replies are observed
+scenario:
+  id: matrix-reaction-notification
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixRequireCanary: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-reaction.js
+  call: runReactionNotificationScenario
+  args:
+    - expr: "scenarioContext"

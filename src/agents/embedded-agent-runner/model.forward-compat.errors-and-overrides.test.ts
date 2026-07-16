@@ -61,7 +61,7 @@ vi.mock("../agent-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.test-support.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,

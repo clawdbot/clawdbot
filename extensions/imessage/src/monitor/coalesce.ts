@@ -15,10 +15,10 @@ import type { IMessagePayload } from "./types.js";
  * prompt past a safe ceiling. Every source GUID still surfaces via
  * `coalescedMessageGuids` so a future replay path can recognize duplicates.
  */
-export const MAX_COALESCED_TEXT_CHARS = 4000;
-export const MAX_COALESCED_ATTACHMENTS = 20;
-export const MAX_COALESCED_ENTRIES = 10;
-export const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
+const MAX_COALESCED_TEXT_CHARS = 4000;
+const MAX_COALESCED_ATTACHMENTS = 20;
+const MAX_COALESCED_ENTRIES = 10;
+const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
 
 export function hasIMessageUrlBalloonBundleID(payload: IMessagePayload): boolean {
   return payload.balloon_bundle_id === IMESSAGE_URL_BALLOON_BUNDLE_ID;

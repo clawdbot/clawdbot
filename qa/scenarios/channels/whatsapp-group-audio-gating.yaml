@@ -1,0 +1,17 @@
+title: WhatsApp group audio mention gating
+scenario:
+  id: whatsapp-group-audio-gating
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-audio-gating }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupAudioGatingScenario
+  args: [{ expr: whatsappScenarioContext }]

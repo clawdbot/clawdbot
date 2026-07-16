@@ -517,7 +517,7 @@ export function resolveCliBackendConfig(
 }
 
 /** Test-only dependency controls for CLI backend registry resolution. */
-export const testing = {
+const testing = {
   resetDepsForTest(): void {
     cliBackendsDeps = defaultCliBackendsDeps;
   },
@@ -528,3 +528,7 @@ export const testing = {
     };
   },
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliBackendsTestApi")] = testing;
+}

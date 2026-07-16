@@ -4,11 +4,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  enqueueCommandInLane,
-  resetCommandQueueStateForTest,
-  setCommandLaneConcurrency,
-} from "../process/command-queue.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -29,8 +26,9 @@ describe("applyGatewayLaneConcurrency", () => {
     vi.useRealTimers();
     // Gateway startup drains the process-global suspension cleanup state.
     // Reset between tests so lane assertions only see this test's setup.
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.resetSessionSuspensionStateForTest();
+    const { resetSessionSuspensionStateForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    resetSessionSuspensionStateForTest();
     resetCommandQueueStateForTest();
   });
 
@@ -171,8 +169,9 @@ describe("applyGatewayLaneConcurrency", () => {
   });
 
   it("does not resume cleanup-held built-in lanes during live config publication", async () => {
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.seedClearedLaneResumeForTest(CommandLane.Main, {
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    seedClearedLaneResumeForTest(CommandLane.Main, {
       resumeConcurrency: 3,
       resumeAtMs: Date.now() + 100,
     });
@@ -200,8 +199,9 @@ describe("applyGatewayLaneConcurrency", () => {
   it("does not resume an unexpired shared nested lane during gateway startup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { testing } = await import("../agents/session-suspension.js");
-    testing.seedClearedLaneResumeForTest(CommandLane.Nested, {
+    const { seedClearedLaneResumeForTest } =
+      await import("../agents/session-suspension.test-support.js");
+    seedClearedLaneResumeForTest(CommandLane.Nested, {
       resumeConcurrency: 1,
       resumeAtMs: 1_100,
     });

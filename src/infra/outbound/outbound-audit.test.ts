@@ -1,9 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import { describe, expect, it, vi } from "vitest";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
@@ -11,9 +8,6 @@ import {
 } from "./outbound-audit.js";
 
 describe("outbound audit projection", () => {
-  beforeEach(() => resetMessageAuditEventsForTest());
-  afterEach(() => resetMessageAuditEventsForTest());
-
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
     const events: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));

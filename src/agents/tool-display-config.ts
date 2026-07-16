@@ -305,20 +305,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Skill Workshop",
       detailKeys: ["action", "name", "proposal_id"],
     },
-    crestodian: {
+    openclaw: {
       emoji: "🦀",
-      title: "Crestodian",
+      title: "OpenClaw",
       detailKeys: ["action", "path", "model"],
     },
     gateway: {
       emoji: "🔌",
       title: "Gateway",
-      actions: {
-        restart: {
-          label: "restart",
-          detailKeys: ["reason", "delayMs"],
-        },
-      },
+      detailKeys: ["action", "path"],
     },
     exec: {
       emoji: "🛠️",
@@ -339,6 +334,20 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "📊",
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
+    },
+    sessions: {
+      emoji: "🗂️",
+      title: "Session Settings",
+      actions: {
+        patch: {
+          label: "update",
+          detailKeys: ["sessionKey", "label", "pinned", "archived", "model", "thinkingLevel"],
+        },
+        group_list: { label: "groups" },
+        group_set: { label: "set groups", detailKeys: ["names"] },
+        group_rename: { label: "rename group", detailKeys: ["name", "to"] },
+        group_delete: { label: "delete group", detailKeys: ["name"] },
+      },
     },
     sessions_list: {
       emoji: "🗂️",

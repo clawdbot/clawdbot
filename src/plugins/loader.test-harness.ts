@@ -6,7 +6,7 @@ import { expect } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-state.js";
+import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -1002,3 +1002,4 @@ export const globalAfterAll1 = () => {
   cachedBundledTelegramDir = "";
   cachedBundledMemoryDir = "";
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

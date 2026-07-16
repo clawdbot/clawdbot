@@ -110,7 +110,7 @@ const matrixStreamingSchema = z
   })
   .strict();
 
-export const MatrixConfigSchema = z.object({
+const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   defaultAccount: z.string().optional(),

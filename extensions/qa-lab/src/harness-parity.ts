@@ -9,7 +9,7 @@ import type {
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
-export type HarnessVariant = {
+type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;

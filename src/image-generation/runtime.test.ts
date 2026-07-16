@@ -5,9 +5,10 @@ import {
   generateImage,
   listRuntimeImageGenerationProviders,
   type GenerateImageParams,
-  type ImageGenerationRuntimeDeps,
 } from "./runtime.js";
 import type { ImageGenerationProvider } from "./types.js";
+
+type ImageGenerationRuntimeDeps = NonNullable<Parameters<typeof generateImage>[1]>;
 
 let providers: ImageGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];

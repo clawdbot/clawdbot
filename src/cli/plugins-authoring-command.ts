@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -307,10 +308,8 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 
   writeJsonFile(manifestPath, manifest);
   writeJsonFile(packagePath, nextPackageManifest);
-  defaultRuntime.log(
-    `Wrote ${path.relative(process.cwd(), manifestPath) || PLUGIN_MANIFEST_FILENAME}`,
-  );
-  defaultRuntime.log(`Updated ${path.relative(process.cwd(), packagePath) || "package.json"}`);
+  defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
+  defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
 export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
@@ -808,5 +807,6 @@ export async function runPluginsInitCommand(
   }
   writeJsonFile(path.join(rootDir, "tsconfig.json"), tsconfig);
   writeScaffoldVitestConfig(rootDir);
-  defaultRuntime.log(`Created ${path.relative(process.cwd(), rootDir) || "."}`);
+  defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

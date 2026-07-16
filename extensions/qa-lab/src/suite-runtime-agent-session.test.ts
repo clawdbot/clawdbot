@@ -15,14 +15,12 @@ import {
   readSessionTranscriptSummary,
   readSkillStatus,
   seedQaSessionTranscript,
-  setSessionStoreLockRetryDelaysMsForTests,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
 afterEach(async () => {
-  setSessionStoreLockRetryDelaysMsForTests();
   vi.useRealTimers();
   await cleanup();
 });
@@ -37,7 +35,6 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
-    setSessionStoreLockRetryDelaysMsForTests([1, 1, 1]);
     gatewayCall.mockReset();
   });
 
@@ -111,7 +108,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Session", "agent:qa:retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-2");
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -133,7 +130,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Stale Session", "agent:qa:stale-retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-3");
     expect(gatewayCall).toHaveBeenCalledTimes(2);

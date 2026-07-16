@@ -29,7 +29,7 @@ import {
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
-export const telegramMessageActionRuntime = {
+const telegramMessageActionRuntime = {
   handleTelegramAction: async (
     ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
   ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> => {

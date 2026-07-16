@@ -1259,3 +1259,4 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

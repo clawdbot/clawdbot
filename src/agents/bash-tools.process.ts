@@ -599,7 +599,7 @@ export function createProcessTool(
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );
@@ -779,3 +779,4 @@ export function createProcessTool(
 
 /** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

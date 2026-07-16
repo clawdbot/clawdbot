@@ -13,6 +13,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
@@ -34,6 +35,8 @@ import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
+import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import {
   prepareSimpleCompletionModel,
@@ -63,18 +66,16 @@ import type {
   Usage,
 } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  projectWorkerInferenceTerminalMessage,
+  type WorkerInferenceModelIdentity,
+} from "./inference-terminal-message.js";
+import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
-type WorkerInferenceModelIdentity = {
-  api: string;
-  provider: string;
-  model: string;
-};
-const MAX_PENDING_TOOL_DELTA_BYTES = 1024 * 1024;
-const MAX_PENDING_TOOL_DELTAS = 4096;
-
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 
@@ -103,6 +104,7 @@ type WorkerInferenceRuntimeDependencies = {
   loadCatalog: typeof loadModelCatalog;
   resolveDefaultModel: typeof resolveDefaultModelForAgent;
   resolveSessionAuthProfile: typeof resolveSessionAuthProfileOverride;
+  resolveAuthProfileMode: typeof resolveWorkerInferenceAuthProfileMode;
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveProviderStream: typeof registerProviderStreamForModel;
@@ -113,6 +115,56 @@ type WorkerInferenceRuntimeDependencies = {
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
   recordUsage: (params: WorkerInferenceUsageParams) => void;
 };
+
+function resolveWorkerInferenceAuthProfileMode(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  profileId: string;
+}): string | undefined {
+  const configuredMode = params.config.auth?.profiles?.[params.profileId]?.mode;
+  if (configuredMode) {
+    return configuredMode;
+  }
+  return ensureAuthProfileStore(params.agentDir, {
+    readOnly: true,
+    allowKeychainPrompt: false,
+    config: params.config,
+  }).profiles[params.profileId]?.type;
+}
+
+export function projectWorkerInferenceModelRouteConfig(params: {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  authMode?: string;
+}): OpenClawConfig {
+  const authRequirement = resolveProviderModelRouteAuthRequirement(params.authMode);
+  if (!authRequirement) {
+    return params.config;
+  }
+  const resolution = resolveProviderModelRoutes({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+  });
+  if (resolution?.kind !== "routes") {
+    return params.config;
+  }
+  const route = resolution.routes.find(
+    (candidate) => candidate.authRequirement === authRequirement,
+  );
+  if (!route) {
+    return params.config;
+  }
+  // Worker placement owns the agent harness, while the gateway-owned profile
+  // owns the provider route. Keep those decisions separate or OAuth can be
+  // materialized as a public API-key endpoint and fail before the first token.
+  return projectProviderModelRouteConfig({
+    provider: params.provider,
+    config: params.config,
+    route,
+  });
+}
 
 const ERROR_MESSAGES = {
   "model-not-approved": "Model is not approved for this agent.",
@@ -135,25 +187,6 @@ function inferenceError(
     reason,
     message: ERROR_MESSAGES[reason],
     ...(usage ? { usage: structuredClone(usage) } : {}),
-  };
-}
-
-function safeAssistantMessage(params: {
-  message: AssistantMessage;
-  modelIdentity: WorkerInferenceModelIdentity;
-  stopReason: Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">;
-}): Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] {
-  return {
-    role: "assistant",
-    content: structuredClone(params.message.content),
-    api: params.modelIdentity.api,
-    provider: params.modelIdentity.provider,
-    model: params.modelIdentity.model,
-    ...(params.message.responseModel ? { responseModel: params.message.responseModel } : {}),
-    ...(params.message.responseId ? { responseId: params.message.responseId } : {}),
-    usage: structuredClone(params.message.usage),
-    stopReason: params.stopReason,
-    timestamp: params.message.timestamp,
   };
 }
 
@@ -352,6 +385,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   loadCatalog: loadModelCatalog,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthProfile: resolveSessionAuthProfileOverride,
+  resolveAuthProfileMode: resolveWorkerInferenceAuthProfileMode,
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
   resolveProviderStream: registerProviderStreamForModel,
@@ -510,6 +544,18 @@ async function resolveApprovedModel(params: {
         : sessionProfileId
           ? { id: sessionProfileId, source: sessionProfileSource }
           : undefined;
+  const modelConfig = projectWorkerInferenceModelRouteConfig({
+    config,
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
+    authMode: selectedProfile
+      ? dependencies.resolveAuthProfileMode({
+          config,
+          agentDir,
+          profileId: selectedProfile.id,
+        })
+      : undefined,
+  });
   const modelResolver = bindSimpleCompletionModelResolverWorkspace(
     (provider, modelId, resolvedAgentDir, cfg, options) =>
       dependencies.resolveModel(provider, modelId, resolvedAgentDir, cfg, {
@@ -519,14 +565,16 @@ async function resolveApprovedModel(params: {
       }),
     workspaceDir,
   );
+  // Route projection and credential selection are one decision. Pin even an
+  // automatic profile so generic auth fallback cannot cross to another route.
   const prepared = await dependencies.prepareModel({
-    cfg: config,
+    cfg: modelConfig,
     provider: resolved.ref.provider,
     modelId: resolved.ref.model,
     agentDir,
-    ...(selectedProfile?.source === "user" ? { profileId: selectedProfile.id } : {}),
+    ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
     ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
-    ...(selectedProfile?.source === "user" ? { bindAuthOwner: true } : {}),
+    ...(selectedProfile ? { bindAuthOwner: true } : {}),
     allowMissingApiKeyModes: ["aws-sdk"],
     useAsyncModelResolution: true,
     modelResolver,
@@ -675,28 +723,11 @@ export function createWorkerInferenceExecutor(
         trace,
       });
     };
-    const pendingToolDeltas = new Map<number, string[]>();
-    let pendingToolDeltaBytes = 0;
-    let pendingToolDeltaCount = 0;
-    const startedToolCalls = new Set<number>();
-    const startToolCall = (contentIndex: number, partial: AssistantMessage): boolean => {
-      if (startedToolCalls.has(contentIndex)) {
-        return true;
-      }
-      const content = contentAt(partial, contentIndex);
-      if (content?.type !== "toolCall" || !content.id || !content.name) {
-        return false;
-      }
-      params.emit({ type: "toolcall_start", contentIndex, id: content.id, toolName: content.name });
-      startedToolCalls.add(contentIndex);
-      for (const delta of pendingToolDeltas.get(contentIndex) ?? []) {
-        params.emit({ type: "toolcall_delta", contentIndex, delta });
-        pendingToolDeltaBytes -= Buffer.byteLength(delta, "utf8");
-        pendingToolDeltaCount -= 1;
-      }
-      pendingToolDeltas.delete(contentIndex);
-      return true;
-    };
+    const executionIsCurrent = () => !signal.aborted && params.isCurrent();
+    const toolCalls = createWorkerToolCallStream({
+      emit: params.emit,
+      isCurrent: executionIsCurrent,
+    });
 
     const providerAbort = new AbortController();
     const providerSignal = AbortSignal.any([signal, providerAbort.signal]);
@@ -716,9 +747,23 @@ export function createWorkerInferenceExecutor(
           if (signal.aborted || !params.isCurrent()) {
             return inferenceError("cancelled", event.message.usage);
           }
+          for (const [contentIndex, content] of event.message.content.entries()) {
+            if (content.type === "toolCall") {
+              const endResult = toolCalls.end(contentIndex, event.message, content);
+              if (endResult === "cancelled") {
+                return inferenceError("cancelled", event.message.usage);
+              }
+              if (endResult === "invalid") {
+                return inferenceError("provider-error");
+              }
+            }
+          }
+          if (!toolCalls.matchesTerminal(event.message)) {
+            return inferenceError("provider-error");
+          }
           return {
             type: "done",
-            message: safeAssistantMessage({
+            message: projectWorkerInferenceTerminalMessage({
               message: event.message,
               modelIdentity,
               stopReason: event.reason,
@@ -736,33 +781,29 @@ export function createWorkerInferenceExecutor(
           return inferenceError("cancelled");
         }
         if (event.type === "toolcall_start") {
-          startToolCall(event.contentIndex, event.partial);
+          if (toolCalls.start(event.contentIndex, event.partial) === "cancelled") {
+            return inferenceError("cancelled");
+          }
           continue;
         }
         if (event.type === "toolcall_delta") {
-          if (startedToolCalls.has(event.contentIndex)) {
-            params.emit({ type: event.type, contentIndex: event.contentIndex, delta: event.delta });
-          } else {
-            const pending = pendingToolDeltas.get(event.contentIndex) ?? [];
-            pendingToolDeltaBytes += Buffer.byteLength(event.delta, "utf8");
-            pendingToolDeltaCount += 1;
-            if (
-              pendingToolDeltaBytes > MAX_PENDING_TOOL_DELTA_BYTES ||
-              pendingToolDeltaCount > MAX_PENDING_TOOL_DELTAS
-            ) {
-              return inferenceError("provider-error");
-            }
-            pending.push(event.delta);
-            pendingToolDeltas.set(event.contentIndex, pending);
-            startToolCall(event.contentIndex, event.partial);
+          const deltaResult = toolCalls.delta(event.contentIndex, event.delta, event.partial);
+          if (deltaResult === "cancelled") {
+            return inferenceError("cancelled");
+          }
+          if (deltaResult === "invalid") {
+            return inferenceError("provider-error");
           }
           continue;
         }
         if (event.type === "toolcall_end") {
-          if (!startToolCall(event.contentIndex, event.partial)) {
+          const endResult = toolCalls.end(event.contentIndex, event.partial, event.toolCall);
+          if (endResult === "cancelled") {
+            return inferenceError("cancelled");
+          }
+          if (endResult === "invalid") {
             return inferenceError("provider-error");
           }
-          params.emit({ type: event.type, contentIndex: event.contentIndex });
           continue;
         }
         const workerEvent = toWorkerStreamEvent(event, modelIdentity);
@@ -780,3 +821,4 @@ export function createWorkerInferenceExecutor(
 }
 
 export const executeWorkerInference: WorkerInferenceExecutor = createWorkerInferenceExecutor();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

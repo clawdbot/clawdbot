@@ -1519,3 +1519,4 @@ describe("openai-completions stop-reason tool-call guard", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

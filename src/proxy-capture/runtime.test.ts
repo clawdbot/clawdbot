@@ -1,9 +1,7 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerSecretValueForRedaction,
-  resetSecretRedactionRegistryForTest,
-} from "../logging/secret-redaction-registry.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
 import {
   captureHttpExchange,

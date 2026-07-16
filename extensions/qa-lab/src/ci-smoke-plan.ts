@@ -2,15 +2,15 @@
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./model-selection.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
-import { scenarioMatchesQaProviderLane } from "./suite-planning.js";
 
 const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
 const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
 const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "control-ui-chat-flow-playwright",
-  "crestodian-ring-zero-setup",
+  "system-agent-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
   "luna-thinking-visibility-switch",
@@ -73,6 +73,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
         providerMode,
         primaryModel,
         channelDriver: profile.channelDriver,
+        channel: scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
       }),
   );
   if (scenarios.length === 0) {

@@ -79,7 +79,6 @@ describeControlUiE2e("Control UI Quick Config thinking persistence mocked Gatewa
       expect(await lowButton.getAttribute("aria-checked")).toBe("true");
 
       await modelCard.getByRole("radio", { name: "High", exact: true }).click();
-      await page.getByRole("button", { name: "Save", exact: true }).click();
 
       const raw = requestRaw(await gateway.waitForRequest("config.set"));
       expect(raw).toEqual({

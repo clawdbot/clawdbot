@@ -59,7 +59,7 @@ function qaLabFlowScenarioIds(scenarios: QaSeedScenario[]) {
     .map((scenario) => scenario.id);
 }
 
-export function createDefaultQaRunSelection(
+function createDefaultQaRunSelection(
   scenarios: QaSeedScenario[],
   options?: { resolveDefaultModel?: QaDefaultModelResolver },
 ): QaLabRunSelection {

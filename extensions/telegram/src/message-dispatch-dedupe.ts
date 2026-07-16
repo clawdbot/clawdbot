@@ -12,7 +12,7 @@ export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-messag
 const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
-export type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
+type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
   Required<Pick<ClaimableDedupe, "forget">>;
 
 type TelegramMessageDispatchClaim =
@@ -25,7 +25,7 @@ type TelegramMessageDispatchReplayForgetFailure = {
   error?: unknown;
 };
 
-export class TelegramMessageDispatchReplayForgetError extends Error {
+class TelegramMessageDispatchReplayForgetError extends Error {
   readonly failures: TelegramMessageDispatchReplayForgetFailure[];
   override readonly cause: unknown;
 
@@ -66,7 +66,7 @@ export function resolveTelegramMessageDispatchLegacyPath(params: {
   );
 }
 
-export function buildTelegramMessageDispatchReplayKey(msg: Message): string | null {
+function buildTelegramMessageDispatchReplayKey(msg: Message): string | null {
   const chatId = msg.chat?.id;
   const messageId = msg.message_id;
   if (chatId == null || typeof messageId !== "number" || messageId <= 0) {
@@ -220,30 +220,6 @@ export async function commitTelegramMessageDispatchReplay(params: {
       }
       throw error;
     }
-  }
-}
-
-export async function forgetTelegramMessageDispatchReplay(params: {
-  guard: TelegramMessageDispatchReplayGuard;
-  keys?: readonly string[];
-}): Promise<void> {
-  const keys = normalizeReplayKeys(params.keys);
-  const failures = (
-    await Promise.all(
-      keys.map(async (key): Promise<TelegramMessageDispatchReplayForgetFailure | null> => {
-        try {
-          const forgotten = await params.guard.forget(key, {
-            namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-          });
-          return forgotten ? null : { key };
-        } catch (error) {
-          return { key, error };
-        }
-      }),
-    )
-  ).filter((failure): failure is TelegramMessageDispatchReplayForgetFailure => Boolean(failure));
-  if (failures.length > 0) {
-    throw new TelegramMessageDispatchReplayForgetError(failures);
   }
 }
 

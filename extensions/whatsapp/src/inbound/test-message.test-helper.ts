@@ -7,10 +7,11 @@ import type {
   AdmittedWebInboundMessage,
   WebInboundCallbackMessage,
   WebInboundMessage,
-  WhatsAppInboundEvent,
-  WhatsAppInboundPayload,
-  WhatsAppInboundPlatform,
 } from "./types.js";
+
+type WhatsAppInboundEvent = WebInboundCallbackMessage["event"];
+type WhatsAppInboundPayload = WebInboundCallbackMessage["payload"];
+type WhatsAppInboundPlatform = WebInboundCallbackMessage["platform"];
 
 type TestWhatsAppInboundAdmissionOverrides = Partial<
   Omit<

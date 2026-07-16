@@ -2147,3 +2147,4 @@ describe("chrome.ts internal", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

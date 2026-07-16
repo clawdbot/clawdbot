@@ -87,6 +87,24 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun voiceWakeSettingsDefaultAndPersist() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.voiceWakeEnabled.value)
+    assertEquals(listOf("openclaw", "claude", "computer"), prefs.voiceWakeWords.value)
+
+    prefs.setVoiceWakeEnabled(true)
+    prefs.setVoiceWakeWords(listOf(" hey claw ", "computer"))
+
+    val restored = testPrefs(context)
+    assertTrue(restored.voiceWakeEnabled.value)
+    assertEquals(listOf("hey claw", "computer"), restored.voiceWakeWords.value)
+  }
+
+  @Test
   fun installedAppsSharing_defaultsOffAndPersistsDisclosureConsent() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

@@ -6986,3 +6986,4 @@ describe("chat.send operator UI client sender context", () => {
     expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

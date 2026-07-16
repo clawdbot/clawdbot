@@ -16,6 +16,51 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
+  it("includes initial-message attachments", () => {
+    const attachments = [
+      { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
+    ];
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "",
+        attachments,
+        worktree: false,
+      }),
+    ).toEqual({ agentId: "main", message: "", attachments });
+  });
+
+  it("includes a selected model for a plain session", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "use the selected model",
+        model: "anthropic/claude-sonnet-4-6",
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "use the selected model",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("does not combine a catalog target with a draft model override", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start coding",
+        model: "openai/gpt-5.5",
+        worktree: false,
+        catalogId: "claude",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start coding",
+      catalogId: "claude",
+    });
+  });
+
   it("submits the catalog target for server-side resolution", () => {
     expect(
       buildDraftSessionCreateParams({

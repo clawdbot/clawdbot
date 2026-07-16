@@ -40,7 +40,7 @@ function normalizeId(value?: string): string {
   return normalizeOptionalString(value) ?? "";
 }
 
-export function buildDiscordModelPickerPreferenceKey(
+function buildDiscordModelPickerPreferenceKey(
   scope: DiscordModelPickerPreferenceScope,
 ): string | null {
   const userId = normalizeId(scope.userId);

@@ -17,6 +17,7 @@ export type NodeTestShard = {
   env?: Record<string, string>;
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
+  planConcurrency?: number;
 };
 
 export type NodeTestPlanOptions = {

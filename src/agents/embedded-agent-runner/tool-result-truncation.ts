@@ -206,7 +206,7 @@ function hasImportantTail(text: string): boolean {
  * This ensures error messages and summaries at the end of tool output
  * aren't lost during truncation.
  */
-export function truncateToolResultText(
+function truncateToolResultText(
   text: string,
   maxChars: number,
   options: ToolResultTruncationOptions = {},
@@ -275,7 +275,7 @@ export function truncateToolResultText(
  * Uses a rough 4 chars ≈ 1 token heuristic (conservative for English text;
  * actual ratio varies by tokenizer).
  */
-export function calculateMaxToolResultChars(contextWindowTokens: number): number {
+function calculateMaxToolResultChars(contextWindowTokens: number): number {
   return calculateMaxToolResultCharsWithCap(
     contextWindowTokens,
     resolveAutoLiveToolResultMaxChars(contextWindowTokens),
@@ -351,7 +351,7 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
 /**
  * Get the total character count of text content blocks in a tool result message.
  */
-export function getToolResultTextLength(msg: AgentMessage): number {
+function getToolResultTextLength(msg: AgentMessage): number {
   if (!msg || (msg as { role?: string }).role !== "toolResult") {
     return 0;
   }
@@ -701,15 +701,6 @@ type ToolResultReplacement = {
   entryId: string;
   message: AgentMessage;
 };
-
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map<string, AgentMessage>(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceTextByKey: new Map<string, string[]>(),
-  };
-}
 
 function getToolResultProjectionBaseKey(message: AgentMessage): string | undefined {
   if (message.role !== "toolResult") {
@@ -1413,7 +1404,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
 /**
  * Truncates oversized tool results in the active runtime transcript.
  */
-export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
+async function truncateOversizedToolResultsInRuntimeTranscript(params: {
   scope: RuntimeTranscriptScope;
   contextWindowTokens: number;
   maxCharsOverride?: number;
@@ -1509,7 +1500,7 @@ export async function truncateOversizedToolResultsInActiveTarget(params: {
 /**
  * Truncates a named transcript file artifact.
  */
-export async function truncateOversizedToolResultsInSession(params: {
+async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
@@ -1557,3 +1548,4 @@ export function sessionLikelyHasOversizedToolResults(params: {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

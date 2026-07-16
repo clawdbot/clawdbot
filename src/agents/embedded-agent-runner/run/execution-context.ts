@@ -1,0 +1,33 @@
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { SessionSuspensionParams } from "../../session-suspension.js";
+import { resolveRunWorkspaceDir } from "../../workspace-run.js";
+import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { RunEmbeddedAgentParams } from "./params.js";
+import { createEmbeddedRunProgressController } from "./progress-controller.js";
+import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+
+export type PreparedEmbeddedRunInput = {
+  runParams: RunEmbeddedAgentParamsWithSessionFile;
+  provider: string;
+  modelId: string;
+  agentDir: string;
+  workspaceResolution: ReturnType<typeof resolveRunWorkspaceDir>;
+  workspaceDir: string;
+  isCanonicalWorkspace: boolean;
+  globalLane: string;
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hookContext: Parameters<typeof prepareEmbeddedRunRuntime>[0]["hookContext"];
+  fallbackConfigured: boolean;
+  isProbeSession: boolean;
+  resolvedSessionKey: string;
+  resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
+  startedAtMs: number;
+  startupStages: ReturnType<typeof createEmbeddedRunStageTracker>;
+  emitStartupStageSummary: (phase: string) => void;
+  progressController: ReturnType<typeof createEmbeddedRunProgressController>;
+  laneController: ReturnType<typeof createEmbeddedRunLaneController>;
+  lifecycleGeneration: NonNullable<RunEmbeddedAgentParams["lifecycleGeneration"]>;
+  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+};

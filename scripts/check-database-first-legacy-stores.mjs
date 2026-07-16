@@ -90,9 +90,16 @@ const legacyStorePatterns = [
   /\bcache\/[^"'`]*\.json\b/u,
   /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
   /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|workspace-state)\.json\b/u,
+  /\btui\/last-session\.json\b/u,
+  /\bcommitments\/commitments\.json\b/u,
+  /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+  /\bpush\/(?:web-push-subscriptions|vapid-keys)\.json\b/u,
+  /\bnode\.json\b/u,
+  /\btmp\/skill-uploads\b/u,
+  /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|audit\/file-transfer|audit\/crestodian)\.jsonl\b/u,
+  /\b(?:calls|ref-index|audit\/file-transfer|audit\/openclaw)\.jsonl\b/u,
   /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
   /\bplugin-state\/state\.sqlite\b/u,
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
@@ -101,16 +108,20 @@ const legacyStorePatterns = [
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
+  "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
+  "src/infra/state-migrations.tui-last-session.ts",
+  "src/infra/state-migrations.commitments.ts",
+  "src/infra/state-migrations.managed-outgoing-images.ts",
+  "src/infra/state-migrations.web-push.ts",
+  "src/infra/state-migrations.node-host.ts",
+  "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
   "src/commands/doctor-state-migrations.test.ts",
 ];
 
-const allowedFixturePaths = new Set([
-  "extensions/qa-lab/src/providers/shared/auth-store.ts",
-  "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
-]);
+const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
 const allowedCurrentLegacyWriteViolations = [
   "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",

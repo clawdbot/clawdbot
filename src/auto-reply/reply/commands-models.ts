@@ -767,3 +767,4 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   }
   return { reply, shouldContinue: false };
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

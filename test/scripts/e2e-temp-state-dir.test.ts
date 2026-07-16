@@ -17,11 +17,12 @@ import { describe, expect, it } from "vitest";
 import { createE2eStateDir } from "../../scripts/e2e/lib/temp-state-dir.ts";
 
 async function waitForFile(filePath: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Preserve the 2-second file budget while detecting child readiness sooner.
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     if (existsSync(filePath)) {
       return;
     }
-    await delay(20);
+    await delay(5);
   }
   throw new Error(`Timed out waiting for ${filePath}`);
 }

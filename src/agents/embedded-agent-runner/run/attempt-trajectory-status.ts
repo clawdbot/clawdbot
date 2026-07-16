@@ -9,7 +9,7 @@ import {
 type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 /** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
-export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
+const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 /** Normalized terminal status recorded for an embedded run attempt trajectory. */
 type AttemptTrajectoryTerminal = {

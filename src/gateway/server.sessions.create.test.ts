@@ -1813,6 +1813,53 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
+test("sessions.create forwards an attachment-only first turn", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "attachment-run", status: "started" });
+  });
+  const attachment = {
+    type: "image",
+    mimeType: "image/png",
+    fileName: "pixel.png",
+    content:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+  };
+
+  try {
+    const created = await directSessionReq<{ runStarted?: boolean; runId?: string }>(
+      "sessions.create",
+      { agentId: "main", message: "", attachments: [attachment] },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(created.payload).toMatchObject({ runStarted: true, runId: "attachment-run" });
+    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
+      message: "",
+      attachments: [attachment],
+    });
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
+test("sessions.create rejects unusable attachment-only input before creating a session", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    attachments: [null],
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("attachments require usable content");
+  const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
+  expect(listed.payload?.sessions).toEqual([]);
+});
+
 test("sessions.create rejects replacing its parent key", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }] };
@@ -1831,3 +1878,4 @@ test("sessions.create rejects replacing its parent key", async () => {
     message: "sessions.create key must differ from parentSessionKey",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,11 +5,16 @@ import {
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
+import { DISCORD_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
 
 type DiscordQaCliRuntime = typeof import("./cli.runtime.js");
+type DiscordQaAdapterRuntime = typeof import("./adapter.runtime.js");
 
 const loadDiscordQaCliRuntime = createLazyCliRuntimeLoader<DiscordQaCliRuntime>(
   () => import("./cli.runtime.js"),
+);
+const loadDiscordQaAdapterRuntime = createLazyCliRuntimeLoader<DiscordQaAdapterRuntime>(
+  () => import("./adapter.runtime.js"),
 );
 
 async function runQaDiscord(opts: LiveTransportQaCommandOptions) {
@@ -20,6 +25,14 @@ async function runQaDiscord(opts: LiveTransportQaCommandOptions) {
 export const discordQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "discord",
+    adapterFactory: {
+      id: "discord",
+      scenarioIds: DISCORD_QA_DEFAULT_SCENARIO_IDS,
+      matches: ({ channelId, driver }) => driver === "live" && channelId === "discord",
+      async create(context) {
+        return await (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
+      },
+    },
     credentialOptions: {
       sourceDescription: "Credential source for Discord QA: env or convex (default: env)",
       roleDescription:

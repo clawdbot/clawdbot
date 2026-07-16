@@ -205,13 +205,13 @@ model.
 
 ## Configuration
 
-| Setting                                    | Default     | Self-learning effect                                                                                                              |
-| ------------------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `skills.workshop.autonomous.enabled`       | `false`     | Enables direct correction capture and delayed experience review.                                                                  |
-| `skills.workshop.approvalPolicy`           | `"pending"` | Controls approval prompts for normal agent-initiated lifecycle actions; it does not expand the background reviewer's permissions. |
-| `skills.workshop.maxPending`               | `50`        | Caps pending and quarantined proposals per workspace.                                                                             |
-| `skills.workshop.maxSkillBytes`            | `40000`     | Caps proposal body size in bytes.                                                                                                 |
-| `skills.workshop.allowSymlinkTargetWrites` | `false`     | Affects apply behavior only; self-learning itself writes proposal state, not live skill targets.                                  |
+| Setting                                    | Default  | Self-learning effect                                                                                                              |
+| ------------------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `skills.workshop.autonomous.enabled`       | `false`  | Enables direct correction capture and delayed experience review.                                                                  |
+| `skills.workshop.approvalPolicy`           | `"auto"` | Controls approval prompts for normal agent-initiated lifecycle actions; it does not expand the background reviewer's permissions. |
+| `skills.workshop.maxPending`               | `50`     | Caps pending and quarantined proposals per workspace.                                                                             |
+| `skills.workshop.maxSkillBytes`            | `40000`  | Caps proposal body size in bytes.                                                                                                 |
+| `skills.workshop.allowSymlinkTargetWrites` | `false`  | Affects apply behavior only; self-learning itself writes proposal state, not live skill targets.                                  |
 
 For the exhaustive schema, ranges, and related skill settings, see
 [Skills config](/tools/skills-config#workshop-skills-workshop).

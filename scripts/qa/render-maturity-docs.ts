@@ -1117,7 +1117,11 @@ function renderTaxonomy({
           `    <div>${scoreMeter(coverageScore)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.quality)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.completeness)}</div>`,
-          `    <div className="maturity-category-docs">${docs || "No linked docs"}</div>`,
+          '    <div className="maturity-category-docs">',
+          "",
+          docs || "No linked docs",
+          "",
+          "    </div>",
           "  </div>",
         );
       }

@@ -15,7 +15,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
@@ -25,9 +25,9 @@ import {
 } from "./profiles.js";
 import {
   getRuntimeAuthProfileStoreSnapshot as getInternalRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreCredentialMutationRevision,
+  getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreStateMutationRevision,
+  getRuntimeAuthProfileStoreStateMutationToken,
 } from "./runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
@@ -41,8 +41,8 @@ import {
   restoreAuthProfileStorePersistenceSnapshot,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   saveAuthProfileStore,
-  testing as storeTesting,
 } from "./store.js";
+import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 type ExpectedOAuthCredentialFields = {
@@ -385,8 +385,9 @@ describe("promoteAuthProfileInOrder", () => {
       replaceRuntimeAuthProfileStoreSnapshots([
         { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
       ]);
-      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const credentialRevision =
+        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
 
       runAuthProfileWriteTransaction(agentDir, (database) => {
         saveAuthProfileStore(store("sk-new"), agentDir, undefined, database);
@@ -402,10 +403,10 @@ describe("promoteAuthProfileInOrder", () => {
         "openai:backup",
         "openai:default",
       ]);
-      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBeGreaterThan(
         credentialRevision,
       );
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
         stateRevision,
       );
     });
@@ -479,8 +480,9 @@ describe("promoteAuthProfileInOrder", () => {
         order: { openai: ["openai:old"] },
       };
       saveAuthProfileStore(oldStore, agentDir);
-      const credentialRevision = getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir);
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const credentialRevision =
+        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
       const database = openOpenClawAgentDatabase({
         agentId: "main",
         path: resolveAuthProfileDatabasePath(agentDir),
@@ -508,10 +510,10 @@ describe("promoteAuthProfileInOrder", () => {
       database.db.exec("DROP TRIGGER reject_auth_profile_state_update;");
 
       expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir)).toMatchObject(oldStore);
-      expect(getRuntimeAuthProfileStoreCredentialMutationRevision(agentDir)).toBe(
+      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBe(
         credentialRevision,
       );
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBe(stateRevision);
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBe(stateRevision);
     });
   });
 
@@ -790,7 +792,7 @@ describe("promoteAuthProfileInOrder", () => {
       };
       saveAuthProfileStore(store, agentDir);
       const credentialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationRevision(agentDir);
+      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
 
       saveAuthProfileStore(
         { ...store, usageStats: { "openai:default": { lastUsed: 42 } } },
@@ -798,7 +800,7 @@ describe("promoteAuthProfileInOrder", () => {
       );
 
       expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(credentialRevision);
-      expect(getRuntimeAuthProfileStoreStateMutationRevision(agentDir)).toBeGreaterThan(
+      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
         stateRevision,
       );
     });
@@ -1358,3 +1360,4 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

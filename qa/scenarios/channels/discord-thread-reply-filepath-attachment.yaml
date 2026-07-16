@@ -1,0 +1,17 @@
+title: Discord thread reply preserves filePath attachment
+scenario:
+  id: discord-thread-reply-filepath-attachment
+  surface: channels
+  coverage:
+    primary: [channels.media-rich-content]
+  execution:
+    kind: flow
+    channel: discord
+    timeoutMs: 45000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { discordScenarioId: discord-thread-reply-filepath-attachment }
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordThreadReplyFilepathAttachmentScenario
+  args: [{ expr: discordScenarioContext }]

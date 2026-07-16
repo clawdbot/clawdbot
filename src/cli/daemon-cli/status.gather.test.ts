@@ -1340,3 +1340,4 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

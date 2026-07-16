@@ -1207,3 +1207,4 @@ describe("runEmbeddedAgent", () => {
     expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

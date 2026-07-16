@@ -1,0 +1,78 @@
+// Verifies runtime live-state guardrails stay documented and enforced.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it } from "vitest";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+const LIVE_RUNTIME_STATE_GUARDS: Record<
+  string,
+  {
+    required: readonly string[];
+    forbidden: readonly string[];
+  }
+> = {
+  [bundledPluginFile("whatsapp", "src/connection-controller-runtime-context.ts")]: {
+    required: ["getChannelRuntimeContext", "WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY"],
+    forbidden: ["globalThis", "resolveGlobalSingleton"],
+  },
+};
+
+type GuardAssertion = {
+  relativePath: string;
+  type: "required" | "forbidden";
+  needle: string;
+  message: string;
+};
+
+function guardAssertions(): GuardAssertion[] {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) =>
+    guard.required
+      .map<GuardAssertion>((needle) => ({
+        relativePath,
+        type: "required",
+        needle,
+        message: `${relativePath} missing ${needle}`,
+      }))
+      .concat(
+        guard.forbidden.map<GuardAssertion>((needle) => ({
+          relativePath,
+          type: "forbidden",
+          needle,
+          message: `${relativePath} must not contain ${needle}`,
+        })),
+      ),
+  );
+}
+
+function expectGuardState(
+  params: {
+    source: string;
+  } & Pick<GuardAssertion, "message" | "needle" | "type">,
+) {
+  if (params.type === "required") {
+    expect(params.source, params.message).toContain(params.needle);
+    return;
+  }
+  expect(params.source, params.message).not.toContain(params.needle);
+}
+
+function readGuardrailSource(relativePath: string) {
+  return readFileSync(resolve(repoRoot, relativePath), "utf8");
+}
+
+describe("runtime live state guardrails", () => {
+  it.each(guardAssertions())(
+    "keeps split-runtime state holders on explicit direct globals: $relativePath $type $needle",
+    ({ relativePath, type, needle, message }) => {
+      expectGuardState({
+        source: readGuardrailSource(relativePath),
+        type,
+        needle,
+        message,
+      });
+    },
+  );
+});

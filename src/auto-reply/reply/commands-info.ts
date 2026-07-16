@@ -321,11 +321,13 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
   ) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/export-session");
+  if (unauthorized) {
+    return unauthorized;
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/export-session");
+  if (nonOwner) {
+    return nonOwner;
   }
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
-import { runCodeModeScriptHeadless, testing, type CodeModeHeadlessResult } from "./code-mode.js";
+import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,

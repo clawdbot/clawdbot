@@ -1,5 +1,6 @@
 import type { Envelope, GuardAdapter, SignedReceipt } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
+import type { ReefAutonomy } from "./friend-types.js";
 
 export interface ReefKeys {
   signing: { publicKey: string; secretKey: string };
@@ -50,4 +51,5 @@ export interface ReefIngressMessage {
   thread?: string;
   replyTo?: string;
   provenance: string;
+  autonomy: ReefAutonomy;
 }

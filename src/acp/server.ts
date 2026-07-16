@@ -7,6 +7,7 @@ import {
   AgentSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type AnyMessage,
 } from "@agentclientprotocol/sdk";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -31,12 +32,6 @@ import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
-type AcpStreamMessage =
-  ReturnType<typeof ndJsonStream> extends {
-    readable: ReadableStream<infer Message>;
-  }
-    ? Message
-    : never;
 type JsonObject = Record<string, unknown>;
 
 /** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
@@ -176,7 +171,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
   const readable = stream.readable.pipeThrough(
-    new TransformStream<AcpStreamMessage, AcpStreamMessage>({
+    new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
@@ -214,7 +209,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   return closed;
 }
 
-function normalizeAcpInitializeProtocolVersion(message: AcpStreamMessage): AcpStreamMessage {
+function normalizeAcpInitializeProtocolVersion(message: AnyMessage): AnyMessage {
   if (!isJsonObject(message)) {
     return message;
   }
@@ -235,7 +230,7 @@ function normalizeAcpInitializeProtocolVersion(message: AcpStreamMessage): AcpSt
       ...params,
       protocolVersion: PROTOCOL_VERSION,
     },
-  } as AcpStreamMessage;
+  } as AnyMessage;
 }
 
 function isJsonObject(value: unknown): value is JsonObject {

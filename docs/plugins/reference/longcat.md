@@ -16,7 +16,7 @@ OpenClaw LongCat provider plugin.
 
 ## Surface
 
-providers: longcat
+providers: `longcat`
 
 ## Related docs
 

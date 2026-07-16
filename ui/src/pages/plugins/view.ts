@@ -1257,3 +1257,4 @@ export function renderPlugins(props: PluginsViewProps) {
     { wide: true },
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

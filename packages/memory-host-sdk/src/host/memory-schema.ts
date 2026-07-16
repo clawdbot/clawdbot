@@ -13,10 +13,43 @@ export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
 
-const MEMORY_PATH_FTS_TRIGGER_NAMES = [
-  "memory_index_paths_fts_after_insert",
-  "memory_index_paths_fts_after_update",
-  "memory_index_paths_fts_after_delete",
+/** Optional canonical triggers owned by the derived path FTS index. */
+export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
+  {
+    name: "memory_index_paths_fts_after_insert",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
+      AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        VALUES (NEW.id, NEW.path, NEW.source);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_paths_fts_after_update",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
+      AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+        WHERE rowid = OLD.id;
+        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
+        VALUES (NEW.id, NEW.path, NEW.source);
+      END;
+    `,
+  },
+  {
+    name: "memory_index_paths_fts_after_delete",
+    sql: `
+      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
+      AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
+      BEGIN
+        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
+        WHERE rowid = OLD.id;
+      END;
+    `,
+  },
 ] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
@@ -454,37 +487,18 @@ function migrateLegacyMemoryIndexTables(
 
 /** Drop the canonical source-to-path-FTS maintenance triggers. */
 export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
-  for (const triggerName of MEMORY_PATH_FTS_TRIGGER_NAMES) {
-    db.exec(`DROP TRIGGER IF EXISTS main.${triggerName}`);
+  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
   }
 }
 
 /** Install the canonical source-to-path-FTS maintenance triggers. */
 export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
-  db.exec(`
-    -- The named integer source identity survives VACUUM and gives every
-    -- FTS update/delete a direct rowid lookup instead of a virtual-table scan.
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      VALUES (NEW.id, NEW.path, NEW.source);
-    END;
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
-    AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-      WHERE rowid = OLD.id;
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      VALUES (NEW.id, NEW.path, NEW.source);
-    END;
-    CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-      WHERE rowid = OLD.id;
-    END;
-  `);
+  // The named integer source identity survives VACUUM and gives every
+  // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
+  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
+    db.exec(trigger.sql);
+  }
 }
 
 function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {

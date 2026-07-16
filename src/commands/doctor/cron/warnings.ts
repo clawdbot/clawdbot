@@ -165,7 +165,7 @@ function listConcreteCronDeliveryTargets(
  * list is resolved lazily so doctor skips the read-only channel snapshot when no job can drift.
  * Returns `null` when no job pins a concrete target or every concrete target is active.
  */
-export function collectCronDeliveryTargetAdvisory(params: {
+function collectCronDeliveryTargetAdvisory(params: {
   jobs: Array<Record<string, unknown>>;
   storePath: string;
   resolveAvailableChannelIds: () => Iterable<string>;

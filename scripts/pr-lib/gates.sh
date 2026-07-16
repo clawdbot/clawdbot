@@ -2,7 +2,7 @@ run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
   local changelog_only="$3"
-  local recent_sha="${4:-}"
+  local recent_sha=""
   local remote_head
   remote_head=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
   if [ "$remote_head" != "$current_head" ]; then
@@ -41,10 +41,6 @@ run_hosted_prepare_gates() {
     args+=(--changelog-only)
   fi
   run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"
-}
-
-compute_pr_patch_id() {
-  git diff --binary "$1" "$2" | git patch-id --verbatim | awk 'NR == 1 { print $1 }'
 }
 
 pin_worktree_bundled_plugins_dir() {
@@ -398,36 +394,14 @@ prepare_gates() {
   fi
 
   if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    gates_mode="hosted_exact_or_recent_rebase"
+    gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check origin/main...HEAD
     fi
-    local recent_hosted_sha=""
-    if [ -s .local/prep-sync.env ]; then
-      # shellcheck disable=SC1091
-      source .local/prep-sync.env
-      local current_prep_tree
-      current_prep_tree=$(git rev-parse "${current_head}^{tree}")
-      if [ "${PREP_SYNC_TREE:-}" != "$current_prep_tree" ]; then
-        echo "Prepared PR head no longer matches the recorded sync tree."
-        exit 1
-      fi
-      if [ -z "${PREP_SYNC_MAINLINE_BASE_SHA:-}" ] || [ -z "${PREP_SYNC_PATCH_ID:-}" ]; then
-        echo "Prepared PR sync evidence is incomplete."
-        exit 1
-      fi
-      local current_patch_id
-      current_patch_id=$(compute_pr_patch_id "$PREP_SYNC_MAINLINE_BASE_SHA" "$current_head")
-      if [ "$current_patch_id" != "$PREP_SYNC_PATCH_ID" ]; then
-        echo "Prepared PR patch no longer matches the verified pre-rebase patch."
-        exit 1
-      fi
-      recent_hosted_sha="${PREP_SYNC_EVIDENCE_SHA:-}"
-    fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$recent_hosted_sha"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only"
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

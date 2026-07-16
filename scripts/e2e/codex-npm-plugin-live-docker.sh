@@ -153,7 +153,7 @@ if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
-  -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-codex/gpt-5.4}" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-openai/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT="$SESSION_STORE_CONTRACT" \
   -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
@@ -201,7 +201,7 @@ fi
 
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_PLUGIN_SPEC}"
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
-POST_UNINSTALL_MODEL_REF="codex/${MODEL_REF#*/}"
+POST_UNINSTALL_MODEL_REF="$MODEL_REF"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS:-420}"
@@ -355,15 +355,11 @@ if openclaw agent --local \
   --thinking low \
   --timeout 120 \
   --json >/tmp/openclaw-codex-agent-after-uninstall.json 2>/tmp/openclaw-codex-agent-after-uninstall.err; then
-  echo "Expected OpenClaw agent to fail after Codex uninstall, got status 0" >&2
-  exit 1
+  post_uninstall_status=0
+else
+  post_uninstall_status=$?
 fi
-if ! grep -Fq 'Requested agent harness "codex" is not registered' /tmp/openclaw-codex-agent-after-uninstall.err &&
-  ! grep -Fq 'Unknown model: codex/' /tmp/openclaw-codex-agent-after-uninstall.err; then
-  echo "Unexpected post-uninstall agent error:" >&2
-  tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err >&2 || true
-  exit 1
-fi
+node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-agent-error "$post_uninstall_status"
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF

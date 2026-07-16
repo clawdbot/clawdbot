@@ -14,7 +14,9 @@ export {
 type QaLabLiveTransportQaCliRegistrationOptions = Omit<
   LiveTransportQaCliRegistrationOptions,
   "allowFailuresHelp" | "defaultProviderMode" | "providerModeHelp"
->;
+> & {
+  defaultProviderMode?: LiveTransportQaCliRegistrationOptions["defaultProviderMode"];
+};
 
 export function createLiveTransportQaCliRegistration(
   params: QaLabLiveTransportQaCliRegistrationOptions,
@@ -22,7 +24,7 @@ export function createLiveTransportQaCliRegistration(
   return createSharedLiveTransportQaCliRegistration({
     ...params,
     allowFailuresHelp: "Write artifacts without setting a failing exit code when scenarios fail",
-    defaultProviderMode: DEFAULT_QA_LIVE_PROVIDER_MODE,
+    defaultProviderMode: params.defaultProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
     providerModeHelp: formatQaProviderModeHelp(),
   });
 }

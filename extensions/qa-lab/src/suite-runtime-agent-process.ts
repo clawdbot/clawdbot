@@ -590,13 +590,11 @@ async function runAgentPrompt(
 export {
   forceMemoryIndex,
   findManagedDreamingCronJob,
-  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
   runQaCli,
   startAgentRun,
   waitForAgentHistoryReply,
-  waitForMemorySearchMatch,
   waitForAgentRun,
 };

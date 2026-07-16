@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   validateWorkspaceDoc,
   type WorkspaceBinding,
@@ -59,15 +60,15 @@ function parseOptionalBoolean(value: string): boolean {
 }
 
 function parseWorkspaceGrid(value: string): WorkspaceGrid {
-  const parts = value.split(",").map((entry) => Number(entry.trim()));
-  if (parts.length !== 4 || parts.some((entry) => !Number.isInteger(entry))) {
+  // Reject alternate JS numeric spellings that the CLI contract does not expose.
+  const parts = value.split(",").map((entry) => parseStrictNonNegativeInteger(entry.trim()));
+  if (parts.length !== 4 || parts.includes(undefined)) {
     throw new Error("grid must be x,y,w,h");
   }
-  const [x, y, w, h] = parts as [number, number, number, number];
-  return { x, y, w, h };
+  return { x: parts[0]!, y: parts[1]!, w: parts[2]!, h: parts[3]! };
 }
 
-export function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
+function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
   const eqIndex = value.indexOf("=");
   if (eqIndex <= 0) {
     throw new Error("binding must be id=file:<path>, id=rpc:<method>, or id=static:<json>");

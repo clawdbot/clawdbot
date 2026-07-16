@@ -171,10 +171,17 @@ const APPEARANCE_SETTINGS_BLOCKS = {
       "chat.sendShortcut",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
+      "chat.followUpMode",
+      "chat.followUpModeSteer",
+      "chat.followUpModeQueue",
+      "chat.catalogOpenTarget",
+      "chat.catalogOpenTargetViewer",
+      "chat.catalogOpenTargetTerminal",
       "chat.composer.microphoneInput",
       "chat.composer.systemDefaultMicrophone",
     ],
-    aliases: "keyboard enter microphone voice audio input",
+    aliases:
+      "keyboard enter follow-up followup steer queue microphone voice audio input codex claude terminal viewer",
   },
   connection: {
     routeId: "appearance",

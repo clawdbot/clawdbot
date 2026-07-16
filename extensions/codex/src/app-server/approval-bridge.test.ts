@@ -2636,3 +2636,4 @@ describe("Codex app-server approval bridge", () => {
     expect(payload.description).toBe(`${"d".repeat(252)}...`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

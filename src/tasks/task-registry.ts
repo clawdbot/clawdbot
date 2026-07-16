@@ -1607,7 +1607,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
   }
 }
 
-export async function maybeDeliverTaskStateChangeUpdate(
+async function maybeDeliverTaskStateChangeUpdate(
   taskId: string,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
@@ -2633,7 +2633,7 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
     .toSorted(compareTasksNewestFirst);
 }
 
-export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
+function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {
   const task = listTasksForFlowId(flowId)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
@@ -2684,7 +2684,7 @@ export function listTasksForFlowId(flowId: string): TaskRecord[] {
   return listTasksFromIndex(taskIdsByParentFlowId, key);
 }
 
-export function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
+function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
   const task = listTasksForRelatedSessionKey(sessionKey)[0];
   return task ? cloneTaskRecord(task) : undefined;
 }
@@ -2735,7 +2735,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   return true;
 }
 
-export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   clearTaskRegistryMemory();
   taskRegistryRestoreState = { status: "uninitialized" };
   resetTaskRegistryRuntimeForTests();
@@ -2754,30 +2754,42 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   getTaskRegistryStore().close?.();
 }
 
-export function resetTaskRegistryDeliveryRuntimeForTests() {
+function resetTaskRegistryDeliveryRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = null;
   deliveryRuntimeLoader.clear();
 }
 
-export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
+function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = runtime;
   deliveryRuntimeLoader.clear();
 }
 
-export function resetTaskRegistryControlRuntimeForTests() {
+function resetTaskRegistryControlRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = null;
   controlRuntimeLoader.clear();
 }
 
-export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
+function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = runtime;
   controlRuntimeLoader.clear();
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.taskRegistryTestApi")] = {
+    maybeDeliverTaskStateChangeUpdate,
+    resetTaskRegistryControlRuntimeForTests,
+    resetTaskRegistryDeliveryRuntimeForTests,
+    resetTaskRegistryForTests,
+    setTaskRegistryControlRuntimeForTests,
+    setTaskRegistryDeliveryRuntimeForTests,
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

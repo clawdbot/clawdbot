@@ -29,7 +29,6 @@ export type ChangedScopeArgs = {
 
 export function detectChangedScope(changedPaths: string[]): ChangedScope;
 export function shouldRunNativeI18n(changedPaths: string[]): boolean;
-export function shouldRunTsLoc(changedPaths: string[]): boolean;
 export function detectNodeFastScope(changedPaths: string[]): NodeFastScope;
 export function detectInstallSmokeScope(changedPaths: string[]): InstallSmokeScope;
 export function listChangedPaths(
@@ -44,7 +43,6 @@ export function writeGitHubOutput(
   installSmokeScope?: InstallSmokeScope,
   nodeFastScope?: NodeFastScope,
   runNativeI18n?: boolean,
-  runTsLoc?: boolean,
   changedPaths?: string[] | null,
 ): void;
 

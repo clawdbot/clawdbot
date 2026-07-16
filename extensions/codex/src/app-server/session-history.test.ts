@@ -110,11 +110,26 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
     ).resolves.toEqual([]);
   });
 
-  it("returns undefined for malformed non-empty mirrored session files", async () => {
+  it("returns [] for transcripts that do not open with a Codex session marker", async () => {
+    // A non-Codex-shaped transcript (e.g. a non-Codex model run reusing this
+    // hook) is an empty mirror, not a read failure, so callers must not warn.
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
     tempDirs.push(dir);
     const sessionFile = path.join(dir, "session.jsonl");
     await fs.writeFile(sessionFile, JSON.stringify({ type: "message", id: "orphan" }) + "\n");
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
+  });
+
+  it("returns undefined for a session header without a string id", async () => {
+    // A `session` header with corrupt metadata is a Codex transcript gone bad,
+    // not a foreign transcript — it must stay on the warn path.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-"));
+    tempDirs.push(dir);
+    const sessionFile = path.join(dir, "session.jsonl");
+    await fs.writeFile(sessionFile, JSON.stringify({ type: "session", id: 42 }) + "\n");
 
     await expect(
       readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),

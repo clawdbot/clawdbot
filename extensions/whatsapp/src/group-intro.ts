@@ -2,6 +2,11 @@
 const WHATSAPP_GROUP_INTRO_HINT =
   "WhatsApp IDs: SenderId is the participant JID (group participant id).";
 
+/**
+ * @deprecated Core never consumed the group intro hint adapter; this export
+ * remains only for the plugin API surface and is removed after the next
+ * release train together with ChannelGroupAdapter.resolveGroupIntroHint.
+ */
 export function resolveWhatsAppGroupIntroHint(): string {
   return WHATSAPP_GROUP_INTRO_HINT;
 }

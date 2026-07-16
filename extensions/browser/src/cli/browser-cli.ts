@@ -240,12 +240,7 @@ function resolveBrowserLazySubcommand(argv: string[]): string | null {
 }
 
 function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  for (let current: Command | null | undefined = cmd; current; current = current.parent) {
-    if (current.name() === "browser") {
-      return current.opts() as BrowserParentOpts;
-    }
-  }
-  return cmd.parent?.opts?.() as BrowserParentOpts;
+  return cmd.optsWithGlobals<BrowserParentOpts>();
 }
 
 function registerLazyBrowserCommands(

@@ -1,4 +1,5 @@
 import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import milliseconds from "ms";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 
 type RateLimitWindow =
@@ -32,24 +33,9 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
     ) {
       return undefined;
     }
-    if (unit === "d" || unit?.startsWith("day")) {
-      return value * 86_400;
-    }
-    if (unit === "h" || unit?.startsWith("hr") || unit?.startsWith("hour")) {
-      return value * 3_600;
-    }
-    if (
-      unit?.startsWith("m") &&
-      unit !== "ms" &&
-      !unit.startsWith("msec") &&
-      !unit.startsWith("millisecond")
-    ) {
-      return value * 60;
-    }
-    if (unit === "ms" || unit?.startsWith("msec") || unit?.startsWith("millisecond")) {
-      return value / 1000;
-    }
-    return value;
+    const unitMilliseconds = milliseconds(`1${unit ?? "s"}` as Parameters<typeof milliseconds>[0]);
+    // Preserve division for millisecond inputs; multiplying by 0.001 can change IEEE-754 rounding.
+    return unitMilliseconds === 1 ? value / 1000 : value * (unitMilliseconds / 1000);
   }
   const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);

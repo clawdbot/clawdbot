@@ -26,6 +26,7 @@ class ConnectionManager(
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
+  private val voiceWakeAvailable: () -> Boolean,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
@@ -141,6 +142,7 @@ class ConnectionManager(
       motionPedometerAvailable = motionPedometerAvailable(),
       installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
+      voiceWakeEnabled = prefs.voiceWakeEnabled.value && voiceWakeAvailable(),
     )
 
   /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */

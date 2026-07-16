@@ -7,14 +7,15 @@ type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
-    name: "crestodian",
-    description: "Open the ring-zero setup and repair helper",
+    name: "setup",
+    description: "Chat with OpenClaw; onboard when setup is incomplete",
     hasSubcommands: false,
   },
   {
-    name: "setup",
-    description: "Alias for openclaw onboard",
+    name: "crestodian", // hidden alias
+    description: "Deprecated: use openclaw setup",
     hasSubcommands: false,
+    hidden: true,
   },
   {
     name: "onboard",

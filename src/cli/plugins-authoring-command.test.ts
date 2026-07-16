@@ -3,13 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
   buildToolPluginManifest,
   buildToolPluginPackageManifest,
   loadToolPlugin,
+  runPluginsBuildCommand,
   runPluginsInitCommand,
   validateToolPluginProject,
 } from "./plugins-authoring-command.js";
@@ -312,6 +314,68 @@ describe("plugin authoring commands", () => {
 
     expect(loaded.metadata.id).toBe("source-demo");
     expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["source_echo"]);
+  });
+
+  it("finishes a build from an absolute root after the launch directory is removed", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-build-"));
+    const packagePath = path.join(tmpDir, "package.json");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-deleted-cwd-build",
+      pluginId: "deleted-cwd-build",
+      toolName: "deleted_cwd_echo",
+    });
+    const originalCwd = process.cwd();
+    const originalWriteFileSync = fs.writeFileSync.bind(fs);
+    let cwdRemoved = false;
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      if (cwdRemoved) {
+        throw new Error("ENOENT: no such file or directory, uv_cwd");
+      }
+      return originalCwd;
+    });
+    const writeFileSync = vi
+      .spyOn(fs, "writeFileSync")
+      .mockImplementation((file, data, options) => {
+        originalWriteFileSync(file, data, options);
+        if (file === packagePath) {
+          cwdRemoved = true;
+        }
+      });
+
+    try {
+      await runPluginsBuildCommand({ root: tmpDir, entry: entryPath });
+
+      expect(fs.existsSync(path.join(tmpDir, "openclaw.plugin.json"))).toBe(true);
+      expect(log).toHaveBeenCalledWith(`Wrote ${path.join(tmpDir, "openclaw.plugin.json")}`);
+      expect(log).toHaveBeenCalledWith(`Updated ${packagePath}`);
+    } finally {
+      writeFileSync.mockRestore();
+      cwd.mockRestore();
+      log.mockRestore();
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
+  });
+
+  it("finishes init with an absolute directory after the launch directory is removed", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-init-"));
+    const projectDir = path.join(tmpDir, "demo");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory, uv_cwd");
+    });
+
+    try {
+      await runPluginsInitCommand("demo", { directory: projectDir });
+
+      expect(fs.existsSync(path.join(projectDir, "package.json"))).toBe(true);
+      expect(log).toHaveBeenCalledWith(`Created ${projectDir}`);
+    } finally {
+      cwd.mockRestore();
+      log.mockRestore();
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
   });
 
   it("scaffolds a dist-entry tool plugin project", async () => {

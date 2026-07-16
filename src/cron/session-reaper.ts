@@ -20,7 +20,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const lastSweepAtMsByStore = new Map<string, number>();
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
-export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
+function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   if (cronConfig?.sessionRetention === false) {
     return null; // pruning disabled
   }
@@ -148,6 +148,12 @@ export async function sweepCronRunSessions(params: {
 }
 
 /** Resets per-store reaper throttles between tests. */
-export function resetReaperThrottle(): void {
+function resetReaperThrottle(): void {
   lastSweepAtMsByStore.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronSessionReaperTestApi")] = {
+    resetReaperThrottle,
+  };
 }

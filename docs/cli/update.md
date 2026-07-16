@@ -294,9 +294,14 @@ third-party packages, and non-npm sources keep their existing intent.
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
 install: OpenClaw installs the new package into a temporary npm prefix,
-verifies the packaged `dist` inventory there, then swaps that clean package
-tree into the real global prefix. If verification fails, post-update doctor,
-plugin sync, and restart work do not run from the suspect tree. Even when the
+lets the candidate package validate the host Node version during `preinstall`,
+and verifies the packaged `dist` inventory there. A packed completion guard
+stays outside that inventory until `preinstall` succeeds, so package managers
+that skip lifecycle scripts also stop before activation. On npm 12 and newer,
+the updater approves only the candidate OpenClaw lifecycle; transitive
+dependency scripts remain blocked. OpenClaw then swaps the clean package tree
+into the real global prefix. If verification fails, post-update doctor, plugin
+sync, and restart work do not run from the suspect tree. Even when the
 installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned

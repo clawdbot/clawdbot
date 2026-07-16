@@ -381,6 +381,54 @@ describe("parseLineDirectives", () => {
     });
   });
 
+  describe("blank comma-separated entries", () => {
+    // A trailing or doubled comma in agent output must not emit empty Flex text
+    // components (agenda) or empty action labels (device); LINE rejects those with
+    // HTTP 400 "May not be empty".
+    const collectRenderedStrings = (node: unknown, out: string[]): string[] => {
+      if (Array.isArray(node)) {
+        for (const item of node) {
+          collectRenderedStrings(item, out);
+        }
+      } else if (node && typeof node === "object") {
+        const record = node as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          out.push(record.text);
+        }
+        if (typeof record.label === "string") {
+          out.push(record.label);
+        }
+        for (const value of Object.values(record)) {
+          collectRenderedStrings(value, out);
+        }
+      }
+      return out;
+    };
+
+    it("drops trailing commas in agenda events", () => {
+      const result = parseLineDirectives({ text: "[[agenda: Today | Standup:9am, Lunch:12pm,]]" });
+      const flexMessage = requireFlexMessage(
+        getLineData(result).flexMessage,
+        "agenda trailing comma",
+      );
+      expect(flexMessage.altText).toBe("📋 Today (2 events)");
+      expect(collectRenderedStrings(flexMessage.contents, [])).not.toContain("");
+    });
+
+    it("drops doubled commas and blank labels in device controls", () => {
+      const result = parseLineDirectives({
+        text: "[[device: TV | Box | Playing | Play:toggle,, :ignored, Menu:menu]]",
+      });
+      const flexMessage = requireFlexMessage(
+        getLineData(result).flexMessage,
+        "device blank controls",
+      );
+      const renderedStrings = collectRenderedStrings(flexMessage.contents, []);
+      expect(renderedStrings).toEqual(expect.arrayContaining(["Play", "Menu"]));
+      expect(renderedStrings).not.toContain("");
+    });
+  });
+
   describe("device", () => {
     it("parses device variants", () => {
       const cases = [

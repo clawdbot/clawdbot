@@ -148,7 +148,7 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
  * shared-link content must be fetched through the Graph shares API rather
  * than directly.
  */
-export function isGraphSharedLinkUrl(url: string): boolean {
+function isGraphSharedLinkUrl(url: string): boolean {
   let host: string;
   try {
     host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
@@ -442,11 +442,11 @@ export function safeHostForUrl(url: string): string {
   }
 }
 
-export function resolveAllowedHosts(input?: string[]): string[] {
+function resolveAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_HOST_ALLOWLIST);
 }
 
-export function resolveAuthAllowedHosts(input?: string[]): string[] {
+function resolveAuthAllowedHosts(input?: string[]): string[] {
   return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
 }
 
@@ -549,13 +549,13 @@ export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undef
  * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
  * parse errors.
  */
-export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Resolve a hostname via DNS and reject private/reserved IPs.
  * Throws if the resolved IP is private or resolution fails.
  */
-export async function resolveAndValidateIP(
+async function resolveAndValidateIP(
   hostname: string,
   resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
@@ -582,7 +582,7 @@ const MAX_SAFE_REDIRECTS = 5;
  * - Auto-following redirects to non-allowlisted hosts
  * - DNS rebinding attacks when a lookup function is provided
  */
-export async function safeFetch(params: {
+async function safeFetch(params: {
   url: string;
   allowHosts: string[];
   /**

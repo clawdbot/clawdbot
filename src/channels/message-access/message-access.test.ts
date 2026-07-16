@@ -1,13 +1,13 @@
 // Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
-import {
-  decideChannelIngress,
-  resolveChannelIngressState,
-  type ChannelIngressPolicyInput,
-  type ChannelIngressStateInput,
-  type InternalChannelIngressAdapter,
-  type InternalChannelIngressSubject,
+import { decideChannelIngress } from "./decision.js";
+import type {
+  ChannelIngressPolicyInput,
+  ChannelIngressStateInput,
+  InternalChannelIngressAdapter,
+  InternalChannelIngressSubject,
 } from "./index.js";
+import { resolveChannelIngressState } from "./state.js";
 
 const subject = (value: string): InternalChannelIngressSubject => ({
   identifiers: [{ opaqueId: "subject-1", kind: "stable-id", value }],

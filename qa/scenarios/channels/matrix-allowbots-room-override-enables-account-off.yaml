@@ -1,0 +1,30 @@
+title: Matrix room allowBots=mentions overrides account allowBots off
+scenario:
+  id: matrix-allowbots-room-override-enables-account-off
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-policy
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        configuredBotRoles:
+          - observer
+        groupAllowRoles:
+          - driver
+          - observer
+        groupsByKey:
+          main:
+            allowBots: mentions
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsRoomOverrideEnablesAccountOffScenario
+  args:
+    - expr: "scenarioContext"

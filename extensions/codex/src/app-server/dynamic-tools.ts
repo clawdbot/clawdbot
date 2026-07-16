@@ -45,6 +45,7 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
@@ -895,8 +896,8 @@ function createCodexDynamicToolSpecs(params: {
   const directOnlyNamespaceTools: CodexDynamicToolFunctionSpec[] = [];
   for (const entry of params.entries) {
     const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
-    if (entry.name === "crestodian" && params.directToolNames.has(entry.name)) {
-      // Crestodian is ring-zero and its whole turn surface. Keep its canonical
+    if (entry.name === "openclaw" && params.directToolNames.has(entry.name)) {
+      // OpenClaw is ring-zero and its whole turn surface. Keep its canonical
       // root name even though generic direct-only tools use a model namespace.
       specs.push(functionSpec);
       continue;
@@ -972,8 +973,14 @@ function projectCodexDynamicTools(tools: readonly AnyAgentTool[]): {
       quarantinedTools.push(descriptor.diagnostic);
       continue;
     }
+    const normalizedParameters = normalizeOpenAIToolSchemas({
+      provider: "openai",
+      modelApi: "openai-chatgpt-responses",
+      // The shared normalizer only reads parameters; do not expose unreadable plugin fields.
+      tools: [{ parameters: descriptor.parameters } as AnyAgentTool],
+    })[0]?.parameters;
     const projection = projectRuntimeToolInputSchema(
-      descriptor.parameters,
+      normalizedParameters ?? descriptor.parameters,
       `${descriptor.name}.inputSchema`,
     );
     if (projection.violations.length > 0) {
@@ -1263,45 +1270,6 @@ function extractInternalSourceReplyPayload(
     ? payload
     : undefined;
 }
-function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
-  if (isToolResultError(result)) {
-    return true;
-  }
-  const details = result.details;
-  if (!isRecord(details)) {
-    return false;
-  }
-  if (details.ok === true || details.success === true) {
-    return false;
-  }
-  if (details.timedOut === true) {
-    return true;
-  }
-  if (typeof details.exitCode === "number" && details.exitCode !== 0) {
-    return true;
-  }
-  if (typeof details.status !== "string") {
-    return false;
-  }
-  const status = details.status.trim().toLowerCase();
-  return (
-    status !== "" &&
-    status !== "0" &&
-    status !== "ok" &&
-    status !== "success" &&
-    status !== "completed" &&
-    status !== "recorded" &&
-    status !== "created" &&
-    status !== "updated" &&
-    status !== "accepted" &&
-    status !== "found" &&
-    status !== "missing" &&
-    status !== "pending" &&
-    status !== "started" &&
-    status !== "running" &&
-    status !== "yielded"
-  );
-}
 function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   if (!isRecord(details) || typeof details.status !== "string") {
@@ -1522,3 +1490,4 @@ function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

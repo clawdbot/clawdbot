@@ -1,0 +1,18 @@
+title: Slack native Codex command approval prompt resolves
+scenario:
+  id: slack-codex-approval-exec-native
+  surface: channels
+  coverage:
+    primary: [channels.native-approval-prompts]
+  execution:
+    kind: flow
+    channel: slack
+    runtime: codex
+    timeoutMs: 180000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-codex-approval-exec-native }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackCodexApprovalExecNativeScenario
+  args: [{ expr: slackScenarioContext }]

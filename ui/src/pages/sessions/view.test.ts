@@ -1325,6 +1325,31 @@ describe("sessions view", () => {
     expect(emptyCell?.querySelector("button")).toBeNull();
   });
 
+  it.each([
+    { activeMinutes: "60minutes", limit: "1e2", filtered: false },
+    { activeMinutes: "+30", limit: "060", filtered: true },
+  ])("keeps numeric-filter empty state consistent: $activeMinutes / $limit", async (testCase) => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: testCase.activeMinutes,
+        limit: testCase.limit,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const emptyState = container.querySelector(".data-table-empty-state");
+    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
+      testCase.filtered ? "No sessions match your filters." : "No sessions found.",
+    );
+    expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
+  });
+
   it("summarizes loaded sessions in the overview tiles", async () => {
     const container = document.createElement("div");
     render(
@@ -1526,3 +1551,4 @@ describe("sessions view", () => {
     expect(container.querySelector(".sessions-overview")).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

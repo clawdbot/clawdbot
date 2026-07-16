@@ -969,3 +969,4 @@ export function normalizeToolParameterSchema(
     normalizeToolParameterSchemaUncached(schema, options),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

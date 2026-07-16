@@ -1,0 +1,46 @@
+title: Matrix block streaming preserves completed quiet preview blocks
+scenario:
+  id: matrix-room-block-streaming
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        agentDefaults:
+          blockStreamingChunk:
+            breakPreference: newline
+            maxChars: 48
+            minChars: 1
+          blockStreamingCoalesce:
+            idleMs: 0
+            maxChars: 48
+            minChars: 1
+        blockStreaming: true
+        streaming: quiet
+        toolProfile: coding
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: block
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Block Streaming Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runBlockStreamingScenario
+  args:
+    - expr: "scenarioContext"

@@ -11,6 +11,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { loadSessionStoreEntry, resolveStorePath } from "./dispatch-from-config.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { isSlackDirectRoutedThreadTurn } from "./routed-delivery-thread.js";
 
 function routeThreadIdsDiffer(
   left: string | number | undefined,
@@ -20,28 +21,6 @@ function routeThreadIdsDiffer(
     return false;
   }
   return String(left) !== String(right);
-}
-
-function isSlackDirectRoutedThreadTurn(
-  ctx: Pick<
-    FinalizedMsgContext,
-    | "ChatType"
-    | "MessageThreadId"
-    | "OriginatingChannel"
-    | "Provider"
-    | "Surface"
-    | "TransportThreadId"
-  >,
-): boolean {
-  if (normalizeChatType(ctx.ChatType) !== "direct") {
-    return false;
-  }
-  if (ctx.MessageThreadId == null && ctx.TransportThreadId == null) {
-    return false;
-  }
-  return [ctx.Provider, ctx.Surface, ctx.OriginatingChannel].some(
-    (value) => normalizeOptionalString(value)?.toLowerCase() === "slack",
-  );
 }
 
 export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {

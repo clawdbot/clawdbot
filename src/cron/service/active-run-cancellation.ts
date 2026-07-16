@@ -15,7 +15,7 @@ const settlingCronTaskRuns = new Map<Promise<unknown>, SettlingCronTaskRun>();
 // host snapshot must keep refusing readiness until that core actually settles.
 const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
 const DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS = 25;
-export const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
+const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 
 export function startActiveCronTaskRunSettlementGrace(): void {
   for (const [promise, entry] of settlingCronTaskRuns) {
@@ -135,7 +135,13 @@ export function cancelActiveCronTaskRun(params: {
   return true;
 }
 
-export function resetActiveCronTaskRunsForTests(): void {
+function resetActiveCronTaskRunsForTests(): void {
   retireActiveCronTaskRunTracking();
   suspensionVisibleCronTaskRuns.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.activeCronTaskRunTestApi")] = {
+    resetActiveCronTaskRunsForTests,
+  };
 }

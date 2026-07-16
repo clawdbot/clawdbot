@@ -12,7 +12,7 @@ import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
 } from "./plugin-install-config-policy.js";
-import { loadConfigForInstall } from "./plugins-install-command.js";
+import { loadConfigForInstall } from "./plugins-install-command.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),

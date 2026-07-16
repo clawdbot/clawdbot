@@ -10,6 +10,7 @@ import type {
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 export type Conversation = {
+  accountId: string;
   id: string;
   kind: "direct" | "channel";
   title?: string;
@@ -31,15 +32,17 @@ export type Attachment = {
 };
 
 export type Thread = {
+  accountId: string;
   id: string;
   conversationId: string;
   title: string;
 };
 
 export type Message = {
+  accountId: string;
   id: string;
   direction: "inbound" | "outbound";
-  conversation: Conversation;
+  conversation: Omit<Conversation, "accountId">;
   senderId: string;
   senderName?: string;
   text: string;
@@ -361,7 +364,7 @@ export type UiState = {
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
   selectedEvidenceEntryId: string | null;
-  selectedConversationId: string | null;
+  selectedConversationKey: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;
   activeTab: TabId;

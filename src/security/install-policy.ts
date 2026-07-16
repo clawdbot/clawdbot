@@ -77,7 +77,7 @@ export type InstallPolicyFinding = {
   evidence?: string;
 };
 
-export type InstallPolicyRequest = {
+type InstallPolicyRequest = {
   targetType: InstallPolicyTarget;
   targetName: string;
   sourcePath: string;
@@ -750,3 +750,4 @@ export async function probeInstallPolicy(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

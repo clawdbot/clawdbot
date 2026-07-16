@@ -14,7 +14,7 @@ vi.mock("./proxy.js", () => ({
   resolveZaloProxyFetch: (...args: unknown[]) => resolveZaloProxyFetchMock(...args),
 }));
 
-import { sendMessageZalo, sendPhotoZalo } from "./send.js";
+import { sendMessageZalo } from "./send.js";
 
 type ZaloSendResult = Awaited<ReturnType<typeof sendMessageZalo>>;
 
@@ -110,8 +110,9 @@ describe("zalo send", () => {
     const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
     expectFailedSend(missingToken, "No Zalo bot token configured");
 
-    const blankPhoto = await sendPhotoZalo("dm-chat-4", "   ", {
+    const blankPhoto = await sendMessageZalo("dm-chat-4", "", {
       token: "zalo-token",
+      mediaUrl: "   ",
     });
     expectFailedSend(blankPhoto, "No photo URL provided");
 
@@ -133,9 +134,9 @@ describe("zalo send", () => {
     await sendMessageZalo("dm-chat-surrogate-text", boundaryText, {
       token: "zalo-token",
     });
-    await sendPhotoZalo("dm-chat-surrogate-caption", "https://example.com/photo.jpg", {
+    await sendMessageZalo("dm-chat-surrogate-caption", boundaryText, {
       token: "zalo-token",
-      caption: boundaryText,
+      mediaUrl: "https://example.com/photo.jpg",
     });
 
     expect(sendMessageMock.mock.calls[0]?.[1]?.text).toBe("a".repeat(1999));
@@ -148,7 +149,7 @@ describe("zalo send", () => {
       result: { message_id: "z-photo-2" },
     });
 
-    const result = await sendPhotoZalo("dm-chat-5", "https://example.com/photo.jpg", {
+    const result = await sendMessageZalo("dm-chat-5", "", {
       cfg: {
         channels: {
           zalo: {
@@ -157,6 +158,7 @@ describe("zalo send", () => {
           },
         },
       } as never,
+      mediaUrl: "https://example.com/photo.jpg",
     });
 
     expect(sendPhotoMock).toHaveBeenCalledWith(

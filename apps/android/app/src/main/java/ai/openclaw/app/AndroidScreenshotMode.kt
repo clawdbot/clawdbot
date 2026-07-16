@@ -16,6 +16,7 @@ enum class AndroidScreenshotScene(
   Voice("voice", HomeDestination.Voice),
   Settings("settings", HomeDestination.Settings),
   Gateway("gateway", HomeDestination.Settings, SettingsRoute.Gateway),
+  VoiceWake("voice-wake", HomeDestination.Settings, SettingsRoute.Voice),
   ;
 
   companion object {

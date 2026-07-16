@@ -1,0 +1,20 @@
+title: Matrix inbound edits cannot turn ignored messages into triggers
+scenario:
+  id: matrix-inbound-edit-ignored
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-edit.js
+  call: runInboundEditIgnoredScenario
+  args:
+    - expr: "scenarioContext"

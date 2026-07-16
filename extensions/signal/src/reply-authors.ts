@@ -25,7 +25,7 @@ type MemoryReplyContextRecord = SignalReplyContextRecord & {
   expiresAt: number;
 };
 
-export type SignalPersistedReplyContext =
+type SignalPersistedReplyContext =
   | { author: string; body?: string; ambiguous?: never }
   | { ambiguous: true; author?: never; body?: never };
 
@@ -235,10 +235,4 @@ export async function resolveSignalReplyContextWithPersistence(params: {
       .warn("Signal persistent reply author lookup failed", { error: String(error) });
     return undefined;
   }
-}
-
-export async function clearSignalReplyAuthorsForTest(): Promise<void> {
-  memoryReplyContexts.clear();
-  persistentStoreDisabled = false;
-  await openSignalReplyAuthorStore()?.clear();
 }

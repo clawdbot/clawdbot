@@ -67,7 +67,7 @@ Where does the **Gateway** run?
 </Step>
 <Step title="Connect your AI">
   A connected Gateway that already has a configured agent model skips this
-  page entirely and opens the normal agent UI. Crestodian and provider setup
+  page entirely and opens the normal agent UI. OpenClaw and provider setup
   only run for a fresh or incomplete Gateway.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
@@ -90,9 +90,9 @@ The manual key/token picker uses the same provider registry. In every route,
 the provider supplies its starter model and configuration; OpenClaw verifies
 the credential with the same live test before storing its auth profile. Next
 remains locked until one backend has passed, so the first agent chat cannot
-start without working inference. After that live check passes, Crestodian becomes
+start without working inference. After that live check passes, OpenClaw becomes
 available to help configure the remaining workspace, Gateway, channels, and
-other optional features; it is also available later under Settings → Crestodian.
+other optional features; it is also available later under Settings → OpenClaw.
 </Step>
 <Step title="Permissions">
 
@@ -104,10 +104,10 @@ Onboarding requests TCC permissions for: Automation (AppleScript), Notifications
 
 </Step>
 <Step title="Finish">
-  After inference passes, Crestodian owns the remaining optional setup and can
+  After inference passes, OpenClaw owns the remaining optional setup and can
   hand you off to the normal agent chat. Finishing the permission walkthrough
   opens that same chat; the app does not create a workspace or launch a separate
-  agent setup conversation before Crestodian. See
+  agent setup conversation before OpenClaw. See
   [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
   during the agent's first real turn.
 </Step>

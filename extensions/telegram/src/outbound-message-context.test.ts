@@ -6,13 +6,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createTelegramMessageCache,
-  resetTelegramMessageCacheBucketsForTest,
-  resolveTelegramMessageCacheScope,
-} from "./message-cache.js";
+import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import {
+  clearTelegramRuntimeForTest as clearTelegramRuntime,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+} from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 const cfg = {

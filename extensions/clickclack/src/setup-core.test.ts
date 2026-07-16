@@ -1,0 +1,332 @@
+// ClickClack tests cover non-interactive setup validation and config writes.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
+
+const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
+
+vi.mock("./setup-verify.js", () => ({
+  verifyClickClackAccountAfterSetup,
+}));
+import {
+  applyClickClackCredentialConfig,
+  clickClackSetupAdapter,
+  normalizeClickClackBaseUrl,
+} from "./setup-core.js";
+
+function validate(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  input: Parameters<NonNullable<typeof clickClackSetupAdapter.validateInput>>[0]["input"];
+}) {
+  return clickClackSetupAdapter.validateInput?.({
+    cfg: params.cfg ?? {},
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+    input: params.input,
+  });
+}
+
+describe("ClickClack setup adapter", () => {
+  it("normalizes http(s) base URLs and rejects other schemes", () => {
+    expect(normalizeClickClackBaseUrl(" https://clickclack.example.com/// ")).toBe(
+      "https://clickclack.example.com",
+    );
+    expect(normalizeClickClackBaseUrl("http://localhost:3000/")).toBe("http://localhost:3000");
+    expect(normalizeClickClackBaseUrl("ssh://clickclack.example.com")).toBeUndefined();
+    expect(normalizeClickClackBaseUrl("not-a-url")).toBeUndefined();
+  });
+
+  it("requires token, base URL, and workspace for explicit setup", () => {
+    const message = "ClickClack requires --token, --base-url, and --workspace (or --use-env).";
+    expect(
+      validate({ input: { baseUrl: "https://clickclack.example", workspace: "default" } }),
+    ).toBe(message);
+    expect(validate({ input: { token: "ccb_test", workspace: "default" } })).toBe(message);
+    expect(validate({ input: { token: "ccb_test", baseUrl: "https://clickclack.example" } })).toBe(
+      message,
+    );
+    expect(
+      validate({
+        input: {
+          token: "ccb_test",
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("limits --use-env to the default account and requires URL and workspace config", () => {
+    expect(
+      validate({
+        accountId: "work",
+        input: {
+          useEnv: true,
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBe("CLICKCLACK_BOT_TOKEN can only be used for the default account.");
+    expect(validate({ input: { useEnv: true } })).toBe(
+      "ClickClack requires --token, --base-url, and --workspace (or --use-env).",
+    );
+    expect(
+      validate({
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "https://clickclack.example",
+              workspace: "default",
+            },
+          },
+        } as OpenClawConfig,
+        input: { useEnv: true },
+      }),
+    ).toBeNull();
+    expect(
+      validate({
+        cfg: {
+          channels: {
+            clickclack: {
+              baseUrl: "ssh://clickclack.example",
+              workspace: "default",
+            },
+          },
+        } as OpenClawConfig,
+        input: { useEnv: true },
+      }),
+    ).toBe("ClickClack base URL must be a valid http(s) URL.");
+  });
+
+  it("rejects malformed base URLs before writing config", () => {
+    expect(
+      validate({
+        input: {
+          token: "ccb_test",
+          baseUrl: "clickclack.example",
+          workspace: "default",
+        },
+      }),
+    ).toBe("ClickClack base URL must be a valid http(s) URL.");
+  });
+
+  it("writes normalized default and named account config", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          name: "Primary",
+          token: "ccb_default",
+          baseUrl: "https://clickclack.example/",
+          workspace: " default ",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          name: "Primary",
+          token: "ccb_default",
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    });
+
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: { channels: { clickclack: { name: "Legacy" } } } as OpenClawConfig,
+        accountId: "Work Team",
+        input: {
+          name: "Work",
+          tokenFile: "/run/secrets/clickclack",
+          baseUrl: "https://work.clickclack.example/",
+          workspace: "wsp_work",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          accounts: {
+            default: { name: "Legacy" },
+            "work-team": {
+              enabled: true,
+              name: "Work",
+              tokenFile: "/run/secrets/clickclack",
+              baseUrl: "https://work.clickclack.example",
+              workspace: "wsp_work",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps --use-env config free of token fields", () => {
+    expect(
+      clickClackSetupAdapter.applyAccountConfig({
+        cfg: {},
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          useEnv: true,
+          baseUrl: "https://clickclack.example/",
+          workspace: "default",
+        },
+      }),
+    ).toEqual({
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    });
+  });
+
+  it("clears stale competing credentials when the auth mode changes", () => {
+    const base = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          workspace: "default",
+        },
+      },
+    } as OpenClawConfig;
+
+    const withToken = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            ...base.channels?.clickclack,
+            tokenFile: "/run/secrets/old-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        token: "ccb_new",
+        baseUrl: "https://clickclack.example",
+        workspace: "default",
+      },
+    });
+    expect(withToken.channels?.clickclack).toMatchObject({ token: "ccb_new" });
+    expect(withToken.channels?.clickclack).not.toHaveProperty("tokenFile");
+
+    const withFile = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            ...base.channels?.clickclack,
+            token: "ccb_old",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        tokenFile: "/run/secrets/new-token",
+        baseUrl: "https://clickclack.example",
+        workspace: "default",
+      },
+    });
+    expect(withFile.channels?.clickclack).toMatchObject({
+      tokenFile: "/run/secrets/new-token",
+    });
+    expect(withFile.channels?.clickclack).not.toHaveProperty("token");
+
+    const withEnv = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example/",
+            workspace: " default ",
+            token: "ccb_old",
+            tokenFile: "/run/secrets/old-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    });
+    expect(withEnv.channels?.clickclack).not.toHaveProperty("token");
+    expect(withEnv.channels?.clickclack).not.toHaveProperty("tokenFile");
+    expect(withEnv.channels?.clickclack).toMatchObject({
+      baseUrl: "https://clickclack.example",
+      workspace: "default",
+    });
+
+    const namedWithToken = clickClackSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          clickclack: {
+            baseUrl: "https://clickclack.example",
+            workspace: "default",
+            tokenFile: "/run/secrets/default-token",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      input: {
+        token: "ccb_work",
+        baseUrl: "https://clickclack.example",
+        workspace: "work",
+      },
+    });
+    expect(namedWithToken.channels?.clickclack).not.toHaveProperty("tokenFile");
+    expect(namedWithToken.channels?.clickclack?.accounts).toMatchObject({
+      default: { tokenFile: "/run/secrets/default-token" },
+      work: { token: "ccb_work" },
+    });
+    expect(namedWithToken.channels?.clickclack?.accounts?.work).not.toHaveProperty("tokenFile");
+  });
+
+  it("preserves credentials when a partial patch does not select an auth mode", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          tokenFile: "/run/secrets/clickclack",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      applyClickClackCredentialConfig({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      }).channels?.clickclack,
+    ).toMatchObject({
+      enabled: true,
+      tokenFile: "/run/secrets/clickclack",
+    });
+  });
+
+  it("runs post-write verification with the saved account config", async () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          token: "ccb_test",
+          workspace: "default",
+        },
+      },
+    } as OpenClawConfig;
+    const runtime = createNonExitingRuntimeEnv();
+
+    await clickClackSetupAdapter.afterAccountConfigWritten?.({
+      previousCfg: {},
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {},
+      runtime,
+    });
+
+    expect(verifyClickClackAccountAfterSetup).toHaveBeenCalledWith({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      runtime,
+    });
+  });
+});

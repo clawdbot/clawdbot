@@ -16,7 +16,7 @@ Codex app-server harness, model provider, and native session catalog.
 
 ## Surface
 
-providers: codex; contracts: mediaUnderstandingProviders, migrationProviders, tools, webSearchProviders
+providers: `codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 

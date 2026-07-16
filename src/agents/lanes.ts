@@ -4,8 +4,8 @@
 import { CommandLane } from "../process/lanes.js";
 
 /** Default lane for nested agent work. */
-export const AGENT_LANE_NESTED = CommandLane.Nested;
-export const AGENT_LANE_CRON_NESTED = CommandLane.CronNested;
+const AGENT_LANE_NESTED = CommandLane.Nested;
+const AGENT_LANE_CRON_NESTED = CommandLane.CronNested;
 export const AGENT_LANE_SUBAGENT = CommandLane.Subagent;
 const AGENT_LANE_CRON: string = CommandLane.Cron;
 const NESTED_LANE = "nested";

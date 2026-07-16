@@ -69,7 +69,7 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 }));
 
 describe("announce loop guard (#18264)", () => {
-  let registry: typeof import("./subagent-registry.js");
+  let registry: typeof import("./subagent-registry.test-helpers.js");
 
   function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
     const entry = runs.find((run) => run.runId === runId);
@@ -103,7 +103,7 @@ describe("announce loop guard (#18264)", () => {
 
   beforeAll(async () => {
     vi.resetModules();
-    registry = await import("./subagent-registry.js");
+    registry = await import("./subagent-registry.test-helpers.js");
   });
 
   beforeEach(() => {

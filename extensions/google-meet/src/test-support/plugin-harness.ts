@@ -49,6 +49,11 @@ export function setupGoogleMeetPlugin(
   options: {
     fullConfig?: Record<string, unknown>;
     gatewayAvailable?: boolean;
+    gatewayRequestHandler?: (
+      method: string,
+      params?: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => Promise<unknown>;
     nodesListResult?: GoogleMeetTestNodeListResult;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
@@ -138,8 +143,15 @@ export function setupGoogleMeetPlugin(
       return { code: 0, stdout: "", stderr: "" };
     },
   );
-  const gatewayRequest = vi.fn((method: string, params?: Record<string, unknown>) =>
-    invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
+  const gatewayRequest = vi.fn(
+    async (
+      method: string,
+      params?: Record<string, unknown>,
+      requestOptions?: Record<string, unknown>,
+    ) =>
+      options.gatewayRequestHandler
+        ? await options.gatewayRequestHandler(method, params, requestOptions)
+        : await invokeGoogleMeetGatewayMethodForTest(methods, method, params, "google-meet"),
   );
   const api = createTestPluginApi({
     id: "google-meet",

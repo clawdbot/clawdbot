@@ -88,6 +88,17 @@ export function execPlainGh(args, options = {}) {
   });
 }
 
+export function execGhApiRead(endpoint, options = {}) {
+  const env = plainGhEnv(options.env ?? process.env);
+  // Keep reads on the normal PATH shim; OPENCLAW_GH_BIN pins maintainer writes.
+  delete env.OPENCLAW_GH_BIN;
+  return execFileSync("gh", ["api", endpoint, "--method", "GET"], {
+    ...options,
+    env,
+    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+  });
+}
+
 export function spawnPlainGh(args, options = {}) {
   const env = plainGhEnv(options.env ?? process.env);
   const ghBin = resolvePlainGhBin(env);

@@ -1,0 +1,20 @@
+title: Matrix inbound edits do not duplicate already handled triggers
+scenario:
+  id: matrix-inbound-edit-no-duplicate-trigger
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-edit.js
+  call: runInboundEditNoDuplicateTriggerScenario
+  args:
+    - expr: "scenarioContext"

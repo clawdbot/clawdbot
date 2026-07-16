@@ -1,4 +1,3 @@
-// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
@@ -37,7 +36,6 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -142,6 +140,8 @@ export type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";
+export type { OpenClawPluginGatewayEventScope } from "../plugins/gateway-events.js";
+export type { OpenClawPluginGatewayEvents } from "../plugins/gateway-events.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -868,3 +868,4 @@ export function createChannelPluginBase<TResolvedAccount>(
     setup: params.setup,
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -47,25 +47,7 @@ type BrowserRequestParams = {
 
 type BrowserRequestCaller = (params: BrowserRequestParams) => Promise<unknown>;
 
-const chromeTransportDeps: {
-  callGatewayFromCli: typeof callGatewayFromCli;
-} = {
-  callGatewayFromCli,
-};
-
 const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
-
-export const testing = {
-  setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
-    chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
-  },
-  meetStatusScriptForTest: meetStatusScript,
-  meetTranscriptScriptForTest: meetTranscriptScript,
-  meetLeaveScriptForTest: meetLeaveScript,
-  parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
-  resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
-  resolveLocalBrowserRequestForTest: resolveLocalBrowserRequest,
-};
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
   return mode === "agent" || mode === "bidi";
@@ -315,7 +297,7 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
 }
 
 async function callLocalBrowserRequest(params: BrowserRequestParams) {
-  return await chromeTransportDeps.callGatewayFromCli(
+  return await callGatewayFromCli(
     "browser.request",
     {
       json: true,
@@ -1727,3 +1709,4 @@ export async function launchChromeMeetOnNode(params: {
     tab: browserControl.tab,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

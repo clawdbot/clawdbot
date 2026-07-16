@@ -14,7 +14,11 @@ const ApprovalIdSchema = Type.String({
 });
 
 /** Approval owner used to select the safe presentation payload. */
-export const ApprovalKindSchema = Type.Union([Type.Literal("exec"), Type.Literal("plugin")]);
+export const ApprovalKindSchema = Type.Union([
+  Type.Literal("exec"),
+  Type.Literal("plugin"),
+  Type.Literal("system-agent"),
+]);
 
 /** Reviewer decisions accepted by the unified approval resolver. */
 export const ApprovalDecisionSchema = Type.Union([
@@ -76,6 +80,11 @@ const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
     "Available reviewer decisions. Deny is always available so malformed or unsafe input can fail closed.",
 });
 
+const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
+  Type.Literal("allow-once"),
+  Type.Literal("deny"),
+]);
+
 /** Redacted exec details safe to persist and render outside the requesting runtime. */
 export const ExecApprovalPresentationSchema = Type.Object(
   {
@@ -107,10 +116,21 @@ export const PluginApprovalPresentationSchema = closedObject({
   allowedDecisions: ApprovalAllowedDecisionsSchema,
 });
 
+/** Reviewer-safe OpenClaw system change. Exact operation stays host-local. */
+export const SystemAgentApprovalPresentationSchema = closedObject({
+  kind: Type.Literal("system-agent"),
+  title: Type.String({ minLength: 1, maxLength: 80 }),
+  description: Type.String({ minLength: 1, maxLength: 512 }),
+  proposalHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  allowedDecisions: SystemAgentApprovalAllowedDecisionsSchema,
+});
+
 /** Reviewer-safe presentation discriminated by the approval owner. */
 export const ApprovalPresentationSchema = Type.Union([
   ExecApprovalPresentationSchema,
   PluginApprovalPresentationSchema,
+  SystemAgentApprovalPresentationSchema,
 ]);
 
 const ApprovalRecordCommonFields = {
@@ -244,6 +264,7 @@ export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
+export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
 export type ApprovalPresentation = Static<typeof ApprovalPresentationSchema>;
 export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchema>;
 export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;

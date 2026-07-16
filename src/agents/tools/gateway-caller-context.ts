@@ -16,6 +16,17 @@ type GatewayToolCallerIdentity = {
   turnSourceThreadId?: string | number;
 };
 
+type GatewayToolCallerSource = {
+  agentSessionKey?: string;
+  agentChannel?: string;
+  currentMessagingTarget?: string;
+  currentChannelId?: string;
+  agentTo?: string;
+  agentAccountId?: string;
+  currentThreadTs?: string;
+  agentThreadId?: string | number;
+};
+
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
@@ -65,4 +76,22 @@ export function wrapToolWithGatewayCallerIdentity(
   copyBeforeToolCallHookMarker(tool, wrapped);
   copyToolTerminalPresentation(tool, wrapped);
   return wrapped;
+}
+
+export function createGatewayToolCallerWrapper(
+  agentId: string | undefined,
+  source: GatewayToolCallerSource | undefined,
+): (tool: AnyAgentTool) => AnyAgentTool {
+  const identity =
+    agentId && source?.agentSessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: source.agentSessionKey.trim(),
+          turnSourceChannel: source.agentChannel,
+          turnSourceTo: source.currentMessagingTarget ?? source.currentChannelId ?? source.agentTo,
+          turnSourceAccountId: source.agentAccountId,
+          turnSourceThreadId: source.currentThreadTs ?? source.agentThreadId,
+        }
+      : undefined;
+  return (tool) => wrapToolWithGatewayCallerIdentity(tool, identity);
 }

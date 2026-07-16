@@ -298,10 +298,15 @@ describeControlUiE2e("Control UI usage cost analysis mocked Gateway E2E", () => 
     try {
       await page.goto(`${server.baseUrl}usage`);
       await page.locator(".daily-chart-compact").waitFor({ state: "visible", timeout: 10_000 });
+      await page.locator(".agent-scope-control__select").selectOption("");
+      await expect
+        .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
+        .toMatchObject({ agentScope: "all" });
+      const costRequestsBeforeRangeChange = (await gateway.getRequests("usage.cost")).length;
       await page.getByRole("button", { name: "90d", exact: true }).click();
       await expect
         .poll(async () => (await gateway.getRequests("usage.cost")).length)
-        .toBeGreaterThan(1);
+        .toBeGreaterThan(costRequestsBeforeRangeChange);
       await page.getByRole("button", { name: "Cost", exact: true }).click();
 
       const windowCards = page.locator(".cost-window-card");

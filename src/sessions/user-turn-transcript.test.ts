@@ -16,10 +16,10 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
-  persistUserTurnTranscript,
   resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "./user-turn-transcript.js";
+import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("user turn transcript persistence", () => {
   const tempDirs: string[] = [];
@@ -623,6 +623,7 @@ describe("user turn transcript persistence", () => {
         },
         updateMode: "none",
       });
+      expect(recorder.getPersistedMessage?.()).toBeUndefined();
 
       const [first, second] = await Promise.all([
         recorder.persistFallback(),
@@ -631,6 +632,7 @@ describe("user turn transcript persistence", () => {
 
       expect(first?.messageId).toBeTruthy();
       expect(second?.messageId).toBe(first?.messageId);
+      expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",

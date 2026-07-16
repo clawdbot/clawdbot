@@ -27,6 +27,7 @@ import {
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
@@ -269,8 +270,6 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
-const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
-
 function isUnconfiguredConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
 ): boolean {
@@ -280,9 +279,7 @@ function isUnconfiguredConfigSnapshot(
   if (!snapshot.valid) {
     return false;
   }
-  return Object.keys(snapshot.sourceConfig).every((key) =>
-    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
-  );
+  return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
@@ -1431,3 +1428,4 @@ export async function runCli(argv: string[] = process.argv) {
     flushExitAfterOneShotOutput();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

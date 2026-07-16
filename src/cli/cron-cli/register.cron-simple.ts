@@ -93,7 +93,7 @@ function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefin
   );
 }
 
-export async function loadCronJobForShow(
+async function loadCronJobForShow(
   opts: GatewayRpcOpts,
   idOrName: string,
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {

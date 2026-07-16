@@ -3,6 +3,9 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  "channels.discord.activities": "Discord Activities",
+  "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
+  "channels.discord.activities.applicationId": "Discord Activities Application ID",
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.lastTouchedAt": "Config Last Touched At",
@@ -1131,3 +1134,4 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

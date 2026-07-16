@@ -10,11 +10,9 @@ import {
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
-import {
-  runInstallPolicy,
-  validateInstallPolicyStatic,
-  type InstallPolicyRequest,
-} from "./install-policy.js";
+import { runInstallPolicy, validateInstallPolicyStatic } from "./install-policy.js";
+
+type InstallPolicyRequest = Parameters<typeof runInstallPolicy>[0]["request"];
 
 const tempDirs: string[] = [];
 

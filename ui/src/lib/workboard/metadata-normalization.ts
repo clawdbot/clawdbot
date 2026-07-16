@@ -1,21 +1,29 @@
+import {
+  normalizeAutomation,
+  normalizeDiagnosticAction,
+} from "./metadata-contract-normalization.ts";
 import { isRecord } from "./normalization-utils.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
+  WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EVENT_KINDS,
   WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_LINK_TYPES,
+  WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
   type WorkboardAttachment,
   type WorkboardAttemptStatus,
-  type WorkboardAutomation,
+  type WorkboardClaim,
   type WorkboardComment,
   type WorkboardDiagnostic,
+  type WorkboardDiagnosticAction,
+  type WorkboardDiagnosticKind,
   type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
   type WorkboardEventKind,
@@ -27,6 +35,7 @@ import {
   type WorkboardLinkType,
   type WorkboardMetadata,
   type WorkboardNotification,
+  type WorkboardNotificationKind,
   type WorkboardProof,
   type WorkboardProofStatus,
   type WorkboardRunAttempt,
@@ -34,7 +43,6 @@ import {
   type WorkboardTemplateId,
   type WorkboardWorkerLog,
   type WorkboardWorkerProtocol,
-  type WorkboardWorkspace,
 } from "./types.ts";
 
 export function normalizeExecution(value: unknown): WorkboardExecution | undefined {
@@ -106,12 +114,6 @@ export function normalizeEvents(value: unknown): WorkboardEvent[] {
     : [];
 }
 
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
-    : [];
-}
-
 function normalizeWorkerProtocolState(
   value: unknown,
 ): WorkboardWorkerProtocol["state"] | undefined {
@@ -122,48 +124,6 @@ function normalizeWorkerProtocolState(
     value === "violated"
     ? value
     : undefined;
-}
-
-function normalizeAutomation(value: unknown): WorkboardAutomation | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const workspace = isRecord(value.workspace)
-    ? {
-        kind:
-          value.workspace.kind === "scratch" ||
-          value.workspace.kind === "dir" ||
-          value.workspace.kind === "worktree"
-            ? value.workspace.kind
-            : undefined,
-        ...(typeof value.workspace.path === "string" ? { path: value.workspace.path } : {}),
-        ...(typeof value.workspace.branch === "string" ? { branch: value.workspace.branch } : {}),
-      }
-    : undefined;
-  const automation: WorkboardAutomation = {
-    ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
-    ...(typeof value.boardId === "string" ? { boardId: value.boardId } : {}),
-    ...(typeof value.createdByCardId === "string"
-      ? { createdByCardId: value.createdByCardId }
-      : {}),
-    ...(typeof value.idempotencyKey === "string" ? { idempotencyKey: value.idempotencyKey } : {}),
-    ...(normalizeStringArray(value.skills).length
-      ? { skills: normalizeStringArray(value.skills) }
-      : {}),
-    ...(workspace?.kind ? { workspace: workspace as WorkboardWorkspace } : {}),
-    ...(typeof value.maxRuntimeSeconds === "number"
-      ? { maxRuntimeSeconds: value.maxRuntimeSeconds }
-      : {}),
-    ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
-    ...(typeof value.scheduledAt === "number" ? { scheduledAt: value.scheduledAt } : {}),
-    ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
-    ...(normalizeStringArray(value.createdCardIds).length
-      ? { createdCardIds: normalizeStringArray(value.createdCardIds) }
-      : {}),
-    ...(typeof value.dispatchCount === "number" ? { dispatchCount: value.dispatchCount } : {}),
-    ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),
-  };
-  return Object.keys(automation).length ? automation : undefined;
 }
 
 export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
@@ -354,34 +314,48 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
           : {}),
       }
     : undefined;
-  const claim = isRecord(value.claim)
-    ? {
-        ownerId: typeof value.claim.ownerId === "string" ? value.claim.ownerId : "",
-        ...(typeof value.claim.token === "string" ? { token: value.claim.token } : {}),
-        claimedAt: typeof value.claim.claimedAt === "number" ? value.claim.claimedAt : 0,
-        lastHeartbeatAt:
-          typeof value.claim.lastHeartbeatAt === "number" ? value.claim.lastHeartbeatAt : 0,
-        ...(typeof value.claim.expiresAt === "number" ? { expiresAt: value.claim.expiresAt } : {}),
-      }
-    : undefined;
+  const claim: WorkboardClaim | undefined =
+    isRecord(value.claim) &&
+    typeof value.claim.ownerId === "string" &&
+    typeof value.claim.token === "string" &&
+    typeof value.claim.claimedAt === "number" &&
+    typeof value.claim.lastHeartbeatAt === "number"
+      ? {
+          ownerId: value.claim.ownerId,
+          token: value.claim.token,
+          claimedAt: value.claim.claimedAt,
+          lastHeartbeatAt: value.claim.lastHeartbeatAt,
+          ...(typeof value.claim.expiresAt === "number"
+            ? { expiresAt: value.claim.expiresAt }
+            : {}),
+        }
+      : undefined;
   const diagnostics = Array.isArray(value.diagnostics)
     ? value.diagnostics.flatMap((entry): WorkboardDiagnostic[] => {
-        if (!isRecord(entry) || typeof entry.kind !== "string" || typeof entry.title !== "string") {
+        if (
+          !isRecord(entry) ||
+          !WORKBOARD_DIAGNOSTIC_KINDS.includes(entry.kind as WorkboardDiagnosticKind) ||
+          !WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
+            entry.severity as WorkboardDiagnosticSeverity,
+          ) ||
+          typeof entry.title !== "string"
+        ) {
           return [];
         }
         return [
           {
-            kind: entry.kind,
-            severity: WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
-              entry.severity as WorkboardDiagnosticSeverity,
-            )
-              ? (entry.severity as WorkboardDiagnosticSeverity)
-              : "warning",
+            kind: entry.kind as WorkboardDiagnosticKind,
+            severity: entry.severity as WorkboardDiagnosticSeverity,
             title: entry.title,
             detail: typeof entry.detail === "string" ? entry.detail : entry.title,
             firstSeenAt: typeof entry.firstSeenAt === "number" ? entry.firstSeenAt : Date.now(),
             lastSeenAt: typeof entry.lastSeenAt === "number" ? entry.lastSeenAt : Date.now(),
             count: typeof entry.count === "number" ? entry.count : 1,
+            actions: Array.isArray(entry.actions)
+              ? entry.actions
+                  .map(normalizeDiagnosticAction)
+                  .filter((action): action is WorkboardDiagnosticAction => action !== null)
+              : [],
           },
         ];
       })
@@ -391,7 +365,7 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         if (
           !isRecord(entry) ||
           typeof entry.id !== "string" ||
-          typeof entry.kind !== "string" ||
+          !WORKBOARD_NOTIFICATION_KINDS.includes(entry.kind as WorkboardNotificationKind) ||
           typeof entry.message !== "string" ||
           typeof entry.createdAt !== "number"
         ) {
@@ -400,9 +374,10 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         return [
           {
             id: entry.id,
-            kind: entry.kind,
+            kind: entry.kind as WorkboardNotificationKind,
             message: entry.message,
             createdAt: entry.createdAt,
+            ...(typeof entry.sequence === "number" ? { sequence: entry.sequence } : {}),
             ...(typeof entry.sessionKey === "string" ? { sessionKey: entry.sessionKey } : {}),
             ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
           },
@@ -438,7 +413,7 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
     ...(workerLogs.length ? { workerLogs } : {}),
     ...(workerProtocol ? { workerProtocol } : {}),
     ...(automation ? { automation } : {}),
-    ...(claim?.ownerId && claim.claimedAt ? { claim } : {}),
+    ...(claim ? { claim } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
     ...(notifications.length ? { notifications } : {}),
     ...(WORKBOARD_TEMPLATE_IDS.includes(value.templateId as WorkboardTemplateId)

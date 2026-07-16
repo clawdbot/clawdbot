@@ -10,12 +10,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  containerCheck,
-  containerRpcRequest,
-  streamContainerEvents,
-  containerFetchAttachment,
-} from "./client-container.js";
+import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
 import type { SignalRpcOptions } from "./client.js";
 import {
   signalCheck as nativeCheck,
@@ -33,9 +28,6 @@ export type SignalSseEvent = {
 };
 
 export type SignalApiMode = "native" | "container" | "auto";
-
-// Re-export the options type so consumers can import it from the adapter.
-export type { SignalRpcOptions } from "./client.js";
 
 // Cache auto-detected modes per baseUrl to avoid repeated network probes.
 const detectedModeCache = new Map<
@@ -132,7 +124,7 @@ async function resolveApiModeForOperation(params: {
  * Detect which Signal API mode is available by probing endpoints.
  * Native wins when both APIs are healthy because it preserves the richer JSON-RPC contract.
  */
-export async function detectSignalApiMode(
+async function detectSignalApiMode(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { account?: string; requireContainerReceive?: boolean } = {},
@@ -261,57 +253,4 @@ export async function streamSignalEvents(params: {
     timeoutMs: params.timeoutMs,
     onEvent: (event) => params.onEvent(event),
   });
-}
-
-/**
- * Fetch attachment, routing to native or container implementation.
- */
-export async function fetchAttachment(params: {
-  baseUrl: string;
-  account?: string;
-  accountId?: string;
-  attachmentId: string;
-  sender?: string;
-  groupId?: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  apiMode?: SignalApiMode;
-}): Promise<Buffer | null> {
-  const mode = await resolveApiModeForOperation({
-    baseUrl: params.baseUrl,
-    accountId: params.accountId,
-    account: params.account,
-    timeoutMs: params.timeoutMs,
-    apiMode: params.apiMode,
-  });
-  if (mode === "container") {
-    return containerFetchAttachment(params.attachmentId, {
-      baseUrl: params.baseUrl,
-      timeoutMs: params.timeoutMs,
-      maxResponseBytes: params.maxResponseBytes,
-    });
-  }
-
-  const rpcParams: Record<string, unknown> = {
-    id: params.attachmentId,
-  };
-  if (params.account) {
-    rpcParams.account = params.account;
-  }
-  if (params.groupId) {
-    rpcParams.groupId = params.groupId;
-  } else if (params.sender) {
-    rpcParams.recipient = params.sender;
-  } else {
-    return null;
-  }
-  const result = await nativeRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
-    baseUrl: params.baseUrl,
-    timeoutMs: params.timeoutMs,
-    maxResponseBytes: params.maxResponseBytes,
-  });
-  if (!result?.data) {
-    return null;
-  }
-  return Buffer.from(result.data, "base64");
 }

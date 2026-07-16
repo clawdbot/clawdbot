@@ -14,6 +14,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
   splitDropIndicatorRect,
@@ -22,8 +23,6 @@ import {
 } from "./split-drop-zone.ts";
 import {
   closePane,
-  createSinglePaneLayout,
-  createSplitLayout,
   findPane,
   insertPane,
   panesOf,
@@ -74,6 +73,9 @@ export class ChatPage extends OpenClawLightDomElement {
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
   private consumedDraftData: ChatRouteData | null = null;
+  private readonly chatMessagesBySession: ChatMessageCache = new Map();
+  private classicColumnId = "c1";
+  private classicPaneId = "p1";
 
   override connectedCallback() {
     super.connectedCallback();
@@ -299,7 +301,12 @@ export class ChatPage extends OpenClawLightDomElement {
       if (!currentSessionKey) {
         return;
       }
-      const next = insertPane(createSinglePaneLayout(currentSessionKey), "p1", trimmed, zone.edge);
+      const next = insertPane(
+        this.classicLayout(currentSessionKey),
+        this.classicPaneId,
+        trimmed,
+        zone.edge,
+      );
       this.persistLayout(next);
       this.updateRoute(trimmed, true);
       return;
@@ -361,7 +368,9 @@ export class ChatPage extends OpenClawLightDomElement {
   private readonly openSplitView = () => {
     const sessionKey = this.data?.sessionKey?.trim();
     if (sessionKey) {
-      this.persistLayout(createSplitLayout(sessionKey));
+      this.persistLayout(
+        insertPane(this.classicLayout(sessionKey), this.classicPaneId, sessionKey, "right"),
+      );
     }
   };
 
@@ -390,6 +399,13 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     const survivingPane = panesOf(layout).find((pane) => pane.id !== paneId);
     const next = closePane(layout, paneId);
+    if (!next && survivingPane) {
+      const survivingLocation = findPane(layout, survivingPane.id);
+      if (survivingLocation) {
+        this.classicColumnId = survivingLocation.column.id;
+        this.classicPaneId = survivingPane.id;
+      }
+    }
     this.persistLayout(next);
     if (!next && survivingPane) {
       this.updateRoute(survivingPane.sessionKey, true);
@@ -416,7 +432,7 @@ export class ChatPage extends OpenClawLightDomElement {
   /** Header + pane travel together so each pane owns its title bar in-flow —
    * no fixed toolbar layer mirroring the split geometry. The pane renders its
    * own header so the workspace toggle can read per-pane workspace state. */
-  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number) {
+  private renderPaneCell(pane: ChatSplitPane, active: boolean, weight: number, splitMode: boolean) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const title = resolveSessionDisplayName(
       pane.sessionKey,
@@ -424,23 +440,25 @@ export class ChatPage extends OpenClawLightDomElement {
     );
     return html`
       <div
-        class="chat-split-view__cell ${active ? "chat-split-view__cell--active" : ""}"
+        class="chat-split-view__cell ${splitMode && active ? "chat-split-view__cell--active" : ""}"
         style="flex: ${weight} 1 0"
         @pointerdown=${() => this.handleFocusPane(pane.id)}
         @focusin=${() => this.handleFocusPane(pane.id)}
       >
         <openclaw-chat-pane
-          class="chat-split-view__pane"
+          class=${splitMode ? "chat-split-view__pane" : ""}
           .paneId=${pane.id}
+          .chatMessagesBySession=${this.chatMessagesBySession}
           .sessionKey=${pane.sessionKey}
           .active=${active}
           .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
-          .showPaneHeader=${true}
+          .showPaneHeader=${splitMode}
           .paneTitle=${title}
           .narrow=${this.narrow}
-          .onSplitDown=${this.handleSplitDown}
-          .onSplitRight=${this.handleSplitRight}
-          .onClosePane=${this.handleClosePane}
+          .onOpenSplitView=${splitMode || this.narrow ? undefined : this.openSplitView}
+          .onSplitDown=${splitMode ? this.handleSplitDown : undefined}
+          .onSplitRight=${splitMode ? this.handleSplitRight : undefined}
+          .onClosePane=${splitMode ? this.handleClosePane : undefined}
           .onFocusPane=${this.handleFocusPane}
           .onPaneSessionChange=${this.handlePaneSessionChange}
         ></openclaw-chat-pane>
@@ -448,25 +466,45 @@ export class ChatPage extends OpenClawLightDomElement {
     `;
   }
 
-  private renderSplitLayout(layout: ChatSplitLayout) {
-    if (this.narrow) {
-      const activePane = findPane(layout, layout.activePaneId)?.pane;
-      return activePane
-        ? html`<div class="chat-split-view chat-split-view--narrow">
-            ${this.renderPaneCell(activePane, true, 1)}
-          </div>`
-        : nothing;
-    }
+  private classicLayout(sessionKey = this.data?.sessionKey?.trim() ?? ""): ChatSplitLayout {
+    return {
+      columns: [
+        {
+          id: this.classicColumnId,
+          panes: [{ id: this.classicPaneId, sessionKey }],
+          paneWeights: [1],
+        },
+      ],
+      columnWeights: [1],
+      activePaneId: this.classicPaneId,
+    };
+  }
+
+  private renderSplitLayout(layout: ChatSplitLayout, splitMode: boolean) {
+    const activeLocation = findPane(layout, layout.activePaneId);
+    const renderedColumns =
+      this.narrow && activeLocation
+        ? [
+            {
+              ...activeLocation.column,
+              panes: [activeLocation.pane],
+              paneWeights: [1],
+            },
+          ]
+        : this.narrow
+          ? []
+          : layout.columns;
+    const renderedColumnWeights = this.narrow ? [1] : layout.columnWeights;
     return html`
-      <div class="chat-split-view">
+      <div class="chat-split-view ${this.narrow ? "chat-split-view--narrow" : ""}">
         ${repeat(
-          layout.columns,
+          renderedColumns,
           (column) => column.id,
           (column, columnIndex) => html`
             <div
               class="chat-split-view__column"
               style="flex: ${splitWeight(
-                layout.columnWeights,
+                renderedColumnWeights,
                 columnIndex,
                 "rendered split column weight",
               )} 1 0"
@@ -479,6 +517,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     pane,
                     pane.id === layout.activePaneId,
                     splitWeight(column.paneWeights, paneIndex, "rendered split pane weight"),
+                    splitMode,
                   )}
                   ${paneIndex < column.panes.length - 1
                     ? html`
@@ -506,7 +545,7 @@ export class ChatPage extends OpenClawLightDomElement {
                 `,
               )}
             </div>
-            ${columnIndex < layout.columns.length - 1
+            ${columnIndex < renderedColumns.length - 1
               ? html`
                   <resizable-divider
                     .splitRatio=${splitRatio(
@@ -536,22 +575,10 @@ export class ChatPage extends OpenClawLightDomElement {
 
   override render() {
     const indicator = this.dropIndicator;
+    const layout = this.layout;
     return html`
       <div class="chat-split-view__drop-container">
-        ${this.layout
-          ? this.renderSplitLayout(this.layout)
-          : html`
-              <openclaw-chat-pane
-                .paneId=${"single"}
-                .sessionKey=${this.data?.sessionKey ?? ""}
-                .active=${true}
-                .draft=${this.routeDraftForActivePane()}
-                .showPaneHeader=${false}
-                .onFocusPane=${this.handleFocusPane}
-                .onPaneSessionChange=${this.handlePaneSessionChange}
-                .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
-              ></openclaw-chat-pane>
-            `}
+        ${this.renderSplitLayout(layout ?? this.classicLayout(), Boolean(layout))}
         ${indicator
           ? html`<div
               class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"

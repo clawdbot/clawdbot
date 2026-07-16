@@ -404,7 +404,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
-          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+          "connect-src 'self' ws: wss: data: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
@@ -1903,6 +1903,71 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("accepts RFC qvalue boundary forms", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('valid-qvalue');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-QvAl5678.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+        const cases = [
+          { quality: "0", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.000", fallbackQuality: "0.5", expected: "gzip" },
+          { quality: "0.123", fallbackQuality: "0.1", expected: "br" },
+          { quality: "0.999", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1.", fallbackQuality: "0.5", expected: "br" },
+          { quality: "1.000", fallbackQuality: "0.5", expected: "br" },
+        ] as const;
+
+        for (const testCase of cases) {
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/app-QvAl5678.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: {
+              "accept-encoding": `br;q=${testCase.quality}, gzip;q=${testCase.fallbackQuality}, identity;q=0`,
+            },
+          });
+
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", testCase.expected);
+          const compressed = end.mock.calls[0]?.[0] as Buffer;
+          const decoded =
+            testCase.expected === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed);
+          expect(decoded.toString()).toBe(source);
+        }
+      },
+    });
+  });
+
+  it("rejects malformed Accept-Encoding qvalues instead of parsing numeric prefixes", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('strict-qvalue');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-QvAl1234.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        for (const malformedQuality of ["0.8junk", ".8", "0.1234", "1.001", "1e0"]) {
+          const { end, setHeader } = await runControlUiRequest({
+            url: "/assets/app-QvAl1234.js",
+            method: "GET",
+            rootPath: tmp,
+            rootKind: "bundled",
+            headers: {
+              "accept-encoding": `br;q=${malformedQuality}, gzip;q=0.5, identity;q=0`,
+            },
+          });
+
+          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        }
+      },
+    });
+  });
+
   it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -2458,3 +2523,4 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

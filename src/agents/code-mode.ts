@@ -56,11 +56,7 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-export {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  isCodeModeControlTool,
-} from "./code-mode-control-tools.js";
+export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -75,7 +71,7 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 type CodeModeLanguage = "javascript" | "typescript";
 
 /** Resolved Code Mode runtime limits and visible language options. */
-export type CodeModeConfig = {
+type CodeModeConfig = {
   enabled: boolean;
   runtime: "quickjs-wasi";
   mode: "only";
@@ -1731,19 +1727,22 @@ export function addClientToolsToCodeModeCatalog(params: {
 }
 
 /** Test-only hooks and state accessors for Code Mode worker orchestration. */
-export const testing = {
+const testing = {
   activeRuns,
   resumingRunIds,
-  codeModeWorkerUrl,
   createHeadlessAbortScope,
   normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
   resolveCodeModeWorkerUrl,
-  resolveCodeModeConfig,
   getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
     typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeTestApi")] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

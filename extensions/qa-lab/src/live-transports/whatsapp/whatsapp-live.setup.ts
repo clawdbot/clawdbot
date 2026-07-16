@@ -20,7 +20,7 @@ type WhatsAppChannelStatus = {
   running?: boolean;
 };
 
-export function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
+function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
   return (
     status?.running === true &&
     status.connected === true &&
@@ -118,7 +118,7 @@ async function listTarEntries(archivePath: string): Promise<string[]> {
   return normalizeStringEntries(stdout.split("\n"));
 }
 
-export function assertSafeArchiveEntries(entries: string[]) {
+function assertSafeArchiveEntries(entries: string[]) {
   if (entries.length === 0) {
     throw new Error("WhatsApp auth archive is empty.");
   }

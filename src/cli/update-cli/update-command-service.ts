@@ -109,7 +109,7 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   return params.serviceLoaded;
 }
 
-export function shouldUseLegacyProcessRestartAfterUpdate(params: {
+function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {
   return !isPackageManagerUpdateMode(params.updateMode);
@@ -126,7 +126,7 @@ type PostUpdateLaunchAgentRecoveryDeps = {
   recover?: typeof recoverInstalledLaunchAgent;
 };
 
-export async function recoverInstalledLaunchAgentAfterUpdate(params: {
+async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateLaunchAgentRecoveryDeps;
@@ -171,7 +171,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
   waitForHealthy?: typeof waitForGatewayHealthyRestart;
 };
 
-export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
@@ -228,7 +228,7 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
   return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
 }
 
-export function formatPostUpdateGatewayRecoveryInstructions(
+function formatPostUpdateGatewayRecoveryInstructions(
   result: UpdateRunResult,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
@@ -240,6 +240,16 @@ export function formatPostUpdateGatewayRecoveryInstructions(
     );
   }
   return lines;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandServiceTestApi")] =
+    {
+      formatPostUpdateGatewayRecoveryInstructions,
+      recoverInstalledLaunchAgentAfterUpdate,
+      recoverLaunchAgentAndRecheckGatewayHealth,
+      shouldUseLegacyProcessRestartAfterUpdate,
+    };
 }
 
 export type PreManagedServiceStop = {
@@ -1428,3 +1438,4 @@ export async function maybeRestartService(params: {
   }
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

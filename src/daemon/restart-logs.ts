@@ -5,7 +5,7 @@ import { resolveGatewayProfileSuffix } from "./constants.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
-export const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
+const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
 
 type GatewayLogPaths = {
   logDir: string;

@@ -1,5 +1,5 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -36,7 +36,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -108,6 +108,63 @@ async function waitForChildExit(
   ]);
 }
 
+type CliResult = {
+  status: number | null;
+  stderr: string;
+  stdout: string;
+};
+
+function runCli(scriptPath: string, args: string[]): Promise<CliResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("close", (status) => resolve({ status, stderr, stdout }));
+  });
+}
+
+function createCliPair(
+  scriptPath: string,
+  firstArgs: string[],
+  secondArgs: string[],
+): () => Promise<[CliResult, CliResult]> {
+  let result: Promise<[CliResult, CliResult]> | undefined;
+  return () => {
+    // Pair only sibling entrypoint probes: process proof stays real while peak
+    // child concurrency stays capped at two.
+    result ??= Promise.all([runCli(scriptPath, firstArgs), runCli(scriptPath, secondArgs)]);
+    return result;
+  };
+}
+
+const getDiscordCliResults = createCliPair(
+  "scripts/dev/discord-acp-plain-language-smoke.ts",
+  ["--wat"],
+  ["--help"],
+);
+const getTuiPtyCliResults = createCliPair(
+  "scripts/dev/tui-pty-test-watch.ts",
+  ["--help"],
+  ["--wat"],
+);
+const getClaudeUsageCliResults = createCliPair(
+  "scripts/debug-claude-usage.ts",
+  ["--help"],
+  ["--agent"],
+);
+
 afterEach(async () => {
   vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
@@ -165,32 +222,17 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseDriverMode("curl")).toThrow(/Invalid --driver/u);
   });
 
-  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", () => {
+  it("rejects unknown Discord smoke args before live Discord/OpenClaw work", async () => {
     expect(() => discordSmokeTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const [result] = await getDiscordCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
-  it("prints Discord smoke usage without starting live validation", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/discord-acp-plain-language-smoke.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints Discord smoke usage without starting live validation", async () => {
+    const [, result] = await getDiscordCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: bun scripts/dev/discord-acp-plain-language-smoke.ts");
@@ -339,32 +381,17 @@ describe("script-specific dev tooling hardening", () => {
     expect(calls).toBe(1);
   });
 
-  it("prints TUI PTY watch usage without launching the watcher", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints TUI PTY watch usage without launching the watcher", async () => {
+    const [result] = await getTuiPtyCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts");
     expect(result.stderr).toBe("");
   });
 
-  it("rejects unknown TUI PTY watch args before launching the watcher", () => {
+  it("rejects unknown TUI PTY watch args before launching the watcher", async () => {
     expect(() => tuiPtyWatchTesting.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/tui-pty-test-watch.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const [, result] = await getTuiPtyCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
@@ -1079,30 +1106,16 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("prints Claude usage help without opening auth stores", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("prints Claude usage help without opening auth stores", async () => {
+    const [result] = await getClaudeUsageCliResults();
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage: node --import tsx scripts/debug-claude-usage.ts");
     expect(result.stderr).toBe("");
   });
 
-  it("fails missing Claude usage option values before defaulting to main auth", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/debug-claude-usage.ts", "--agent"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+  it("fails missing Claude usage option values before defaulting to main auth", async () => {
+    const [, result] = await getClaudeUsageCliResults();
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");

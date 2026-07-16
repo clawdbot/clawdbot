@@ -31,6 +31,7 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
+import { agentsCoreIsolatedTestFiles } from "../vitest/vitest.agents-paths.mjs";
 import {
   channelConfigContractPatterns,
   channelRegistryContractPatterns,
@@ -631,54 +632,54 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-plan.test.ts"],
       ],
       [
-        "scripts/e2e/crestodian-first-run-docker.sh",
+        "scripts/e2e/system-agent-first-run-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
           "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
         ],
       ],
       [
-        "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
+        "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
           "src/cli/program/register.onboard.test.ts",
           "src/cli/run-main.test.ts",
           "src/cli/run-main.exit.test.ts",
-          "src/commands/crestodian-with-inference.test.ts",
-          "src/crestodian/assistant.configured.test.ts",
-          "src/crestodian/assistant.test.ts",
-          "src/crestodian/crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/overview.test.ts",
-          "src/crestodian/setup-inference.test.ts",
-          "src/crestodian/audit.test.ts",
+          "src/commands/system-agent-with-inference.test.ts",
+          "src/system-agent/assistant.configured.test.ts",
+          "src/system-agent/assistant.test.ts",
+          "src/system-agent/system-agent.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/overview.test.ts",
+          "src/system-agent/setup-inference.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-first-run-spec.json",
+        "scripts/e2e/system-agent-first-run-spec.json",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-rescue-docker.sh",
+        "scripts/e2e/system-agent-rescue-docker.sh",
         [
           "test/scripts/docker-build-helper.test.ts",
           "test/scripts/docker-e2e-plan.test.ts",
-          "test/scripts/docker-e2e-crestodian.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
         ],
       ],
       [
-        "scripts/e2e/crestodian-rescue-docker-client.ts",
+        "scripts/e2e/system-agent-rescue-docker-client.ts",
         [
-          "test/scripts/docker-e2e-crestodian.test.ts",
-          "src/crestodian/rescue-policy.test.ts",
-          "src/crestodian/rescue-message.test.ts",
-          "src/crestodian/operations.test.ts",
-          "src/crestodian/audit.test.ts",
+          "test/scripts/docker-e2e-system-agent.test.ts",
+          "src/system-agent/rescue-policy.test.ts",
+          "src/system-agent/rescue-message.test.ts",
+          "src/system-agent/operations.test.ts",
+          "src/system-agent/audit.test.ts",
         ],
       ],
       [
@@ -2453,6 +2454,47 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the bundled provider auth parity test to the isolated tooling shard", () => {
+    expect(
+      buildVitestRunPlans(["test/plugins/bundled-provider-auth-literal-parity.test.ts"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    "test/scripts/check-extension-package-tsc-boundary.test.ts",
+    "test/scripts/control-ui-i18n.test.ts",
+  ])("routes process-group test %s to the isolated tooling shard", (testFile) => {
+    expect(buildVitestRunPlans([testFile])).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: [testFile],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each(agentsCoreIsolatedTestFiles)(
+    "routes isolated agent test %s to the isolated agents-core shard",
+    (testFile) => {
+      expect(buildVitestRunPlans([testFile])).toEqual([
+        {
+          config: "test/vitest/vitest.agents-core-isolated.config.ts",
+          forwardedArgs: [],
+          includePatterns: [testFile],
+          watchMode: false,
+        },
+      ]);
+    },
+  );
+
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [
       "scripts/e2e/kitchen-sink-plugin-docker.sh",
@@ -2630,13 +2672,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes Crestodian Docker E2E script targets instead of skipping changed tests", () => {
+  it("routes OpenClaw Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
-      "scripts/e2e/crestodian-first-run-docker.sh",
-      "test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts",
-      "scripts/e2e/crestodian-first-run-spec.json",
-      "scripts/e2e/crestodian-rescue-docker.sh",
-      "scripts/e2e/crestodian-rescue-docker-client.ts",
+      "scripts/e2e/system-agent-first-run-docker.sh",
+      "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts",
+      "scripts/e2e/system-agent-first-run-spec.json",
+      "scripts/e2e/system-agent-rescue-docker.sh",
+      "scripts/e2e/system-agent-rescue-docker-client.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -2645,32 +2687,38 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "test/scripts/docker-build-helper.test.ts",
         "test/scripts/docker-e2e-plan.test.ts",
-        "test/scripts/docker-e2e-crestodian.test.ts",
+        "test/scripts/docker-e2e-system-agent.test.ts",
         "src/cli/program/register.onboard.test.ts",
         "src/cli/run-main.test.ts",
         "src/cli/run-main.exit.test.ts",
-        "src/commands/crestodian-with-inference.test.ts",
-        "src/crestodian/assistant.configured.test.ts",
-        "src/crestodian/assistant.test.ts",
-        "src/crestodian/crestodian.test.ts",
-        "src/crestodian/operations.test.ts",
-        "src/crestodian/overview.test.ts",
-        "src/crestodian/setup-inference.test.ts",
-        "src/crestodian/audit.test.ts",
-        "src/crestodian/rescue-policy.test.ts",
-        "src/crestodian/rescue-message.test.ts",
+        "src/commands/system-agent-with-inference.test.ts",
+        "src/system-agent/assistant.configured.test.ts",
+        "src/system-agent/assistant.test.ts",
+        "src/system-agent/system-agent.test.ts",
+        "src/system-agent/operations.test.ts",
+        "src/system-agent/overview.test.ts",
+        "src/system-agent/setup-inference.test.ts",
+        "src/system-agent/audit.test.ts",
+        "src/system-agent/rescue-policy.test.ts",
+        "src/system-agent/rescue-message.test.ts",
       ],
     });
   });
 
   it("chunks the broad shell helper tooling shard after isolated targets", () => {
     const plans = buildVitestRunPlans(["test/scripts"], process.cwd());
-    expect(plans.slice(0, 3)).toEqual([
+    expect(plans.slice(0, 4)).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.unit-fast.config.ts",
         includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
         watchMode: false,
       }),
+      {
+        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/android-version.test.ts"],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.tooling-docker.config.ts",
         forwardedArgs: [],
@@ -2680,13 +2728,17 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        includePatterns: [
+          "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/openclaw-e2e-instance.test.ts",
+        ],
         watchMode: false,
       },
     ]);
     const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
     const toolingPlans = plans
-      .slice(3)
+      .slice(4)
       .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
@@ -2773,6 +2825,10 @@ describe("scripts/test-projects changed-target routing", () => {
         includePatterns: expect.arrayContaining(["src/plugin-sdk/access-groups.test.ts"]),
       }),
       expect.objectContaining({
+        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        includePatterns: ["src/plugin-sdk/memory-host-events.test.ts"],
+      }),
+      expect.objectContaining({
         config: "test/vitest/vitest.plugin-sdk-light.config.ts",
         includePatterns: expect.arrayContaining(["src/plugin-sdk/acp-runtime.test.ts"]),
       }),
@@ -2809,12 +2865,18 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("chunks broad shell helper globs after isolated targets", () => {
     const plans = buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd());
-    expect(plans.slice(0, 3)).toEqual([
+    expect(plans.slice(0, 4)).toEqual([
       expect.objectContaining({
         config: "test/vitest/vitest.unit-fast.config.ts",
         includePatterns: expect.arrayContaining(["test/scripts/arg-utils.test.ts"]),
         watchMode: false,
       }),
+      {
+        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/android-version.test.ts"],
+        watchMode: false,
+      },
       {
         config: "test/vitest/vitest.tooling-docker.config.ts",
         forwardedArgs: [],
@@ -2824,13 +2886,17 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        includePatterns: [
+          "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/openclaw-e2e-instance.test.ts",
+        ],
         watchMode: false,
       },
     ]);
     const e2ePlans = plans.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
     const toolingPlans = plans
-      .slice(3)
+      .slice(4)
       .filter((plan) => plan.config === "test/vitest/vitest.tooling.config.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.includePatterns ?? []);
 
@@ -3391,7 +3457,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ]),
     ).toEqual([
       {
-        config: "test/vitest/vitest.tooling.config.ts",
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
         forwardedArgs: [],
         includePatterns: ["test/scripts/control-ui-i18n.test.ts"],
         watchMode: false,
@@ -3692,6 +3758,22 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-overview-values.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes forced stateful unit-fast tests to the isolated lane", () => {
+    const plans = buildVitestRunPlans(
+      ["src/system-agent/assistant.configured.test.ts"],
+      process.cwd(),
+    );
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/system-agent/assistant.configured.test.ts"],
         watchMode: false,
       },
     ]);
@@ -4407,6 +4489,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       ...unitFastPlans.map(() => unitFastConfig),
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
@@ -4448,6 +4531,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.agents-core-isolated.config.ts",
       ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
@@ -4522,7 +4606,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
     expect(unitFastTargets.length).toBeGreaterThan(1_000);
     expect(new Set(unitFastTargets).size).toBe(unitFastTargets.length);
-    expect(unitFastTargets).toContain("extensions/canvas/src/host/server.state-dir.test.ts");
+    expect(unitFastTargets).not.toContain("extensions/canvas/src/host/server.state-dir.test.ts");
     expect(unitFastTargets).not.toContain("src/utils.test.ts");
     const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
     expect(toolingPlans.length).toBeGreaterThan(1);
@@ -4530,6 +4614,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
     expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
     expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets.some((target) => target.endsWith(".live.test.ts"))).toBe(false);
     expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
     expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(

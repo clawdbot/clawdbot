@@ -364,6 +364,25 @@ describe("sessions.usage", () => {
     );
   });
 
+  it("includes untimestamped entries only for the all-time range", async () => {
+    await runSessionsUsage({ range: "all", limit: 10 });
+    await runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 10 });
+    await runSessionsUsage({ startDate: "1970-01-01", endDate: "2026-02-02", limit: 10 });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ includeUntimestamped: true }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ includeUntimestamped: undefined }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ includeUntimestamped: undefined, startMs: 0 }),
+    );
+  });
+
   it("falls back to the legacy offset when Gateway ICU does not recognize the browser timezone", async () => {
     await runSessionsUsage({
       ...BASE_USAGE_RANGE,

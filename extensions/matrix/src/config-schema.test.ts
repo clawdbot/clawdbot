@@ -1,6 +1,11 @@
 // Matrix tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MatrixConfigSchema } from "./config-schema.js";
+import { MatrixChannelConfigSchema } from "./config-schema.js";
+
+const MatrixConfigSchema = MatrixChannelConfigSchema.runtime;
+if (!MatrixConfigSchema) {
+  throw new Error("expected Matrix runtime config schema");
+}
 
 describe("MatrixConfigSchema SecretInput", () => {
   it("accepts SecretRef accessToken at top-level", () => {
@@ -68,7 +73,9 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.groups?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      groups: { "!room:example.org": { account: "axis" } },
+    });
   });
 
   it("accepts legacy room-level account assignments", () => {
@@ -86,7 +93,9 @@ describe("MatrixConfigSchema SecretInput", () => {
     if (!result.success) {
       throw new Error("expected schema parse to succeed");
     }
-    expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
+    expect(result.data).toMatchObject({
+      rooms: { "!room:example.org": { account: "axis" } },
+    });
   });
 
   it("accepts nested quiet Matrix streaming mode with delivery controls", () => {

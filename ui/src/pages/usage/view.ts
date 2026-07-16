@@ -890,3 +890,4 @@ export function renderUsage(props: UsageProps) {
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

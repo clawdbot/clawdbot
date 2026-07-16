@@ -139,6 +139,11 @@ Request one secret:
 successful `get` returns the value plus the configured slug, item title, and
 field label.
 
+The tool schema also declares an internal `authorizationNonce` parameter. The
+policy layer injects it after evaluating the request to hand the authorization
+to the executing tool call. Never set it manually: the policy hook overwrites
+any supplied value, and an unknown value fails the request.
+
 ## Policy tiers and approvals
 
 - `auto`: fetch immediately and audit the request.
@@ -153,6 +158,11 @@ identity. The grant expires after `grantTtlHours`, which defaults to 720 hours.
 An unresolved or timed-out approval denies the request; the maximum approval
 wait is 600 seconds. The plugin retains up to 1,024 standing grants; at that
 bound, the oldest grant is evicted and its agent must approve the next access.
+
+Each evaluated authorization is single-use and is handed to the executing tool
+call through shared SQLite state, so the handoff also works when more than one
+plugin instance is active in the gateway process. Unused authorizations expire
+after the 600-second approval window.
 
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
@@ -180,9 +190,9 @@ openclaw onepassword audit
 openclaw onepassword audit --limit 100
 ```
 
-Rows are newest first and show timestamp, agent, slug, outcome, and a truncated
-reason. The reason is stored as supplied; the broker never adds the fetched
-value to the audit log.
+Rows are newest first and show timestamp, agent, slug, outcome, an `errorCode`
+when the attempt failed, and a truncated reason. The reason is stored as
+supplied; the broker never adds the fetched value to the audit log.
 
 ## 1Password CLI behavior
 
@@ -193,5 +203,34 @@ receives only that field rather than the full item. Only
 
 The plugin makes one attempt. `RATE_LIMITED` errors should be handled by waiting
 before a later agent request; the plugin does not create an automatic retry
-loop. Other stable error codes distinguish missing tokens or binaries, missing
-items or fields, authentication failures, timeouts, and other `op` failures.
+loop.
+
+## Error codes
+
+Failed attempts carry one closed error code in the tool result and the audit
+row.
+
+1Password access errors:
+
+| Code              | Meaning                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `TOKEN_MISSING`   | Token file is missing or empty                                   |
+| `OP_NOT_FOUND`    | `op` binary could not be resolved                                |
+| `ITEM_NOT_FOUND`  | Configured item is not in the vault                              |
+| `FIELD_NOT_FOUND` | Configured field is not on the item; available labels are listed |
+| `RATE_LIMITED`    | 1Password service-account rate limit reached                     |
+| `AUTH_FAILED`     | Service-account authentication failed                            |
+| `TIMEOUT`         | `op` exceeded `opTimeoutMs`                                      |
+| `OP_ERROR`        | Any other `op` failure or invalid output                         |
+
+Policy and validation errors:
+
+| Code                                               | Meaning                                                                      |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `INVALID_ACTION`, `INVALID_REASON`, `INVALID_SLUG` | Request failed input validation                                              |
+| `UNKNOWN_SLUG`                                     | Slug is not in the configured registry                                       |
+| `TOOL_CALL_ID_MISSING`                             | Call arrived without a tool call id                                          |
+| `POLICY_NOT_EVALUATED`                             | No matching authorization for this call; the request was not policy-approved |
+| `POLICY_CHANGED`                                   | Config changed between approval and execution                                |
+| `GRANT_EXPIRED`                                    | Standing grant lapsed before execution                                       |
+| `APPROVAL_CANCELLED`                               | The run was aborted while the approval was pending                           |

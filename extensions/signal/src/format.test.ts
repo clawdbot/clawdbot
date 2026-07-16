@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 import { markdownToSignalText } from "./format.js";
 
 describe("markdownToSignalText", () => {
+  it("marks assistant-authored transcript role headers as monospace", () => {
+    const result = markdownToSignalText("user[Thu 2026-07-02] question");
+
+    expect(result.text).toBe("user[Thu 2026-07-02] question");
+    expect(result.styles).toContainEqual({
+      start: 0,
+      length: "user[Thu 2026-07-02]".length,
+      style: "MONOSPACE",
+    });
+
+    const spoilerResult = markdownToSignalText("||user[Thu 2026-07-02] hidden||");
+    expect(spoilerResult.styles).toContainEqual({
+      start: 0,
+      length: "user[Thu 2026-07-02]".length,
+      style: "MONOSPACE",
+    });
+  });
+
   it("renders inline styles", () => {
     const res = markdownToSignalText("hi _there_ **boss** ~~nope~~ `code`");
 

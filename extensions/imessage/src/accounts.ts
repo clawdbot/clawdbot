@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   createAccountListHelpers,
@@ -10,6 +11,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageAccountConfig } from "./account-types.js";
+import { resolveLocalIMessageChatDbPath } from "./cli-path.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -170,6 +172,15 @@ function resolveIMessageAccountSourceOwner(params: {
   return defaultOwner;
 }
 
+function resolveIMessageDatabaseFileIdentity(dbPath: string): string | undefined {
+  try {
+    const stats = statSync(dbPath);
+    return stats.isFile() ? `${stats.dev}:${stats.ino}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Returns the owner account id when `account` is an enabled duplicate of
  * another enabled account that targets the same local Messages source. Used
@@ -196,6 +207,52 @@ export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessa
   return listIMessageAccountIds(cfg)
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+export function hasExclusiveIMessageLocalDatabase(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+  cliPath: string;
+  dbPath?: string;
+}): boolean {
+  const otherAccounts = listEnabledIMessageAccounts(params.cfg).filter(
+    (candidate) => candidate.accountId !== params.account.accountId,
+  );
+  if (otherAccounts.length === 0) {
+    return true;
+  }
+
+  const selectedDbPath = resolveLocalIMessageChatDbPath({
+    cliPath: params.cliPath,
+    dbPath: params.dbPath,
+    remoteHost: params.account.config.remoteHost,
+  });
+  if (!selectedDbPath) {
+    return false;
+  }
+
+  const selectedDbIdentity = resolveIMessageDatabaseFileIdentity(selectedDbPath);
+  if (!selectedDbIdentity) {
+    return false;
+  }
+
+  for (const candidate of otherAccounts) {
+    if (candidate.config.remoteHost?.trim()) {
+      continue;
+    }
+    const candidateDbPath = resolveLocalIMessageChatDbPath({
+      cliPath: candidate.config.cliPath?.trim() || "imsg",
+      dbPath: candidate.config.dbPath?.trim() || undefined,
+    });
+    if (!candidateDbPath) {
+      return false;
+    }
+    const candidateDbIdentity = resolveIMessageDatabaseFileIdentity(candidateDbPath);
+    if (!candidateDbIdentity || candidateDbIdentity === selectedDbIdentity) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function collectIMessageDuplicateAccountSourceWarnings(params: {

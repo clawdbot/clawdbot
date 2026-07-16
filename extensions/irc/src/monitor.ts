@@ -22,7 +22,7 @@ type IrcMonitorOptions = {
 
 const IRC_MONITOR_RECONNECT_DELAY_MS = 1000;
 
-export function resolveIrcInboundTarget(params: { target: string; senderNick: string }): {
+function resolveIrcInboundTarget(params: { target: string; senderNick: string }): {
   isGroup: boolean;
   target: string;
   rawTarget: string;

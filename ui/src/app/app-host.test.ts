@@ -77,6 +77,7 @@ type ShellNavigationState = {
   };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
+  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
@@ -447,10 +448,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("opens search and starts a session from native titlebar events", () => {
     const navigate = vi.fn();
     const openPalette = vi.fn();
+    const togglePalette = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
     Object.defineProperty(shell, "commandPalette", {
       configurable: true,
-      value: { openPalette },
+      value: { openPalette, togglePalette },
     });
     shell.runtime = {
       context: {
@@ -459,10 +461,32 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       } as unknown as ApplicationContext,
     };
     shell.handleNativeOpenSearch();
+    const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
+    shell.handleNativeToggleSearch(toggleEvent);
     shell.handleNativeNewSession();
 
     expect(openPalette).toHaveBeenCalledOnce();
+    expect(togglePalette).toHaveBeenCalledOnce();
+    // preventDefault is the handled signal for the native legacy fallback.
+    expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+  });
+
+  it("retains a native new-session request until a context exists", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+
+    shell.handleNativeNewSession();
+
+    shell.runtime = {
+      context: {
+        navigate,
+        agentSelection: { state: { selectedId: "main" } },
+      } as unknown as ApplicationContext,
+    };
+    shell.handleNativeNewSession();
+
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
   });
 
   it("does not start a native session during onboarding", () => {

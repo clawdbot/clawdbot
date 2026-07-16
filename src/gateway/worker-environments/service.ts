@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
@@ -22,15 +21,12 @@ import { onSessionIdentityMutation } from "../../config/sessions/session-accesso
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
   type WorkerLease,
-  type WorkerLeaseStatus,
   type WorkerProfile,
   type WorkerProvider,
   type WorkerSshEndpoint,
@@ -60,9 +56,13 @@ import {
   type WorkerInferenceSink,
 } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
+import {
+  boundedWorkerError as boundedError,
+  inspectionStatus,
+  requireWorkerLease,
+} from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
-  normalizeWorkerSshEndpoint,
   type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch as TransitionPatch,
@@ -92,6 +92,7 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
+const STALE_ATTACHED_BUNDLE_ERROR = "Attached worker build no longer matches the Gateway";
 
 function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
@@ -174,6 +175,7 @@ export type WorkerSessionPlacementGate = {
     binding: WorkerPlacementTurnBinding & {
       transcriptSeq?: number;
       liveSeq?: number;
+      workspaceResultPending?: boolean;
     },
   ): void;
 };
@@ -204,49 +206,12 @@ type WorkerInferenceCancelServiceResult =
   | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateCloudWorkerProfileSettings(value);
   if (error) {
     throw serviceError("invalid_profile", error);
   }
   return value as WorkerProfile;
-}
-
-function inspectionStatus(value: unknown): WorkerLeaseStatus["status"] {
-  if (!isRecord(value)) {
-    throw new Error("Worker provider returned an invalid inspection result");
-  }
-  const status = value.status;
-  if (status !== "active" && status !== "destroyed" && status !== "unknown") {
-    throw new Error("Worker provider returned an invalid inspection status");
-  }
-  return status;
-}
-
-function requireWorkerLease(value: unknown): WorkerLease {
-  if (
-    !isRecord(value) ||
-    typeof value.leaseId !== "string" ||
-    !value.leaseId.trim() ||
-    !isRecord(value.ssh)
-  ) {
-    throw new Error("Worker provider returned an invalid provision result");
-  }
-  return {
-    leaseId: value.leaseId.trim(),
-    ssh: normalizeWorkerSshEndpoint(value.ssh as WorkerSshEndpoint),
-  };
-}
-
-function boundedError(error: unknown): string {
-  const redacted = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/g, " ")
-    .trim();
-  return truncateUtf16Safe(redacted || "unknown error", 1_024);
 }
 
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
@@ -757,14 +722,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return void cancelRequested(record);
     }
     let currentBundle: WorkerInstallationArtifact | undefined;
-    if (
-      record.destroyRequestedAtMs === null &&
-      record.bootstrapReceipt &&
-      inState(record, "ready", "idle", "attached")
-    ) {
+    if (record.destroyRequestedAtMs === null && inState(record, "ready", "idle", "attached")) {
       try {
         currentBundle = await options.prepareInstallation("bundle");
-        if (verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
+        if (
+          record.bootstrapReceipt &&
+          verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)
+        ) {
           const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : null;
           if (record.state !== "attached" || sessionId) {
             ensurePendingCredential(record, sessionId ?? null);
@@ -824,7 +788,20 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     if (record.state === "attached") {
-      // Milestone 2 owns session draining; never replace a build beneath a live worker.
+      if (
+        currentBundle &&
+        (!record.bootstrapReceipt ||
+          !verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle))
+      ) {
+        // A new Gateway build rejects the old worker at admission. Tear it down now so placement
+        // reconciliation can fail-stop cleanly instead of reporting active until the next turn.
+        await failBootstrap(
+          record,
+          leaseId,
+          provider,
+          new Error(STALE_ATTACHED_BUNDLE_ERROR),
+        ).catch(() => undefined);
+      }
       return;
     }
     if (record.state === "draining" && record.destroyRequestedAtMs === null) {
@@ -925,7 +902,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     });
   };
 
-  const destroy = async (environmentId: string) => {
+  const destroy = async (
+    environmentId: string,
+    destroyOptions: { requireUnattached?: boolean } = {},
+  ) => {
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -936,6 +916,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       if (inState(record, "destroyed", "failed", "orphaned")) {
         return record;
+      }
+      if (destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
+        throw serviceError(
+          "invalid_state",
+          "Attached cloud workers must be stopped through sessions.reclaim",
+        );
       }
       record = store.requestDestroy({ environmentId, state: record.state });
       if (record.state === "requested") {
@@ -1340,6 +1326,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       options.placementStore?.updateAckCursors({
         ...placement,
         liveSeq: result.result.ackedSeq,
+        ...(isTerminalLiveEvent(request) ? { workspaceResultPending: true } : {}),
       });
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
     }
@@ -1452,6 +1439,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     create: async (profileId: string, idempotencyKey: string) =>
       project(await create(profileId, idempotencyKey)),
     destroy: async (environmentId: string) => project(await destroy(environmentId)),
+    destroyUnattached: async (environmentId: string) =>
+      project(await destroy(environmentId, { requireUnattached: true })),
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
@@ -1574,3 +1563,4 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 }
 
 export type WorkerEnvironmentService = ReturnType<typeof createWorkerEnvironmentService>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

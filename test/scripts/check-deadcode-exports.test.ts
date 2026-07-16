@@ -1,9 +1,8 @@
-// Check Deadcode Exports tests cover parsing, ratcheting, and baseline emission.
+// Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import { describe, expect, it } from "vitest";
 import knipConfig from "../../config/knip.config.ts";
 import {
-  compareUnusedExportsToBaseline,
-  formatUnusedExportBaseline,
+  checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mjs";
@@ -26,6 +25,10 @@ describe("check-deadcode-exports", () => {
 
   it("models the jiti virtual agent-sessions SDK entry", () => {
     expect(knipConfig.workspaces["."].entry).toContain("src/agents/sessions/extension-sdk.ts!");
+  });
+
+  it("models the spawned system-agent MCP stdio entry", () => {
+    expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
   });
 
   it("parses all compact export sections and expands symbol lists", () => {
@@ -63,59 +66,27 @@ src/noise.ts: src/noise.ts
     });
   });
 
-  it.each([
-    {
-      name: "unexpected and stale entries",
-      actual: ["src/a.ts: kept", "src/new.ts: added"],
-      required: ["src/a.ts: kept", "src/old.ts: removed"],
-      optional: [],
-      expected: { unexpected: ["src/new.ts: added"], stale: ["src/old.ts: removed"] },
-    },
-    {
-      name: "optional entries present",
-      actual: ["src/a.ts: kept", "src/platform.ts: variant"],
-      required: ["src/a.ts: kept"],
-      optional: ["src/platform.ts: variant"],
-      expected: { unexpected: [], stale: [] },
-    },
-    {
-      name: "optional entries absent",
-      actual: ["src/a.ts: kept"],
-      required: ["src/a.ts: kept"],
-      optional: ["src/platform.ts: variant"],
-      expected: { unexpected: [], stale: [] },
-    },
-  ])("ratchets $name", ({ actual, expected, optional, required }) => {
-    expect(compareUnusedExportsToBaseline(actual, required, optional)).toMatchObject(expected);
+  it("accepts an empty compact report with zero unused exports", () => {
+    expect(checkUnusedExports("")).toEqual({
+      ok: true,
+      entries: [],
+      message: "",
+    });
   });
 
-  it("rejects unsorted and duplicate required baselines", () => {
+  it("rejects every unused export without an allowlist", () => {
     expect(
-      compareUnusedExportsToBaseline(
-        ["src/a.ts: one", "src/b.ts: two"],
-        ["src/b.ts: two", "src/a.ts: one", "src/a.ts: one"],
-      ),
-    ).toMatchObject({ allowlistIsSorted: false, duplicateAllowedCount: 1 });
-  });
-
-  it("emits a sorted baseline module while preserving optional entries", () => {
-    expect(
-      formatUnusedExportBaseline(
-        ["src/b.ts: beta", "src/a.ts: alpha", "src/a.ts: alpha", "src/platform.ts: variant"],
-        ["src/platform.ts: variant"],
-      ),
-    ).toBe(`// Pre-existing unused exports awaiting deletion.
-// New entries fail CI. After deleting dead code, run \`pnpm deadcode:exports:update\`.
-// Do not add entries to avoid fixing new findings.
-export const KNIP_UNUSED_EXPORT_BASELINE = [
-  "src/a.ts: alpha",
-  "src/b.ts: beta",
-];
-
-// Platform-variant findings. Allowed when present; never required.
-export const KNIP_OPTIONAL_UNUSED_EXPORT_BASELINE = [
-  "src/platform.ts: variant",
-];
-`);
+      checkUnusedExports(`Unused exports (2)
+src/z.ts: zebra
+src/a.ts: alpha
+`),
+    ).toEqual({
+      ok: false,
+      entries: ["src/a.ts: alpha", "src/z.ts: zebra"],
+      message: `Unused exports are not allowed:
+  src/a.ts: alpha
+  src/z.ts: zebra
+Delete the exports or model their real production consumers in Knip.`,
+    });
   });
 });

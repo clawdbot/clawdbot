@@ -1405,3 +1405,4 @@ describe("plugins cli update", () => {
     expect(runtimeLogs).toContain('Failed to update hook pack "demo-hooks": registry timeout');
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,14 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCommitmentExtractionPrompt,
   parseCommitmentExtractionOutput,
   persistCommitmentExtractionResult,
-  validateCommitmentCandidates,
 } from "./extraction.js";
-import { loadCommitmentStore } from "./store.js";
+import { validateCommitmentCandidates } from "./extraction.test-support.js";
+import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
 
 describe("commitment extraction", () => {
@@ -20,6 +21,7 @@ describe("commitment extraction", () => {
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     stateDirEnvSnapshot?.restore();
@@ -273,13 +275,13 @@ describe("commitment extraction", () => {
       },
       nowMs: nowMs + 1_000,
     });
-    const store = await loadCommitmentStore();
+    const commitments = readCommitmentsForTest();
 
     expect(created).toHaveLength(1);
     expect(deduped).toHaveLength(0);
-    expect(store.commitments).toHaveLength(1);
-    expect(store.commitments[0]?.reason).toBe("Updated reason");
-    expect(store.commitments[0]?.confidence).toBe(0.97);
-    expect(store.commitments[0]?.status).toBe("pending");
+    expect(commitments).toHaveLength(1);
+    expect(commitments[0]?.reason).toBe("Updated reason");
+    expect(commitments[0]?.confidence).toBe(0.97);
+    expect(commitments[0]?.status).toBe("pending");
   });
 });

@@ -1460,6 +1460,10 @@ async function main() {
   const preflightCleanup = parseBool(process.env.OPENCLAW_DOCKER_ALL_PREFLIGHT_CLEANUP, true);
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
+  const allowFrozenTargetScenarioOmissions = parseBool(
+    process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
+    false,
+  );
   const planJson =
     cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
@@ -1511,21 +1515,29 @@ async function main() {
   appendExtension(baseEnv, "codex");
 
   const timingStore = await loadTimingStore(timingsFile, timingsEnabled);
-  const { orderedLanes, orderedTailLanes, plan, scheduledLanes } = resolveDockerE2ePlan({
-    includeOpenWebUI,
-    liveMode,
-    liveRetries,
-    orderLanes,
-    planReleaseAll: planJson && planReleaseAll,
-    profile,
-    releaseChunk,
-    releaseProfile,
-    selectedLaneNames,
-    timingStore,
-    upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
-    upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
-  });
-  if (scheduledLanes.length === 0) {
+  const { omittedUnsupportedLaneNames, orderedLanes, orderedTailLanes, plan, scheduledLanes } =
+    resolveDockerE2ePlan({
+      includeOpenWebUI,
+      liveMode,
+      liveRetries,
+      orderLanes,
+      planReleaseAll: planJson && planReleaseAll,
+      profile,
+      releaseChunk,
+      releaseProfile,
+      selectedLaneNames,
+      timingStore,
+      upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+      upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
+      upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
+      allowFrozenTargetScenarioOmissions,
+    });
+  if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
+    throw new Error(
+      `frozen target scenario omissions require trusted workflow opt-in: ${omittedUnsupportedLaneNames.join(", ")}`,
+    );
+  }
+  if (scheduledLanes.length === 0 && omittedUnsupportedLaneNames.length === 0) {
     throw new Error(
       [
         "resolved zero Docker lanes",
@@ -1538,6 +1550,8 @@ async function main() {
       ].join("; "),
     );
   }
+  const omittedUnsupportedLanes =
+    omittedUnsupportedLaneNames.length > 0 ? omittedUnsupportedLaneNames : undefined;
 
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
@@ -1585,8 +1599,28 @@ async function main() {
   );
   printLaneManifest("Main", orderedLanes, timingStore);
   printLaneManifest("Tail", orderedTailLanes, timingStore);
+  if (omittedUnsupportedLanes) {
+    console.log(
+      `==> Docker lanes omitted: target lacks ${omittedUnsupportedLanes.join(", ")} scenario support`,
+    );
+  }
   if (dryRun) {
     console.log("==> Dry run complete");
+    return;
+  }
+
+  if (scheduledLanes.length === 0) {
+    await writeSummary({
+      chunk: releaseChunk || undefined,
+      failures: [],
+      lanes: [],
+      omittedUnsupportedLanes,
+      phases,
+      profile,
+      selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
+      startedAt: runStartedAt,
+      status: "passed",
+    });
     return;
   }
 
@@ -1676,6 +1710,7 @@ async function main() {
         functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
       },
       lanes: allResults,
+      omittedUnsupportedLanes,
       phases,
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
@@ -1715,6 +1750,7 @@ async function main() {
         functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
       },
       lanes: allResults,
+      omittedUnsupportedLanes,
       phases,
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
@@ -1744,6 +1780,7 @@ async function main() {
         functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
       },
       lanes: allResults,
+      omittedUnsupportedLanes,
       phases,
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
@@ -1762,6 +1799,7 @@ async function main() {
       functional: baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
     },
     lanes: allResults,
+    omittedUnsupportedLanes,
     phases,
     profile,
     selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,

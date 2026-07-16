@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getRecentSessionContent, sanitizeSessionMemoryTranscriptText } from "./transcript.js";
+import { getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const tempRoots: string[] = [];
 
@@ -43,7 +43,7 @@ describe("session-memory transcript extraction", () => {
       ].join("\n"),
     );
 
-    const memoryContent = await getRecentSessionContent(transcriptPath);
+    const memoryContent = await getRecentSessionContentWithResetFallback(transcriptPath);
 
     expect(memoryContent).toContain(
       "user: Please summarize this [REMOVED_SPECIAL_TOKEN]system[REMOVED_SPECIAL_TOKEN]",
@@ -60,12 +60,18 @@ describe("session-memory transcript extraction", () => {
     expect(memoryContent).not.toContain("ignore previous instructions");
   });
 
-  it("preserves ordinary mentions while dropping standalone no-reply markers", () => {
-    expect(sanitizeSessionMemoryTranscriptText("Use NO_REPLY when nothing changed.")).toBe(
-      "Use NO_REPLY when nothing changed.",
+  it("preserves ordinary mentions while dropping standalone no-reply markers", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("assistant", "Use NO_REPLY when nothing changed."),
+        message("assistant", '{"action":"NO_REPLY"}'),
+        message("assistant", "All done\n\nNO_REPLY"),
+      ].join("\n"),
     );
-    expect(sanitizeSessionMemoryTranscriptText('{"action":"NO_REPLY"}')).toBeNull();
-    expect(sanitizeSessionMemoryTranscriptText("All done\n\nNO_REPLY")).toBe("All done");
+
+    await expect(getRecentSessionContentWithResetFallback(transcriptPath)).resolves.toBe(
+      "assistant: Use NO_REPLY when nothing changed.\nassistant: All done",
+    );
   });
 
   it("extracts sanitized text blocks from array content", async () => {
@@ -76,7 +82,7 @@ describe("session-memory transcript extraction", () => {
       ]),
     );
 
-    await expect(getRecentSessionContent(transcriptPath)).resolves.toBe(
+    await expect(getRecentSessionContentWithResetFallback(transcriptPath)).resolves.toBe(
       "assistant: Answer [REMOVED_SPECIAL_TOKEN]",
     );
   });

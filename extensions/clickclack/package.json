@@ -28,6 +28,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "clickclack",
       "label": "ClickClack",
@@ -43,7 +44,13 @@
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--workspace <workspace>",
+          "description": "ClickClack workspace id, slug, or name"
+        }
+      ]
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/clickclack",

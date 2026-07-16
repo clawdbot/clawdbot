@@ -1,10 +1,8 @@
 // Discord tests cover targets plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetDiscordDirectoryCacheForTest,
-  resolveDiscordDirectoryUserId,
-} from "./directory-cache.js";
+import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import * as directoryLive from "./directory-live.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -104,7 +102,7 @@ describe("resolveDiscordTarget", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    resetDiscordDirectoryCacheForTest();
+    clearDiscordDirectoryCacheForTest();
   });
 
   it("returns a resolved user for usernames", async () => {

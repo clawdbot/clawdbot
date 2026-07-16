@@ -7,7 +7,7 @@ import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
 export const WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY = "connection-controller";
 
-export type WhatsAppConnectionControllerHandle = {
+type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
   getCurrentSock(): WASocket | null;
   getSelfIdentity(): WhatsAppSelfIdentity | null;

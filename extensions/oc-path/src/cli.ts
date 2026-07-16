@@ -32,7 +32,7 @@ import {
   type OcPath,
 } from "./oc-path/index.js";
 
-export type OutputRuntimeEnv = {
+type OutputRuntimeEnv = {
   writeStdout(value: string): void;
   error(value: string): void;
   exit(code: number): void;
@@ -215,7 +215,7 @@ function splitDiffLines(s: string): readonly string[] {
   return s === "" ? [] : s.split("\n");
 }
 
-export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }
@@ -270,7 +270,7 @@ export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: st
 
 // ---------- Commands -----------------------------------------------------
 
-export async function pathResolveCommand(
+async function pathResolveCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -304,7 +304,7 @@ export async function pathResolveCommand(
   emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
 }
 
-export async function pathSetCommand(
+async function pathSetCommand(
   pathStr: string | undefined,
   value: string | undefined,
   options: PathCommandOptions,
@@ -382,7 +382,7 @@ export async function pathSetCommand(
   );
 }
 
-export async function pathFindCommand(
+async function pathFindCommand(
   patternStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -434,7 +434,7 @@ export async function pathFindCommand(
   }
 }
 
-export function pathValidateCommand(
+function pathValidateCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -492,7 +492,7 @@ export function pathValidateCommand(
   }
 }
 
-export async function pathEmitCommand(
+async function pathEmitCommand(
   fileArg: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,

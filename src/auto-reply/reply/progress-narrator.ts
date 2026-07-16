@@ -1,51 +1,37 @@
-// Generates short utility-model narration of an in-progress agent turn.
-// Channels opt in via GetReplyOptions.onNarrationUpdate; the narrator tees
-// tool lifecycle events and emits 1-2 plain sentences describing the work.
-import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../../agents/simple-completion-runtime.js";
+// Utility-model narration for channel progress drafts.
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
+import { sanitizeProgressStatusText } from "../../channels/progress-draft-status-text.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import type { TextContent } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GetReplyOptions } from "../get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import {
+  generateNarrationWithUtilityModel,
+  prepareNarrationModel,
+  type ProgressNarrationInput,
+  truncateAtWordBoundary,
+} from "./progress-narrator-model.js";
 
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
 const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
-const NARRATION_TIMEOUT_MS = 10_000;
 const NARRATION_MAX_CHARS = 280;
 const NARRATION_NOTE_MAX_CHARS = 160;
 const MAX_ACTIVITY_NOTES = 40;
-const NOTES_IN_PROMPT = 15;
-const USER_MESSAGE_PROMPT_CHARS = 500;
-// Reasoning-capable utility models spend output tokens before the short
-// visible text; a tiny cap can leave no text (same budget as label generation).
-const NARRATION_MAX_TOKENS = 4_096;
+const VISIBILITY_RETRY_MS = 1_000;
+// Keep hidden-draft polling bounded even when a channel never exposes the draft.
+const MAX_VISIBILITY_RETRIES = 30;
+const PREAMBLE_RETRY_EPSILON_MS = 1;
 const MAX_NARRATIONS_PER_TURN = 30;
 const MAX_CONSECUTIVE_FAILURES = 2;
 
-const NARRATION_SYSTEM_PROMPT = [
-  "You write the live status line for an AI assistant that is working on a chat request.",
-  "Describe what the assistant is doing right now in one or two short plain sentences, under 200 characters total.",
-  "Use simple present tense and plain language a non-technical reader understands.",
-  "No emoji, no markdown, no lists, no tool or API jargon, no quotation marks.",
-  "If something failed, mention it briefly.",
-  "Reply with the status text only.",
-].join(" ");
-
-type ProgressNarrationInput = {
-  userMessage: string;
-  activityNotes: readonly string[];
-  previousText: string;
-};
-
 type ProgressNarrator = {
+  beginTurn: () => void;
+  stopTurn: () => void;
   noteToolStart: (payload: {
     name?: string;
     phase?: string;
@@ -58,28 +44,14 @@ type ProgressNarrator = {
     status?: string;
     exitCode?: number | null;
   }) => void;
-  noteItemEvent: (payload: { name?: string; title?: string; status?: string }) => void;
+  noteItemEvent: (payload: {
+    kind?: string;
+    name?: string;
+    title?: string;
+    status?: string;
+    progressText?: string;
+  }) => void;
 };
-
-function isTextContentBlock(block: { type: string }): block is TextContent {
-  return block.type === "text";
-}
-
-function truncateAtWordBoundary(text: string, maxChars: number): string {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
 
 function normalizeNarrationText(raw: string): string {
   const collapsed = raw
@@ -93,104 +65,24 @@ function normalizeNarrationText(raw: string): string {
   return truncateAtWordBoundary(collapsed, NARRATION_MAX_CHARS);
 }
 
-function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
-  const request = truncateAtWordBoundary(
-    input.userMessage.replace(/\s+/g, " ").trim(),
-    USER_MESSAGE_PROMPT_CHARS,
-  );
-  const notes = input.activityNotes.slice(-NOTES_IN_PROMPT);
-  return [
-    `Request:\n${request || "(none)"}`,
-    `Recent activity (oldest first):\n${notes.map((note) => `- ${note}`).join("\n") || "- (none yet)"}`,
-    `Previous status: ${input.previousText || "(none)"}`,
-  ].join("\n\n");
-}
-
-async function generateNarrationWithUtilityModel(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
-  input: ProgressNarrationInput;
-  abortSignal?: AbortSignal;
-}): Promise<{ text: string | null; error?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
-  const onOuterAbort = () => controller.abort();
-  params.abortSignal?.addEventListener("abort", onOuterAbort, { once: true });
-  try {
-    const result = await completeWithPreparedSimpleCompletionModel({
-      model: params.prepared.model,
-      auth: params.prepared.auth,
-      cfg: params.cfg,
-      context: {
-        systemPrompt: NARRATION_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: buildNarrationUserPrompt(params.input),
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: Math.min(NARRATION_MAX_TOKENS, Math.floor(params.prepared.model.maxTokens)),
-        temperature: 0.3,
-        signal: controller.signal,
-      },
-    });
-    if (result.stopReason === "error") {
-      const error = result.errorMessage?.trim() || "unknown error";
-      logVerbose(`progress-narrator: completion failed: ${error}`);
-      return { text: null, error };
-    }
-    const text = result.content
-      .filter(isTextContentBlock)
-      .map((block) => block.text)
-      .join("")
-      .trim();
-    return { text: text || null };
-  } catch (err) {
-    logVerbose(`progress-narrator: completion failed: ${String(err)}`);
-    return { text: null, error: String(err) };
-  } finally {
-    clearTimeout(timeout);
-    params.abortSignal?.removeEventListener("abort", onOuterAbort);
-  }
-}
-
-async function prepareNarrationModel(params: { cfg: OpenClawConfig; agentId: string }) {
-  try {
-    const prepared = await prepareSimpleCompletionModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      useUtilityModel: true,
-      useAsyncModelResolution: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-    if ("error" in prepared) {
-      logVerbose(`progress-narrator: ${prepared.error}`);
-      return null;
-    }
-    return prepared;
-  } catch (err) {
-    logVerbose(`progress-narrator: model preparation failed: ${String(err)}`);
-    return null;
-  }
-}
-
-export function createProgressNarrator(params: {
+function createProgressNarrator(params: {
   cfg: OpenClawConfig;
   agentId: string;
   userMessage?: string;
   onUpdate: (payload: { text: string }) => Promise<void> | void;
+  isProgressDraftVisible?: () => boolean;
   abortSignal?: AbortSignal;
   /** Mirror of the channel's commandText: "status" policy for narration input. */
   hideCommandText?: boolean;
   /** Test seam: replaces the utility-model completion. */
   generate?: (input: ProgressNarrationInput) => Promise<string | null>;
   now?: () => number;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
 }): ProgressNarrator {
   const now = params.now ?? Date.now;
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const notes: string[] = [];
   let disabled = false;
   let inFlight = false;
@@ -203,32 +95,58 @@ export function createProgressNarrator(params: {
   let preparedPromise: ReturnType<typeof prepareNarrationModel> | undefined;
   let lastFailure: string | undefined;
   let utilityModelLabel: string | undefined;
+  let lastPreambleAt: number | undefined;
+  let visibilityRetryCount = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryImmediate = false;
+  let turnGeneration = 0;
+  let turnActive = true;
+  let userMessage = params.userMessage ?? "";
 
-  const generate =
-    params.generate ??
-    (async (input: ProgressNarrationInput) => {
-      preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
-      const prepared = await preparedPromise;
-      if (!prepared) {
-        disabled = true;
-        return null;
-      }
-      const { provider, modelId, profileId } = prepared.selection;
-      utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
-      const outcome = await generateNarrationWithUtilityModel({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        prepared,
-        input,
-        abortSignal: params.abortSignal,
-      });
-      lastFailure = outcome.error;
-      return outcome.text;
-    });
+  const clearRetryTimer = () => {
+    if (retryTimer !== undefined) {
+      clearTimeoutFn(retryTimer);
+      retryTimer = undefined;
+    }
+    retryImmediate = false;
+  };
+
+  const resetTurnState = () => {
+    turnGeneration += 1;
+    turnActive = true;
+    // Queued turns reuse the narrator lifecycle but not the primary request.
+    // Empty context is safer than describing follow-up work with stale intent.
+    userMessage = "";
+    notes.splice(0);
+    disabled = false;
+    inFlight = false;
+    pendingImmediate = false;
+    notesAtLastRun = -1;
+    lastRunAt = 0;
+    narrationCount = 0;
+    consecutiveFailures = 0;
+    lastText = "";
+    lastFailure = undefined;
+    lastPreambleAt = undefined;
+    visibilityRetryCount = 0;
+    clearRetryTimer();
+  };
+
+  const stopTurn = () => {
+    if (!turnActive) {
+      return;
+    }
+    turnGeneration += 1;
+    turnActive = false;
+    inFlight = false;
+    pendingImmediate = false;
+    clearRetryTimer();
+  };
 
   // Stopping mid-turn must clear any rendered narration so the channel draft
   // falls back to raw tool lines instead of pinning stale status text.
-  const disableNarration = () => {
+  function disableNarration() {
+    clearRetryTimer();
     if (disabled) {
       return;
     }
@@ -240,12 +158,34 @@ export function createProgressNarrator(params: {
     void Promise.resolve(params.onUpdate({ text: "" })).catch((err: unknown) => {
       logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
     });
-  };
+  }
+
+  const generate =
+    params.generate ??
+    (async (input: ProgressNarrationInput) => {
+      preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
+      const prepared = await preparedPromise;
+      if (!prepared) {
+        disableNarration();
+        return null;
+      }
+      const { provider, modelId, profileId } = prepared.selection;
+      utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
+      const outcome = await generateNarrationWithUtilityModel({
+        cfg: params.cfg,
+        prepared,
+        input,
+        abortSignal: params.abortSignal,
+      });
+      lastFailure = outcome.error;
+      return outcome.text;
+    });
 
   const addNote = (note: string, options?: { immediate?: boolean }) => {
-    if (disabled || params.abortSignal?.aborted) {
+    if (!turnActive || disabled || params.abortSignal?.aborted) {
       return;
     }
+    visibilityRetryCount = 0;
     notes.push(truncateAtWordBoundary(note.replace(/\s+/g, " ").trim(), NARRATION_NOTE_MAX_CHARS));
     if (notes.length > MAX_ACTIVITY_NOTES) {
       notes.splice(0, notes.length - MAX_ACTIVITY_NOTES);
@@ -267,10 +207,49 @@ export function createProgressNarrator(params: {
     return now() - lastRunAt >= MIN_INTERVAL_MS;
   };
 
-  const maybeRun = (immediate: boolean) => {
-    if (disabled) {
+  // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
+  const scheduleRetry = (delayMs: number, immediate: boolean) => {
+    retryImmediate ||= immediate;
+    if (retryTimer !== undefined) {
+      clearTimeoutFn(retryTimer);
+      retryTimer = undefined;
+    }
+    if (!turnActive || disabled || params.abortSignal?.aborted) {
+      retryImmediate = false;
       return;
     }
+    retryTimer = setTimeoutFn(
+      () => {
+        retryTimer = undefined;
+        const rerunImmediate = retryImmediate;
+        retryImmediate = false;
+        maybeRun(rerunImmediate);
+      },
+      Math.max(1, delayMs),
+    );
+  };
+
+  function maybeRun(immediate: boolean) {
+    if (!turnActive || disabled || params.abortSignal?.aborted) {
+      clearRetryTimer();
+      return;
+    }
+    if (params.isProgressDraftVisible?.() === false) {
+      if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
+        visibilityRetryCount += 1;
+        scheduleRetry(VISIBILITY_RETRY_MS, immediate);
+      }
+      return;
+    }
+    const preambleAge = lastPreambleAt === undefined ? undefined : now() - lastPreambleAt;
+    if (preambleAge !== undefined && preambleAge < PROGRESS_STATUS_PREAMBLE_FRESH_MS) {
+      scheduleRetry(
+        PROGRESS_STATUS_PREAMBLE_FRESH_MS - preambleAge + PREAMBLE_RETRY_EPSILON_MS,
+        immediate,
+      );
+      return;
+    }
+    clearRetryTimer();
     if (inFlight) {
       pendingImmediate ||= immediate;
       return;
@@ -282,18 +261,23 @@ export function createProgressNarrator(params: {
       disableNarration();
       return;
     }
+    visibilityRetryCount = 0;
     inFlight = true;
+    const runGeneration = turnGeneration;
     narrationCount += 1;
     notesAtLastRun = notes.length;
     lastRunAt = now();
     const input: ProgressNarrationInput = {
-      userMessage: params.userMessage ?? "",
+      userMessage,
       activityNotes: [...notes],
       previousText: lastText,
     };
     void (async () => {
       try {
         const raw = await generate(input);
+        if (!turnActive || runGeneration !== turnGeneration) {
+          return;
+        }
         const text = raw ? normalizeNarrationText(raw) : "";
         if (!text) {
           consecutiveFailures += 1;
@@ -319,17 +303,25 @@ export function createProgressNarrator(params: {
       } catch (err) {
         logVerbose(`progress-narrator: update failed: ${String(err)}`);
       } finally {
-        inFlight = false;
-        const rerunImmediate = pendingImmediate;
-        pendingImmediate = false;
-        if (rerunImmediate) {
-          maybeRun(true);
+        if (runGeneration === turnGeneration) {
+          inFlight = false;
+          const rerunImmediate = pendingImmediate;
+          pendingImmediate = false;
+          if (rerunImmediate) {
+            maybeRun(true);
+          }
         }
       }
     })();
-  };
+  }
+
+  params.abortSignal?.addEventListener("abort", stopTurn, { once: true });
 
   return {
+    beginTurn() {
+      resetTurnState();
+    },
+    stopTurn,
     noteToolStart(payload) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
@@ -358,6 +350,17 @@ export function createProgressNarrator(params: {
       addNote(`${subject} failed${exit}`, { immediate: true });
     },
     noteItemEvent(payload) {
+      if (payload.kind === "preamble") {
+        const preambleText = sanitizeProgressStatusText(payload.progressText ?? "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!preambleText) {
+          return;
+        }
+        lastPreambleAt = now();
+        addNote(`model: ${preambleText}`);
+        return;
+      }
       if (payload.status !== "failed") {
         return;
       }
@@ -376,10 +379,10 @@ export function attachProgressNarratorToReplyOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;
   userMessage?: string;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   /** Model-locked native sessions must never invoke the utility model. */
   disabled?: boolean;
-}): GetReplyOptions | undefined {
+}): InternalGetReplyOptions | undefined {
   const opts = params.opts;
   const onNarrationUpdate = opts?.onNarrationUpdate;
   if (!opts || !onNarrationUpdate || params.disabled === true) {
@@ -395,8 +398,13 @@ export function attachProgressNarratorToReplyOptions(params: {
     agentId: params.agentId,
     userMessage: params.userMessage,
     onUpdate: onNarrationUpdate,
+    isProgressDraftVisible: opts.isProgressDraftVisible,
     abortSignal: opts.abortSignal,
     hideCommandText: opts.narrationHideCommandText === true,
+  });
+  opts.onProgressNarratorLifecycle?.({
+    beginTurn: narrator.beginTurn,
+    stopTurn: narrator.stopTurn,
   });
   return {
     ...opts,

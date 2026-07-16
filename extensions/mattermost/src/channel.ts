@@ -811,6 +811,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     }),
     messaging: {
       targetPrefixes: ["mattermost"],
+      directTargetStyle: "user-prefixed",
+      targetIdComparison: "case-sensitive",
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
@@ -959,3 +961,4 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   security: mattermostSecurityAdapter,
   outbound: mattermostOutbound,
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

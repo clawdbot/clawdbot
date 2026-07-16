@@ -10,8 +10,8 @@ import {
   recordRemoteSkillNodeInfo,
   removeRemoteNodeSkills,
   replaceRemoteNodeSkills,
-  resetRemoteNodeSkillsForTests,
 } from "./remote-skills.js";
+import { resetRemoteNodeSkillsForTests } from "./remote-skills.test-support.js";
 
 function content(name: string, description: string, body = "# Instructions"): string {
   return `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;

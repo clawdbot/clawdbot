@@ -11,11 +11,8 @@ import type {
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
-import {
-  testing as cliBackendsTesting,
-  resolveCliBackendConfig,
-  resolveCliBackendLiveTest,
-} from "./cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -1193,3 +1190,4 @@ describe("resolveCliBackendConfig alias precedence", () => {
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

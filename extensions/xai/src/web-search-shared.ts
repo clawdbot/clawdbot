@@ -81,7 +81,7 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
+function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
   if (isAbortError(error)) {
     throw new Error(
       `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,

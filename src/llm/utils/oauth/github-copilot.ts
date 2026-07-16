@@ -2,7 +2,6 @@
  * GitHub Copilot OAuth flow
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   assertOkOrThrowProviderError,
@@ -14,6 +13,18 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromEpochSeconds,
 } from "../../../infra/parse-finite-number.js";
+import {
+  isSupportedGithubCopilotDomain,
+  normalizeGithubCopilotDomain,
+} from "../../../plugin-sdk/github-copilot-domain.js";
+import { resolveGithubCopilotTokenEndpoint } from "../../../plugin-sdk/github-copilot-token-endpoint.js";
+import type {
+  CopilotModelListEntry,
+  CopilotRequestOptions,
+  DeviceCodeResponse,
+  DeviceTokenErrorResponse,
+  DeviceTokenSuccessResponse,
+} from "../../github-copilot-oauth-types.js";
 import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
@@ -34,38 +45,6 @@ const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 const COPILOT_REQUEST_TIMEOUT_MS = 30_000;
-
-type DeviceCodeResponse = {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  intervalMs: number;
-  expiresAt: number;
-};
-
-type DeviceTokenSuccessResponse = {
-  access_token: string;
-  token_type?: string;
-  scope?: string;
-};
-
-type DeviceTokenErrorResponse = {
-  error: string;
-  error_description?: string;
-  interval?: number;
-};
-
-type CopilotModelListEntry = {
-  id?: unknown;
-  object?: unknown;
-  capabilities?: {
-    type?: unknown;
-  };
-};
-type CopilotRequestOptions = {
-  signal?: AbortSignal;
-  timeoutMs?: number;
-};
 
 function resolveExpiresAtFromDurationSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value);
@@ -93,40 +72,35 @@ function getUrls(domain: string): {
   accessTokenUrl: string;
   copilotTokenUrl: string;
 } {
+  const safeDomain = normalizeGithubCopilotDomain(domain);
   return {
-    deviceCodeUrl: `https://${domain}/login/device/code`,
-    accessTokenUrl: `https://${domain}/login/oauth/access_token`,
-    copilotTokenUrl: `https://api.${domain}/copilot_internal/v2/token`,
+    deviceCodeUrl: `https://${safeDomain}/login/device/code`,
+    accessTokenUrl: `https://${safeDomain}/login/oauth/access_token`,
+    copilotTokenUrl: `https://api.${safeDomain}/copilot_internal/v2/token`,
   };
 }
 
-/**
- * Parse the proxy-ep from a Copilot token and convert to API base URL.
- * Token format: tid=...;exp=...;proxy-ep=proxy.individual.githubcopilot.com;...
- * Returns API URL like https://api.individual.githubcopilot.com
- */
-function getBaseUrlFromToken(token: string): string | null {
-  const match = token.match(/proxy-ep=([^;]+)/);
-  if (!match) {
-    return null;
-  }
-  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
-  // Convert proxy.xxx to api.xxx
-  const apiHost = proxyHost.replace(/^proxy\./, "api.");
-  return `https://${apiHost}`;
-}
-
 function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
+  if (enterpriseDomain && !isSupportedGithubCopilotDomain(enterpriseDomain)) {
+    throw new Error(
+      `Refusing to route GitHub Copilot requests for unsupported enterprise domain "${enterpriseDomain}". Re-authenticate with a supported host (github.com or a *.ghe.com tenant).`,
+    );
+  }
   // If we have a token, extract the base URL from proxy-ep
   if (token) {
-    const urlFromToken = getBaseUrlFromToken(token);
-    if (urlFromToken) {
-      return urlFromToken;
+    const tokenEndpoint = resolveGithubCopilotTokenEndpoint(token, enterpriseDomain);
+    if (tokenEndpoint.hasProxyEndpoint && !tokenEndpoint.baseUrl) {
+      throw new Error(
+        "Refusing to route GitHub Copilot requests to an unsupported proxy endpoint.",
+      );
+    }
+    if (tokenEndpoint.baseUrl) {
+      return tokenEndpoint.baseUrl;
     }
   }
   // Fallback for enterprise or if token parsing fails
   if (enterpriseDomain) {
-    return `https://copilot-api.${enterpriseDomain}`;
+    return `https://copilot-api.${normalizeGithubCopilotDomain(enterpriseDomain)}`;
   }
   return "https://api.individual.githubcopilot.com";
 }
@@ -357,11 +331,16 @@ async function pollForGitHubAccessToken(
 /**
  * Refresh GitHub Copilot token
  */
-export async function refreshGitHubCopilotToken(
+async function refreshGitHubCopilotToken(
   refreshToken: string,
   enterpriseDomain?: string,
   options: CopilotRequestOptions = {},
 ): Promise<OAuthCredentials> {
+  if (enterpriseDomain && !isSupportedGithubCopilotDomain(enterpriseDomain)) {
+    throw new Error(
+      `Refusing to refresh GitHub Copilot token for unsupported enterprise domain "${enterpriseDomain}". Re-authenticate with a supported host (github.com or a *.ghe.com tenant).`,
+    );
+  }
   const domain = enterpriseDomain || "github.com";
   const urls = getUrls(domain);
 
@@ -533,6 +512,11 @@ async function loginGitHubCopilot(options: {
   if (trimmed && !enterpriseDomain) {
     throw new Error("Invalid GitHub Enterprise URL/domain");
   }
+  if (!isSupportedGithubCopilotDomain(enterpriseDomain)) {
+    throw new Error(
+      `Unsupported GitHub Enterprise domain "${trimmed}". Use github.com or a *.ghe.com data-residency tenant.`,
+    );
+  }
   const domain = enterpriseDomain || "github.com";
 
   const device = await startDeviceFlow(domain, { signal: options.signal });
@@ -583,14 +567,14 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
     const domain = creds.enterpriseUrl
       ? (normalizeDomain(creds.enterpriseUrl) ?? undefined)
       : undefined;
-    const baseUrl = getGitHubCopilotBaseUrl(creds.access, domain);
+    const tokenEndpoint = resolveGithubCopilotTokenEndpoint(creds.access, domain);
+    if (
+      !isSupportedGithubCopilotDomain(creds.enterpriseUrl) ||
+      (tokenEndpoint.hasProxyEndpoint && !tokenEndpoint.baseUrl)
+    ) {
+      return models.filter((m) => m.provider !== "github-copilot");
+    }
+    const baseUrl = tokenEndpoint.baseUrl ?? getGitHubCopilotBaseUrl(undefined, domain);
     return models.map((m) => (m.provider === "github-copilot" ? { ...m, baseUrl } : m));
   },
-};
-
-export const testing = {
-  enableGitHubCopilotModel,
-  listGitHubCopilotModelIds,
-  pollForGitHubAccessToken,
-  startDeviceFlow,
 };

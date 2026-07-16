@@ -398,19 +398,6 @@ async function processOpenAICompletionsStream(
     chunkPushedEvent = true;
     stream.push(event);
   };
-  const finishCurrentBlock = () => {
-    if (!currentBlock) {
-      return;
-    }
-    if (currentBlock.type === "toolCall") {
-      currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-    }
-  };
-  const finishAllToolCallBlocks = () => {
-    for (const block of toolCallBlocksByIndex.values()) {
-      block.arguments = parseStreamingJson(block.partialArgs);
-    }
-  };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
     const nextBytes = measureUtf8Bytes(next.text);
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
@@ -434,7 +421,6 @@ async function processOpenAICompletionsStream(
   };
   const appendThinkingDeltaInternal = (reasoningDelta: { signature: string; text: string }) => {
     if (!currentBlock || currentBlock.type !== "thinking") {
-      finishCurrentBlock();
       currentBlock = {
         type: "thinking",
         thinking: "",
@@ -453,7 +439,6 @@ async function processOpenAICompletionsStream(
   };
   const appendTextDeltaInternal = (text: string) => {
     if (!currentBlock || currentBlock.type !== "text") {
-      finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
       output.content.push(currentBlock);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
@@ -506,7 +491,6 @@ async function processOpenAICompletionsStream(
   };
   const appendRecoveredToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
     const switchingToolCall = currentBlock?.type === "toolCall";
-    finishCurrentBlock();
     if (switchingToolCall) {
       currentBlock = null;
       flushPendingPostToolCallDeltas();
@@ -731,7 +715,6 @@ async function processOpenAICompletionsStream(
         }
         if (!block) {
           const switchingToolCall = currentBlock?.type === "toolCall";
-          finishCurrentBlock();
           if (switchingToolCall) {
             currentBlock = null;
             flushPendingPostToolCallDeltas();
@@ -793,7 +776,6 @@ async function processOpenAICompletionsStream(
   flushReasoningTagTextPartitionerAtEnd();
   flushDeepSeekToolCallRecovererAtEnd();
   flushDeepSeekTextFilterAtEnd();
-  finishAllToolCallBlocks();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
@@ -1935,7 +1917,7 @@ function hasOpenAICompletionsReasoningUsageActivity(
   );
 }
 
-export const completionsTesting = {
+const completionsTesting = {
   getCompat,
   createSseDoneDetector,
   createOpenAICompletionsClient,
@@ -1944,3 +1926,12 @@ export const completionsTesting = {
   processOpenAICompletionsStream,
   shouldEmitOpenAICompletionsReasoningForModel,
 };
+
+declare global {
+  var openclawOpenAICompletionsTransportTestApi: typeof completionsTesting | undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  globalThis.openclawOpenAICompletionsTransportTestApi = completionsTesting;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

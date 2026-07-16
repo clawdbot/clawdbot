@@ -1621,3 +1621,4 @@ describe("gateway agent handler", () => {
     expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -205,15 +205,16 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
     root.type = tarfile.DIRTYPE
     archive.addfile(root)
 
-    tail = ["d" for _ in range(254)]
-    for index in range(path_count):
-        parts = ["candidate", f"{index:04d}", *tail]
-        for component_count in range(2, len(parts)):
-            directory = tarfile.TarInfo("/".join(parts[:component_count]))
-            directory.type = tarfile.DIRTYPE
-            archive.addfile(directory)
+    # One shared prefix preserves the 256-component boundary and distinct leaves
+    # without rebuilding the same deep parent chain for every sibling.
+    parts = ["candidate", *["d" for _ in range(254)]]
+    for component_count in range(2, len(parts) + 1):
+        directory = tarfile.TarInfo("/".join(parts[:component_count]))
+        directory.type = tarfile.DIRTYPE
+        archive.addfile(directory)
 
-        member = tarfile.TarInfo("/".join(parts))
+    for index in range(path_count):
+        member = tarfile.TarInfo("/".join([*parts, f"{index:04d}"]))
         member.size = 1
         archive.addfile(member, io.BytesIO(b"x"))
 `;
@@ -305,9 +306,23 @@ with open(sys.argv[1], "wb") as output:
     root.type = tarfile.DIRTYPE
     output.write(root.tobuf(format=tarfile.USTAR_FORMAT))
 
+    # Only the short ASCII name changes across these empty regular members.
+    # Reuse one stdlib-generated USTAR header and adjust its name/checksum so
+    # the 100k-member stress case spends its time in the reader under test.
+    member_header = bytearray(
+        tarfile.TarInfo("candidate/f000000").tobuf(format=tarfile.USTAR_FORMAT)
+    )
+    member_header[:100] = b"\0" * 100
+    member_header[148:156] = b" " * 8
+    member_base_checksum = sum(member_header)
+
     for index in range(member_count - 2):
-        member = tarfile.TarInfo(f"candidate/f{index:06d}")
-        output.write(member.tobuf(format=tarfile.USTAR_FORMAT))
+        name = f"candidate/f{index:06d}".encode("ascii")
+        header = member_header.copy()
+        header[:len(name)] = name
+        checksum = member_base_checksum + sum(name)
+        header[148:156] = f"{checksum:06o}\0 ".encode("ascii")
+        output.write(header)
 
     output.write(b"\0" * 1024)
 `;
@@ -928,7 +943,7 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.USTAR_FORMAT) as archive:
       "--max-path-bytes",
       `${8 * 1024 * 1024}`,
     ]);
-    expect(JSON.parse(result.stdout)).toMatchObject({ members: 8_162 });
+    expect(JSON.parse(result.stdout)).toMatchObject({ members: 288 });
     expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
   });
 

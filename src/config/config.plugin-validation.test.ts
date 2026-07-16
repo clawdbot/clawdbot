@@ -1001,7 +1001,8 @@ describe("config plugin validation", () => {
       expect(res.warnings ?? []).toContainEqual(
         expect.objectContaining({
           path: "plugins.allow",
-          message: expect.stringContaining("plugin not installed: codex"),
+          message:
+            "plugin not installed: codex — install the official external plugin with: openclaw plugins install @openclaw/codex",
         }),
       );
     });
@@ -2271,3 +2272,4 @@ describe("config plugin validation", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

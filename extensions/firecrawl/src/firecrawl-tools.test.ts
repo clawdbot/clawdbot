@@ -5,15 +5,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
-  DEFAULT_FIRECRAWL_MAX_AGE_MS,
-  DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS,
-  DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS,
   resolveFirecrawlApiKey,
   resolveFirecrawlBaseUrl,
   resolveFirecrawlMaxAgeMs,
   resolveFirecrawlOnlyMainContent,
   resolveFirecrawlScrapeTimeoutSeconds,
-  resolveFirecrawlSearchConfig,
   resolveFirecrawlSearchTimeoutSeconds,
 } from "./config.js";
 
@@ -965,10 +961,6 @@ describe("firecrawl tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveFirecrawlSearchConfig(cfg)).toEqual({
-      apiKey: "plugin-key",
-      baseUrl: "https://plugin.firecrawl.test",
-    });
     expect(resolveFirecrawlApiKey(cfg)).toBe("plugin-key");
     expect(resolveFirecrawlBaseUrl(cfg)).toBe("https://plugin.firecrawl.test");
   });
@@ -980,9 +972,9 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey()).toBe("env-key");
     expect(resolveFirecrawlBaseUrl()).toBe("https://env.firecrawl.test");
     expect(resolveFirecrawlOnlyMainContent()).toBe(true);
-    expect(resolveFirecrawlMaxAgeMs()).toBe(DEFAULT_FIRECRAWL_MAX_AGE_MS);
-    expect(resolveFirecrawlScrapeTimeoutSeconds()).toBe(DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS);
-    expect(resolveFirecrawlSearchTimeoutSeconds()).toBe(DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS);
+    expect(resolveFirecrawlMaxAgeMs()).toBe(172_800_000);
+    expect(resolveFirecrawlScrapeTimeoutSeconds()).toBe(60);
+    expect(resolveFirecrawlSearchTimeoutSeconds()).toBe(30);
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
@@ -1358,3 +1350,4 @@ describe("firecrawl tools", () => {
     ).toThrow("Firecrawl scrape returned no content.");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

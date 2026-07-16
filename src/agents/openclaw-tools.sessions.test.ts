@@ -38,16 +38,14 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  testing as embeddedRunsTesting,
-  setActiveEmbeddedRun,
-} from "./embedded-agent-runner/runs.js";
-import { testing as agentStepTesting } from "./tools/agent-step.js";
+import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
+import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.test-support.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
-import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
+import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
@@ -2268,3 +2266,4 @@ describe("sessions tools", () => {
     expect(sendParams.threadId).toBe("99");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

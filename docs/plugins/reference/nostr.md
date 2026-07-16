@@ -16,7 +16,7 @@ OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.
 
 ## Surface
 
-channels: nostr
+channels: `nostr`
 
 ## Related docs
 

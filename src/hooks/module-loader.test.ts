@@ -1,24 +1,25 @@
-// Hook module loader tests cover dynamic import and invalid module handling.
+// Hook module loader tests cover dynamic import and export resolution.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveFileModuleUrl, resolveFunctionModuleExport } from "./module-loader.js";
+import { importFileModule, resolveFunctionModuleExport } from "./module-loader.js";
 
 describe("hooks module loader helpers", () => {
-  it("builds a file URL without cache-busting by default", () => {
-    const modulePath = path.resolve("/tmp/hook-handler.js");
-    expect(resolveFileModuleUrl({ modulePath })).toBe(pathToFileURL(modulePath).href);
-  });
+  it("imports file modules and bypasses the module cache when requested", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-module-loader-"));
+    const modulePath = path.join(root, "hook handler.mjs");
+    try {
+      fs.writeFileSync(modulePath, 'export const value = "first";\n');
+      await expect(importFileModule({ modulePath })).resolves.toMatchObject({ value: "first" });
 
-  it("adds a cache-busting query when requested", () => {
-    const modulePath = path.resolve("/tmp/hook-handler.js");
-    expect(
-      resolveFileModuleUrl({
-        modulePath,
-        cacheBust: true,
-        nowMs: 123,
-      }),
-    ).toBe(`${pathToFileURL(modulePath).href}?t=123`);
+      fs.writeFileSync(modulePath, 'export const value = "second";\n');
+      await expect(
+        importFileModule({ modulePath, cacheBust: true, nowMs: 123 }),
+      ).resolves.toMatchObject({ value: "second" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("resolves explicit function exports", () => {

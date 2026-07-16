@@ -56,7 +56,8 @@ async function startFixtureServer(profile: string) {
   const readStderr = collectStream(child.stderr);
   servers.push(child);
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Preserve the 2.5-second startup budget while detecting the port file sooner.
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     if (existsSync(portFile)) {
       const port = Number(readFileSync(portFile, "utf8"));
       if (Number.isInteger(port) && port > 0) {
@@ -66,7 +67,7 @@ async function startFixtureServer(profile: string) {
     if (child.exitCode !== null) {
       throw new Error(`fixture server exited early: stdout=${readStdout()} stderr=${readStderr()}`);
     }
-    await delay(25);
+    await delay(5);
   }
 
   throw new Error(`fixture server did not write a port: stderr=${readStderr()}`);

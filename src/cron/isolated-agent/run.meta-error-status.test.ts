@@ -1,6 +1,5 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
-import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -10,6 +9,12 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+
+function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
+  const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+  error.name = "CommandLaneTaskTimeoutError";
+  return error;
+}
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -91,7 +96,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
 
   it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
-      new CommandLaneTaskTimeoutError("cron-nested", 330_000),
+      makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());

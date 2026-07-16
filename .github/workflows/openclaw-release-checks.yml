@@ -51,6 +51,16 @@ on:
         required: false
         default: false
         type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict
+        required: false
+        default: false
+        type: boolean
+      allow_frozen_target_scenario_omissions:
+        description: Allow trusted compatibility filtering for a canonical frozen release target
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Release check group to run
         required: false
@@ -66,7 +76,7 @@ on:
           - qa-parity
           - qa-live
       live_suite_filter:
-        description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram,qa-live-discord,qa-live-whatsapp; blank runs all selected live suites
+        description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
         required: false
         default: ""
         type: string
@@ -119,6 +129,7 @@ jobs:
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+      allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
@@ -293,6 +304,7 @@ jobs:
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
           RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
+          RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
@@ -352,6 +364,16 @@ jobs:
           esac
           if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
             run_release_soak=true
+          fi
+          allow_unreleased_changelog="$(printf '%s' "$RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$RELEASE_REF_INPUT" == "main" || "$RELEASE_REF_INPUT" == "refs/heads/main" ]]; then
+            allow_unreleased_changelog=true
+          elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+            allow_unreleased_changelog=false
+          elif [[ "$allow_unreleased_changelog" != "true" && "$allow_unreleased_changelog" != "1" && "$allow_unreleased_changelog" != "yes" ]]; then
+            allow_unreleased_changelog=false
+          else
+            allow_unreleased_changelog=true
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
@@ -443,6 +465,7 @@ jobs:
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
+            printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
             printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
@@ -466,6 +489,7 @@ jobs:
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -484,6 +508,7 @@ jobs:
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
+            echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
@@ -654,6 +679,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
 
@@ -701,6 +727,8 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       # Live-provider suites depend on third-party model deployments; beta
       # treats only those as advisory while repo E2E stays blocking and
       # stable/full keep everything blocking.
@@ -774,6 +802,8 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false
       include_release_path_suites: true
@@ -806,6 +836,7 @@ jobs:
     uses: ./.github/workflows/package-acceptance.yml
     with:
       advisory: false
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
@@ -1445,104 +1476,24 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  qa_live_matrix_release_checks:
-    name: Run QA Lab live Matrix lane
+  qa_live_release_checks:
+    name: Run QA Live Matrix profile
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
-    continue-on-error: true
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: read
-    environment: qa-live-shared
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
-      - name: Run Matrix live lane
-        id: run_lane
-        shell: bash
-        env:
-          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS: "90000"
-          OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
-        run: |
-          set -euo pipefail
-
-          output_dir=".artifacts/qa-e2e/matrix-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          matrix_args=(
-            --repo-root . \
-            --provider-mode mock-openai \
-            --model mock-openai/gpt-5.6-luna \
-            --alt-model mock-openai/gpt-5.6-luna-alt \
-            --profile fast \
-            --fast
-          )
-          if pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
-            matrix_args+=(--fail-fast)
-          fi
-
-          for attempt in 1 2; do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "2" ]]; then
-              exit 1
-            fi
-            echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2
-            sleep 10
-          done
-
-      - name: Upload Matrix QA artifacts
-        id: upload_matrix_qa_artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
-          retention-days: 14
-          if-no-files-found: error
-
-      - name: Record advisory status
-        if: always()
-        shell: bash
-        env:
-          RELEASE_CHECK_JOB: qa_live_matrix_release_checks
-          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
-          JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_matrix_qa_artifacts.outcome }}
-        run: *record_release_check_advisory_status
-
-      - name: Upload advisory status
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/release-check-status/qa_live_matrix_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
-          retention-days: 14
-          if-no-files-found: error
+    uses: ./.github/workflows/qa-live-transports-convex.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      matrix_profile: release
+      matrix_provider_mode: mock-openai
+      matrix_primary_model: mock-openai/gpt-5.6-luna
+      matrix_alternate_model: mock-openai/gpt-5.6-luna-alt
+      matrix_attempts: 2
+      run_matrix: true
+      matrix_advisory: true
 
   # The dispatched child owns Telegram evidence/status artifacts; this blocking job
   # carries its exact conclusion into the parent summary without copying secrets or artifacts.
@@ -1731,7 +1682,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1831,7 +1781,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1928,7 +1877,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1999,7 +1947,7 @@ jobs:
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
       - runtime_tool_coverage_release_checks
-      - qa_live_matrix_release_checks
+      - qa_live_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
       - qa_live_whatsapp_release_checks
@@ -2034,7 +1982,7 @@ jobs:
           QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
           QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
           RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
-          QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_matrix_release_checks.result }}
+          QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result == 'skipped' && 'skipped' || needs.qa_live_release_checks.outputs.matrix_status || 'failure' }}
           QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
           QA_LIVE_TELEGRAM_SELECTED: ${{ contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
           QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
@@ -2060,7 +2008,7 @@ jobs:
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
             "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
-            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
+            "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
             "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
@@ -2070,7 +2018,6 @@ jobs:
             "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
             "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
             "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
-            "qa_live_matrix_release_checks=${QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT}"
             "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
             "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
             "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
@@ -2224,7 +2171,7 @@ jobs:
           }
           advisory_status_override_allowed() {
             case "$1" in
-              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
                 return 0
                 ;;
               *)

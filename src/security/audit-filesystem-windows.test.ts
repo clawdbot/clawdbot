@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { collectFilesystemFindings } from "./audit.js";
+import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const windowsAuditEnv = {
@@ -30,16 +30,21 @@ describe("security audit filesystem Windows findings", () => {
         await fs.mkdir(stateDir, { recursive: true });
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectFilesystemFindings({
-          stateDir,
-          configPath,
-          platform: "win32",
-          env: windowsAuditEnv,
-          execIcacls: async (_cmd: string, args: string[]) => ({
-            stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-            stderr: "",
-          }),
-        });
+        const findings = await collectSecurityAuditFindings(
+          {},
+          {
+            stateDir,
+            configPath,
+            includeFilesystem: true,
+            configSnapshot: null,
+            platform: "win32",
+            env: windowsAuditEnv,
+            execIcacls: async (_cmd: string, args: string[]) => ({
+              stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
+              stderr: "",
+            }),
+          },
+        );
         const forbidden = new Set([
           "fs.state_dir.perms_world_writable",
           "fs.state_dir.perms_group_writable",
@@ -61,25 +66,30 @@ describe("security audit filesystem Windows findings", () => {
         await fs.mkdir(stateDir, { recursive: true });
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectFilesystemFindings({
-          stateDir,
-          configPath,
-          platform: "win32",
-          env: windowsAuditEnv,
-          execIcacls: async (_cmd: string, args: string[]) => {
-            const target = expectDefined(args[0], "args[0] test invariant");
-            if (target.endsWith(`${path.sep}state`)) {
+        const findings = await collectSecurityAuditFindings(
+          {},
+          {
+            stateDir,
+            configPath,
+            includeFilesystem: true,
+            configSnapshot: null,
+            platform: "win32",
+            env: windowsAuditEnv,
+            execIcacls: async (_cmd: string, args: string[]) => {
+              const target = expectDefined(args[0], "args[0] test invariant");
+              if (target.endsWith(`${path.sep}state`)) {
+                return {
+                  stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
+                  stderr: "",
+                };
+              }
               return {
-                stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
+                stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
                 stderr: "",
               };
-            }
-            return {
-              stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-              stderr: "",
-            };
+            },
           },
-        });
+        );
         expect(
           findings.some(
             (finding) =>
@@ -93,25 +103,30 @@ describe("security audit filesystem Windows findings", () => {
         await fs.mkdir(stateDir, { recursive: true });
         const configPath = path.join(stateDir, "openclaw.json");
         await fs.writeFile(configPath, "{}\n", "utf-8");
-        const findings = await collectFilesystemFindings({
-          stateDir,
-          configPath,
-          platform: "win32",
-          env: windowsAuditEnv,
-          execIcacls: async (_cmd: string, args: string[]) => {
-            const target = expectDefined(args[0], "args[0] test invariant");
-            if (target.endsWith(`${path.sep}state`)) {
+        const findings = await collectSecurityAuditFindings(
+          {},
+          {
+            stateDir,
+            configPath,
+            includeFilesystem: true,
+            configSnapshot: null,
+            platform: "win32",
+            env: windowsAuditEnv,
+            execIcacls: async (_cmd: string, args: string[]) => {
+              const target = expectDefined(args[0], "args[0] test invariant");
+              if (target.endsWith(`${path.sep}state`)) {
+                return {
+                  stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
+                  stderr: "",
+                };
+              }
               return {
-                stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,
+                stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
                 stderr: "",
               };
-            }
-            return {
-              stdout: `${target} *S-1-5-18:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
-              stderr: "",
-            };
+            },
           },
-        });
+        );
         expect(
           findings.some(
             (finding) =>

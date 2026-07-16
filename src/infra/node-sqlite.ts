@@ -11,10 +11,18 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   if (isSqliteWalResetSafeVersion(version)) {
     return;
   }
+  const variables = (process.config as { variables?: Record<string, unknown> } | undefined)
+    ?.variables;
+  const isShared =
+    variables?.node_shared_sqlite === true || variables?.node_shared_sqlite === "true";
+  const wording = isShared ? "uses shared system" : "embeds";
+  const remediation = isShared
+    ? "Upgrade the system SQLite library to 3.51.3+ (or patched 3.50.7+/3.44.6+), or use a Node build embedding a safe version."
+    : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
   throw new Error(
     `OpenClaw requires SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) for WAL safety; ` +
-      `Node ${nodeVersion} embeds SQLite ${version}, which is affected by the upstream WAL-reset ` +
-      "database corruption bug. Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.",
+      `Node ${nodeVersion} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
+      `database corruption bug. ${remediation}`,
   );
 }
 

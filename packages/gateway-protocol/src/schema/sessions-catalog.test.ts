@@ -17,6 +17,7 @@ describe("SessionsCatalogListResultSchema", () => {
               continueSession: true,
               archive: false,
               createSession: { model: "anthropic/claude-opus-4-8" },
+              openTerminal: true,
             },
             hosts: [
               {
@@ -24,7 +25,16 @@ describe("SessionsCatalogListResultSchema", () => {
                 label: "Gateway",
                 kind: "gateway",
                 connected: true,
-                sessions: [],
+                sessions: [
+                  {
+                    threadId: "thread-1",
+                    status: "idle",
+                    archived: false,
+                    canContinue: true,
+                    canArchive: false,
+                    canOpenTerminal: true,
+                  },
+                ],
               },
             ],
           },

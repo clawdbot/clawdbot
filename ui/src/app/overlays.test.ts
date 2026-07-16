@@ -75,6 +75,27 @@ function createGatewayHarness(
         listener(event);
       }
     },
+    emitSystemApproval(id: string, createdAtMs: number) {
+      const event: GatewayEventFrame = {
+        event: "openclaw.approval.requested",
+        payload: {
+          id,
+          createdAtMs,
+          expiresAtMs: Date.now() + 60_000,
+          request: {
+            title: "OpenClaw change",
+            description: "Set gateway.port to 19001",
+            command: "Set gateway.port to 19001",
+            proposalHash: "a".repeat(64),
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+        type: "event",
+      };
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
     gateway,
     update(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
@@ -96,6 +117,24 @@ async function flushMicrotasks() {
 }
 
 describe("application approval overlays", () => {
+  it("resolves OpenClaw changes through unified human approval", async () => {
+    const request = vi.fn<RequestFn>(async (method) =>
+      method.endsWith(".list") ? [] : { ok: true },
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitSystemApproval("system-agent:1", 1_000);
+    await overlays.decideApproval("allow-once");
+
+    expect(request).toHaveBeenCalledWith("approval.resolve", {
+      id: "system-agent:1",
+      kind: "system-agent",
+      decision: "allow-once",
+    });
+    overlays.dispose();
+  });
+
   it("reloads pending approvals for each connected epoch", async () => {
     const firstList = deferred();
     const reconnectedList = deferred();
@@ -120,6 +159,7 @@ describe("application approval overlays", () => {
     expect(execListRequests).toBe(1);
     expect(request).toHaveBeenCalledWith("exec.approval.list", {});
     expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).toHaveBeenCalledWith("openclaw.approval.list", {});
 
     harness.update({ connected: false });
     expect(overlays.snapshot.approvalQueue).toEqual([]);
@@ -242,6 +282,32 @@ describe("application approval overlays", () => {
 });
 
 describe("application update overlays", () => {
+  it("drains config writes after suspending and before issuing update.run", async () => {
+    const order: string[] = [];
+    const request = vi.fn<RequestFn>().mockImplementation(async (method) => {
+      order.push(method);
+      return { ok: true, result: { status: "ok", after: { version: "2.0.0" } } };
+    });
+    const harness = createGatewayHarness(client(request));
+    let updateRunningWhenDrained = false;
+    const overlays = createApplicationOverlays(harness.gateway, {
+      drainConfigWrites: async () => {
+        order.push("drain");
+        updateRunningWhenDrained = overlays.snapshot.updateRunning;
+        await Promise.resolve();
+      },
+    });
+
+    await overlays.runUpdate();
+
+    expect(order.filter((entry) => entry === "drain" || entry === "update.run")).toEqual([
+      "drain",
+      "update.run",
+    ]);
+    // Suspension publishes first so no NEW write can start while draining.
+    expect(updateRunningWhenDrained).toBe(true);
+  });
+
   it("surfaces a coalesced restart while reconnect verification remains active", async () => {
     const request = vi.fn<RequestFn>().mockResolvedValue({
       ok: true,

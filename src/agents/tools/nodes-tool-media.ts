@@ -7,10 +7,11 @@ import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  type CameraFacing,
   cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
+  resolveCameraClipTarget,
+  resolveCameraSnapTargets,
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
@@ -123,14 +124,12 @@ async function executeCameraSnap({
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
-  const facings: CameraFacing[] =
-    facingRaw === "both"
-      ? ["front", "back"]
-      : facingRaw === "front" || facingRaw === "back"
-        ? [facingRaw]
-        : (() => {
-            throw new Error("invalid facing (front|back|both)");
-          })();
+  const facing =
+    facingRaw === "both" || facingRaw === "front" || facingRaw === "back"
+      ? facingRaw
+      : (() => {
+          throw new Error("invalid facing (front|back|both)");
+        })();
   const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? 1600;
   const quality =
     readFiniteNumberParam(params, "quality", {
@@ -143,19 +142,24 @@ async function executeCameraSnap({
     typeof params.deviceId === "string" && params.deviceId.trim()
       ? params.deviceId.trim()
       : undefined;
-  if (deviceId && facings.length > 1) {
+  if (deviceId && facing === "both" && resolvedNode.platform?.toLowerCase() !== "linux") {
     throw new Error("facing=both is not allowed when deviceId is set");
   }
+  const targets = resolveCameraSnapTargets({
+    facing,
+    platform: resolvedNode.platform,
+    deviceId,
+  });
 
   const content: AgentToolResult<unknown>["content"] = [];
   const details: Array<Record<string, unknown>> = [];
 
-  for (const facing of facings) {
+  for (const target of targets) {
     const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
       nodeId,
       command: "camera.snap",
       params: {
-        facing,
+        facing: target.requestFacing,
         maxWidth,
         quality,
         format: "jpg",
@@ -173,7 +177,7 @@ async function executeCameraSnap({
     const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
     const filePath = cameraTempPath({
       kind: "snap",
-      facing,
+      facing: target.artifactFacing,
       ext: isJpeg ? "jpg" : "png",
     });
     await writeCameraPayloadToFile({
@@ -190,7 +194,7 @@ async function executeCameraSnap({
       });
     }
     details.push({
-      facing,
+      facing: target.artifactFacing,
       path: filePath,
       width: payload.width,
       height: payload.height,
@@ -332,6 +336,7 @@ async function executeCameraClip({
   if (facing !== "front" && facing !== "back") {
     throw new Error("invalid facing (front|back)");
   }
+  const target = resolveCameraClipTarget({ facing, platform: resolvedNode.platform });
   const durationMs = Math.min(
     readPositiveIntegerParam(params, "durationMs") ??
       (typeof params.duration === "string" ? parseDurationMs(params.duration) : 3000),
@@ -347,7 +352,7 @@ async function executeCameraClip({
     nodeId,
     command: "camera.clip",
     params: {
-      facing,
+      facing: target.requestFacing,
       durationMs,
       includeAudio,
       format: "mp4",
@@ -359,13 +364,13 @@ async function executeCameraClip({
   const payload = parseCameraClipPayload(raw?.payload);
   const filePath = await writeCameraClipPayloadToFile({
     payload,
-    facing,
+    facing: target.artifactFacing,
     expectedHost: resolvedNode.remoteIp,
   });
   return {
     content: [{ type: "text", text: `FILE:${filePath}` }],
     details: {
-      facing,
+      facing: target.artifactFacing,
       path: filePath,
       durationMs: payload.durationMs,
       hasAudio: payload.hasAudio,

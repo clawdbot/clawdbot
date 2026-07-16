@@ -14,8 +14,11 @@ import {
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
-
-type ProfileId = "smoke" | "default" | "large";
+import {
+  CliUsageError,
+  parseSqliteStateBenchmarkCli,
+  type ProfileId,
+} from "./lib/sqlite-state-benchmark-cli.js";
 
 type ProfileConfig = {
   agentCacheEntries: number;
@@ -104,79 +107,6 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     queryRuns: 40,
   },
 };
-
-type CliOptions = {
-  output: string | null;
-  profile: ProfileId;
-  stateDir: string | null;
-};
-
-const BOOLEAN_FLAGS = new Set(["--help"]);
-const VALUE_FLAGS = new Set(["--output", "--profile", "--state-dir"]);
-
-class CliUsageError extends Error {
-  override name = "CliUsageError";
-}
-
-function parseFlagValue(flag: string, argv: string[]): string | undefined {
-  const index = argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new CliUsageError(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function hasFlag(flag: string, argv = process.argv.slice(2)): boolean {
-  return argv.includes(flag);
-}
-
-function validateArgs(argv: string[]): void {
-  const seenValueFlags = new Set<string>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (VALUE_FLAGS.has(arg)) {
-      if (seenValueFlags.has(arg)) {
-        throw new CliUsageError(`${arg} was provided more than once`);
-      }
-      seenValueFlags.add(arg);
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new CliUsageError(`${arg} requires a value`);
-      }
-      index += 1;
-      continue;
-    }
-    throw new CliUsageError(`Unknown argument: ${arg}`);
-  }
-}
-
-function parseProfile(raw: string | undefined): ProfileId {
-  if (!raw) {
-    return "default";
-  }
-  if (raw === "smoke" || raw === "default" || raw === "large") {
-    return raw;
-  }
-  throw new CliUsageError(
-    `--profile must be one of smoke, default, large; got ${JSON.stringify(raw)}`,
-  );
-}
-
-function parseOptions(argv = process.argv.slice(2)): CliOptions {
-  validateArgs(argv);
-  return {
-    output: parseFlagValue("--output", argv) ?? null,
-    profile: parseProfile(parseFlagValue("--profile", argv)),
-    stateDir: parseFlagValue("--state-dir", argv) ?? null,
-  };
-}
 
 function applyScale(config: ProfileConfig): ProfileConfig {
   const scale = parseStrictIntegerOption({
@@ -570,12 +500,12 @@ function printProofLines(report: BenchmarkReport): void {
 
 function main(): void {
   const argv = process.argv.slice(2);
-  validateArgs(argv);
-  if (hasFlag("--help", argv)) {
+  const cli = parseSqliteStateBenchmarkCli(argv);
+  if (cli.help) {
     printUsage();
     return;
   }
-  const options = parseOptions(argv);
+  const { options } = cli;
   const config = applyScale(PROFILES[options.profile]);
   const stateDir =
     options.stateDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-perf-"));

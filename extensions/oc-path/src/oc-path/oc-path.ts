@@ -17,7 +17,7 @@ import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 const OC_SCHEME = "oc://";
 
 // Hard caps bound resource use under pathological / hostile input.
-export const MAX_PATH_LENGTH = 4096;
+const MAX_PATH_LENGTH = 4096;
 const MAX_SUB_SEGMENTS_PER_SLOT = 64;
 export const MAX_TRAVERSAL_DEPTH = 256;
 
@@ -330,19 +330,6 @@ export function formatOcPath(path: OcPath): string {
   return out;
 }
 
-/** True iff `input` is a string `parseOcPath` would accept. */
-export function isValidOcPath(input: unknown): input is string {
-  if (typeof input !== "string") {
-    return false;
-  }
-  try {
-    parseOcPath(input);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Positional tokens: `$first` / `$last` resolve to the first / last
  * index or declared key. They pick exactly one element, so they don't
@@ -417,7 +404,7 @@ export const WILDCARD_RECURSIVE = "**";
  * union `{a,b,c}`, or predicate `[k=v]`). Single-match verbs reject
  * these; only `findOcPaths` consumes them.
  */
-export function isPattern(path: OcPath): boolean {
+function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
     if (slot === undefined) {
       continue;
@@ -537,32 +524,6 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
     }
   }
   return false;
-}
-
-/**
- * Flatten the path into a concrete sub-segment list plus slot offsets,
- * so a caller can reconstruct an `OcPath` from a concrete walk by
- * re-packing sub-segments back into their original slots.
- */
-interface PathSegmentLayout {
-  readonly subs: readonly string[];
-  readonly sectionLen: number;
-  readonly itemLen: number;
-  readonly fieldLen: number;
-}
-
-export function getPathLayout(path: OcPath): PathSegmentLayout {
-  // Quote-aware split — `.split('.')` would shred a quoted segment
-  // containing a literal `.` (e.g. `"a.b"`).
-  const sectionSubs = path.section === undefined ? [] : splitRespectingBrackets(path.section, ".");
-  const itemSubs = path.item === undefined ? [] : splitRespectingBrackets(path.item, ".");
-  const fieldSubs = path.field === undefined ? [] : splitRespectingBrackets(path.field, ".");
-  return {
-    subs: [...sectionSubs, ...itemSubs, ...fieldSubs],
-    sectionLen: sectionSubs.length,
-    itemLen: itemSubs.length,
-    fieldLen: fieldSubs.length,
-  };
 }
 
 function extractSession(queryPart: string, input: string): string | undefined {

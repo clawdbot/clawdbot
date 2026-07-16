@@ -2092,3 +2092,4 @@ describe("gateway agent handler chat.abort integration", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

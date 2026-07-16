@@ -12,6 +12,7 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   isCompactionCheckpointTranscriptFileName,
+  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
@@ -223,11 +224,9 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
     .catch(() => []);
-  // Stat concurrently: the budget sweep stats every session file, and serial
-  // stats turn one sweep into per-file latency round trips on networked
-  // filesystems.
+  // Skip rollback archives before concurrent stats so retained bytes cannot evict live sessions.
   const tasks = dirEntries
-    .filter((dirent) => dirent.isFile())
+    .filter((dirent) => dirent.isFile() && !isMigrationArchiveArtifactName(dirent.name))
     .map((dirent) => async (): Promise<SessionsDirFileStat | null> => {
       const filePath = path.join(sessionsDir, dirent.name);
       const stat = await fs.promises.stat(filePath).catch(() => null);
@@ -846,3 +845,4 @@ export async function enforceSessionDiskBudget(params: {
     overBudget: true,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2063,3 +2063,4 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
     await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

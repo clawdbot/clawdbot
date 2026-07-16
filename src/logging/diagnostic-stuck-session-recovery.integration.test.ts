@@ -2,20 +2,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
-  testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
-import {
-  enqueueCommandInLane,
-  getQueueSize,
-  resetCommandLane,
-  resetCommandQueueStateForTest,
-} from "../process/command-queue.js";
+import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
+import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,

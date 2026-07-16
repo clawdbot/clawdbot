@@ -5,9 +5,9 @@
  * and can be called from anywhere in the codebase.
  *
  * The runner is created once and resolves hooks live on every dispatch from a
- * composed view of the registries that are currently live: the most recently
- * initialized registry, the active registry, and the pinned channel/http-route
- * surfaces. Freezing one registry caused scoped mid-run activations (harness
+ * composed view of the registries that are currently live: an explicitly
+ * initialized SDK registry, the pinned channel registry, the active registry,
+ * and other pinned surfaces. Freezing one registry caused scoped mid-run activations (harness
  * and memory ensures) to rebind the runner to a narrow registry and silently
  * drop other plugins' tool-call hooks (#91918). Composing live also preserves
  * the older contract that hooks pushed into a registry after initialization
@@ -29,7 +29,8 @@ const getLog = () => createSubsystemLogger("plugins");
  * Initialize the global hook runner with a plugin registry.
  * Called on every plugin registry activation and by SDK consumers. The runner
  * instance stays stable so references captured mid-run keep seeing current
- * hooks; the passed registry becomes the highest-precedence composition source.
+ * hooks. An isolated SDK registry stays authoritative; runtime registries use
+ * the gateway surface precedence shared by plugin tool resolution.
  */
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
   const state = getHookRunnerGlobalState();

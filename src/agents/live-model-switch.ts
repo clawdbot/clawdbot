@@ -24,7 +24,7 @@ export type LiveSessionModelSelection = {
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai";
 
-export function resolveLiveSessionModelSelection(params: {
+function resolveLiveSessionModelSelection(params: {
   cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
@@ -97,7 +97,7 @@ function isAlreadyAppliedOpenAICodexRuntimePromotion(
   );
 }
 
-export function hasDifferentLiveSessionModelSelection(
+function hasDifferentLiveSessionModelSelection(
   current: {
     provider: string;
     model: string;

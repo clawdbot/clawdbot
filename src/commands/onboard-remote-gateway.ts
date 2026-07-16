@@ -1,20 +1,20 @@
 // Remote-Gateway onboarding adapters keep inference detection and activation on the Gateway host.
 import { randomUUID } from "node:crypto";
 import type {
-  CrestodianChatResult,
-  CrestodianSetupActivateResult,
-  CrestodianSetupDetectResult,
-  CrestodianSetupVerifyResult,
+  SystemAgentChatResult,
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CallGatewayCliOptions } from "../gateway/call.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type {
   ActivateSetupInferenceParams,
   ActivateSetupInferenceResult,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
-} from "../crestodian/setup-inference.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+} from "../system-agent/setup-inference.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
@@ -22,7 +22,7 @@ const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 20_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 const GATEWAY_SETUP_VERIFY_TIMEOUT_MS = 30_000;
-const GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS = 190_000;
+const GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 
 type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 
@@ -41,7 +41,7 @@ type RemoteGatewayInferenceOnboardingDeps = {
   runGuidedOnboarding?: typeof import("./onboard-guided.js").runGuidedOnboarding;
 };
 
-function toSetupInferenceDetection(result: CrestodianSetupDetectResult): SetupInferenceDetection {
+function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
     candidates: result.candidates.map((candidate) => ({
       kind: candidate.kind,
@@ -89,7 +89,7 @@ function isSetupInferenceFailureStatus(value: unknown): value is SetupInferenceF
 }
 
 function toSetupInferenceActivationResult(
-  result: CrestodianSetupActivateResult,
+  result: SystemAgentSetupActivateResult,
 ): ActivateSetupInferenceResult {
   if (result.ok) {
     if (
@@ -135,7 +135,7 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
 function assertVerifiedActivation(params: {
   activation: Extract<ActivateSetupInferenceResult, { ok: true }>;
   requestedModelRef?: string;
-  verification: CrestodianSetupVerifyResult;
+  verification: SystemAgentSetupVerifyResult;
 }): void {
   if (
     params.requestedModelRef &&
@@ -157,7 +157,7 @@ function assertVerifiedActivation(params: {
 
 /**
  * Configure missing inference on the selected remote Gateway, then let that
- * Gateway's Crestodian finish setup before handing off to its normal TUI.
+ * Gateway's OpenClaw finish setup before handing off to its normal TUI.
  * The local config is routing input only; every setup mutation runs through
  * Gateway RPC.
  */
@@ -194,8 +194,8 @@ export async function runRemoteGatewayInferenceOnboarding(
     });
 
   const detect = async (): Promise<SetupInferenceDetection> => {
-    const result = await request<CrestodianSetupDetectResult>({
-      method: "crestodian.setup.detect",
+    const result = await request<SystemAgentSetupDetectResult>({
+      method: "openclaw.setup.detect",
       payload: {},
       timeoutMs: GATEWAY_SETUP_DETECT_TIMEOUT_MS,
     });
@@ -207,8 +207,8 @@ export async function runRemoteGatewayInferenceOnboarding(
   const activate = async (
     params: ActivateSetupInferenceParams,
   ): Promise<ActivateSetupInferenceResult> => {
-    const result = await request<CrestodianSetupActivateResult>({
-      method: "crestodian.setup.activate",
+    const result = await request<SystemAgentSetupActivateResult>({
+      method: "openclaw.setup.activate",
       payload: {
         kind: params.kind,
         ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
@@ -222,8 +222,8 @@ export async function runRemoteGatewayInferenceOnboarding(
     if (!activation.ok) {
       return activation;
     }
-    const verification = await request<CrestodianSetupVerifyResult>({
-      method: "crestodian.setup.verify",
+    const verification = await request<SystemAgentSetupVerifyResult>({
+      method: "openclaw.setup.verify",
       payload: {},
       timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
     });
@@ -239,24 +239,24 @@ export async function runRemoteGatewayInferenceOnboarding(
     detect,
     activate,
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
-    runCrestodianChat: async () => {
+    runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??
         import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
           createClackPrompter(),
         ));
-      await prompter.intro("Crestodian");
+      await prompter.intro("OpenClaw");
       const sessionId = randomUUID();
-      let reply = await request<CrestodianChatResult>({
-        method: "crestodian.chat",
+      let reply = await request<SystemAgentChatResult>({
+        method: "openclaw.chat",
         payload: { sessionId, welcomeVariant: "onboarding" },
-        timeoutMs: GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
 
       try {
         for (;;) {
-          await prompter.note(reply.reply, "Crestodian");
+          await prompter.note(reply.reply, "OpenClaw");
           if (reply.action === "exit") {
-            await prompter.outro("Crestodian setup finished.");
+            await prompter.outro("OpenClaw setup finished.");
             return;
           }
           if (reply.action === "open-agent") {
@@ -264,19 +264,19 @@ export async function runRemoteGatewayInferenceOnboarding(
             break;
           }
           const message = await prompter.text({
-            message: "Reply to Crestodian",
+            message: "Reply to OpenClaw",
             ...(reply.sensitive ? { sensitive: true } : {}),
             validate: (value) => (value.trim() ? undefined : "Required"),
           });
-          reply = await request<CrestodianChatResult>({
-            method: "crestodian.chat",
+          reply = await request<SystemAgentChatResult>({
+            method: "openclaw.chat",
             payload: { sessionId, message },
-            timeoutMs: GATEWAY_CRESTODIAN_CHAT_TIMEOUT_MS,
+            timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
           });
         }
       } catch (error) {
         if (error instanceof WizardCancelledError) {
-          await prompter.outro("Crestodian setup paused.");
+          await prompter.outro("OpenClaw setup paused.");
           return;
         }
         throw error;

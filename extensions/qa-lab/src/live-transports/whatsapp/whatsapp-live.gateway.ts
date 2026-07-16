@@ -145,6 +145,7 @@ export async function callWhatsAppGatewayMessageAction(
       accountId: context.sutAccountId,
       action: params.action,
       channel: "whatsapp",
+      conversationReadOrigin: "direct-operator",
       idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
       params: {
         ...params.params,

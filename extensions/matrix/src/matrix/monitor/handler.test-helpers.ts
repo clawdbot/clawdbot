@@ -10,8 +10,10 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
+import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
+
+type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
 
 const DEFAULT_ROUTE = {
   agentId: "ops",

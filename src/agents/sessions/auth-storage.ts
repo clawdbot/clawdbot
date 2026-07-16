@@ -98,9 +98,8 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     this.ensureParentDir();
     this.ensureFileExists();
 
-    let release: (() => void) | undefined;
+    const release = acquireLockSyncWithRetry(this.authPath);
     try {
-      release = acquireLockSyncWithRetry(this.authPath);
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = fn(current);
       if (next !== undefined) {
@@ -108,9 +107,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       }
       return result;
     } finally {
-      if (release) {
-        release();
-      }
+      release();
     }
   }
 
@@ -118,47 +115,31 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     this.ensureParentDir();
     this.ensureFileExists();
 
-    let release: (() => Promise<void>) | undefined;
-    let lockCompromised = false;
     let lockCompromisedError: Error | undefined;
-    const throwIfCompromised = () => {
-      if (lockCompromised) {
-        throw lockCompromisedError ?? new Error("Auth storage lock was compromised");
-      }
-    };
-
+    const release = await lockfile.lock(this.authPath, {
+      retries: {
+        minTimeout: 100,
+        maxTimeout: 10000,
+        randomize: true,
+      },
+      stale: 30000,
+      onCompromised: (err) => {
+        lockCompromisedError = err;
+      },
+    });
     try {
-      release = await lockfile.lock(this.authPath, {
-        retries: {
-          retries: 10,
-          factor: 2,
-          minTimeout: 100,
-          maxTimeout: 10000,
-          randomize: true,
-        },
-        stale: 30000,
-        onCompromised: (err) => {
-          lockCompromised = true;
-          lockCompromisedError = err;
-        },
-      });
-
-      throwIfCompromised();
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = await fn(current);
-      throwIfCompromised();
+      if (lockCompromisedError) {
+        throw lockCompromisedError;
+      }
       if (next !== undefined) {
         this.replaceAuthFileAtomic(next);
       }
-      throwIfCompromised();
       return result;
     } finally {
-      if (release) {
-        try {
-          await release();
-        } catch {
-          // Ignore unlock errors when lock is compromised.
-        }
+      if (!lockCompromisedError) {
+        await release();
       }
     }
   }

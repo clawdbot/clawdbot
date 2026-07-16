@@ -862,3 +862,4 @@ export async function runRuntimeToolFixture(
     .filter(Boolean)
     .join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

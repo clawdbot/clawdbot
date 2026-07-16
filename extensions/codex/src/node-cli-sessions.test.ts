@@ -156,6 +156,10 @@ describe("codex cli node sessions", () => {
   });
 
   it("reports malformed node session payloadJSON with an owned error", async () => {
+    const invoke = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: "{not json",
+    }));
     const runtime = {
       nodes: {
         list: vi.fn(async () => ({
@@ -167,10 +171,7 @@ describe("codex cli node sessions", () => {
             },
           ],
         })),
-        invoke: vi.fn(async () => ({
-          ok: true,
-          payloadJSON: "{not json",
-        })),
+        invoke,
       },
     } as unknown as PluginRuntime;
 
@@ -180,6 +181,7 @@ describe("codex cli node sessions", () => {
         requestedNode: "node-1",
       }),
     ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
   });
 
   it("keeps Codex history session previews on UTF-16 code point boundaries", async () => {

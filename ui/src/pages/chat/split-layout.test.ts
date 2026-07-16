@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   closePane,
-  createSinglePaneLayout,
-  createSplitLayout,
   findPane,
   insertPane,
   normalizeChatSplitLayout,
@@ -13,6 +11,18 @@ import {
   setPaneSession,
   type ChatSplitLayout,
 } from "./split-layout.ts";
+
+function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
+  return {
+    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
+    columnWeights: [1],
+    activePaneId: "p1",
+  };
+}
+
+function createSplitLayout(sessionKey: string): ChatSplitLayout {
+  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
+}
 
 function threePaneLayout(): ChatSplitLayout {
   return insertPane(createSplitLayout("main"), "p2", "agent:main:second", "down");

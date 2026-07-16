@@ -760,7 +760,7 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
-  it("routes bound Codex CLI node sessions through node resume", async () => {
+  it("routes a programmatically bound Control UI session through node resume", async () => {
     const resumeCodexCliSessionOnNode = vi.fn(async () => ({
       ok: true as const,
       sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
@@ -770,21 +770,21 @@ describe("codex conversation binding", () => {
     const result = await handleCodexConversationInboundClaim(
       {
         content: "continue the task",
-        channel: "discord",
-        isGroup: true,
+        channel: "webchat",
+        isGroup: false,
         commandAuthorized: true,
         sessionKey: "node-session",
       },
       {
-        channelId: "discord",
+        channelId: "webchat",
         sessionKey: "node-session",
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
           pluginRoot: tempDir,
-          channel: "discord",
+          channel: "webchat",
           accountId: "default",
-          conversationId: "channel-1",
+          conversationId: "node-session",
           boundAt: Date.now(),
           data: {
             kind: "codex-cli-node-session",
@@ -2334,3 +2334,4 @@ describe("codex conversation binding", () => {
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

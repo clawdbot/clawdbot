@@ -1,7 +1,7 @@
 import { mkdir, open as openFile, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
-import { randomBytes } from "@noble/hashes/utils.js";
+import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { createAuditEntry, verifyChain, type AuditEntry, type AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64 } from "./encoding.js";
@@ -293,10 +293,7 @@ function encryptReplayBody(
     throw new Error("replay body rng returned invalid nonce");
   }
   const ciphertext = gcm(key, nonce).encrypt(canonicalBytes(body));
-  const packed = new Uint8Array(nonce.length + ciphertext.length);
-  packed.set(nonce);
-  packed.set(ciphertext, nonce.length);
-  return { enc: base64(packed) };
+  return { enc: base64(concatBytes(nonce, ciphertext)) };
 }
 
 function decryptReplayBody(body: EncryptedReplayBody, key: Uint8Array): MessageBody {

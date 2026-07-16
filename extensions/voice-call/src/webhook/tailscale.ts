@@ -7,7 +7,7 @@ type TailscaleSelfInfo = {
   nodeId: string | null;
 };
 
-export const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
+const TAILSCALE_COMMAND_STDOUT_MAX_BYTES = 4 * 1024 * 1024;
 
 async function runTailscaleCommand(
   args: string[],

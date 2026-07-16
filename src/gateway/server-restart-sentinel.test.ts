@@ -15,6 +15,13 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
   deliver: (payload: { text?: string; replyToId?: string | null }) => Promise<void>;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
 };
+type InProcessDispatchMock = (
+  method: string,
+  params: Record<string, unknown>,
+  options?: Record<string, unknown>,
+) => Promise<Record<string, unknown>>;
+type AdvanceSessionDeliveryAgentRunMock =
+  typeof import("../infra/session-delivery-queue.js").advanceSessionDeliveryAgentRun;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -29,6 +36,13 @@ const mocks = vi.hoisted(() => {
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
     },
+    dispatchGatewayMethodInProcess: vi.fn<InProcessDispatchMock>(async () => ({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    })),
     readRestartSentinel: vi.fn(
       async (): Promise<RestartSentinel> => ({
         version: 1,
@@ -95,6 +109,19 @@ const mocks = vi.hoisted(() => {
       state.queuedSessionDelivery = payload;
       return "session-delivery-1";
     }),
+    ackSessionDelivery: vi.fn(async () => {}),
+    advanceSessionDeliveryAgentRun: vi.fn<AdvanceSessionDeliveryAgentRunMock>(async () => {}),
+    deferSessionDelivery: vi.fn(async () => {}),
+    failSessionDelivery: vi.fn(async () => {}),
+    markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
+    moveSessionDeliveryToFailed: vi.fn(async () => {}),
+    markSessionDeliverySettlement: vi.fn(async () => {}),
+    appendAssistantMessageToSessionTranscript: vi.fn(async () => ({
+      ok: true as const,
+      sessionFile: "/tmp/session.jsonl",
+      messageId: "generated-media-transcript",
+    })),
+    removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
     loadPendingSessionDelivery: vi.fn(async () => state.queuedSessionDelivery),
     drainPendingSessionDeliveries: vi.fn(
       async (params: {
@@ -194,10 +221,28 @@ vi.mock("../infra/restart-sentinel.js", () => ({
 }));
 
 vi.mock("../infra/session-delivery-queue.js", () => ({
+  ackSessionDelivery: mocks.ackSessionDelivery,
+  advanceSessionDeliveryAgentRun: mocks.advanceSessionDeliveryAgentRun,
+  deferSessionDelivery: mocks.deferSessionDelivery,
+  failSessionDelivery: mocks.failSessionDelivery,
   enqueueSessionDelivery: mocks.enqueueSessionDelivery,
   loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
+  markSessionDeliveryAttemptStarted: mocks.markSessionDeliveryAttemptStarted,
+  moveSessionDeliveryToFailed: mocks.moveSessionDeliveryToFailed,
+  markSessionDeliverySettlement: mocks.markSessionDeliverySettlement,
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
   recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
+  SessionDeliveryDeadLetteredError: class SessionDeliveryDeadLetteredError extends Error {},
+  SessionDeliveryDeferredError: class SessionDeliveryDeferredError extends Error {},
+  SessionDeliverySafeRetryError: class SessionDeliverySafeRetryError extends Error {},
+}));
+
+vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
+  removeCronRunContinuationSessionIfIdle: mocks.removeCronRunContinuationSessionIfIdle,
+}));
+
+vi.mock("../config/sessions/transcript.js", () => ({
+  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -255,7 +300,15 @@ vi.mock("../channels/turn/kernel.js", () => ({
       onDispatchError: (err: unknown, info: { kind: string }) =>
         params.delivery.onError?.(err, info),
     } as unknown as RecordInboundSessionAndDispatchReplyParams);
+    return {
+      dispatched: true,
+      dispatchResult: { observedReplyDelivery: true },
+    };
   },
+}));
+
+vi.mock("./server-plugins.js", () => ({
+  dispatchGatewayMethodInProcess: mocks.dispatchGatewayMethodInProcess,
 }));
 
 vi.mock("../infra/outbound/targets.js", () => ({
@@ -308,6 +361,7 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
 }));
 
 const {
+  deliverQueuedSessionDelivery,
   getLatestUpdateRestartSentinel,
   refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake,
@@ -387,6 +441,14 @@ describe("scheduleRestartSentinelWake", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.dispatchGatewayMethodInProcess.mockReset();
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValue({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
     mocks.readRestartSentinel.mockReset();
     mocks.readRestartSentinel.mockResolvedValue({
       version: 1,
@@ -433,6 +495,15 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeat.mockClear();
     mocks.enqueueSessionDelivery.mockClear();
+    mocks.ackSessionDelivery.mockClear();
+    mocks.advanceSessionDeliveryAgentRun.mockClear();
+    mocks.deferSessionDelivery.mockClear();
+    mocks.failSessionDelivery.mockClear();
+    mocks.markSessionDeliveryAttemptStarted.mockClear();
+    mocks.moveSessionDeliveryToFailed.mockClear();
+    mocks.markSessionDeliverySettlement.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.removeCronRunContinuationSessionIfIdle.mockClear();
     mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
@@ -613,6 +684,7 @@ describe("scheduleRestartSentinelWake", () => {
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.onTurnAdopted?.();
       await params.deliver({
         text: "done",
         replyToId: "restart-sentinel:agent:main:main:agentTurn:123",
@@ -626,12 +698,15 @@ describe("scheduleRestartSentinelWake", () => {
       threadId: "thread-42",
     });
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-1", kind: "agentTurn" }),
+    );
     expectContinuationDispatchFields(
       {
         channel: "whatsapp",
         accountId: "acct-2",
         routeSessionKey: "agent:main:main",
-        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+        replyOptions: expect.objectContaining({ sourceReplyDeliveryMode: "message_tool_only" }),
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
@@ -662,6 +737,1379 @@ describe("scheduleRestartSentinelWake", () => {
     ).some(([call]) => call.payloads?.some((payload) => payload.text === "done") === true);
     expect(deliveredContinuationReply).toBe(false);
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("replays generated-media provenance through the owning session agent", async () => {
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      stateDir: "/tmp/custom-session-delivery-state",
+      entry: {
+        id: "session-delivery-media",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-1:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "default",
+          chatType: "channel",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "image_generate:task-1",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+        idempotencyKey: "image:task-1:agent-loop",
+      },
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      {
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        deliver: true,
+        bestEffortDeliver: false,
+        channel: "discord",
+        accountId: "default",
+        to: "channel:123",
+        threadId: undefined,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "image_generate:task-1",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        disableMessageTool: true,
+        forceRestartSafeTools: true,
+        idempotencyKey: "image:task-1:agent-loop",
+      },
+      {
+        expectFinal: true,
+        forceSyntheticClient: true,
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        onAccepted: expect.any(Function),
+      },
+    );
+    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media", kind: "agentTurn" }),
+      "/tmp/custom-session-delivery-state",
+    );
+  });
+
+  it("fences an adopted generic turn in its explicit queue state directory", async () => {
+    mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.onTurnAdopted?.();
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      stateDir: "/tmp/custom-generic-session-delivery-state",
+      entry: {
+        id: "session-delivery-generic-state-dir",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "continue",
+        messageId: "restart-sentinel:generic-state-dir",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+      },
+    });
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-generic-state-dir" }),
+      "/tmp/custom-generic-session-delivery-state",
+    );
+  });
+
+  it("keeps a generated-media gateway rejection before acceptance retryable", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-pre-accept",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-pre-accept:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("failed before gateway acceptance");
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media-pre-accept" }),
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("authorizes queued media replay for an active cron continuation", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "cron-run-session",
+        cronRunContinuation: {
+          lifecycleRevision: "revision-1",
+          phase: "ready",
+          basePersisted: true,
+        },
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:cron:daily-media:run:run-123",
+      storeKeys: ["agent:main:cron:daily-media:run:run-123"],
+      legacyKey: undefined,
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-cron-media",
+        kind: "agentTurn",
+        sessionKey: "agent:main:cron:daily-media:run:run-123",
+        message: "generated image ready",
+        messageId: "image:cron-task:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["/tmp/proof.png"],
+        suppressTextDelivery: true,
+      },
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        sessionKey: "agent:main:cron:daily-media:run:run-123",
+        sessionId: "cron-run-session",
+      }),
+      {
+        allowSyntheticCronRunContinuation: true,
+        expectFinal: true,
+        forceSyntheticClient: true,
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        internalDeliverySuppressText: true,
+        onAccepted: expect.any(Function),
+      },
+    );
+  });
+
+  it("defers a generated-media turn still owned by agent recovery", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "image:task-owned:agent-loop",
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-owned",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-owned:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("still owned by agent recovery");
+
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith("session-delivery-media-owned", 1_000);
+  });
+
+  it("retains the local fence when gateway dedupe reports another in-flight owner", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "in_flight" });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-in-flight",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-in-flight:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("still owned by agent recovery");
+
+    expect(mocks.markSessionDeliveryAttemptStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media-in-flight" }),
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-in-flight",
+      1_000,
+    );
+  });
+
+  it("fails closed when a terminal agent turn has no replayable result", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal:agent-loop"],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-terminal",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-terminal:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered without durable terminal evidence");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("retries a captured empty terminal result instead of dead-lettering it", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal-empty:agent-loop"],
+        restartRecoveryTerminalDeliveryEvidence: [
+          { runId: "image:task-terminal-empty:agent-loop", captured: true },
+        ],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-terminal-empty",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generation completed",
+          messageId: "image:task-terminal-empty:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 1,
+          lastChargedAgentRunAttempt: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "message_tool_only",
+          expectedMediaUrls: [],
+        },
+      }),
+    ).rejects.toThrow("completed without a visible reply");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-empty",
+    );
+    expect(mocks.failSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-empty",
+      1_000,
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("uses durable terminal evidence to retry media omitted before queue acknowledgement", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal-missing:agent-loop"],
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: "image:task-terminal-missing:agent-loop",
+            payloads: [{ visible: true }],
+            deliveryStatus: { status: "sent" },
+          },
+        ],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-terminal-missing",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-terminal-missing:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-missing",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
+    );
+    expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-missing",
+      expect.stringContaining("missed expected media"),
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-missing",
+      1_000,
+    );
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters an interrupted attempt without durable agent evidence", async () => {
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-interrupted-unproven",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-interrupted-unproven:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          deliveryStartedAt: 2,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("interrupted unproven attempt");
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("does not replay private terminal media as an owning-transcript delivery", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({ status: "ok" });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal-private:agent-loop"],
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: "image:task-terminal-private:agent-loop",
+            payloads: [{ visible: false, mediaUrls: ["/tmp/proof.png"] }],
+          },
+        ],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-terminal-private",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-terminal-private:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-private",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
+    );
+    expect(mocks.failSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-private",
+      expect.stringContaining("missed expected media"),
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-private",
+      1_000,
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("asks the normal agent loop to deliver automatic generated-media replies", async () => {
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-media-automatic",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-automatic:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "default",
+          chatType: "channel",
+        },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["/tmp/proof.png"],
+        suppressTextDelivery: true,
+      },
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        deliver: true,
+        sourceReplyDeliveryMode: "automatic",
+        disableMessageTool: true,
+        forceRestartSafeTools: true,
+        idempotencyKey: "image:task-automatic:agent-loop",
+      }),
+      {
+        expectFinal: true,
+        forceSyntheticClient: true,
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        internalDeliverySuppressText: true,
+        onAccepted: expect.any(Function),
+      },
+    );
+  });
+
+  it("accepts a generated-media reply committed only to the owning transcript", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
+      },
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-media-internal",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-internal:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      },
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ deliver: false, sourceReplyDeliveryMode: "automatic" }),
+      {
+        expectFinal: true,
+        forceSyntheticClient: true,
+        internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        onAccepted: expect.any(Function),
+      },
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      expectedSessionId: "agent:main:main",
+      mediaUrls: ["/tmp/proof.png"],
+      idempotencyKey: "image:task-internal:agent-loop:generated-media-transcript",
+      updateMode: "inline",
+    });
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("persists proven internal media before retrying the missing subset", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: { payloads: [{ text: "first ready", mediaUrls: ["/tmp/one.png"] }] },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-internal-partial",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-internal-partial:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        },
+      }),
+    ).rejects.toThrow("partially missed expected media: /tmp/two.png");
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrls: ["/tmp/one.png"],
+        idempotencyKey: "image:task-internal-partial:agent-loop:generated-media-transcript",
+      }),
+    );
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-internal-partial",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/two.png"] }),
+    );
+  });
+
+  it("does not count private reasoning media as an owning-transcript reply", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ isReasoning: true, mediaUrls: ["/tmp/proof.png"] }],
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-internal-reasoning",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-internal-reasoning:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/proof.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-internal-reasoning",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("retries a completed agent turn that omitted the expected media", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "generation finished" }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-missing",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-missing:agent-loop",
+          idempotencyKey: "image:task-missing:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 2,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("queued generated-media agent turn missed expected media: /tmp/proof.png");
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({ idempotencyKey: "image:task-missing:agent-loop" }),
+      expect.any(Object),
+    );
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-missing",
+      {
+        expectedMediaUrls: ["/tmp/proof.png"],
+        message: expect.stringContaining("MEDIA:/tmp/proof.png"),
+        suppressTextDelivery: true,
+      },
+    );
+  });
+
+  it("retries when automatic aggregate evidence contains media only in a hidden payload", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [
+          { text: "generation finished" },
+          { visible: false, mediaUrls: ["/tmp/proof.png"] },
+        ],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-hidden-aggregate",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-hidden-aggregate:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/proof.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-hidden-aggregate",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/proof.png"] }),
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("accepts suppressed automatic media as a committed durable delivery", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: { status: "suppressed" },
+      },
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-media-suppressed",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generated image ready",
+        messageId: "image:task-suppressed:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      },
+    });
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("accepts a suppressed visible automatic completion notice", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "generation failed" }],
+        deliveryStatus: { status: "suppressed" },
+      },
+    });
+
+    await deliverQueuedSessionDelivery({
+      deps: {} as never,
+      entry: {
+        id: "session-delivery-notice-suppressed",
+        kind: "agentTurn",
+        sessionKey: "agent:main:main",
+        message: "generation failed",
+        messageId: "image:task-notice-suppressed:agent-loop",
+        enqueuedAt: 1,
+        retryCount: 0,
+        route: { channel: "discord", to: "channel:123", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "webchat",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: [],
+      },
+    });
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("retries only media proven missing from a successful partial delivery", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-partial-safe",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-partial-safe:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        },
+      }),
+    ).rejects.toThrow("partially missed expected media: /tmp/two.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-partial-safe",
+      {
+        expectedMediaUrls: ["/tmp/two.png"],
+        message: expect.stringContaining("MEDIA:/tmp/two.png"),
+        suppressTextDelivery: true,
+      },
+    );
+    const retryMessage = (
+      mocks.advanceSessionDeliveryAgentRun.mock.calls[0]?.[1] as { message?: string } | undefined
+    )?.message;
+    expect(retryMessage).not.toContain("/tmp/one.png");
+  });
+
+  it("checks partial automatic evidence only for media still missing", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ mediaUrls: ["/tmp/one.png"] }, { mediaUrls: ["/tmp/two.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "second attachment failed before send",
+          payloadOutcomes: [
+            { index: 0, status: "sent" },
+            { index: 1, status: "failed", sentBeforeError: false },
+          ],
+        },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-cross-path-partial",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-cross-path-partial:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/two.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-cross-path-partial",
+      expect.objectContaining({ expectedMediaUrls: ["/tmp/two.png"] }),
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("suppresses ambiguous caption replay while repairing missing media", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready" }, { mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "attachment failed before send",
+          payloadOutcomes: [{ index: 1, status: "failed", sentBeforeError: false }],
+        },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-caption-ambiguous",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-caption-ambiguous:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/proof.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-caption-ambiguous",
+      expect.objectContaining({
+        expectedMediaUrls: ["/tmp/proof.png"],
+        suppressTextDelivery: true,
+      }),
+    );
+  });
+
+  it("does not accept explicitly hidden automatic evidence as a visible notice", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ visible: false, mediaUrls: ["/tmp/private.png"] }],
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-hidden-automatic",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-hidden-automatic:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+        },
+      }),
+    ).rejects.toThrow("completed without a visible reply");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-hidden-automatic",
+    );
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("retries missing media after an unrelated text payload was sent", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready" }, { mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "attachment failed",
+          payloadOutcomes: [
+            { index: 0, status: "sent" },
+            { index: 1, status: "failed", sentBeforeError: false },
+          ],
+        },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-text-only",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-text-only:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("missed expected media: /tmp/proof.png");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalled();
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters a partial send without exact per-payload evidence", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "transport failed after an unknown side effect",
+        },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-partial-unclassified",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-partial-unclassified:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after ambiguous side effects");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters truncated terminal evidence before retrying missing media", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "earlier payload" }],
+        payloadsTruncated: true,
+        deliveryStatus: { status: "sent" },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-truncated",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-truncated:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after truncated evidence");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters impossible truncated messaging-tool evidence", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:wrong",
+            mediaUrls: ["/tmp/proof.png"],
+          },
+        ],
+        messagingToolSentTargetsTruncated: true,
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-tool-targets-truncated",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-tool-targets-truncated:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "message_tool_only",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters aggregate-only message-tool evidence before replaying", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: ["/tmp/proof.png"],
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-tool-aggregate-only",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-tool-aggregate-only:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "message_tool_only",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters unaccounted aggregate evidence mixed with routed tool sends", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:123",
+            mediaUrls: ["/tmp/one.png"],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-tool-mixed-aggregate",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-tool-mixed-aggregate:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "message_tool_only",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters impossible message-tool delivery to a different destination", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:wrong",
+            mediaUrls: ["/tmp/proof.png"],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-wrong-target",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-wrong-target:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "message_tool_only",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters impossible committed side effects before a fresh attempt", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready" }],
+        successfulCronAdds: 1,
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-unsafe-side-effect",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated image ready",
+          messageId: "image:task-unsafe-side-effect:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/proof.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after an unexpected committed side effect");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("dead-letters a partial visible send instead of replaying it", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        payloads: [{ text: "ready", mediaUrls: ["/tmp/one.png", "/tmp/two.png"] }],
+        deliveryStatus: {
+          status: "partial_failed",
+          errorMessage: "second attachment failed after first send",
+          payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
+        },
+      },
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "session-delivery-media-partial",
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated images ready",
+          messageId: "image:task-partial:agent-loop",
+          enqueuedAt: 1,
+          retryCount: 0,
+          route: { channel: "discord", to: "channel:123", chatType: "channel" },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceChannel: "webchat",
+            sourceTool: "image_generate",
+          },
+          sourceReplyDeliveryMode: "automatic",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+        },
+      }),
+    ).rejects.toThrow("dead-lettered after ambiguous side effects");
+
+    expect(mocks.moveSessionDeliveryToFailed).not.toHaveBeenCalled();
   });
 
   it("dispatches agentTurn continuation for a completed run entry", async () => {
@@ -937,7 +2385,7 @@ describe("scheduleRestartSentinelWake", () => {
         channel: "telegram",
         accountId: "default",
         routeSessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+        replyOptions: expect.objectContaining({ sourceReplyDeliveryMode: "message_tool_only" }),
       },
       {
         Body: "continue in topic",
@@ -1577,3 +3025,4 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

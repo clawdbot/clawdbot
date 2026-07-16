@@ -1786,3 +1786,4 @@ class LobsterPet extends LitElement {
 if (!customElements.get("openclaw-lobster-pet")) {
   customElements.define("openclaw-lobster-pet", LobsterPet);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,9 +10,9 @@ import {
 } from "../../index.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
-// The limits are internals (trimmed from the public barrel); import them from
-// their defining module.
-import { MAX_PATH_LENGTH, MAX_TRAVERSAL_DEPTH } from "../../oc-path.js";
+import { MAX_TRAVERSAL_DEPTH } from "../../oc-path.js";
+
+const PATH_LENGTH_LIMIT = 4096;
 
 function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): void {
   try {
@@ -86,33 +86,35 @@ describe("file-slot containment", () => {
 
 describe("path-string and traversal caps", () => {
   it("parseOcPath rejects strings longer than MAX_PATH_LENGTH", () => {
-    expect(() => parseOcPath("oc://X/" + "a".repeat(MAX_PATH_LENGTH))).toThrow(/exceeds .* bytes/);
+    expect(() => parseOcPath("oc://X/" + "a".repeat(PATH_LENGTH_LIMIT))).toThrow(
+      /exceeds .* bytes/,
+    );
   });
 
   it("keeps overlong parse input UTF-16 safe", () => {
     const prefix = `oc://${"a".repeat(74)}`;
     expectUtf16SafeLimitError(
-      () => parseOcPath(`${prefix}😀${"b".repeat(MAX_PATH_LENGTH)}`),
+      () => parseOcPath(`${prefix}😀${"b".repeat(PATH_LENGTH_LIMIT)}`),
       `${prefix}…`,
     );
   });
 
   it("keeps post-NFC overlong parse input UTF-16 safe", () => {
     const prefix = `oc://${"a".repeat(74)}`;
-    const input = `${prefix}😀${"\u0344".repeat(MAX_PATH_LENGTH - prefix.length - 2)}`;
-    expect(input).toHaveLength(MAX_PATH_LENGTH);
-    expect(input.normalize("NFC").length).toBeGreaterThan(MAX_PATH_LENGTH);
+    const input = `${prefix}😀${"\u0344".repeat(PATH_LENGTH_LIMIT - prefix.length - 2)}`;
+    expect(input).toHaveLength(PATH_LENGTH_LIMIT);
+    expect(input.normalize("NFC").length).toBeGreaterThan(PATH_LENGTH_LIMIT);
 
     expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
   });
 
   it("parseOcPath accepts a path right at the cap", () => {
-    const justUnder = "oc://X/" + "a".repeat(MAX_PATH_LENGTH - "oc://X/".length);
+    const justUnder = "oc://X/" + "a".repeat(PATH_LENGTH_LIMIT - "oc://X/".length);
     expect(() => parseOcPath(justUnder)).not.toThrow();
   });
 
   it("formatOcPath enforces the same cap on output", () => {
-    expect(() => formatOcPath({ file: "X", section: "a".repeat(MAX_PATH_LENGTH) })).toThrow(
+    expect(() => formatOcPath({ file: "X", section: "a".repeat(PATH_LENGTH_LIMIT) })).toThrow(
       /Formatted oc:\/\/ exceeds/,
     );
   });
@@ -121,7 +123,7 @@ describe("path-string and traversal caps", () => {
     const sectionPrefix = "a".repeat(72);
     expectUtf16SafeLimitError(
       () =>
-        formatOcPath({ file: "X", section: `${sectionPrefix}😀${"b".repeat(MAX_PATH_LENGTH)}` }),
+        formatOcPath({ file: "X", section: `${sectionPrefix}😀${"b".repeat(PATH_LENGTH_LIMIT)}` }),
       `oc://X/${sectionPrefix}…`,
     );
   });

@@ -96,12 +96,17 @@ describe("openshell backend exec workdir validation", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
   it("reuses validation-time workspace preparation for the following exec", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "fixture");
+    vi.stubEnv("ANTHROPIC_API_KEY", "fixture");
+    vi.stubEnv("LANG", "en_US.UTF-8");
+    vi.stubEnv("NODE_ENV", "test");
     const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
     await fs.writeFile(path.join(workspaceDir, "seed.txt"), "seed", "utf8");
     const backendFactory = createOpenShellSandboxBackendFactory({
@@ -112,7 +117,7 @@ describe("openshell backend exec workdir validation", () => {
     });
     const backend = await backendFactory({
       sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
+      scopeKey: "agent:somalley_alice:dashboard-8",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg: createOpenShellBackendSandboxConfig(),
@@ -130,6 +135,25 @@ describe("openshell backend exec workdir validation", () => {
       ([params]) => params.args[0] === "sandbox" && params.args[1] === "upload",
     );
     expect(uploadCalls).toHaveLength(1);
+    expect(uploadCalls[0]?.[0]).toMatchObject({
+      args: [
+        "sandbox",
+        "upload",
+        "--no-git-ignore",
+        backend.runtimeId,
+        expect.stringMatching(/\/seed\.txt$/),
+        "/sandbox",
+      ],
+      cwd: workspaceDir,
+    });
+    expect(backend.runtimeId).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/);
+    expect(backend.runtimeId).toContain("somalley-alice");
+    expect(backend.runtimeId).not.toContain("_");
+    expect(backend.runtimeId.length).toBeLessThanOrEqual(63);
+    expect(execSpec.env.OPENAI_API_KEY).toBeUndefined();
+    expect(execSpec.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(execSpec.env.LANG).toBe("en_US.UTF-8");
+    expect(execSpec.env.NODE_ENV).toBe("test");
     expect(execSpec.argv).toContain("openshell-test");
   });
 

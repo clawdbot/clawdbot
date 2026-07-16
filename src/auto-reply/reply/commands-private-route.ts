@@ -200,8 +200,11 @@ function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): S
   }
   if (channel && to) {
     keys.add(`${channel}:${to}`);
-    if (channel === "telegram") {
-      keys.add(`tg:${to}`);
+    for (const prefix of getLoadedChannelPlugin(channel)?.messaging?.targetPrefixes ?? []) {
+      const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+      if (normalizedPrefix) {
+        keys.add(`${normalizedPrefix}:${to}`);
+      }
     }
   }
   return keys;

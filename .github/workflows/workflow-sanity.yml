@@ -162,6 +162,19 @@ jobs:
       - name: Install pre-commit
         run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
 
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHELLCHECK_VERSION="0.11.0"
+          archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
+            -o "${archive}" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  ${archive}" | sha256sum -c -
+          tar -xJf "${archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+
       - name: Install actionlint
         shell: bash
         run: |

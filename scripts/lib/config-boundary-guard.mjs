@@ -8,6 +8,7 @@ const sourceCache = new Map();
 
 const COMPAT_CONFIG_API_FILES = new Set([
   "src/config/config.ts",
+  "src/config/io.runtime.ts",
   "src/config/io.ts",
   "src/config/mutate.ts",
   "src/memory-host-sdk/runtime-core.ts",

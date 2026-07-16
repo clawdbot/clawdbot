@@ -372,11 +372,14 @@ describe("release validation no-push transport", () => {
       'if [[ "$source_sha" != "$PACKAGE_REF" ]]',
     );
     expect(live.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       shared_image_artifact_namespace: "release-live",
       shared_image_policy: "no-push-artifact",
     });
-    expect(live.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(docker.with).toMatchObject({
+      allow_unreleased_changelog:
+        "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
       package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
@@ -390,7 +393,6 @@ describe("release validation no-push transport", () => {
       shared_image_artifact_namespace: "release-docker",
       shared_image_policy: "no-push-artifact",
     });
-    expect(docker.with).not.toHaveProperty("allow_unreleased_changelog");
     expect(acceptance.with).toMatchObject({
       artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
       artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
@@ -491,6 +493,19 @@ describe("release validation no-push transport", () => {
 
     const dockerProducer = job(workflow, "prepare_docker_e2e_image");
     const liveProducer = job(workflow, "prepare_live_test_image");
+    const liveProducerSteps = liveProducer.steps ?? [];
+    const liveBuildIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Build shared live-test image",
+    );
+    const trustedHarnessIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Checkout trusted release harness",
+    );
+    const livePackIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Pack live-test image artifact",
+    );
+    expect(liveBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(trustedHarnessIndex).toBeGreaterThan(liveBuildIndex);
+    expect(livePackIndex).toBeGreaterThan(trustedHarnessIndex);
     expect(permissionAt(workflow.permissions, "actions", "none")).toBe("read");
     expect(permissionAt(workflow.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(dockerProducer);

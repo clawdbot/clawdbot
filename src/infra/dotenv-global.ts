@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import dotenv from "dotenv";
+import { parse as parseDotEnv } from "dotenv";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -34,9 +34,9 @@ export function readDotEnvFile(params: {
   filePath: string;
   quiet?: boolean;
 }): LoadedDotEnvFile | null {
-  let content: string;
+  let content: Buffer;
   try {
-    content = fs.readFileSync(params.filePath, "utf8");
+    content = fs.readFileSync(params.filePath);
   } catch (error) {
     if (!params.quiet) {
       const code =
@@ -48,17 +48,8 @@ export function readDotEnvFile(params: {
     return null;
   }
 
-  let parsed: Record<string, string>;
-  try {
-    parsed = dotenv.parse(content);
-  } catch (error) {
-    if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
-    }
-    return null;
-  }
   const entries: DotEnvEntry[] = [];
-  for (const [rawKey, value] of Object.entries(parsed)) {
+  for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (key && (params.entryFilter?.(key, value) ?? true)) {
       entries.push({ key, value });

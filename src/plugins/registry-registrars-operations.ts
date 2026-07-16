@@ -197,7 +197,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (reservedNodeHostCommands.has(command)) {
+    // Native nodes already own system.notify. A bundled node-host plugin may
+    // supply it on platforms without a native app, while external plugins stay blocked.
+    const bundledSystemNotify =
+      record.origin === "bundled" && command === NODE_SYSTEM_NOTIFY_COMMAND;
+    if (reservedNodeHostCommands.has(command) && !bundledSystemNotify) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

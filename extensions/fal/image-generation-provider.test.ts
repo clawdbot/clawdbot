@@ -1618,3 +1618,4 @@ describe("fal image-generation provider", () => {
     expectFalDownload({ call: 2, url: "http://media.relay.internal/files/generated.png" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

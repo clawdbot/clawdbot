@@ -463,7 +463,7 @@ const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
 ]);
 
 /** Preserve safe operator-owned env vars from an existing service definition. */
-export function collectPreservedExistingServiceEnvVars(
+function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
   managedServiceEnvKeys: Set<string>,
 ): Record<string, string | undefined> {
@@ -847,3 +847,4 @@ export function gatewayInstallErrorHint(platform = process.platform): string {
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

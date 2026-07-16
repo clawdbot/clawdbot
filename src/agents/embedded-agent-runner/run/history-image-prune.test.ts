@@ -5,11 +5,13 @@ import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
-  PRUNED_HISTORY_IMAGE_MARKER,
-  PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
 } from "./history-image-prune.js";
+
+const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
+  "[media reference removed - already processed by model]";
 
 function expectArrayMessageContent(
   message: AgentMessage | undefined,

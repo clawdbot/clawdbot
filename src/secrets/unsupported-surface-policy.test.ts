@@ -1,13 +1,10 @@
 /** Tests unsupported SecretRef surface policy matching and messages. */
 import { describe, expect, it } from "vitest";
-import {
-  collectUnsupportedSecretRefConfigCandidates,
-  getUnsupportedSecretRefSurfacePatterns,
-} from "./unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
-    expect(getUnsupportedSecretRefSurfacePatterns().toSorted()).toEqual(
+    expect(unsupportedSecretRefSurfacePolicy.listPatterns().toSorted()).toEqual(
       [
         "commands.ownerDisplaySecret",
         "hooks.token",
@@ -23,7 +20,7 @@ describe("unsupported SecretRef surface policy metadata", () => {
   });
 
   it("discovers concrete config candidates for unsupported mutable surfaces", () => {
-    const candidates = collectUnsupportedSecretRefConfigCandidates({
+    const candidates = unsupportedSecretRefSurfacePolicy.collectConfigCandidates({
       commands: { ownerDisplaySecret: { source: "env", provider: "default", id: "OWNER" } },
       hooks: {
         token: { source: "env", provider: "default", id: "HOOK_TOKEN" },

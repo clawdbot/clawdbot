@@ -1,4 +1,3 @@
-// Googlechat plugin module implements google auth behavior.
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -10,8 +9,6 @@ import {
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
-type TlsCert = ConnectionOptions["cert"];
-type TlsKey = ConnectionOptions["key"];
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthRuntime = typeof import("google-auth-library");
 type GoogleAuthTransport = InstanceType<GoogleAuthRuntime["gaxios"]["Gaxios"]>;
@@ -21,8 +18,8 @@ type GoogleAuthTransportOptions = NonNullable<
 type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
 type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
 type TlsOptions = {
-  cert?: TlsCert;
-  key?: TlsKey;
+  cert?: ConnectionOptions["cert"];
+  key?: ConnectionOptions["key"];
 };
 type ProxyAgentLike = {
   connectOpts?: TlsOptions;
@@ -41,7 +38,7 @@ const GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES = ["accounts.google.com", "googleapis.co
 const GOOGLE_AUTH_POLICY = buildHostnameAllowlistPolicyFromSuffixAllowlist(
   GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES,
 );
-const GOOGLE_AUTH_AUDIT_CONTEXT = "googlechat.auth.google-auth";
+const GOOGLE_AUTH_FETCH_TIMEOUT_MS = 30_000;
 const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth";
 const GOOGLE_AUTH_PROVIDER_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs";
 const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -414,17 +411,18 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
+function createGoogleAuthFetch(): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
     const { response, release } = await fetchWithSsrFGuard({
-      auditContext: GOOGLE_AUTH_AUDIT_CONTEXT,
+      auditContext: "googlechat.auth.google-auth",
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
       init: guardedOptions.init,
       policy: GOOGLE_AUTH_POLICY,
+      signal: guardedOptions.init?.signal ?? undefined,
+      timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
       url,
-      ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
     try {
       const body = await readGoogleAuthResponseBytes(response);
@@ -521,14 +519,3 @@ export async function resolveValidatedGoogleChatCredentials(
   }
   return null;
 }
-
-export const testing = {
-  resetGoogleAuthRuntimeForTests(): void {
-    googleAuthRuntimePromise = null;
-  },
-  normalizeGoogleAuthPreparedRequestHeaders,
-  normalizeGoogleAuthResponseHeaders,
-  resolveGoogleAuthEnvProxyUrl,
-  validateGoogleChatServiceAccountCredentials,
-};
-export { testing as __testing };

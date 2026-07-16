@@ -5,7 +5,7 @@
 
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
-import * as Diff from "diff";
+import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { resolveToCwd } from "./path-utils.js";
 
@@ -540,9 +540,9 @@ export function generateUnifiedPatch(
   newContent: string,
   contextLines = 4,
 ): string {
-  return Diff.createTwoFilesPatch(path, path, oldContent, newContent, undefined, undefined, {
+  return createPatch(path, oldContent, newContent, undefined, undefined, {
     context: contextLines,
-    headerOptions: Diff.FILE_HEADERS_ONLY,
+    headerOptions: FILE_HEADERS_ONLY,
   });
 }
 
@@ -555,7 +555,7 @@ export function generateDiffString(
   newContent: string,
   contextLines = 4,
 ): { diff: string; firstChangedLine: number | undefined } {
-  const hunks = Diff.structuredPatch("", "", oldContent, newContent, undefined, undefined, {
+  const hunks = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
     context: contextLines,
   }).hunks;
   const oldLineCount = oldContent.split("\n").length;

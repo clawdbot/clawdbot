@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { WebSocket } from "ws";
 import type {
+  ClickClackBotCommand,
   ClickClackChannel,
   ClickClackEvent,
   ClickClackMessage,
@@ -155,6 +156,18 @@ export function createClickClackClient(options: ClientOptions) {
     me: async (): Promise<ClickClackUser> => {
       const data = await request<{ user: ClickClackUser }>("/api/me");
       return data.user;
+    },
+    setBotCommands: async (
+      commands: { command: string; description: string; args_hint?: string }[],
+    ): Promise<ClickClackBotCommand[]> => {
+      const data = await request<{ bot_commands: ClickClackBotCommand[] }>(
+        "/api/bots/self/commands",
+        {
+          method: "PUT",
+          body: JSON.stringify({ commands }),
+        },
+      );
+      return data.bot_commands;
     },
     workspaces: async (): Promise<ClickClackWorkspace[]> => {
       const data = await request<{ workspaces: ClickClackWorkspace[] }>("/api/workspaces");

@@ -21,9 +21,10 @@ import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-c
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
-import { decodeGatewayMessage } from "./gateway-payload.js";
+import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
+import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -71,13 +72,6 @@ const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
 
-function ensureGatewayParams(url: string): string {
-  const parsed = new URL(url);
-  parsed.searchParams.set("v", parsed.searchParams.get("v") ?? "10");
-  parsed.searchParams.set("encoding", parsed.searchParams.get("encoding") ?? "json");
-  return parsed.toString();
-}
-
 export class GatewayPlugin extends Plugin {
   readonly id = "gateway";
   protected client?: Client;
@@ -121,6 +115,10 @@ export class GatewayPlugin extends Plugin {
 
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    return this.voiceStateCache.takeTransition(state);
   }
 
   get heartbeatInterval(): NodeJS.Timeout | undefined {

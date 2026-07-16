@@ -17,6 +17,7 @@ import type {
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { normalizeString } from "./node-normalize.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -27,6 +28,8 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   NodeInvokeStreamController,
+  type NodeInvokeProgressParams,
+  type NodeInvokeResultParams,
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
@@ -73,10 +76,6 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   connId: string;
   expiresAtMs: number | null;
 };
-/** Normalize optional string-ish websocket fields. */
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
 
 /** Extract system.run event auth metadata from invoke params. */
 function resolvePendingSystemRunEvent(params: {
@@ -209,6 +208,40 @@ export class NodeRegistry {
         invokeId: requestId,
         nodeId: pending.nodeId,
       });
+    },
+    isConnectionActive: (pending) => this.nodesById.get(pending.nodeId)?.connId === pending.connId,
+    sendInput: (invokeId, pending, seq, payloadJSON) => {
+      const node = this.nodesById.get(pending.nodeId);
+      return node
+        ? this.sendEventToSession(node, "node.invoke.input", {
+            id: invokeId,
+            nodeId: pending.nodeId,
+            seq,
+            payloadJSON,
+          })
+        : false;
+    },
+    onFailedResult: (pending) => {
+      if (pending.systemRunEvent) {
+        this.forgetAuthorizedSystemRunEvent({
+          nodeId: pending.nodeId,
+          connId: pending.connId,
+          ...pending.systemRunEvent,
+        });
+      }
+    },
+    disconnectPending: (pending) => {
+      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
+        pending.resolve({
+          ok: false,
+          error: {
+            code: "MCP_SERVER_UNAVAILABLE",
+            message: "node host disconnected during MCP tool call",
+          },
+        });
+      } else {
+        pending.reject(new Error(`node disconnected (${pending.command})`));
+      }
     },
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
@@ -379,26 +412,7 @@ export class NodeRegistry {
         this.publishActiveNodeContext();
       }
     }
-    for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.connId !== connId) {
-        continue;
-      }
-      this.invokeStreams.clearTimers(pending);
-      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
-        // Preserve MCP's structured failure contract when transport loss wins
-        // the race; callers can degrade instead of seeing an opaque invoke error.
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "MCP_SERVER_UNAVAILABLE",
-            message: "node host disconnected during MCP tool call",
-          },
-        });
-      } else {
-        pending.reject(new Error(`node disconnected (${pending.command})`));
-      }
-      this.pendingInvokes.delete(id);
-    }
+    this.invokeStreams.handleDisconnect(connId);
     for (const [key, event] of this.authorizedSystemRunEvents) {
       if (event.connId === connId) {
         this.authorizedSystemRunEvents.delete(key);
@@ -672,6 +686,9 @@ export class NodeRegistry {
     onProgress?: (chunk: string) => void;
     signal?: AbortSignal;
     idempotencyKey?: string;
+    sessionKey?: string;
+    /** Receives the id synchronously after send; the terminal relay depends on this timing. */
+    onInvokeId?: (invokeId: string) => void;
   }): Promise<NodeInvokeResult> {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
@@ -704,26 +721,13 @@ export class NodeRegistry {
         "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
       timeoutMs,
       idempotencyKey: params.idempotencyKey,
+      sessionKey: normalizeString(params.sessionKey) || undefined,
     };
-    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
-    if (!ok) {
-      return {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-      };
-    }
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
       params: invokeParams,
     });
-    if (systemRunEvent) {
-      this.rememberAuthorizedSystemRunEvent({
-        nodeId: params.nodeId,
-        connId: node.connId,
-        ...systemRunEvent,
-      });
-    }
-    return await new Promise<NodeInvokeResult>((resolve, reject) => {
+    const result = new Promise<NodeInvokeResult>((resolve, reject) => {
       const pending: PendingInvoke = {
         nodeId: params.nodeId,
         connId: node.connId,
@@ -733,6 +737,7 @@ export class NodeRegistry {
         reject,
         nextProgressSeq: 0,
         progressChunks: new Map(),
+        nextInputSeq: 0,
         ...(params.onProgress ? { onProgress: params.onProgress } : {}),
       };
       const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
@@ -744,15 +749,39 @@ export class NodeRegistry {
         ...(params.signal ? { signal: params.signal } : {}),
       });
     });
+    if (!this.pendingInvokes.has(requestId)) {
+      return await result;
+    }
+    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
+    if (!ok) {
+      const pending = this.pendingInvokes.get(requestId);
+      if (pending) {
+        this.invokeStreams.clearTimers(pending);
+        this.pendingInvokes.delete(requestId);
+        pending.resolve({
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
+        });
+      }
+      return await result;
+    }
+    if (systemRunEvent) {
+      this.rememberAuthorizedSystemRunEvent({
+        nodeId: params.nodeId,
+        connId: node.connId,
+        ...systemRunEvent,
+      });
+    }
+    params.onInvokeId?.(requestId);
+    return await result;
   }
 
-  handleInvokeProgress(params: {
-    invokeId: string;
-    nodeId: string;
-    connId: string | undefined;
-    seq: number;
-    chunk: string;
-  }): boolean {
+  /** Send one ordered input frame to a pending streaming invoke. */
+  sendInvokeInput(invokeId: string, payload: unknown): void {
+    this.invokeStreams.sendInput(invokeId, payload);
+  }
+
+  handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
   }
 
@@ -905,38 +934,8 @@ export class NodeRegistry {
     return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
   }
 
-  handleInvokeResult(params: {
-    id: string;
-    nodeId: string;
-    connId: string | undefined;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  }): boolean {
-    const pending = this.pendingInvokes.get(params.id);
-    if (!pending) {
-      return false;
-    }
-    if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
-      return false;
-    }
-    this.invokeStreams.clearTimers(pending);
-    this.pendingInvokes.delete(params.id);
-    if (!params.ok && pending.systemRunEvent) {
-      this.forgetAuthorizedSystemRunEvent({
-        nodeId: pending.nodeId,
-        connId: pending.connId,
-        ...pending.systemRunEvent,
-      });
-    }
-    pending.resolve({
-      ok: params.ok,
-      payload: params.payload,
-      payloadJSON: params.payloadJSON ?? null,
-      error: params.error ?? null,
-    });
-    return true;
+  handleInvokeResult(params: NodeInvokeResultParams): boolean {
+    return this.invokeStreams.handleResult(params);
   }
 
   sendEvent(nodeId: string, event: string, payload?: unknown): boolean {
@@ -1033,3 +1032,4 @@ export class NodeRegistry {
     return true;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

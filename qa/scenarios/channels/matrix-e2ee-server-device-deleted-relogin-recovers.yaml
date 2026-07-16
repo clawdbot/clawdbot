@@ -1,0 +1,35 @@
+title: Matrix E2EE server-side device deletion recovers through re-login and backup restore
+scenario:
+  id: matrix-e2ee-server-device-deleted-relogin-recovers
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-server-device-deleted-relogin-recovers
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Server Device Relogin Recovery Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario
+  args:
+    - expr: "scenarioContext"

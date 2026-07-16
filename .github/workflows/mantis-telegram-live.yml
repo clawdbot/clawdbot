@@ -444,7 +444,7 @@ jobs:
           telegram_exit=$?
           set -e
 
-          if [[ ! -f "$root/qa-evidence.json" && ! -f "$root/telegram-qa-summary.json" ]]; then
+          if [[ ! -f "$root/qa-evidence.json" ]]; then
             echo "Telegram live QA did not produce an evidence summary." >&2
             exit "$telegram_exit"
           fi
@@ -496,7 +496,7 @@ jobs:
             fi
           fi
 
-          cat "$root/telegram-qa-report.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$root/qa-suite-report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Mantis Telegram artifacts
         id: upload_artifact

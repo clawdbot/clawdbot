@@ -3,10 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+  crablineRuntimeLoads: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
+
+vi.mock("@openclaw/crabline", async (importOriginal) => {
+  crablineRuntimeLoads();
+  return await importOriginal<typeof import("@openclaw/crabline")>();
+});
 
 vi.mock("./suite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite.js")>()),
@@ -108,6 +114,20 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("keeps Crabline out of unrelated live transport startup", async () => {
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
+
+    await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      channelId: "telegram",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(crablineRuntimeLoads).not.toHaveBeenCalled();
+  });
+
   it("routes selected flow scenarios to the flow suite engine", async () => {
     const result = await runQaSuite({
       repoRoot: process.cwd(),
@@ -130,6 +150,69 @@ describe("qa suite runtime launcher", () => {
       }),
     );
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("partitions flow-only suites that request isolated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-only-isolated",
+      concurrency: 1,
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["channel-chat-baseline", "matrix-allowlist-hot-reload"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "flow-only-isolated");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-1"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-2"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["matrix-allowlist-hot-reload"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("runs runtime-specific live scenarios in dedicated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-live-runtime-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/live-runtime",
+      channelDriver: "live",
+      channelId: "slack",
+      concurrency: 4,
+      scenarioIds: ["slack-canary", "slack-codex-approval-exec-native"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "live-runtime", "flow");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "isolated"),
+        forcedRuntime: undefined,
+        scenarioIds: ["slack-canary"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "runtime-codex-1"),
+        forcedRuntime: "codex",
+        scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    );
   });
 
   it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
@@ -1157,3 +1240,4 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

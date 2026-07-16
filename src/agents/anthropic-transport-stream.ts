@@ -1750,9 +1750,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
-              if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
-                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
-              }
               delete block.partialJson;
               eventSink.push({
                 type: "toolcall_end",
@@ -1883,3 +1880,4 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     return eventStream as ReturnType<StreamFn>;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

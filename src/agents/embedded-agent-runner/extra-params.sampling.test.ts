@@ -3,11 +3,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import {
-  testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./extra-params.js";
+import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("./logger.js", () => ({
   // Sampling tests assert call options only; silence warning/debug output from
@@ -511,4 +511,52 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(first.fastMode).toBe(firstFastMode);
     expect(second.fastMode).toBe(secondFastMode);
   });
+
+  it.each([
+    { requestRetention: undefined, expected: "long", name: "own undefined" },
+    { requestRetention: "none" as const, expected: "none", name: "explicit none" },
+    { requestRetention: "short" as const, expected: "short", name: "explicit short" },
+    { requestRetention: "long" as const, expected: "long", name: "explicit long" },
+  ])(
+    "merges configured cache retention with $name request options",
+    ({ requestRetention, expected }) => {
+      const underlying = vi.fn(() => ({
+        push: vi.fn(),
+        result: vi.fn(async () => undefined),
+        [Symbol.asyncIterator]: vi.fn(async function* () {
+          // empty stream
+        }),
+      })) as unknown as StreamFn;
+      const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+      applyExtraParamsToAgent(
+        agent,
+        undefined,
+        "anthropic",
+        "claude-sonnet-5",
+        { cacheRetention: "long" },
+        undefined,
+        undefined,
+        undefined,
+        { supportsPromptCacheKey: true } as never,
+      );
+
+      if (!agent.streamFn) {
+        throw new Error("expected extra params to wrap streamFn");
+      }
+
+      const requestOptions = { cacheRetention: requestRetention };
+      expect(requestOptions).toHaveProperty("cacheRetention");
+      void agent.streamFn(
+        { id: "claude-sonnet-5", api: "anthropic-messages", provider: "anthropic" } as never,
+        { messages: [], tools: [] } as never,
+        requestOptions,
+      );
+
+      expect(underlying).toHaveBeenCalledTimes(1);
+      const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]?.[2] as { cacheRetention?: string } | undefined;
+      expect(callOptions?.cacheRetention).toBe(expected);
+    },
+  );
 });

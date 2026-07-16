@@ -1625,3 +1625,4 @@ describe("aggregateRefreshableAuthStatus", () => {
     expect(result.remainingMs).toBe(5_000);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

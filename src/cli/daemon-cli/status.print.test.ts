@@ -1079,3 +1079,4 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Gateway process is");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

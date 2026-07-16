@@ -6,10 +6,6 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
-  LAUNCH_AGENT_PROCESS_TYPE,
-  LAUNCH_AGENT_STDIN_PATH,
-  LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
-  LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
@@ -1438,18 +1434,18 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).toContain("<key>StandardInPath</key>");
-    expect(plist).toContain(`<string>${LAUNCH_AGENT_STDIN_PATH}</string>`);
+    expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
     expect(plist).toContain("<key>ProcessType</key>");
-    expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
+    expect(plist).toContain("<string>Interactive</string>");
     expect(plist).toContain("<key>Umask</key>");
-    expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
+    expect(plist).toContain("<integer>63</integer>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
+    expect(plist).toContain("<integer>10</integer>");
   });
 
   it("rewrites the plist before bootstrap during restart fallback", async () => {
@@ -2448,3 +2444,4 @@ describe("resolveLaunchAgentPlistPath", () => {
     ).toThrow("Invalid launchd label");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

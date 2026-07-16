@@ -26,7 +26,6 @@ export default defineBundledChannelEntry({
   description: "Guarded end-to-end encrypted claw channel",
   importMetaUrl: import.meta.url,
   plugin: { specifier: "./channel-plugin-api.js", exportName: "reefPlugin" },
-  outbound: { specifier: "./api.js", exportName: "reefOutboundAdapter" },
   runtime: { specifier: "./runtime-api.js", exportName: "setReefRuntime" },
   registerCliMetadata: registerReefCliMetadata,
   registerFull: registerReefFullRuntime,

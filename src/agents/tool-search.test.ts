@@ -11,7 +11,6 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
-  testing,
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   applyToolSchemaDirectoryCatalog,
@@ -22,12 +21,14 @@ import {
   estimateToolSchemaDirectoryToolNames,
   projectToolSearchTargetTranscriptMessages,
   registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
   resolveToolSearchCatalogTool,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
+import { testing } from "./tool-search.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, description: string): AnyAgentTool {
@@ -171,7 +172,7 @@ describe("Tool Search", () => {
   });
 
   it("enables object config when a mode is set", () => {
-    const resolved = testing.resolveToolSearchConfig({
+    const resolved = resolveToolSearchConfig({
       tools: {
         toolSearch: {
           mode: "directory",
@@ -186,7 +187,7 @@ describe("Tool Search", () => {
     testing.setToolSearchCodeModeSupportedForTest(false);
     try {
       const config = { tools: { toolSearch: true } } as never;
-      const resolved = testing.resolveToolSearchConfig(config);
+      const resolved = resolveToolSearchConfig(config);
       const compacted = applyToolSearchCatalog({
         tools: [
           fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
@@ -1904,3 +1905,4 @@ describe("Tool Search", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

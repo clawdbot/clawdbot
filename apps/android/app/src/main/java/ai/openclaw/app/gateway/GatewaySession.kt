@@ -377,6 +377,9 @@ class GatewaySession(
 
   internal fun isReady(): Boolean = readyConnection() != null
 
+  /** Current physical connection identity, including events sent during connect publication. */
+  internal fun currentEndpointStableId(): String? = currentConnection?.endpoint?.stableId
+
   /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
@@ -411,6 +414,9 @@ class GatewaySession(
       NodeEventSendOutcome.COMPLETED
     } catch (_: GatewayRequestNotEnqueued) {
       NodeEventSendOutcome.DISCONNECTED
+    } catch (err: CancellationException) {
+      // Voice/audio ownership takeover must cancel before a stale node event dispatches.
+      throw err
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       NodeEventSendOutcome.FAILED
@@ -1251,6 +1257,8 @@ class GatewaySession(
         }
         return
       }
+      // Retired sockets can still drain queued frames after reconnect. Never let them mutate current state.
+      if (currentConnection !== this) return
       if (event == GatewayEvent.NodeInvokeRequest.rawValue && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return

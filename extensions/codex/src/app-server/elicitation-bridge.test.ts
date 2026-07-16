@@ -1770,3 +1770,4 @@ describe("Codex app-server elicitation bridge", () => {
     expect(() => encodeURIComponent(approvalCallParams.description ?? "")).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

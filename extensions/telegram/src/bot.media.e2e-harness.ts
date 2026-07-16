@@ -7,14 +7,11 @@ import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import {
-  resetTopicNameCacheForTest,
-  setTelegramTopicNameStoreFactoryForTest,
-} from "./topic-name-cache.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
-type TelegramBotRuntimeForTest = NonNullable<
-  Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
->;
+type TelegramBotRuntimeForTest = typeof import("./bot.runtime.js");
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyHarnessParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
@@ -133,31 +130,40 @@ const defaultRuntimeConfig = (() =>
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
-type TopicNameStoreFactory = NonNullable<
-  Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
->;
-type TopicNamePersistentStore = ReturnType<TopicNameStoreFactory>;
-type TopicNameEntry = Awaited<ReturnType<TopicNamePersistentStore["entries"]>>[number]["value"];
+type TopicNameEntry = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
 
 const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntry>>();
 
-setTelegramTopicNameStoreFactoryForTest((namespace) => {
-  let store = topicNameStoresForTest.get(namespace);
-  if (!store) {
-    store = new Map();
-    topicNameStoresForTest.set(namespace, store);
-  }
-  return {
-    register: async (key, value) => {
-      store.set(key, value);
+function installTopicNameRuntimeForTest(): void {
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (({ namespace }: { namespace: string }) => {
+        let store = topicNameStoresForTest.get(namespace);
+        if (!store) {
+          store = new Map();
+          topicNameStoresForTest.set(namespace, store);
+        }
+        return {
+          register: async (key: string, value: TopicNameEntry) => {
+            store.set(key, value);
+          },
+          entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
+          delete: async (key: string) => store.delete(key),
+          clear: async () => {
+            store.clear();
+          },
+        };
+      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
     },
-    entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
-    delete: async (key) => store.delete(key),
-    clear: async () => {
-      store.clear();
-    },
-  };
-});
+    channel: {},
+  } as TelegramRuntime);
+}
 
 export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
@@ -224,7 +230,8 @@ beforeEach(() => {
   telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
   topicNameStoresForTest.clear();
-  resetTopicNameCacheForTest();
+  resetTelegramTopicNameCacheForTest();
+  installTopicNameRuntimeForTest();
   resetSaveMediaBufferMock();
   resetUndiciFetchMock();
   resetReadRemoteMediaBufferMock();

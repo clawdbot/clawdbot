@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { vi } from "vitest";
 import { setIMessageRuntime } from "../runtime.js";
 
 function createIMessageTestEnv(): NodeJS.ProcessEnv {
@@ -49,6 +50,48 @@ export function installIMessageStateRuntimeForTest(): void {
     },
     channel: {},
   } as PluginRuntime);
+  createIMessagePluginStateSyncStoreForTest({
+    namespace: "imessage.reply-cache",
+    maxEntries: 2000,
+  }).entries();
+  createIMessagePluginStateSyncStoreForTest({
+    namespace: "imessage.reply-cache-counter",
+    maxEntries: 1,
+  }).entries();
+}
+
+export async function loadFreshIMessageReplyCacheForTest(options?: {
+  preservePersistentState?: boolean;
+}): Promise<typeof import("../monitor-reply-cache.js")> {
+  if (!options?.preservePersistentState) {
+    imessageTestEnv = createIMessageTestEnv();
+  }
+  resetPluginStateStoreForTests();
+  vi.resetModules();
+  const { setIMessageRuntime: setFreshIMessageRuntime } = await import("../runtime.js");
+  setFreshIMessageRuntime({
+    state: {
+      openKeyedStore: ((storeOptions) =>
+        createPluginStateKeyedStoreForTests("imessage", {
+          ...storeOptions,
+          env: imessageTestEnv,
+        })) as PluginRuntime["state"]["openKeyedStore"],
+      openSyncKeyedStore: ((storeOptions) =>
+        createIMessagePluginStateSyncStoreForTest(
+          storeOptions,
+        )) as PluginRuntime["state"]["openSyncKeyedStore"],
+    },
+    channel: {},
+  } as PluginRuntime);
+  createIMessagePluginStateSyncStoreForTest({
+    namespace: "imessage.reply-cache",
+    maxEntries: 2000,
+  }).entries();
+  createIMessagePluginStateSyncStoreForTest({
+    namespace: "imessage.reply-cache-counter",
+    maxEntries: 1,
+  }).entries();
+  return await import("../monitor-reply-cache.js");
 }
 
 export function installIMessageFailingStateRuntimeForTest(): void {

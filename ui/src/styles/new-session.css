@@ -36,7 +36,10 @@ openclaw-new-session-page {
    here; its margin: auto still centers whenever there is spare room. */
 .new-session-page .agent-chat__welcome {
   flex: 0 0 auto;
+  width: 100%;
+  max-width: none;
   min-height: auto;
+  box-sizing: border-box;
 }
 
 /* Draft block inside the centered welcome column; the welcome centers text,
@@ -50,13 +53,20 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-/* Cursor-style quiet trigger row. Web Awesome owns popup/listbox behavior. */
+/* Quiet chip row directly above the composer: every picker (agent, folder,
+   where) shares one trigger treatment so the row reads as a single control
+   strip. Web Awesome owns popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 16px;
-  padding: 0 2px;
+  justify-content: flex-start;
+  gap: 4px 2px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 .new-session-page__select {
@@ -66,14 +76,16 @@ openclaw-new-session-page {
 .new-session-page__trigger {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 0;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   font-size: 12px;
   color: var(--muted);
   list-style: none;
   cursor: pointer;
   user-select: none;
   border: 0;
+  border-radius: 999px;
   background: transparent;
   font-family: inherit;
 }
@@ -82,9 +94,15 @@ openclaw-new-session-page {
   display: none;
 }
 
-.new-session-page__trigger:hover,
+.new-session-page__trigger:hover:not(:disabled),
 .new-session-page__trigger[aria-expanded="true"] {
   color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.new-session-page__trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .new-session-page__trigger--disabled {
@@ -94,6 +112,7 @@ openclaw-new-session-page {
 
 .new-session-page__trigger--disabled:hover {
   color: var(--muted);
+  background: transparent;
 }
 
 /* Keep the anchor focusable while Web Awesome finishes its hide animation. */
@@ -104,6 +123,10 @@ openclaw-new-session-page {
 .new-session-page__runtime {
   color: var(--text);
   cursor: default;
+}
+
+.new-session-page__runtime:hover {
+  background: transparent;
 }
 
 .new-session-page__catalog-unavailable {
@@ -200,6 +223,14 @@ wa-popover.new-session-page__select::part(body) {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+/* Context line inside a picker menu, e.g. which repo syncs to a cloud worker. */
+.new-session-page__menu-note {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 /* The folder menu hosts the directory browser; wider than the list menus. */
 wa-popover.new-session-page__select--folder::part(body) {
   width: min(420px, calc(100vw - 24px));
@@ -212,30 +243,9 @@ wa-popover.new-session-page__select--folder::part(body) {
   width: 100%;
 }
 
-.new-session-page__agent-select::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.new-session-page__agent-select::part(combobox) {
-  min-height: 0;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  box-shadow: none;
-}
-
-.new-session-page__agent-select::part(display-input) {
-  font-size: 12px;
-  color: inherit;
+/* The chip row already spaces itself; keep the composer snug beneath it. */
+.new-session-page__composer.agent-chat__composer-shell {
+  margin-top: 0;
 }
 
 .new-session-page__target-icon {
@@ -353,9 +363,52 @@ wa-popover.new-session-page__select--folder::part(body) {
   border-top: 1px solid var(--border);
 }
 
-.new-session-page__error {
+.new-session-page__browser > .new-session-page__error {
+  padding: 8px 10px 0;
   font-size: 12px;
   color: var(--danger);
+}
+
+.new-session-page__alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: fit-content;
+  max-width: min(48rem, calc(100% - 36px));
+  margin: 4px auto 2px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  text-align: left;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.new-session-page__alert-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.new-session-page__alert-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.new-session-page__alert-message {
+  min-width: 0;
+  padding-top: 3px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .new-session-page__browser-use {
@@ -385,7 +438,7 @@ wa-popover.new-session-page__select--folder::part(body) {
 
   .new-session-page__triggers {
     position: relative;
-    gap: 4px 12px;
+    gap: 4px 2px;
   }
 
   .new-session-page__select {

@@ -15,7 +15,7 @@ import {
 
 const actualDeliveryPlanModule =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
-const { createCronPromptExecutor, executeCronRun } = await import("./run-executor.js");
+const { executeCronRun } = await import("./run-executor.js");
 const { resolveCronSourceDeliveryPlan, resolveFallbackCronSourceDeliveryPlan } =
   await import("./source-delivery-fallback.js");
 
@@ -44,36 +44,20 @@ function makeJob(
   } as CronJob;
 }
 
-function makeExecutor(overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>) {
+function makeExecutor(overrides: Record<string, unknown>) {
   const resolvedDelivery = overrides.resolvedDelivery ?? {};
-
-  return createCronPromptExecutor({
-    cfg: {},
-    cfgWithAgentDefaults: {},
-    job: makeJob(),
-    agentId: "default",
-    agentDir: "/tmp/agent-dir",
-    agentSessionKey: "cron:source-delivery-guard",
-    runSessionKey: "cron:source-delivery-guard:run:test-session-id",
-    workspaceDir: "/tmp/workspace",
-    resolvedVerboseLevel: "off",
-    thinkLevel: undefined,
-    timeoutMs: 60_000,
-    suppressExecNotifyOnExit: true,
-    skillsSnapshot: emptySkillsSnapshot,
-    agentPayload: null,
-    useSubagentFallbacks: false,
-    liveSelection: {
-      provider: "openai",
-      model: "gpt-5.4",
-    },
-    cronSession: makeCronSession() as MutableCronSession,
-    abortReason: () => "aborted",
-    resolvedDeliveryOk: true,
-    messageToolPromptEnabled: true,
-    ...overrides,
-    resolvedDelivery,
-  });
+  return {
+    runPrompt: async (commandBody: string) =>
+      await executeCronRun(
+        makeExecuteCronRunParams({
+          resolvedDeliveryOk: true,
+          messageToolPromptEnabled: true,
+          ...overrides,
+          resolvedDelivery,
+          commandBody,
+        }),
+      ),
+  };
 }
 
 function getEmbeddedRunArg(): Record<string, unknown> {
@@ -256,7 +240,7 @@ describe("resolveCronSourceDeliveryPlan", () => {
   }
 });
 
-describe("createCronPromptExecutor sourceDelivery guard", () => {
+describe("executeCronRun sourceDelivery mapping", () => {
   let previousFastTestEnv: string | undefined;
 
   beforeEach(() => {

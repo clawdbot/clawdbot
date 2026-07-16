@@ -45,6 +45,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,
     terminalTurnNotificationQueued: false,
+    // App-server collapses user interrupts and replacements to "interrupted";
+    // this marker remains the user-interrupt hint until Codex exposes abortReason.
+    sawCodexInterruptMarker: false,
     timedOut: false,
     turnCompletionIdleTimedOut: false,
     turnWatchTimeoutKind: undefined as CodexAttemptTurnWatchTimeoutKind | undefined,

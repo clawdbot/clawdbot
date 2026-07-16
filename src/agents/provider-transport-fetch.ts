@@ -923,3 +923,4 @@ export function buildGuardedModelFetch(
       : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

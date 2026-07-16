@@ -345,6 +345,9 @@ describe("provider auth profile helpers", () => {
       deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=javascript:alert(1);"),
     ).toBeNull();
     expect(deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=://bad;")).toBeNull();
+    expect(
+      deriveCopilotApiBaseUrlFromToken("copilot-token;proxy-ep=proxy.attacker.example;"),
+    ).toBeNull();
   });
 
   it("rejects Copilot token expiry values outside the supported date range", async () => {
@@ -1208,3 +1211,4 @@ describe("Copilot data-residency domain resolution", () => {
     expect(result.baseUrl).toBe("https://copilot-api.acme.ghe.com");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

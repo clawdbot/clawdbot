@@ -24,51 +24,49 @@ import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.j
 import {
   clearEmbeddedSessionPromptStates,
   getEmbeddedSessionPromptState,
+  type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
 
-let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
-let calculateMaxToolResultChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultChars;
 let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.js").calculateMaxToolResultCharsWithCap;
 let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
-let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
-let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
-let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
-let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
   // Load after each setup so module-level constants and mocks stay isolated
   // across persisted-session and live-truncation tests.
   ({
-    truncateToolResultText,
     truncateToolResultMessage,
-    calculateMaxToolResultChars,
     calculateMaxToolResultCharsWithCap,
     resolveAutoLiveToolResultMaxChars,
-    getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
-    truncateOversizedToolResultsInRuntimeTranscript,
-    truncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInActiveTarget,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
-    createToolResultPromptProjectionState,
   } = await import("./tool-result-truncation.js"));
 }
 
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
+
+function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
+  return {
+    replacements: new Map(),
+    frozen: new Set(),
+    ambiguousBaseKeys: new Set(),
+    sourceTextByKey: new Map(),
+  };
+}
 
 beforeEach(async () => {
   testTimestamp = 1;
@@ -128,6 +126,54 @@ function getFirstToolResultText(message: AgentMessage | ToolResultMessage): stri
   }
   const firstBlock = message.content[0];
   return firstBlock && "text" in firstBlock ? firstBlock.text : "";
+}
+
+function truncateToolResultText(
+  text: string,
+  maxChars: number,
+  options?: Parameters<typeof truncateToolResultMessage>[2],
+): string {
+  return getFirstToolResultText(truncateToolResultMessage(makeToolResult(text), maxChars, options));
+}
+
+function calculateMaxToolResultChars(contextWindowTokens: number): number {
+  return resolveLiveToolResultMaxChars({ contextWindowTokens });
+}
+
+function getToolResultTextLength(message: AgentMessage): number {
+  if (message.role !== "toolResult") {
+    return 0;
+  }
+  return message.content.reduce((length, block) => {
+    if (!block || typeof block !== "object" || !("text" in block)) {
+      return length;
+    }
+    return length + (typeof block.text === "string" ? block.text.length : 0);
+  }, 0);
+}
+
+async function truncateSessionThroughActiveTarget(params: {
+  sessionFile: string;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  protectTrailingToolResults?: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+}) {
+  return await truncateOversizedToolResultsInActiveTarget({
+    scope: {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionId: params.sessionId ?? "tool-result-truncation-test",
+      sessionKey: params.sessionKey ?? "agent:main:tool-result-truncation-test",
+      sessionFile: params.sessionFile,
+    },
+    contextWindowTokens: params.contextWindowTokens,
+    maxCharsOverride: params.maxCharsOverride,
+    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+    protectTrailingToolResults: params.protectTrailingToolResults,
+  });
 }
 
 async function createTmpDir(): Promise<string> {
@@ -591,7 +637,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeToolResult("y".repeat(15_000), "current_2"),
     ];
     const messages = [...prefix, ...suffix];
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
 
     const first = truncateOversizedToolResultsInMessages(
       messages,
@@ -615,7 +661,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(messages).toEqual([...prefix, ...suffix]);
 
-    const stableState = createToolResultPromptProjectionState();
+    const stableState = createPromptProjectionStateForTest();
     const stableHistory = [
       makeToolResult("a".repeat(4_000), "stable_1"),
       makeToolResult("b".repeat(4_000), "stable_2"),
@@ -702,7 +748,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves fresh trailing tool results when aggregate history is already saturated", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -740,7 +786,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves fresh tool results through a trailing runtime context carrier", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -815,7 +861,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("preserves multiple fresh tool results before queued steering", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -885,7 +931,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("shrinks deferred fresh results when frozen history cannot satisfy the hard cap", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [
       makeToolResult("a".repeat(4_000), "history_a"),
       makeToolResult("b".repeat(4_000), "history_b"),
@@ -940,7 +986,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("caps oversized fresh trailing tool results without clearing them for aggregate recovery", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const history: AgentMessage[] = [];
     for (let index = 0; index < 50; index++) {
       history.push(makeAssistantMessage(`call ${index}`));
@@ -977,7 +1023,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const messages: AgentMessage[] = [makeUserMessage("run several tools")];
     for (let index = 0; index < 5; index++) {
       messages.push(makeToolResult(String(index).repeat(8_000), `fresh_${index}`));
@@ -1203,7 +1249,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("does not restore filtered image blocks when reusing a projection", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const source = makeToolResult("x".repeat(15_000), "image_call");
     source.content = [
       { type: "image", data: "filtered-after-conversion" },
@@ -1236,7 +1282,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
   });
 
   it("freezes #99495 ambiguous-key projections across filtered history", () => {
-    const projectionState = createToolResultPromptProjectionState();
+    const projectionState = createPromptProjectionStateForTest();
     const duplicate = (text: string) => ({
       role: "toolResult" as const,
       toolCallId: "duplicate-call",
@@ -1298,7 +1344,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+    const result = await truncateOversizedToolResultsInActiveTarget({
       scope: { ...scope, sessionFile },
       contextWindowTokens: 100,
     });
@@ -1415,7 +1461,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       },
     ]);
 
-    const result = await truncateOversizedToolResultsInRuntimeTranscript({
+    const result = await truncateOversizedToolResultsInActiveTarget({
       scope: { ...scope, sessionFile },
       contextWindowTokens: 100,
     });
@@ -1472,7 +1518,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       sessionKey: "agent:main:test",
       contextWindowTokens: 100,
@@ -1532,7 +1578,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       entry.type === "message" ? getFirstToolResultText(entry.message) : "",
     );
 
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       contextWindowTokens: 128_000,
       maxCharsOverride: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -1563,7 +1609,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
     const sessionFile = sm.getSessionFile()!;
 
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       contextWindowTokens: 100,
     });
@@ -1594,7 +1640,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendCompaction("summary", firstKeptEntryId, 10);
     const sessionFile = sm.getSessionFile()!;
 
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       contextWindowTokens: 1_000_000,
       maxCharsOverride: 8_000,
@@ -1622,7 +1668,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult(medium, "call_3"));
     const sessionFile = sm.getSessionFile()!;
 
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       contextWindowTokens: 100,
     });
@@ -1654,7 +1700,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult(medium, "call_3"));
     const sessionFile = sm.getSessionFile()!;
 
-    const result = await truncateOversizedToolResultsInSession({
+    const result = await truncateSessionThroughActiveTarget({
       sessionFile,
       contextWindowTokens: 128_000,
       maxCharsOverride: 120,
@@ -1703,3 +1749,4 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("truncated");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

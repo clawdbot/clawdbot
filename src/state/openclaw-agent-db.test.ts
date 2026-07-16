@@ -1862,3 +1862,4 @@ describe("openclaw agent database", () => {
     expect(walBytesAfterExit).toBe(0);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

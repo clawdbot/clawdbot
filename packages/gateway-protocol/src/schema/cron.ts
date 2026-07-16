@@ -1,5 +1,4 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import type { Static } from "typebox";
 import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -36,7 +35,7 @@ function cronAgentTurnPayloadSchema(params: {
 }
 
 /** Builds command payload variants while preserving create/patch argv optionality. */
-function cronCommandPayloadSchema(params: { argv: TSchema }) {
+function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }) {
   return closedObject({
     kind: Type.Literal("command"),
     argv: params.argv,
@@ -46,6 +45,8 @@ function cronCommandPayloadSchema(params: { argv: TSchema }) {
     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+    toolsAllow: Type.Optional(params.toolsAllow),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   });
 }
 
@@ -228,6 +229,8 @@ export const CronPayloadSchema = Type.Union([
   closedObject({
     kind: Type.Literal("systemEvent"),
     text: NonEmptyString,
+    toolsAllow: Type.Optional(Type.Array(Type.String())),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   }),
   cronAgentTurnPayloadSchema({
     message: NonEmptyString,
@@ -238,6 +241,7 @@ export const CronPayloadSchema = Type.Union([
   }),
   cronCommandPayloadSchema({
     argv: Type.Array(NonEmptyString, { minItems: 1 }),
+    toolsAllow: Type.Array(Type.String()),
   }),
 ]);
 
@@ -246,6 +250,8 @@ export const CronPayloadPatchSchema = Type.Union([
   closedObject({
     kind: Type.Literal("systemEvent"),
     text: Type.Optional(NonEmptyString),
+    toolsAllow: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+    toolsAllowIsDefault: Type.Optional(Type.Boolean()),
   }),
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
@@ -256,6 +262,7 @@ export const CronPayloadPatchSchema = Type.Union([
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
 ]);
 
@@ -567,17 +574,3 @@ export const CronRunLogEntrySchema = closedObject({
   ),
   jobName: Type.Optional(Type.String()),
 });
-
-// Wire types derive from local schemas without importing the ProtocolSchemas registry.
-export type CronJob = Static<typeof CronJobSchema>;
-export type CronListParams = Static<typeof CronListParamsSchema>;
-export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
-export type CronGetParams = Static<typeof CronGetParamsSchema>;
-export type CronAddParams = Static<typeof CronAddParamsSchema>;
-export type CronAddResult = Static<typeof CronAddResultSchema>;
-export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
-export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
-export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
-export type CronRunParams = Static<typeof CronRunParamsSchema>;
-export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
-export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;

@@ -18,10 +18,7 @@ import {
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
-import {
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripRegexes,
-} from "./group-intro.js";
+import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -85,7 +82,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         groups: {
           resolveRequireMention: resolveWhatsAppGroupRequireMention,
           resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-          resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,

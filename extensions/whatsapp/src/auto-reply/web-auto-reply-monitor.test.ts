@@ -9,7 +9,7 @@ import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
-import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
+import { buildInboundLine } from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
@@ -822,18 +822,24 @@ describe("buildInboundLine", () => {
   });
 });
 
-describe("formatReplyContext", () => {
-  it("returns null when replyToBody is missing", () => {
-    expect(formatReplyContext({} as never)).toBeNull();
+describe("buildInboundLine reply context", () => {
+  it("omits reply context when replyToBody is missing", () => {
+    const line = buildInboundLine({
+      cfg: makeInboundCfg(""),
+      agentId: "main",
+      msg: createDirectMessage({ body: "ping" }),
+      envelope: { includeTimestamp: false },
+    });
+    expect(line).not.toContain("[Replying to");
   });
 
   it("uses unknown sender label when reply sender is absent", () => {
-    expect(
-      formatReplyContext(
-        createDirectMessage({
-          replyToBody: "original",
-        }),
-      ),
-    ).toBe("[Replying to unknown sender]\noriginal\n[/Replying]");
+    const line = buildInboundLine({
+      cfg: makeInboundCfg(""),
+      agentId: "main",
+      msg: createDirectMessage({ body: "ping", replyToBody: "original" }),
+      envelope: { includeTimestamp: false },
+    });
+    expect(line).toContain("[Replying to unknown sender]\noriginal\n[/Replying]");
   });
 });

@@ -9,7 +9,8 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import { sweepCronRunSessions } from "./session-reaper.js";
+import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
@@ -42,30 +43,6 @@ function readSessionEntries(storePath: string): Record<string, SessionEntry> {
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
-
-describe("resolveRetentionMs", () => {
-  it("returns 24h default when no config", () => {
-    expect(resolveRetentionMs()).toBe(24 * 3_600_000);
-  });
-
-  it("returns 24h default when config is empty", () => {
-    expect(resolveRetentionMs({})).toBe(24 * 3_600_000);
-  });
-
-  it("parses duration string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "1h" })).toBe(3_600_000);
-    expect(resolveRetentionMs({ sessionRetention: "7d" })).toBe(7 * 86_400_000);
-    expect(resolveRetentionMs({ sessionRetention: "30m" })).toBe(30 * 60_000);
-  });
-
-  it("returns null when disabled", () => {
-    expect(resolveRetentionMs({ sessionRetention: false })).toBeNull();
-  });
-
-  it("falls back to default on invalid string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(24 * 3_600_000);
-  });
-});
 
 describe("isCronRunSessionKey", () => {
   it("matches cron run session keys", () => {
@@ -167,6 +144,26 @@ describe("sweepCronRunSessions", () => {
       sessionId: "regular-session",
       updatedAt: now - 100 * 3_600_000,
     });
+  });
+
+  it("falls back to the default retention when the configured duration is invalid", async () => {
+    const now = Date.now();
+    await seedSessionEntries(storePath, {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: "not-a-duration" },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result).toEqual({ swept: true, pruned: 1 });
   });
 
   it("preserves expired continuation rows while generated media is pending", async () => {

@@ -30,10 +30,8 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import {
-  registerGeneratedMediaTaskActivity,
-  resetGeneratedMediaTaskActivityForTests,
-} from "../../tasks/generated-media-task-activity.js";
+import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -3638,3 +3636,4 @@ describe("embedded attempt harness pinning", () => {
     expect(firstEmbeddedAgentArg()).not.toHaveProperty("agentHarnessId", "claude-cli");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

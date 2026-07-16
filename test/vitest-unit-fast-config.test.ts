@@ -5,18 +5,22 @@ import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import {
   classifyUnitFastTestFileContent,
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
   forcedUnitFastTestFiles,
+  getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
   getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
   isUnitFastTestFile,
+  isUnitFastIsolatedTestFile,
   isUnitFastTimerTestFile,
   resolveUnitFastTestIncludePattern,
+  resolveUnitFastIsolatedTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
@@ -62,6 +66,7 @@ describe("unit-fast vitest lane", () => {
   let configProbeResult: ReturnType<typeof spawnNodeEvalSync>;
   let unitFastConfig: ReturnType<typeof createUnitFastVitestConfig>;
   let unitFastTestFiles: ReturnType<typeof getUnitFastTestFiles>;
+  let unitFastIsolatedTestFiles: ReturnType<typeof getUnitFastIsolatedTestFiles>;
   let unitFastTimerTestFiles: ReturnType<typeof getUnitFastTimerTestFiles>;
   let unitFastAnalysis: ReturnType<typeof collectUnitFastTestFileAnalysis>;
   let broadCandidates: ReturnType<typeof collectBroadUnitFastTestCandidates>;
@@ -137,6 +142,7 @@ describe("unit-fast vitest lane", () => {
     });
     unitFastConfig = createUnitFastVitestConfig({});
     unitFastTestFiles = getUnitFastTestFiles();
+    unitFastIsolatedTestFiles = getUnitFastIsolatedTestFiles();
     unitFastTimerTestFiles = getUnitFastTimerTestFiles();
     unitFastAnalysis = collectUnitFastTestFileAnalysis();
     currentCandidates = collectUnitFastTestCandidates();
@@ -170,30 +176,10 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
-    expect(testConfig.include).toContain("src/entry.version-fast-path.test.ts");
-    expect(testConfig.include).toContain("src/flows/doctor-startup-channel-maintenance.test.ts");
-    expect(testConfig.include).toContain("src/crestodian/rescue-policy.test.ts");
-    expect(testConfig.include).toContain("src/crestodian/assistant.configured.test.ts");
-    expect(testConfig.include).toContain("src/flows/search-setup.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
-    expect(testConfig.include).toContain("src/proxy-capture/proxy-server.test.ts");
-    expect(testConfig.include).toContain("src/talk/agent-consult-tool.test.ts");
     expect(testConfig.include).toContain("src/sessions/session-lifecycle-events.test.ts");
-    expect(testConfig.include).toContain("src/sessions/transcript-events.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-channel-source-config-slack.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-config-symlink.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-exec-sandbox-host.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-gateway.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-gateway-auth-selection.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-gateway-http-auth.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-gateway-tools-http.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-loopback-logging.test.ts");
-    expect(testConfig.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
-    expect(testConfig.include).toContain("src/security/dangerous-config-flags.test.ts");
-    expect(testConfig.include).toContain("src/security/context-visibility.test.ts");
-    expect(testConfig.include).toContain("src/security/safe-regex.test.ts");
+    expect(testConfig.include).not.toEqual(expect.arrayContaining(unitFastIsolatedTestFiles));
   });
 
   it("does not treat moved config paths as CLI include filters", () => {
@@ -215,7 +201,7 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/auto-reply/reply/dispatch-from-config.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/acp/runtime/session-meta.test.ts")).toBe(false);
-    expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/system-agent/assistant.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/flows/channel-setup.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/flows/doctor-health-contributions.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
@@ -237,7 +223,7 @@ describe("unit-fast vitest lane", () => {
     );
   });
 
-  it("routes audited stateful-looking tests through the fast lane", () => {
+  it("routes audited stateful-looking tests through the isolated fast lane", () => {
     const forcedFileSet = new Set(forcedUnitFastTestFiles);
     const forcedAnalysisCount = countMatching(unitFastAnalysis, (entry) =>
       forcedFileSet.has(entry.file),
@@ -247,9 +233,39 @@ describe("unit-fast vitest lane", () => {
     for (const file of forcedUnitFastTestFiles) {
       expect(unitFastTestFiles).toContain(file);
       expect(isUnitFastTestFile(file)).toBe(true);
+      if (unitFastTimerTestFiles.includes(file)) {
+        expect(unitFastIsolatedTestFiles).not.toContain(file);
+      } else {
+        expect(unitFastIsolatedTestFiles).toContain(file);
+        expect(isUnitFastIsolatedTestFile(file)).toBe(true);
+        expect(resolveUnitFastTestIncludePattern(file)).toBeNull();
+        expect(resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
+      }
     }
     const unroutedForcedFiles = collectUnroutedForcedFiles(unitFastAnalysis, forcedFileSet);
     expect(unroutedForcedFiles).toStrictEqual([]);
+
+    const isolatedConfig = requireTestConfig(createUnitFastIsolatedVitestConfig({}));
+    expect(isolatedConfig.isolate).toBe(true);
+    expect(isolatedConfig.runner).toBeUndefined();
+    expect(isolatedConfig.include).toEqual(unitFastIsolatedTestFiles);
+    expect(isolatedConfig.setupFiles).toStrictEqual([
+      expect.stringMatching(ENV_ISOLATION_SETUP_PATH),
+    ]);
+  });
+
+  it("isolates tests that import stateful test helpers", () => {
+    const files = [
+      "src/agents/auth-profiles/oauth-refresh-error.test.ts",
+      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
+    ];
+    for (const file of files) {
+      const analysis = unitFastAnalysis.find((entry) => entry.file === file);
+      expect(analysis?.reasons).toContain("stateful-test-helper");
+      expect(unitFastIsolatedTestFiles).toContain(file);
+      expect(resolveUnitFastTestIncludePattern(file)).toBeNull();
+      expect(resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
+    }
   });
 
   it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {
@@ -265,8 +281,10 @@ describe("unit-fast vitest lane", () => {
     }
 
     const fastConfig = requireTestConfig(unitFastConfig);
+    const isolatedConfig = requireTestConfig(createUnitFastIsolatedVitestConfig({}));
     const timerConfig = requireTestConfig(createUnitFastFakeTimersVitestConfig({}));
     expect(fastConfig.include).not.toEqual(expect.arrayContaining(unitFastTimerTestFiles));
+    expect(isolatedConfig.include).not.toEqual(expect.arrayContaining(unitFastTimerTestFiles));
     expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
     expect(timerConfig.fileParallelism).toBe(false);
     expect(timerConfig.maxWorkers).toBe(1);

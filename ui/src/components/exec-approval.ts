@@ -177,8 +177,8 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
       ? t("execApproval.expiresIn", { time: formatRemaining(remainingMs) })
       : t("execApproval.expired");
   const queueCount = props.queue.length;
-  const isPlugin = active.kind === "plugin";
-  const title = isPlugin
+  const isStructured = active.kind !== "exec";
+  const title = isStructured
     ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
     : t("execApproval.execApprovalNeeded");
   const titleId = "exec-approval-title";
@@ -203,7 +203,7 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
               </div>`
             : nothing}
         </div>
-        ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
+        ${isStructured ? renderPluginBody(active) : renderExecBody(request)}
         ${renderUnavailableDecisionWarning(active, decisions)}
         ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
         <div class="exec-approval-actions">

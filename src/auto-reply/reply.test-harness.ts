@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 
 type ReplyRuntimeMocks = {
   runEmbeddedAgent: Mock;

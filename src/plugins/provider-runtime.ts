@@ -15,6 +15,7 @@ import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../agents/provider-secret-egress.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -646,7 +647,20 @@ export async function prepareProviderRuntimeAuth(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderPrepareRuntimeAuthContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth?.(params.context);
+  const prepareRuntimeAuth = resolveProviderRuntimePlugin(params)?.prepareRuntimeAuth;
+  if (!prepareRuntimeAuth) {
+    return undefined;
+  }
+  // Secret material crosses into provider code only when that provider owns an
+  // auth hook. Callers can safely pass sentinels without probing plugin state.
+  const preparedInput = unwrapSecretSentinelsForProviderEgress(
+    params.context.apiKey,
+    "provider runtime auth exchange",
+  );
+  return await prepareRuntimeAuth({
+    ...params.context,
+    apiKey: preparedInput,
+  });
 }
 
 export async function resolveProviderUsageAuthWithPlugin(params: {
@@ -1079,3 +1093,4 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   }
   return supplemental;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

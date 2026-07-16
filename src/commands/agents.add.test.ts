@@ -115,6 +115,7 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import { agentsAddCommand, testing } from "./agents.commands.add.js";
 
 const runtime = createTestRuntime();
+const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
 
 describe("agents add command", () => {
   const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
@@ -180,6 +181,42 @@ describe("agents add command", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
+
+  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
+    "rejects reserved system-agent id %s",
+    async (name) => {
+      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+
+      await agentsAddCommand({ name, workspace: "/tmp/reserved" }, runtime, { hasFlags: true });
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        `"${name}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
+    "rejects reserved system-agent id %s from an interactive positional argument",
+    async (name) => {
+      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+      const prompter = {
+        intro: vi.fn(),
+        text: vi.fn(),
+        confirm: vi.fn(),
+        note: vi.fn(),
+        outro: vi.fn(),
+      };
+      wizardMocks.createClackPrompter.mockReturnValue(prompter);
+
+      await agentsAddCommand({ name }, runtime);
+
+      expect(prompter.outro).toHaveBeenCalledWith(`"${name}" is reserved. Choose another name.`);
+      expect(prompter.text).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("exits with code 1 when the interactive wizard is cancelled", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });

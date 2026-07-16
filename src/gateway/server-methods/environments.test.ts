@@ -26,10 +26,20 @@ type TestWorkerService = {
   get: (environmentId: string) => TestWorkerRecord | undefined;
   create: (profileId: string, idempotencyKey: string) => Promise<TestWorkerRecord>;
   destroy: (environmentId: string) => Promise<TestWorkerRecord>;
+  destroyUnattached: (environmentId: string) => Promise<TestWorkerRecord>;
 };
 
-function mockContext(workerEnvironmentService?: TestWorkerService) {
+function mockContext(
+  workerEnvironmentService?: TestWorkerService,
+  reconcileActive: (environmentId?: string) => Promise<void> = vi.fn(async () => {}),
+  forceDestroyEnvironment: (environmentId: string) => Promise<TestWorkerRecord> = vi.fn(async () =>
+    workerRecord({ state: "destroyed" }),
+  ),
+) {
   return {
+    logGateway: {
+      warn: vi.fn(),
+    },
     nodeRegistry: {
       listConnected: () => [
         {
@@ -44,6 +54,23 @@ function mockContext(workerEnvironmentService?: TestWorkerService) {
       ],
     },
     workerEnvironmentService,
+    ...(workerEnvironmentService
+      ? {
+          workerPlacementDispatchService: {
+            dispatch: vi.fn(),
+            forceDestroyEnvironment,
+            reconcileActive,
+          },
+          getRuntimeConfig: () => ({
+            cloudWorkers: {
+              profiles: {
+                zeta: { provider: "static-ssh", settings: {} },
+                aws: { provider: "crabbox", settings: {} },
+              },
+            },
+          }),
+        }
+      : {}),
   };
 }
 
@@ -80,6 +107,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     get: vi.fn(() => undefined),
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+    destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
     ...overrides,
   };
 }
@@ -91,13 +119,17 @@ async function callEnvironmentMethod(
     | "environments.create"
     | "environments.destroy",
   params: unknown,
-  options: { service?: TestWorkerService } = {},
+  options: {
+    service?: TestWorkerService;
+    reconcileActive?: (environmentId?: string) => Promise<void>;
+    forceDestroyEnvironment?: (environmentId: string) => Promise<TestWorkerRecord>;
+  } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
-    context: mockContext(options.service),
+    context: mockContext(options.service, options.reconcileActive, options.forceDestroyEnvironment),
   } as never);
   const call = respond.mock.calls.at(0);
   if (call === undefined) {
@@ -178,6 +210,10 @@ describe("environment gateway methods", () => {
 
     expect(ok).toBe(true);
     expect(payload).toMatchObject({
+      profiles: [
+        { id: "aws", providerId: "crabbox" },
+        { id: "zeta", providerId: "static-ssh" },
+      ],
       environments: [
         { id: "gateway", type: "local" },
         { id: "node:node-live", type: "node" },
@@ -377,8 +413,8 @@ describe("environment gateway methods", () => {
 
   it("destroys an environment idempotently", async () => {
     const destroyed = workerRecord({ state: "destroyed" });
-    const destroy = vi.fn(async () => destroyed);
-    const service = workerService({ destroy });
+    const destroyUnattached = vi.fn(async () => destroyed);
+    const service = workerService({ destroyUnattached });
     const first = await callEnvironmentMethod(
       "environments.destroy",
       { environmentId: "worker-1" },
@@ -397,12 +433,87 @@ describe("environment gateway methods", () => {
       status: "unavailable",
       worker: { state: "destroyed" },
     });
-    expect(destroy).toHaveBeenCalledTimes(2);
+    expect(destroyUnattached).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects raw destruction of a session-attached worker", async () => {
+    const service = workerService({
+      destroyUnattached: vi.fn(async () => {
+        throw new FakeWorkerServiceError(
+          "invalid_state",
+          "Attached cloud workers must be stopped through sessions.reclaim",
+        );
+      }),
+    });
+
+    const [ok, , error] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service },
+    );
+
+    expect(ok).toBe(false);
+    expect(error).toEqual({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Attached cloud workers must be stopped through sessions.reclaim",
+    });
+  });
+
+  it("durably abandons placement ownership before forced destruction", async () => {
+    const service = workerService();
+    const forceDestroyEnvironment = vi.fn(
+      async (environmentId: string) => await service.destroy(environmentId),
+    );
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1", force: true },
+      { service, forceDestroyEnvironment },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroy).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroyUnattached).not.toHaveBeenCalled();
+  });
+
+  it("reconciles active placements before returning destroyed worker state", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {});
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
+    expect(service.destroyUnattached).toHaveBeenCalledBefore(reconcileActive);
+  });
+
+  it("preserves destroyed worker success when placement reconciliation fails", async () => {
+    const service = workerService();
+    const reconcileActive = vi.fn(async () => {
+      throw new Error("temporary reconciliation failure");
+    });
+
+    const [ok, payload] = await callEnvironmentMethod(
+      "environments.destroy",
+      { environmentId: "worker-1" },
+      { service, reconcileActive },
+    );
+
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ worker: { state: "destroyed" } });
+    expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
   });
 
   it("rejects an unknown worker environment on destroy", async () => {
     const service = workerService({
-      destroy: vi.fn(async () => {
+      destroyUnattached: vi.fn(async () => {
         throw new FakeWorkerServiceError("environment_not_found", "unknown environmentId");
       }),
     });
@@ -421,7 +532,7 @@ describe("environment gateway methods", () => {
 
   it("returns unavailable without provider details when destroy fails", async () => {
     const service = workerService({
-      destroy: vi.fn(async () => {
+      destroyUnattached: vi.fn(async () => {
         throw new FakeWorkerServiceError("provider_not_found", "private provider details");
       }),
     });

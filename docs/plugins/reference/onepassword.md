@@ -16,7 +16,7 @@ Curated 1Password secrets broker with approval policy and SQLite audit history.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`
 
 ## Related docs
 

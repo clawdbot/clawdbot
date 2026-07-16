@@ -2,6 +2,7 @@
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
@@ -356,6 +357,10 @@ export type AgentEventHandlerOptions = {
   }) => { active: boolean; runIds: string[] };
 };
 
+type AgentEventHandler = ((event: AgentEventPayload) => void) & {
+  dispose: () => void;
+};
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -380,7 +385,7 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+}: AgentEventHandlerOptions): AgentEventHandler {
   const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
     const claimId = evt.contextClaimId;
     if (!claimId) {
@@ -733,6 +738,16 @@ export function createAgentEventHandler({
         // Some local lifecycle sources only carry the aborted flag. Preserve
         // that terminal state instead of misclassifying the run as a timeout.
         const terminalStopReason = evtStopReason ?? (lifecycleAborted ? "aborted" : undefined);
+        const yieldedWaiting = isAgentLifecycleYieldedWaiting({
+          phase: lifecyclePhase,
+          yielded: evt.data?.yielded,
+          livenessState: evt.data?.livenessState,
+          stopReason: terminalStopReason,
+          aborted: lifecycleAborted,
+          status: evt.data?.status,
+          timeoutPhase: evt.data?.timeoutPhase,
+          error: evt.data?.error,
+        });
         const terminalOutcome = buildAgentRunTerminalOutcome({
           status: lifecyclePhase === "error" ? "error" : lifecycleAborted ? "timeout" : "ok",
           error: evt.data?.error,
@@ -765,6 +780,7 @@ export function createAgentEventHandler({
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              yielded: yieldedWaiting ? true : undefined,
             },
           );
         }
@@ -1046,6 +1062,7 @@ export function createAgentEventHandler({
       controlUiVisible?: boolean;
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
+      yielded?: true;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1070,6 +1087,7 @@ export function createAgentEventHandler({
           ? { errorMessage: opts.abortErrorMessage }
           : {}),
         ...(stopReason && { stopReason }),
+        ...(jobState === "done" && opts?.yielded ? { yielded: true as const } : {}),
         message:
           text && !shouldSuppressSilent
             ? {
@@ -1266,7 +1284,7 @@ export function createAgentEventHandler({
     }
   };
 
-  return (event: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
     if (!shouldProcessOwnedEvent(evt)) {
       return;
@@ -1611,4 +1629,16 @@ export function createAgentEventHandler({
       }
     }
   };
+
+  return Object.assign(handleEvent, {
+    dispose: () => {
+      // Deferred provider errors belong to this gateway subscription. Letting
+      // them outlive shutdown can project stale terminal state into a successor.
+      for (const pending of pendingTerminalLifecycleErrors.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingTerminalLifecycleErrors.clear();
+    },
+  });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

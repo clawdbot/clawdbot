@@ -1,25 +1,19 @@
 import { z } from "zod";
+import type { ReefAutonomy } from "./friend-types.js";
 
 const HandleSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/);
-const PublicKeySchema = z
+const RelayUrlSchema = z
   .string()
-  .length(43)
-  .regex(/^[A-Za-z0-9_-]+$/);
-
-export const ReefFriendSchema = z
-  .object({
-    autonomy: z.enum(["notify-only", "bounded", "extended"]).default("bounded"),
-    ed25519PublicKey: PublicKeySchema,
-    x25519PublicKey: PublicKeySchema,
-    keyEpoch: z.number().int().positive(),
-    safetyNumberChanged: z.boolean().default(false),
-  })
-  .strict();
+  .regex(
+    /^[hH][tT][tT][pP][sS]?:\/\/[^\\/?#@]+\/?$/,
+    "Reef relay URL must be an HTTP(S) origin without credentials, path, query, or hash",
+  )
+  .url();
 
 export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
-    relayUrl: z.url().default("https://reefwire.ai"),
+    relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),
     guard: z
@@ -33,15 +27,13 @@ export const ReefChannelConfigSchema = z
       .strict()
       .optional(),
     stateDir: z.string().min(1).optional(),
-    friends: z.record(HandleSchema, ReefFriendSchema).default({}),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),
-    dmPolicy: z.literal("pairing").default("pairing"),
-    allowFrom: z.array(HandleSchema).default([]),
+    // Upgrade-only snapshot. Runtime trust is SQLite-backed; doctor imports valid rows.
+    friends: z.unknown().optional(),
   })
   .strict();
 
 export type ReefChannelConfig = z.infer<typeof ReefChannelConfigSchema>;
-export type ReefFriendConfig = z.infer<typeof ReefFriendSchema>;
 
 export type ReefCoreConfig = {
   channels?: { reef?: Partial<ReefChannelConfig> };
@@ -61,7 +53,11 @@ export function normalizeReefTarget(raw: string): string | undefined {
   return HandleSchema.safeParse(target).success ? target : undefined;
 }
 
-export function autonomyBudget(autonomy: ReefFriendConfig["autonomy"]): {
+export function parseReefRelayUrl(raw: string): string {
+  return new URL(RelayUrlSchema.parse(raw)).origin;
+}
+
+export function autonomyBudget(autonomy: ReefAutonomy): {
   notifyOnly: boolean;
   botLoopProtection: {
     enabled: true;

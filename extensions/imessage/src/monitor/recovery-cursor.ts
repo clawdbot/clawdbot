@@ -12,8 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { getIMessageRuntime } from "../runtime.js";
 
-export const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
-export const IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES = 64;
+const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
+const IMESSAGE_RECOVERY_CURSOR_MAX_ENTRIES = 64;
 
 // Retired catchup cursor, seeded into the recovery cursor once on upgrade (see
 // loadIMessageRecoveryCursor) so a user who had catchup enabled still recovers

@@ -227,7 +227,7 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-export function resolveVideoGenerationModelConfigForTool(params: {
+function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -241,6 +241,12 @@ export function resolveVideoGenerationModelConfigForTool(params: {
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
+    resolveVideoGenerationModelConfigForTool,
+  };
 }
 
 function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
@@ -1316,3 +1322,4 @@ export function createVideoGenerateTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

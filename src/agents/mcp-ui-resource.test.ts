@@ -8,13 +8,14 @@ import {
   resolveMcpAppSandboxPort,
 } from "./mcp-app-sandbox.js";
 import {
-  testing as mcpUiResourceTesting,
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
-  MCP_APP_RESOURCE_MAX_BYTES,
-  MCP_APP_RESOURCE_MIME_TYPE,
 } from "./mcp-ui-resource.js";
+import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 
 function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
   return {

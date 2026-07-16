@@ -575,6 +575,7 @@ describe("worker environment service", () => {
     expect(placementStore.updateAckCursors).toHaveBeenLastCalledWith({
       ...binding,
       liveSeq: 1,
+      workspaceResultPending: true,
     });
   });
 
@@ -705,6 +706,7 @@ describe("worker environment service", () => {
       ownerEpoch: identity.ownerEpoch,
       runId: identity.runId,
       liveSeq: 0,
+      workspaceResultPending: true,
     });
 
     await expect(
@@ -817,6 +819,7 @@ describe("worker environment service", () => {
           ownerEpoch: identity.ownerEpoch,
           runId: identity.runId,
           liveSeq: 1,
+          workspaceResultPending: true,
         },
       ],
     ]);
@@ -1157,6 +1160,26 @@ describe("worker environment service", () => {
         "Session session-owned is already attached to worker environment worker-session-owner",
     });
     expect(store.get(secondId)).toMatchObject({ state: "ready", attachedSessionIds: [] });
+  });
+
+  it("requires session reclaim before operator destruction of an attached worker", async () => {
+    const environmentId = "worker-session-reclaim";
+    seedReady(environmentId);
+    const workerService = createService(createProvider());
+    await workerService.attachSession({
+      environmentId,
+      ownerEpoch: 1,
+      sessionId: "session-reclaim",
+    });
+
+    await expect(workerService.destroyUnattached(environmentId)).rejects.toMatchObject({
+      code: "invalid_state",
+      message: "Attached cloud workers must be stopped through sessions.reclaim",
+    });
+    expect(store.get(environmentId)).toMatchObject({
+      state: "attached",
+      attachedSessionIds: ["session-reclaim"],
+    });
   });
 
   it("stops the tunnel after live binding rollback", async () => {
@@ -1677,6 +1700,37 @@ describe("worker environment service", () => {
       bootstrapReceipt: BOOTSTRAP_RECEIPT,
     });
     expect(bootstrapWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("tears down an attached worker whose admitted bundle is stale", async () => {
+    const environmentId = "worker-attached-stale";
+    seedBootstrapping(environmentId);
+    const ready = store.transition({
+      environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: readyPatch(environmentId, {
+        ...BOOTSTRAP_RECEIPT,
+        bundleHash: "b".repeat(64),
+      }),
+    });
+    store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: attachedPatch(environmentId, "session-1"),
+    });
+    const destroy = vi.fn(async () => {});
+
+    await createService(createProvider({ destroy })).reconcileOnce();
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      attachedSessionIds: [],
+      lastError: "Attached worker build no longer matches the Gateway",
+    });
   });
 
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
@@ -2419,3 +2473,4 @@ describe("worker environment service", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

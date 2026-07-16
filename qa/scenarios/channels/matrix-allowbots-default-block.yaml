@@ -1,0 +1,26 @@
+title: Matrix allowBots default blocks configured bot senders
+scenario:
+  id: matrix-allowbots-default-block
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-policy
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        configuredBotRoles:
+          - observer
+        groupAllowRoles:
+          - driver
+          - observer
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsDefaultBlockScenario
+  args:
+    - expr: "scenarioContext"

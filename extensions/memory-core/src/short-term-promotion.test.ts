@@ -3455,3 +3455,4 @@ describe("short-term promotion", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

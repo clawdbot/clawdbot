@@ -1,9 +1,6 @@
 // Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   createConversationBindingRecord,
@@ -21,6 +18,11 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import {
+  buildPluginBindingSessionKey,
+  normalizeChannel,
+  PLUGIN_BINDING_SESSION_PREFIX,
+} from "./conversation-binding-session-key.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -34,7 +36,6 @@ const log = createSubsystemLogger("plugins/binding");
 
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
-const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
 const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
   "openclaw-app-server:thread:",
   "openclaw-codex-app-server:thread:",
@@ -96,6 +97,7 @@ type PluginBindingMetadata = {
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 };
 
 type PluginBindingResolveResult =
@@ -155,10 +157,6 @@ const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState
 
 function getPluginBindingGlobalState(): PluginBindingGlobalState {
   return pluginBindingGlobalState;
-}
-
-function normalizeChannel(value: string): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
 }
 
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
@@ -224,28 +222,7 @@ function buildApprovalScopeKey(params: {
   ].join("::");
 }
 
-function buildPluginBindingSessionKey(params: {
-  pluginId: string;
-  channel: string;
-  accountId: string;
-  conversationId: string;
-}): string {
-  const hash = crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        pluginId: params.pluginId,
-        channel: normalizeChannel(params.channel),
-        accountId: params.accountId,
-        conversationId: params.conversationId,
-      }),
-    )
-    .digest("hex")
-    .slice(0, 24);
-  return `${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:${hash}`;
-}
-
-function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
+export function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
   return {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
@@ -451,6 +428,7 @@ function buildBindingMetadata(params: {
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -460,6 +438,7 @@ function buildBindingMetadata(params: {
     summary: normalizeOptionalString(params.summary),
     detachHint: normalizeOptionalString(params.detachHint),
     data: normalizeBindingData(params.data),
+    bindingAttemptId: normalizeOptionalString(params.bindingAttemptId),
   };
 }
 
@@ -603,20 +582,24 @@ function buildApprovalEntryFromRequest(
   };
 }
 
-async function bindConversationNow(params: {
+export async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
+  targetSessionKey?: string;
   summary?: string;
   detachHint?: string;
   data?: Record<string, unknown>;
+  bindingAttemptId?: string;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
-  const targetSessionKey = buildPluginBindingSessionKey({
-    pluginId: params.identity.pluginId,
-    channel: ref.channel,
-    accountId: ref.accountId,
-    conversationId: ref.conversationId,
-  });
+  const targetSessionKey =
+    normalizeOptionalString(params.targetSessionKey) ??
+    buildPluginBindingSessionKey({
+      pluginId: params.identity.pluginId,
+      channel: ref.channel,
+      accountId: ref.accountId,
+      conversationId: ref.conversationId,
+    });
   const record = await createConversationBindingRecord({
     targetSessionKey,
     targetKind: "session",
@@ -629,6 +612,7 @@ async function bindConversationNow(params: {
       summary: params.summary,
       detachHint: params.detachHint,
       data: params.data,
+      bindingAttemptId: params.bindingAttemptId,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -1018,3 +1002,4 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
   }
   return `Allowed ${params.request.pluginName ?? params.request.pluginId} to bind this conversation once.${summarySuffix}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

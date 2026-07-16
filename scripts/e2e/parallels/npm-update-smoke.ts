@@ -80,6 +80,7 @@ interface Job {
   lastPhase: string;
   logPath: string;
   promise: Promise<number>;
+  retry?: () => Job;
   rerunCommand: string;
   startedAt: number;
 }
@@ -689,17 +690,7 @@ export class NpmUpdateSmoke {
         }),
       );
     }
-    await this.monitorJobs("fresh", jobs);
-    for (const job of jobs) {
-      const status = (await job.promise) === 0 ? "pass" : "fail";
-      const platform = this.platformFromLabel(job.label);
-      this.freshStatus[platform] = status;
-      this.recordTiming("fresh", job, status);
-      if (status !== "pass") {
-        this.dumpLogTail(job.logPath);
-        die(`${job.label} fresh baseline failed; rerun: ${job.rerunCommand}`);
-      }
-    }
+    await this.finishFreshJobs("fresh", "fresh baseline", jobs, this.freshStatus);
   }
 
   private async runFreshTargetInstalls(): Promise<void> {
@@ -735,15 +726,48 @@ export class NpmUpdateSmoke {
         ),
       );
     }
-    await this.monitorJobs("fresh-target", jobs);
+    await this.finishFreshJobs("fresh-target", "fresh target", jobs, this.freshTargetStatus);
+  }
+
+  private async finishFreshJobs(
+    phase: "fresh" | "fresh-target",
+    failureLabel: string,
+    jobs: Job[],
+    statuses: Record<Platform, string>,
+  ): Promise<void> {
+    await this.monitorJobs(phase, jobs);
+    const retries: Job[] = [];
     for (const job of jobs) {
+      const platform = this.platformFromLabel(job.label);
+      if ((await job.promise) === 0) {
+        statuses[platform] = "pass";
+        this.recordTiming(phase, job, "pass");
+        continue;
+      }
+      statuses[platform] = "retry";
+      this.recordTiming(phase, job, "retry");
+      this.dumpLogTail(job.logPath);
+      // Each fresh wrapper restores its baseline snapshot before running. Retry the
+      // whole lane so a failed install or guest session cannot leak partial state.
+      say(`${job.label} ${failureLabel} failed; retrying once from restored snapshot`);
+      const retry = job.retry?.();
+      if (!retry) {
+        die(`${job.label} ${failureLabel} failed; rerun: ${job.rerunCommand}`);
+      }
+      retries.push(retry);
+    }
+    if (retries.length === 0) {
+      return;
+    }
+    await this.monitorJobs(`${phase}-retry`, retries);
+    for (const job of retries) {
       const status = (await job.promise) === 0 ? "pass" : "fail";
       const platform = this.platformFromLabel(job.label);
-      this.freshTargetStatus[platform] = status;
-      this.recordTiming("fresh-target", job, status);
+      statuses[platform] = status;
+      this.recordTiming(phase, job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
-        die(`${job.label} fresh target failed; rerun: ${job.rerunCommand}`);
+        die(`${job.label} ${failureLabel} failed after retry; rerun: ${job.rerunCommand}`);
       }
     }
   }
@@ -755,8 +779,10 @@ export class NpmUpdateSmoke {
     env: NodeJS.ProcessEnv = {},
     packageSpec = this.packageSpec,
     phase: "fresh" | "fresh-target" = "fresh",
+    attempt = 1,
   ): Job {
-    const logPath = path.join(this.runDir, `${platform}-${phase}.log`);
+    const retrySuffix = attempt === 1 ? "" : `-retry-${attempt}`;
+    const logPath = path.join(this.runDir, `${platform}-${phase}${retrySuffix}.log`);
     const auth = this.authForPlatform(platform);
     const script = `scripts/e2e/parallels-${platform}-smoke.sh`;
     const args = [
@@ -787,6 +813,10 @@ export class NpmUpdateSmoke {
       lastPhase: "starting",
       logPath,
       promise: Promise.resolve(1),
+      retry:
+        attempt === 1
+          ? () => this.spawnFresh(label, platform, extraArgs, env, packageSpec, phase, attempt + 1)
+          : undefined,
       rerunCommand: this.formatRerun("bash", args, env),
       startedAt,
     };

@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import { ReefTransportClient } from "./transport.js";
-import type { ReefKeys } from "./types.js";
+import type { ReefKeys, RelayFriend } from "./types.js";
 
 const ts = 1_752_300_000;
 const signing = {
@@ -104,6 +104,42 @@ describe("ReefTransportClient device authentication", () => {
         bodySha256: sha256Hex(new Uint8Array()),
       }),
     ).toBe(true);
+  });
+
+  it("binds friendship responses to the exact listed peer key snapshot", async () => {
+    const calls: RequestInit[] = [];
+    const fetcher: typeof fetch = async (_input, init) => {
+      calls.push(init ?? {});
+      return Response.json({ peer: "bob", status: "active" });
+    };
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      fetcher,
+      () => ts,
+    );
+    const friend: RelayFriend = {
+      peer: "bob",
+      status: "pending",
+      initiated_by: "bob",
+      vouching_mutual: null,
+      ed25519_pub: "B".repeat(43),
+      x25519_pub: "C".repeat(43),
+      key_epoch: 2,
+    };
+
+    await expect(client.respondFriend(friend, true)).resolves.toEqual({
+      peer: "bob",
+      status: "active",
+    });
+    expect(JSON.parse(new TextDecoder().decode(calls[0]?.body as Uint8Array))).toEqual({
+      peer: "bob",
+      accept: true,
+      expected_key_epoch: 2,
+      expected_ed25519_pub: "B".repeat(43),
+      expected_x25519_pub: "C".repeat(43),
+    });
   });
 
   it("bumps ts monotonically so identical same-second requests never share a replay key", async () => {

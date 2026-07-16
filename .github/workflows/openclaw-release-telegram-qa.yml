@@ -380,12 +380,13 @@ jobs:
                   <<<"$signature_json"
               )"
             fi
-            role_name="$(
+            permission_json="$(
               gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission" \
-                --jq '.role_name'
+                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
             )"
-            if [[ "$role_name" != "admin" && "$role_name" != "maintain" ]]; then
+            permission="$(jq -r '.permission // ""' <<<"$permission_json")"
+            role_name="$(jq -r '.role_name // ""' <<<"$permission_json")"
+            if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then
               echo "Release candidate actor ${permission_actor} lacks maintain/admin access." >&2
               exit 1
             fi
@@ -1073,12 +1074,13 @@ jobs:
                   <<<"$signature_json"
               )"
             fi
-            role_name="$(
+            permission_json="$(
               gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission" \
-                --jq '.role_name'
+                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
             )"
-            [[ "$role_name" == "admin" || "$role_name" == "maintain" ]]
+            permission="$(jq -r '.permission // ""' <<<"$permission_json")"
+            role_name="$(jq -r '.role_name // ""' <<<"$permission_json")"
+            [[ "$permission" == "admin" || "$role_name" == "maintain" ]]
           fi
 
       - name: Create isolated Telegram SUT identity and launcher

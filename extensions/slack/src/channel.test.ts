@@ -1661,3 +1661,4 @@ describe("slackPlugin config", () => {
     expect(snapshot?.signingSecretStatus).toBe("configured_unavailable");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

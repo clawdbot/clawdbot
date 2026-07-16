@@ -27,8 +27,8 @@ import {
 } from "./provider-models.js";
 
 const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
-export const OLLAMA_MODELS_COMMAND = "ollama.models";
-export const OLLAMA_CHAT_COMMAND = "ollama.chat";
+const OLLAMA_MODELS_COMMAND = "ollama.models";
+const OLLAMA_CHAT_COMMAND = "ollama.chat";
 const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
 
 const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;

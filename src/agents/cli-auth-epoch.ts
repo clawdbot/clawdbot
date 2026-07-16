@@ -52,13 +52,20 @@ export const CLI_AUTH_EPOCH_VERSION = 6;
 const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 
 /** Overrides credential readers for auth-epoch unit tests. */
-export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
+function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
 }
 
 /** Restores default credential readers after auth-epoch unit tests. */
-export function resetCliAuthEpochTestDeps(): void {
+function resetCliAuthEpochTestDeps(): void {
   Object.assign(cliAuthEpochDeps, defaultCliAuthEpochDeps);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliAuthEpochTestApi")] = {
+    setCliAuthEpochTestDeps,
+    resetCliAuthEpochTestDeps,
+  };
 }
 
 function hashCliAuthEpochPart(value: string): string {

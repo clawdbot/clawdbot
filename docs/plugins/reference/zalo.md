@@ -16,7 +16,7 @@ OpenClaw Zalo channel plugin for bot and webhook chats.
 
 ## Surface
 
-channels: zalo
+channels: `zalo`
 
 ## Related docs
 

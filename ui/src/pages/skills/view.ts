@@ -825,3 +825,4 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </article>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

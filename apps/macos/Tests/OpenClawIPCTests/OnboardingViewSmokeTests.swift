@@ -54,7 +54,26 @@ struct OnboardingViewSmokeTests {
         #expect(taller - baseline == 200)
     }
 
-    @Test func `page order delegates setup after inference to Crestodian`() {
+    @Test func `onboarding window fits within a short visible screen`() {
+        let visibleFrame = NSRect(x: 0, y: 78, width: 1600, height: 626)
+        let frame = OnboardingController.initialWindowFrame(visibleFrame: visibleFrame)
+
+        #expect(frame.height == visibleFrame.height)
+        #expect(frame.minY == visibleFrame.minY)
+        #expect(frame.maxY == visibleFrame.maxY)
+    }
+
+    @Test func `short onboarding window keeps a usable scrollable page`() {
+        let short = OnboardingView.contentHeight(for: 626, usesCompactHero: false)
+        let preferred = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight,
+            usesCompactHero: false)
+
+        #expect(short == 409)
+        #expect(short < preferred)
+    }
+
+    @Test func `page order delegates setup after inference to OpenClaw`() {
         let order = OnboardingView.pageOrder(
             for: .local,
             requiresCLIInstall: false)
@@ -178,17 +197,17 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)
         var monitoredPage: Int?
-        let previousCrestodianChat = view.crestodianState.chat
+        let previousSystemAgentChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-bound"
-        view.crestodianState.isPresented = true
+        view.systemAgentState.isPresented = true
 
         view.handleConnectionModeChange { pageIndex in
             monitoredPage = pageIndex
         }
 
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.crestodianState.isPresented)
-        #expect(view.crestodianState.chat !== previousCrestodianChat)
+        #expect(!view.systemAgentState.isPresented)
+        #expect(view.systemAgentState.chat !== previousSystemAgentChat)
         #expect(monitoredPage == view.activePageIndex)
     }
 
@@ -256,7 +275,7 @@ struct OnboardingViewSmokeTests {
             defaults.removePersistentDomain(forName: suiteName)
         }
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
 
@@ -267,10 +286,10 @@ struct OnboardingViewSmokeTests {
                 state: state,
                 permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
-                crestodianDefaults: defaults)
-            let priorChat = view.crestodianState.chat
+                systemAgentDefaults: defaults)
+            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "route-a-secret"
-            view.crestodianState.isPresented = true
+            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway B",
                 serviceHost: nil,
@@ -288,12 +307,12 @@ struct OnboardingViewSmokeTests {
 
             #expect(state.connectionMode == .remote)
             #expect(view.aiSetup.manualKey.isEmpty)
-            #expect(!view.crestodianState.isPresented)
-            #expect(view.crestodianState.chat !== priorChat)
-            #expect(!OnboardingCrestodianResumeStore.isPending(
+            #expect(!view.systemAgentState.isPresented)
+            #expect(view.systemAgentState.chat !== priorChat)
+            #expect(!OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-b",
                 defaults: defaults))
-            #expect(OnboardingCrestodianResumeStore.isPending(
+            #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-a",
                 defaults: defaults))
         }
@@ -307,7 +326,7 @@ struct OnboardingViewSmokeTests {
             defaults.removePersistentDomain(forName: suiteName)
         }
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
         let state = AppState(preview: true)
@@ -322,36 +341,36 @@ struct OnboardingViewSmokeTests {
         let view = OnboardingView(
             state: state,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults)
+            systemAgentDefaults: defaults)
         view.preferredGatewayID = "gateway-a"
         view.aiSetup.manualKey = "route-a-secret"
         view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
-        let priorChat = view.crestodianState.chat
-        view.crestodianState.isPresented = true
+        let priorChat = view.systemAgentState.chat
+        view.systemAgentState.isPresented = true
         view.remoteProbeState = .ok(RemoteGatewayProbeSuccess(authSource: .sharedToken))
         view.remoteAuthIssue = .tokenMismatch
 
         view.updateManualRemoteURL("wss://gateway-b.example.test")
 
-        let editedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(
+        let editedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(
             state: state,
             preferredGatewayID: view.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID())
         #expect(view.preferredGatewayID == nil)
         #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
         #expect(editedRouteIdentity?.hasPrefix("remote:direct:") == true)
         #expect(editedRouteIdentity != "remote:id:gateway-a")
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults))
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: editedRouteIdentity,
             defaults: defaults))
         #expect(view.aiSetup.phase == .idle)
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.crestodianState.isPresented)
-        #expect(view.crestodianState.chat !== priorChat)
+        #expect(!view.systemAgentState.isPresented)
+        #expect(view.systemAgentState.chat !== priorChat)
         #expect(view.remoteProbeState == .idle)
         #expect(view.remoteAuthIssue == nil)
         #expect(gatewaySession.snapshotMakeCount() == 0)
@@ -369,7 +388,7 @@ struct OnboardingViewSmokeTests {
             defaults.removePersistentDomain(forName: suiteName)
         }
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
 
@@ -380,10 +399,10 @@ struct OnboardingViewSmokeTests {
                 state: state,
                 permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
-                crestodianDefaults: defaults)
-            let priorChat = view.crestodianState.chat
+                systemAgentDefaults: defaults)
+            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "pending-secret"
-            view.crestodianState.isPresented = true
+            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway A",
                 serviceHost: nil,
@@ -400,9 +419,9 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
 
             #expect(view.aiSetup.manualKey == "pending-secret")
-            #expect(view.crestodianState.isPresented)
-            #expect(view.crestodianState.chat === priorChat)
-            #expect(OnboardingCrestodianResumeStore.isPending(
+            #expect(view.systemAgentState.isPresented)
+            #expect(view.systemAgentState.chat === priorChat)
+            #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-a",
                 defaults: defaults))
         }
@@ -416,24 +435,24 @@ struct OnboardingViewSmokeTests {
             defaults.removePersistentDomain(forName: suiteName)
         }
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
         let state = AppState(preview: true)
         state.connectionMode = .remote
-        let view = OnboardingView(state: state, crestodianDefaults: defaults)
-        let priorChat = view.crestodianState.chat
+        let view = OnboardingView(state: state, systemAgentDefaults: defaults)
+        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-a-secret"
-        view.crestodianState.isPresented = true
+        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(state.connectionMode == .local)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.crestodianState.isPresented)
-        #expect(view.crestodianState.chat !== priorChat)
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(!view.systemAgentState.isPresented)
+        #expect(view.systemAgentState.chat !== priorChat)
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults))
     }
@@ -441,40 +460,40 @@ struct OnboardingViewSmokeTests {
     @Test func `same local selection preserves pending gateway setup state`() throws {
         let (defaults, suiteName) = try makeOnboardingResumeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
         let state = AppState(preview: true)
         state.connectionMode = .local
-        let view = OnboardingView(state: state, crestodianDefaults: defaults)
-        let priorChat = view.crestodianState.chat
+        let view = OnboardingView(state: state, systemAgentDefaults: defaults)
+        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "pending-secret"
-        view.crestodianState.isPresented = true
+        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(view.aiSetup.manualKey == "pending-secret")
-        #expect(view.crestodianState.isPresented)
-        #expect(view.crestodianState.chat === priorChat)
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(view.systemAgentState.isPresented)
+        #expect(view.systemAgentState.chat === priorChat)
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `configure later preserves in flight activation lease`() throws {
         let (defaults, suiteName) = try makeOnboardingResumeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
         let state = AppState(preview: true)
         state.connectionMode = .local
-        let view = OnboardingView(state: state, crestodianDefaults: defaults)
-        let priorChat = view.crestodianState.chat
+        let view = OnboardingView(state: state, systemAgentDefaults: defaults)
+        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "local-secret"
-        view.crestodianState.isPresented = true
+        view.systemAgentState.isPresented = true
 
         view.selectUnconfiguredGateway()
 
         #expect(state.connectionMode == .unconfigured)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.crestodianState.isPresented)
-        #expect(view.crestodianState.chat !== priorChat)
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!view.systemAgentState.isPresented)
+        #expect(view.systemAgentState.chat !== priorChat)
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test

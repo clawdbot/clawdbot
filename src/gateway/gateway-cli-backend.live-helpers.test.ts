@@ -2,7 +2,7 @@
  * Tests live helper utilities for gateway CLI backend probes.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 
 vi.mock("./client-start-readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
@@ -198,9 +198,9 @@ describe("gateway cli backend live helpers", () => {
     });
   });
 
-  it("builds Claude continuity prompts without revealing the hidden note", () => {
+  it("builds Claude continuity prompts without revealing the hidden token", () => {
     const { buildClaudeCliResumeContinuityProbe } = liveHelpers;
-    const memoryToken = "CLI-MEM-A1B2C3D4E5F6";
+    const memoryToken = "test-memory-token";
 
     const probe = buildClaudeCliResumeContinuityProbe({
       firstTurnNonce: "112233",
@@ -213,13 +213,13 @@ describe("gateway cli backend live helpers", () => {
     );
     expect(probe.resumePrompt).toBe(
       "Do not inspect files or run tools. " +
-        "What private session note were you asked to remember earlier? " +
-        "Reply with exactly: CLI backend RESUME OK 445566 <remembered-note>.",
+        "Return exactly two whitespace-separated tokens: CLI-RESUME-445566 followed by " +
+        "the exact opaque session token from the earlier turn. Do not add prose.",
     );
     expect(probe.firstTurnPrompt).not.toContain(memoryToken);
     expect(probe.resumePrompt).not.toContain(memoryToken);
     expect(probe.injectedContext).toContain(memoryToken);
-    expect(probe.expectedResumeReply).toBe("CLI backend RESUME OK 445566 CLI-MEM-A1B2C3D4E5F6.");
+    expect(probe.expectedResumeMarker).toBe("CLI-RESUME-445566");
   });
 
   it("finds only Claude-imported native session ids", () => {

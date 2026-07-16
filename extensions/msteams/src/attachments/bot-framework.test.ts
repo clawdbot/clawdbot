@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {
-  downloadMSTeamsBotFrameworkAttachment,
   downloadMSTeamsBotFrameworkAttachments,
   isBotFrameworkPersonalChatId,
 } from "./bot-framework.js";
@@ -22,6 +21,20 @@ type MockRuntime = {
   savePath: string;
   savedContentType: string;
 };
+
+type DownloadSingleAttachmentParams = Omit<
+  Parameters<typeof downloadMSTeamsBotFrameworkAttachments>[0],
+  "attachmentIds"
+> & { attachmentId: string };
+
+async function downloadMSTeamsBotFrameworkAttachment(params: DownloadSingleAttachmentParams) {
+  const { attachmentId, ...rest } = params;
+  const result = await downloadMSTeamsBotFrameworkAttachments({
+    ...rest,
+    attachmentIds: [attachmentId],
+  });
+  return result.media[0];
+}
 
 function installRuntime(): MockRuntime {
   const state: MockRuntime = {

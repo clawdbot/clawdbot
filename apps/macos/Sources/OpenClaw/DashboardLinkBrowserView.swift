@@ -106,6 +106,10 @@ final class DashboardLinkBrowserView: NSView {
     private var activeTabID: UUID?
     private let toolbar = NSVisualEffectView()
     private let tabBar = DashboardLinkBrowserTabBar()
+    private lazy var toolbarHeightConstraint = self.toolbar.heightAnchor.constraint(
+        equalToConstant: DashboardWindowLayout.linkBrowserToolbarHeight)
+    private lazy var tabBarHeightConstraint = self.tabBar.heightAnchor.constraint(
+        equalToConstant: 0)
     private let backButton = DashboardLinkBrowserView.makeButton(symbol: "chevron.left", label: "Back")
     private let forwardButton = DashboardLinkBrowserView.makeButton(symbol: "chevron.right", label: "Forward")
     private let reloadButton = DashboardLinkBrowserView.makeButton(symbol: "arrow.clockwise", label: "Reload")
@@ -162,6 +166,7 @@ final class DashboardLinkBrowserView: NSView {
         let tab = self.makeTab(requestedURL: url)
         self.tabs.append(tab)
         self.tabBar.appendTab(id: tab.id, title: self.displayTitle(for: tab), toolTip: url.absoluteString)
+        self.updateTabBarVisibility()
         self.activateTab(id: tab.id)
         let webView = tab.webView
         // Let the installed tab become observable before navigation starts.
@@ -178,6 +183,7 @@ final class DashboardLinkBrowserView: NSView {
         let tab = self.tabs.remove(at: index)
         self.dispose(tab)
         self.tabBar.removeTab(id: id)
+        self.updateTabBarVisibility()
 
         guard !self.tabs.isEmpty else {
             self.activeTabID = nil
@@ -200,6 +206,7 @@ final class DashboardLinkBrowserView: NSView {
             self.tabBar.removeTab(id: tab.id)
         }
         self.tabs = [keptTab]
+        self.updateTabBarVisibility()
         self.activateTab(id: id)
     }
 
@@ -219,6 +226,7 @@ final class DashboardLinkBrowserView: NSView {
             self.tabBar.removeTab(id: tab.id)
         }
         self.tabBar.setActiveTab(id: nil)
+        self.updateTabBarVisibility()
         self.updateChrome()
     }
 
@@ -424,14 +432,14 @@ final class DashboardLinkBrowserView: NSView {
             self.toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
             self.toolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
             self.toolbar.topAnchor.constraint(equalTo: topAnchor),
-            self.toolbar.heightAnchor.constraint(equalToConstant: 78),
+            self.toolbarHeightConstraint,
             // Browser-style header: tabs on top, navigation controls below.
             // 12pt top inset clears the window's 12pt drag overlay (it reaches
             // into wide sidebars), keeping every tab pixel clickable.
             self.tabBar.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor),
             self.tabBar.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor),
             self.tabBar.topAnchor.constraint(equalTo: self.toolbar.topAnchor, constant: 12),
-            self.tabBar.heightAnchor.constraint(equalToConstant: DashboardWindowLayout.linkBrowserTabBarHeight),
+            self.tabBarHeightConstraint,
             controls.leadingAnchor.constraint(equalTo: self.toolbar.leadingAnchor, constant: 10),
             controls.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor, constant: -10),
             controls.bottomAnchor.constraint(equalTo: self.toolbar.bottomAnchor, constant: -4),
@@ -440,6 +448,16 @@ final class DashboardLinkBrowserView: NSView {
             separator.trailingAnchor.constraint(equalTo: self.toolbar.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: self.toolbar.bottomAnchor),
         ])
+        self.updateTabBarVisibility()
+    }
+
+    private func updateTabBarVisibility() {
+        let showsTabs = self.tabs.count > 1
+        self.tabBar.isHidden = !showsTabs
+        self.tabBarHeightConstraint.constant = showsTabs ? DashboardWindowLayout.linkBrowserTabBarHeight : 0
+        self.toolbarHeightConstraint.constant = showsTabs
+            ? DashboardWindowLayout.linkBrowserToolbarWithTabsHeight
+            : DashboardWindowLayout.linkBrowserToolbarHeight
     }
 
     private func installWebView(_ webView: WKWebView) {
@@ -629,6 +647,18 @@ extension DashboardLinkBrowserView {
 
     var _testAllWebViews: [WKWebView] {
         self.tabs.map(\.webView)
+    }
+
+    var _testTabBarIsHidden: Bool {
+        self.tabBar.isHidden
+    }
+
+    var _testToolbarHeight: CGFloat {
+        self.toolbarHeightConstraint.constant
+    }
+
+    var _testTabBarHeight: CGFloat {
+        self.tabBarHeightConstraint.constant
     }
 
     func _testSelectTab(at index: Int) {

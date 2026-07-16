@@ -494,7 +494,7 @@ When a channel cannot render interactive controls, button and select values
 fall back to plain text. The fallback behavior preserves usability while
 keeping opaque callback data private:
 
-- **`command`-typed actions** render as `label: \`command\`` so users can
+- **`command`-typed actions** render as `` label: `command` `` so users can
   copy the command and run it manually in the channel input.
 - **`callback`-typed actions** and legacy **`value`** fields render as
   label-only. The opaque callback value is not exposed in fallback text.

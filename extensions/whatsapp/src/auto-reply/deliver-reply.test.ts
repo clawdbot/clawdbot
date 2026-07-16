@@ -11,7 +11,7 @@ import { createTestWebInboundMessage } from "../inbound/test-message.test-helper
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
-import { WhatsAppSocketOperationTimeoutError } from "../socket-timing.js";
+import { withWhatsAppSocketOperationTimeout } from "../socket-timing.js";
 
 const hoisted = vi.hoisted(() => ({
   runFfmpeg: vi.fn(),
@@ -186,6 +186,22 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
     const promise = run();
     await vi.runAllTimersAsync();
     return await promise;
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+}
+
+async function createSocketOperationTimeoutError(): Promise<unknown> {
+  vi.useFakeTimers();
+  try {
+    const failurePromise = withWhatsAppSocketOperationTimeout(
+      "sendMessage",
+      new Promise<never>(() => {}),
+      1_000,
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+    return await failurePromise;
   } finally {
     vi.clearAllTimers();
     vi.useRealTimers();
@@ -443,9 +459,9 @@ describe("deliverWebReply", () => {
 
   it("does not retry terminal socket operation timeouts", async () => {
     const msg = makeMsg();
-    const timeout = new WhatsAppSocketOperationTimeoutError("sendMessage", 60_000);
+    const timeout = await createSocketOperationTimeoutError();
     (
-      msg.platform.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+      msg.platform.reply as unknown as { mockRejectedValueOnce: (error: unknown) => void }
     ).mockRejectedValueOnce(timeout);
 
     await expect(

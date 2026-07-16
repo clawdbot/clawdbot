@@ -10,7 +10,7 @@ import {
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
-let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+let synologyChatPlugin: typeof import("./channel.js").synologyChatPlugin;
 
 function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
   setSynologyRuntimeConfigForTest(cfg);
@@ -43,7 +43,7 @@ function requireMockCall<TArgs extends unknown[]>(
 
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
-    ({ createSynologyChatPlugin } = await import("./channel.js"));
+    ({ synologyChatPlugin } = await import("./channel.js"));
   });
 
   beforeEach(() => {
@@ -56,7 +56,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const abortController = new AbortController();
     const cfg = {
       channels: {
@@ -109,7 +109,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const abortController = new AbortController();
     const cfg = {
       gateway: {
@@ -172,7 +172,7 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("isolates same user_id across different accounts", async () => {
-    const plugin = createSynologyChatPlugin();
+    const plugin = synologyChatPlugin;
     const alphaAbortController = new AbortController();
     const betaAbortController = new AbortController();
     const cfg = {

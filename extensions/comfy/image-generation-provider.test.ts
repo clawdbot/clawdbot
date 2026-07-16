@@ -1087,3 +1087,4 @@ describe("comfy image-generation provider", () => {
     expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

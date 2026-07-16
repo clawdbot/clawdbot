@@ -2,6 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
 export type TuiOptions = {
   local?: boolean;
@@ -22,11 +23,11 @@ export type TuiOptions = {
   forceProcessExitOnReturn?: boolean;
 };
 
-type TuiExitReason = "exit" | "return-to-crestodian";
+type TuiExitReason = "exit" | "return-to-system-agent";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
-  crestodianMessage?: string;
+  systemAgentMessage?: string;
 };
 
 export type TuiHistoryLoadResult =
@@ -168,9 +169,7 @@ export type TuiStateAccess = {
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  pendingChatRunId?: string | null;
-  pendingSubmitDraft?: { runId: string; text: string } | null;
+  pendingSubmit: TuiPendingSubmit | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

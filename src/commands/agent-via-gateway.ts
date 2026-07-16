@@ -1016,3 +1016,4 @@ export async function agentCliCommand(
     signalBridge.dispose();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

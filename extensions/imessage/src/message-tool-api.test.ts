@@ -2,13 +2,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { describeMessageTool } from "../message-tool-api.js";
 import {
-  clearCachedIMessagePrivateApiStatus,
+  getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
 
+function expireCachedPrivateApiStatus(): void {
+  setCachedIMessagePrivateApiStatus(
+    "imsg",
+    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
+    1,
+  );
+  getCachedIMessagePrivateApiStatus("imsg");
+}
+
 describe("iMessage message-tool artifact", () => {
   beforeEach(() => {
-    clearCachedIMessagePrivateApiStatus();
+    expireCachedPrivateApiStatus();
   });
 
   it("keeps poll actions discoverable until the first lazy bridge probe", () => {

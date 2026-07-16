@@ -1,9 +1,71 @@
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import type { NodeHostClient } from "./client.js";
+import type { NodeInvokeRequestPayload } from "./invoke.js";
 
-export type NodeHostWorkerGatewayResponse =
+type NodeHostWorkerGatewayResponse =
   | { type: "gateway-response"; id: string; ok: true; result: unknown }
   | { type: "gateway-response"; id: string; ok: false; error: string };
+
+type NodeHostWorkerInput =
+  | { type: "invoke"; request: NodeInvokeRequestPayload }
+  | { type: "invoke-input"; invokeId: string; seq: number; payloadJSON: string }
+  | { type: "invoke-cancel"; invokeId: string }
+  | NodeHostWorkerGatewayResponse
+  | { type: "stop" };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | null {
+  try {
+    const parsed = asRecord(JSON.parse(line));
+    const type = typeof parsed?.type === "string" ? parsed.type : "";
+    if (type === "invoke") {
+      const request = asRecord(parsed?.request);
+      if (
+        request &&
+        typeof request.id === "string" &&
+        typeof request.nodeId === "string" &&
+        typeof request.command === "string"
+      ) {
+        return { type, request: request as NodeInvokeRequestPayload };
+      }
+      return null;
+    }
+    if (type === "gateway-response") {
+      const id = typeof parsed?.id === "string" ? parsed.id : "";
+      if (!id) {
+        return null;
+      }
+      return parsed?.ok === true
+        ? { type, id, ok: true, result: parsed.result }
+        : {
+            type,
+            id,
+            ok: false,
+            error: typeof parsed?.error === "string" ? parsed.error : "Gateway request failed",
+          };
+    }
+    if (type === "invoke-input") {
+      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
+      const seq = typeof parsed?.seq === "number" ? parsed.seq : -1;
+      const payloadJSON = typeof parsed?.payloadJSON === "string" ? parsed.payloadJSON : null;
+      return invokeId && Number.isInteger(seq) && seq >= 0 && payloadJSON !== null
+        ? { type, invokeId, seq, payloadJSON }
+        : null;
+    }
+    if (type === "invoke-cancel") {
+      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
+      return invokeId ? { type, invokeId } : null;
+    }
+    return type === "stop" ? { type } : null;
+  } catch {
+    return null;
+  }
+}
 
 type PendingGatewayRequest = {
   resolve: (value: unknown) => void;
@@ -24,12 +86,6 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
   ): Promise<T> {
     if (method === "node.invoke.result") {
       this.writeMessage({ type: "invoke-result", result: params ?? {} });
-      return {} as T;
-    }
-    if (method === "node.invoke.progress") {
-      // Unreachable while the embedded app worker never enables agent runs
-      // (the only progress emitter); the Mac host bridge has no case for it.
-      this.writeMessage({ type: "invoke-progress", progress: params ?? {} });
       return {} as T;
     }
     if (method === "node.event") {

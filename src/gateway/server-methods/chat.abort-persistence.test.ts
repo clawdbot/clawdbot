@@ -1373,3 +1373,4 @@ describe("chat.abort session identity matching", () => {
     expect(active.controller.signal.aborted).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

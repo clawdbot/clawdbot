@@ -12,7 +12,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
@@ -155,6 +158,72 @@ describe("guardSessionManager integration", () => {
       MediaTypes: ["image/png"],
     });
     expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
+  });
+
+  it("correlates nested user persists with their exact runtime messages", () => {
+    const outerRuntime = { role: "user", content: "outer" } as AgentMessage;
+    const nestedRuntime = { role: "user", content: "nested" } as AgentMessage;
+    const correlations: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
+    let nested = false;
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (...args: unknown[]) => {
+            const { message } = args[0] as { message: AgentMessage };
+            if (!nested && message.role === "user" && message.content === "outer") {
+              nested = true;
+              appendMessage(nestedRuntime);
+            }
+            return undefined;
+          },
+        },
+      ]),
+    );
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      onUserMessagePersisted: (persisted, runtime) => {
+        correlations.push({ persisted, runtime });
+      },
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage(outerRuntime);
+
+    expect(correlations).toEqual([
+      { persisted: nestedRuntime, runtime: nestedRuntime },
+      { persisted: outerRuntime, runtime: outerRuntime },
+    ]);
+  });
+
+  it("correlates a suppressed user persist with its exact runtime message", () => {
+    const runtimeMessage = { role: "user", content: "already durable" } as AgentMessage;
+    const suppressed: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "already durable",
+        timestamp: 1,
+        __openclaw: { senderName: "Alice" },
+      } as PersistedUserTurnMessage,
+      suppressNextUserMessagePersistence: true,
+      onUserMessagePersistenceSuppressed: (persisted, runtime) => {
+        suppressed.push({ persisted, runtime });
+      },
+    });
+
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    appendMessage(runtimeMessage);
+
+    expect(sm.getEntries()).toEqual([]);
+    expect(suppressed).toEqual([
+      {
+        persisted: expect.objectContaining({
+          content: "already durable",
+          __openclaw: { senderName: "Alice" },
+        }),
+        runtime: runtimeMessage,
+      },
+    ]);
   });
 
   it("lets a write hook remove sender identity while preserving auth state", () => {

@@ -81,7 +81,7 @@ function createRateLimitError(
   return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
-export type VoiceMessageMetadata = {
+type VoiceMessageMetadata = {
   durationSecs: number;
   waveform: string; // base64 encoded
 };

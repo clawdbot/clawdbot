@@ -8,6 +8,7 @@ import {
   type ChatEventPayload,
 } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { readChatMessagesFromCache } from "./session-message-cache.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -424,7 +425,11 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(state.chatMessagesBySession?.get("agent:main:other")).toEqual([payload.message]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: "other",
+      }),
+    ).toEqual([payload.message]);
   });
 
   it.each([
@@ -432,53 +437,51 @@ describe("handleChatGatewayEvent", () => {
       name: "canonical default-session finals under the main alias",
       activeSessionKey: "agent:main:other",
       payloadSessionKey: "agent:main:main",
-      cacheKey: "agent:main:main",
       withConfiguredDefaults: false,
     },
     {
       name: "configured default-session finals under runtime aliases",
       activeSessionKey: "agent:ops:other",
       payloadSessionKey: "agent:ops:home",
-      cacheKey: "agent:ops:main",
       withConfiguredDefaults: true,
     },
     {
       name: "canonical non-main finals under the plain session key",
       activeSessionKey: "main",
       payloadSessionKey: "agent:main:project",
-      cacheKey: "agent:main:project",
       withConfiguredDefaults: false,
     },
-  ])(
-    "caches $name",
-    ({ activeSessionKey, payloadSessionKey, cacheKey, withConfiguredDefaults }) => {
-      const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
-      const payload: ChatEventPayload = {
-        runId: "run-1",
-        sessionKey: payloadSessionKey,
-        state: "final",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "cached final" }],
+  ])("caches $name", ({ activeSessionKey, payloadSessionKey, withConfiguredDefaults }) => {
+    const state = createState({ sessionKey: activeSessionKey, chatMessagesBySession: new Map() });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: payloadSessionKey,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "cached final" }],
+      },
+    };
+
+    if (withConfiguredDefaults) {
+      (state as Record<string, unknown>).hello = {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "ops",
+            mainKey: "home",
+          },
         },
       };
+    }
 
-      if (withConfiguredDefaults) {
-        (state as Record<string, unknown>).hello = {
-          snapshot: {
-            sessionDefaults: {
-              defaultAgentId: "ops",
-              mainKey: "home",
-            },
-          },
-        };
-      }
-
-      expect(handleChatGatewayEvent(state, payload)).toBe(null);
-      expect(state.chatMessagesBySession?.get(cacheKey)).toEqual([payload.message]);
-      expect(state.chatMessagesBySession?.size).toBe(1);
-    },
-  );
+    expect(handleChatGatewayEvent(state, payload)).toBe(null);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: payloadSessionKey,
+      }),
+    ).toEqual([payload.message]);
+    expect(state.chatMessagesBySession?.size).toBe(1);
+  });
 
   it("caches inactive global finals under the payload agent only", () => {
     const visibleMessage = {
@@ -505,7 +508,12 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(state.chatMessagesBySession?.get("agent:main:main")).toEqual([payload.message]);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    ).toEqual([payload.message]);
     expect(state.chatMessagesBySession?.has("agent:work:main")).toBe(false);
   });
 
@@ -978,6 +986,135 @@ describe("handleChatGatewayEvent", () => {
         hasActiveRun: false,
         status: "done",
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not publish Done while a yielded turn has registered continuation work", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Restarting now",
+        chatStreamStartedAt: 100,
+      }) as ChatState & {
+        chatRunStatus?: unknown;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "end_turn",
+          yielded: true,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "The gateway will restart; I will resume verification afterward.",
+              },
+            ],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatRunStatus).toBeNull();
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        activeRunIds: [],
+        status: "running",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not infer pending continuation from end_turn without yielded metadata", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Final response",
+      }) as ChatState & {
+        chatRunStatus?: { phase?: string } | null;
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "end_turn",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final response" }],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunStatus?.phase).toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not suppress completion for stale yielded metadata on another stop reason", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Final response",
+      }) as ChatState & {
+        chatRunStatus?: { phase?: string } | null;
+      };
+
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "final",
+          stopReason: "completed",
+          yielded: true,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final response" }],
+          },
+        }),
+      ).toBe("final");
+
+      expect(state.chatRunStatus?.phase).toBe("done");
     } finally {
       vi.useRealTimers();
     }
@@ -2119,7 +2256,12 @@ describe("loadChatHistory filtering", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessagesBySession?.get("agent:work:main")).toEqual(messages);
+    expect(
+      readChatMessagesFromCache(state.chatMessagesBySession ?? new Map(), state, {
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual(messages);
     expect(state.chatMessagesBySession?.has("agent:main:main")).toBe(false);
   });
 
@@ -3504,3 +3646,4 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatThinkingLevel).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

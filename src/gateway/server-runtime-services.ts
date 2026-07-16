@@ -4,8 +4,14 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import {
+  schedulePendingSessionDeliveries,
+  startSessionDeliveryRuntime,
+} from "../infra/session-delivery-queue-runtime.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -243,28 +249,55 @@ function recoverPendingOutboundDeliveries(params: {
   }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
-function recoverPendingSessionDeliveries(params: {
+function startPendingSessionDeliveryRuntime(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
-}): void {
+}): () => void {
+  let stopped = false;
+  let stopRuntime: (() => void) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
     void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const { recoverPendingRestartContinuationDeliveries } =
+      const { deliverQueuedSessionDelivery, recoverPendingRestartContinuationDeliveries } =
         await import("./server-restart-sentinel.js");
+      if (stopped) {
+        return;
+      }
       const logRecovery = params.log.child("session-delivery-recovery");
-      await recoverPendingRestartContinuationDeliveries({
-        deps: params.deps,
+      stopRuntime = startSessionDeliveryRuntime({
+        deliver: (entry, context = {}) =>
+          deliverQueuedSessionDelivery({
+            deps: params.deps,
+            entry,
+            ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
+          }),
         log: logRecovery,
-        maxEnqueuedAt: params.maxEnqueuedAt,
+        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
       });
+      try {
+        await recoverPendingRestartContinuationDeliveries({
+          deps: params.deps,
+          log: logRecovery,
+          maxEnqueuedAt: params.maxEnqueuedAt,
+        });
+      } finally {
+        // Recovery and scheduling are independent safeguards. A transient
+        // recovery failure must not leave persisted rows without timers.
+        await schedulePendingSessionDeliveries();
+      }
     }).catch((err: unknown) =>
       params.log.error(`Session delivery recovery failed: ${String(err)}`),
     );
   }, 1_250);
   timer.unref?.();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    stopRuntime?.();
+    stopRuntime = undefined;
+  };
 }
 
 function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger }): void {
@@ -393,12 +426,29 @@ export function activateGatewayScheduledServices(params: {
   if (params.minimalTestGateway) {
     // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
     // production starts without launching background loops.
-    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
+    return {
+      heartbeatRunner: createNoopHeartbeatRunner(),
+      stopModelPricingRefresh: () => {},
+    };
   }
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
     readCurrentConfig: getRuntimeConfig,
   });
+  const sessionUpstreamMonitor = startSessionUpstreamMonitor();
+  const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({
+    deps: params.deps,
+    log: params.log,
+    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+  });
+  const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
+    updateConfig: heartbeatRunner.updateConfig,
+    stop: () => {
+      stopSessionDeliveryRuntime();
+      sessionUpstreamMonitor.stop();
+      heartbeatRunner.stop();
+    },
+  };
   if (params.startCron !== false) {
     startGatewayCronWithLogging({
       cronState: params.cronState,
@@ -412,11 +462,6 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
-  recoverPendingSessionDeliveries({
-    deps: params.deps,
-    log: params.log,
-    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
-  });
   recoverPendingContinuations({
     log: params.log,
   });
@@ -427,5 +472,8 @@ export function activateGatewayScheduledServices(params: {
         log: params.log,
       })
     : () => {};
-  return { heartbeatRunner, stopModelPricingRefresh };
+  return {
+    heartbeatRunner: heartbeatRunnerWithUpstreamMonitor,
+    stopModelPricingRefresh,
+  };
 }

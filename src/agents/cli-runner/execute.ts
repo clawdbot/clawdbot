@@ -187,7 +187,7 @@ function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefin
 }
 
 /** Overrides process/event dependencies for CLI runner execution tests. */
-export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
+function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
 
@@ -330,7 +330,7 @@ function formatCliSessionReuseLogState(reusableSession: CliReusableSession): str
 }
 
 /** Builds the compact execution summary logged before a CLI backend run. */
-export function buildCliExecLogLine(params: {
+function buildCliExecLogLine(params: {
   provider: string;
   model: string;
   promptChars: number;
@@ -355,7 +355,7 @@ export function buildCliExecLogLine(params: {
 }
 
 /** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
@@ -372,6 +372,16 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
     `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
     `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerExecuteTestApi")] = {
+    buildCliEnvAuthLog,
+    buildCliExecLogLine,
+    setCliRunnerExecuteTestDeps: (overrides: Record<string, unknown>) => {
+      setCliRunnerExecuteTestDeps(overrides as Partial<typeof executeDeps>);
+    },
+  };
 }
 
 /** Executes a prepared CLI run context and returns normalized CLI output. */
@@ -2103,3 +2113,4 @@ export async function executePreparedCliRun(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

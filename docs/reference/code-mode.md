@@ -35,7 +35,8 @@ identically-named `exec`/`wait` tools.
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` whose image result cannot survive the guest bridge.
+  such as `computer` or the native-vision `image` loader whose image result
+  cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
 - Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden from

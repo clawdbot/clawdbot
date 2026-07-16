@@ -8,17 +8,17 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
-} from "../../agents/subagent-registry.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/detached-task-runtime.js";
+} from "../../agents/subagent-registry.test-helpers.js";
+import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
   listTaskRecords,
   markTaskTerminalById,
-  resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
+import {
+  resetTaskRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   getAgentTestMocks,
@@ -2048,3 +2048,4 @@ describe("gateway agent handler", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

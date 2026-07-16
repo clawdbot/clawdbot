@@ -31,14 +31,17 @@ describe("runCommandWithTimeout", () => {
       argv: ["node", "script.js"],
       baseEnv: {
         OPENCLAW_BASE_ENV: "base",
+        OPENCLAW_CHILD_ENV_REMOVE: "base",
         OPENCLAW_TO_REMOVE: undefined,
       },
       env: {
+        OPENCLAW_CHILD_ENV_REMOVE: undefined,
         OPENCLAW_TEST_ENV: "ok",
       },
     });
 
     expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_CHILD_ENV_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
     expect(resolved.OPENCLAW_TO_REMOVE).toBeUndefined();
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
@@ -62,6 +65,22 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.PATH).toBe("C:\\override\\bin");
     expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
     expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("removes case-insensitive inherited env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+      },
+      env: {
+        PATH: undefined,
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBeUndefined();
   });
 
   it("preserves case-distinct env keys outside Windows", () => {
@@ -502,7 +521,8 @@ describe("runCommandBuffered", () => {
         "process.stdout.write(`PID:${child.pid}\\n`)",
       ].join(";");
       const result = await runCommandBuffered([process.execPath, "-e", parentSource], {
-        timeoutMs: 50,
+        // The timeout starts before Node initializes; loaded CI still needs time to spawn and report the descendant.
+        timeoutMs: 500,
       });
       const pidMatch = result.stdout.toString().match(/PID:(\d+)/u);
       if (!pidMatch) {

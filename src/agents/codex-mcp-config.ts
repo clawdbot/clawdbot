@@ -22,6 +22,7 @@ import type {
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
   return (
@@ -148,10 +149,15 @@ export function normalizeCodexMcpServerConfig(
   return next;
 }
 
-/** Build Codex `mcp_servers` config from normalized bundle MCP config. */
+/**
+ * Build Codex `mcp_servers` config from normalized bundle MCP config.
+ * Requester-scoped servers are excluded: harness-native MCP clients are
+ * session-shared and must never dial placeholder or requester-bound URLs.
+ */
 export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
+  const { staticServers } = partitionMcpServersByConnectionScope(config.mcpServers);
   return Object.fromEntries(
-    Object.entries(config.mcpServers).map(([name, server]) => [
+    Object.entries(staticServers).map(([name, server]) => [
       name,
       normalizeCodexMcpServerConfig(name, server),
     ]),

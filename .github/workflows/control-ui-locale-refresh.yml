@@ -11,6 +11,9 @@ on:
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
       - scripts/control-ui-i18n.ts
+      - scripts/control-ui-i18n-verify.ts
+      - scripts/lib/control-ui-i18n-config.ts
+      - scripts/lib/control-ui-i18n-raw-copy.ts
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/control-ui-locale-refresh.yml
@@ -227,7 +230,7 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
           mkdir -p "${artifact_dir}"
           git add -A ui/src/i18n
-          git diff --cached --binary --full-index -- ui/src/i18n > "${artifact_dir}/${LOCALE}.patch"
+          git diff --cached --binary --full-index -- ui/src/i18n ':(exclude)ui/src/i18n/.i18n/catalog-fallbacks.json' > "${artifact_dir}/${LOCALE}.patch"
 
       - name: Upload locale artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -301,6 +304,9 @@ jobs:
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts
             scripts/control-ui-i18n.ts
+            scripts/control-ui-i18n-verify.ts
+            scripts/lib/control-ui-i18n-config.ts
+            scripts/lib/control-ui-i18n-raw-copy.ts
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
             .github/workflows/control-ui-locale-refresh.yml

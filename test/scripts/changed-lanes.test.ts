@@ -15,6 +15,8 @@ import {
 } from "../../scripts/changed-lanes.mjs";
 import {
   buildChangedCheckCrabboxArgs,
+  changedCheckLocalDependenciesReady,
+  changedCheckRequiresRemote,
   cleanupCorepackPnpmShimDir,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
@@ -25,11 +27,13 @@ import {
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
   shouldRunCanvasA2uiNativeResourceCheck,
+  shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
   shouldRunPluginSdkApiBaselineCheck,
+  shouldRunDeprecationHygieneChecks,
   shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
@@ -235,6 +239,98 @@ describe("scripts/changed-lanes", () => {
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: node scripts/check-changed.mjs");
     expect(result.stdout).not.toContain("[check:changed]");
+  });
+
+  it("exits cleanly for no changes without local dependencies", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-changed.mjs", "--no-changes"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...createNestedGitEnv(), PATH: "/nonexistent" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("[check:changed] no changed paths; nothing to run");
+  });
+
+  it("delegates when the local checkout cannot resolve the default base ref", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-missing-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    const binDir = path.join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        ...createNestedGitEnv(),
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
+        OPENCLAW_TESTBOX: "1",
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).not.toContain("ambiguous argument");
+  });
+
+  it("delegates path-scoped release metadata when local diff refs are unavailable", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-metadata-missing-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+    const binDir = path.join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "pnpm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/check-changed.mjs"), "--", "CHANGELOG.md"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...createNestedGitEnv(),
+          CI: "",
+          GITHUB_ACTIONS: "",
+          OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
+          OPENCLAW_TESTBOX: "",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
   });
 
   it("rejects unknown changed lane options before treating them as paths", () => {
@@ -760,6 +856,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:ui");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core:test");
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:core");
   });
 
@@ -786,6 +883,15 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.lanes.scripts).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+  });
+
+  it("routes Control UI i18n tooling changes through keyless catalog verification", () => {
+    const result = detectChangedLanes(["scripts/control-ui-i18n.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
   it.each([
@@ -984,12 +1090,16 @@ describe("scripts/changed-lanes", () => {
     expect(command.args).toEqual(["check:no-conflict-markers"]);
   });
 
-  it("delegates local changed gates to Crabbox before running locally", () => {
+  it("delegates heavy changed gates after classifying their lanes", () => {
+    const result = detectChangedLanes(["src/config/config.ts"]);
     expect(
-      shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
-        PATH: "/usr/bin",
-      }),
+      shouldDelegateChangedCheckToCrabbox(
+        ["--base", "origin/main"],
+        { PATH: "/usr/bin" },
+        { result },
+      ),
     ).toBe(true);
+    expect(changedCheckRequiresRemote(result)).toBe(true);
 
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "crabbox:run",
@@ -1023,6 +1133,50 @@ describe("scripts/changed-lanes", () => {
       "--head",
       "HEAD",
     ]);
+  });
+
+  it("keeps small changed gates local only with a ready dependency install", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-local-route-");
+    const docsResult = detectChangedLanes(["docs/reference/test.md"]);
+    const noChangesResult = detectChangedLanes([]);
+    const metadataResult = detectChangedLanes(["CHANGELOG.md"]);
+    const mixedResult = detectChangedLanes(["CHANGELOG.md", "src/config/config.ts"]);
+
+    expect(changedCheckLocalDependenciesReady(dir)).toBe(false);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: noChangesResult })).toBe(
+      false,
+    );
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: docsResult })).toBe(
+      true,
+    );
+
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+
+    expect(changedCheckLocalDependenciesReady(dir)).toBe(true);
+    for (const result of [docsResult, noChangesResult, metadataResult]) {
+      expect(changedCheckRequiresRemote(result)).toBe(false);
+      expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result })).toBe(false);
+    }
+    for (const result of [docsResult, metadataResult]) {
+      expect(
+        shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, { cwd: dir, result }),
+      ).toBe(true);
+    }
+    expect(changedCheckRequiresRemote(mixedResult)).toBe(true);
+  });
+
+  it("delegates generated docs baselines with heavy owner checks", () => {
+    for (const changedPath of [
+      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
+    ]) {
+      const result = detectChangedLanes([changedPath]);
+      expect(result.docsOnly).toBe(true);
+      expect(changedCheckRequiresRemote(result)).toBe(true);
+      expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
+    }
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {
@@ -1276,12 +1430,15 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "max-lines suppression ratchet",
       "changelog attributions",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
       "dependency pin guard",
       "format changed files",
+      "deprecated API usage",
+      "plugin boundaries",
       "package patch guard",
       "test temp creation report (warning-only)",
       "typecheck core tests",
@@ -1567,6 +1724,8 @@ describe("scripts/changed-lanes", () => {
       "deps:pins:check",
       "format:check",
       "scripts/generate-npm-shrinkwrap.mjs",
+      "check:deprecated-api-usage",
+      "plugins:boundary-report:ci",
       "deps:patches:check",
       "release-metadata:check",
       "android:version:check",
@@ -1770,6 +1929,37 @@ describe("scripts/changed-lanes", () => {
     expect(releaseMetadataPlan.commands.map((command) => command.args[0])).not.toContain(
       "plugin-sdk:check-exports",
     );
+  });
+
+  it("runs deprecation hygiene checks for outcome-changing paths and all lanes", () => {
+    expect(
+      shouldRunDeprecationHygieneChecks([
+        "src/plugin-sdk/core.ts",
+        "extensions/slack/index.ts",
+        "packages/gateway-protocol/src/index.ts",
+        "scripts/lib/plugin-sdk-entries.mjs",
+        "scripts/check-deprecated-api-usage.mjs",
+        "scripts/plugin-boundary-report.ts",
+        "src/plugins/compat/registry.ts",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunDeprecationHygieneChecks(["docs/plugins/sdk-migration.md"])).toBe(false);
+
+    for (const result of [
+      detectChangedLanes(["extensions/slack/index.ts"]),
+      detectChangedLanes(["unknown-surface.foo"]),
+    ]) {
+      const plan = createChangedCheckPlan(result);
+      expect(plan.commands).toContainEqual({
+        name: "deprecated API usage",
+        args: ["check:deprecated-api-usage"],
+      });
+      expect(plan.commands).toContainEqual({
+        name: "plugin boundaries",
+        args: ["plugins:boundary-report:ci"],
+      });
+    }
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -2080,17 +2270,17 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("adds the changed-file LOC ratchet with worktree and staged scopes", () => {
+  it("adds the max-lines suppression ratchet with worktree and staged bases", () => {
     const result = detectChangedLanes(["src/runtime.ts"]);
     const worktreePlan = createChangedCheckPlan(result, { base: "main", head: "feature" });
     const stagedPlan = createChangedCheckPlan(result, { staged: true });
 
     expect(
-      worktreePlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--base", "main", "--", "src/runtime.ts"] });
+      worktreePlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--base", "main"] });
     expect(
-      stagedPlan.commands.find((command) => command.name === "TypeScript LOC ratchet"),
-    ).toMatchObject({ args: ["check:loc", "--staged", "--", "src/runtime.ts"] });
+      stagedPlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
+    ).toMatchObject({ args: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"] });
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

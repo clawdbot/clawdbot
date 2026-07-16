@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  runQaCharacterEval,
-  type QaCharacterEvalJudgment,
-  type QaCharacterEvalParams,
-} from "./character-eval.js";
+import { runQaCharacterEval } from "./character-eval.js";
 import type { QaSuiteResult } from "./suite.js";
 
+type QaCharacterEvalParams = Parameters<typeof runQaCharacterEval>[0];
+type QaCharacterEvalJudgment = Awaited<
+  ReturnType<typeof runQaCharacterEval>
+>["judgments"][number]["rankings"][number];
 type CharacterRunSuiteParams = Parameters<NonNullable<QaCharacterEvalParams["runSuite"]>>[0];
 type CharacterRunJudgeParams = Parameters<NonNullable<QaCharacterEvalParams["runJudge"]>>[0];
 type TestJudgeRanking = Pick<QaCharacterEvalJudgment, "model" | "rank" | "score" | "summary"> &

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
-  type CommandTurnContext,
+  type CommandFacts,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -30,7 +30,6 @@ import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
   createChannelMessageReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
@@ -149,7 +148,7 @@ function logWhatsAppReplyDeliveryError(params: {
 }
 
 function resolveWhatsAppDurableReplyToId(params: {
-  context: Record<string, unknown>;
+  context: FinalizedMsgContext;
   info: ReplyDeliveryInfo;
   msg: AdmittedWebInboundMessage;
   payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
@@ -298,10 +297,7 @@ export function resolveWhatsAppResponsePrefix(params: {
 export async function buildWhatsAppInboundContext(params: {
   bodyForAgent?: string;
   combinedBody: string;
-  commandBody?: string;
-  commandAuthorized?: boolean;
-  commandTurn?: CommandTurnContext;
-  commandSource?: "text";
+  command?: CommandFacts;
   groupHistory?: GroupHistoryEntry[];
   groupMemberRoster?: Map<string, string>;
   groupSystemPrompt?: string;
@@ -346,7 +342,6 @@ export async function buildWhatsAppInboundContext(params: {
   );
   return buildChannelInboundEventContext({
     channel: "whatsapp",
-    finalize: finalizeInboundContext,
     supplemental: {
       quote: params.visibleReplyTo
         ? {
@@ -385,7 +380,7 @@ export async function buildWhatsAppInboundContext(params: {
       bodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
       inboundHistory,
       rawBody: params.rawBody ?? params.msg.payload.body,
-      commandBody: params.commandBody ?? params.msg.payload.body,
+      commandBody: params.command?.body ?? params.msg.payload.body,
     },
     access: {
       ...(wasMentioned !== undefined
@@ -398,10 +393,10 @@ export async function buildWhatsAppInboundContext(params: {
           }
         : {}),
       commands: {
-        authorized: params.commandAuthorized,
+        authorized: params.command?.authorized === true,
       },
     },
-    commandTurn: params.commandTurn,
+    command: params.command,
     extra: {
       Transcript: params.transcript,
       GroupSubject: params.msg.group?.subject,
@@ -411,53 +406,11 @@ export async function buildWhatsAppInboundContext(params: {
         fallbackE164: params.sender.e164,
       }),
       SenderE164: params.sender.e164,
-      CommandSource:
-        params.commandSource ??
-        (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
-          ? params.commandTurn.source
-          : undefined),
       ReplyThreading: params.replyThreading,
       SuppressMessageReceivedHooks: params.suppressMessageReceivedHooks,
       ...(params.msg.payload.location ? toLocationContext(params.msg.payload.location) : {}),
     },
   });
-}
-
-function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Partial<CommandTurnContext>;
-  const kind = record.kind;
-  const source = record.source;
-  if (kind === "native" && source === "native" && typeof record.authorized === "boolean") {
-    return {
-      kind: "native",
-      source: "native",
-      authorized: record.authorized,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  if (kind === "text-slash" && source === "text" && typeof record.authorized === "boolean") {
-    return {
-      kind: "text-slash",
-      source: "text",
-      authorized: record.authorized,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  if (kind === "normal" && source === "message") {
-    return {
-      kind: "normal",
-      source: "message",
-      authorized: false,
-      commandName: typeof record.commandName === "string" ? record.commandName : undefined,
-      body: typeof record.body === "string" ? record.body : undefined,
-    };
-  }
-  return undefined;
 }
 
 export function resolveWhatsAppDmRouteTarget(params: {
@@ -539,7 +492,7 @@ export function updateWhatsAppMainLastRoute(params: {
 export async function dispatchWhatsAppBufferedReply(params: {
   cfg: ReturnType<LoadConfigFn>;
   connectionId: string;
-  context: Record<string, unknown>;
+  context: FinalizedMsgContext;
   deliverReply: (params: {
     replyResult: ReplyPayload;
     normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
@@ -591,27 +544,11 @@ export async function dispatchWhatsAppBufferedReply(params: {
     accountId: params.route.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
-  const sourceReplyChatType =
-    typeof params.context.ChatType === "string" ? params.context.ChatType : conversationKind;
-  const sourceReplyCommandSource =
-    params.context.CommandSource === "native" || params.context.CommandSource === "text"
-      ? params.context.CommandSource
-      : undefined;
-  const sourceReplyCommandTurn = normalizeCommandTurnFromContext(params.context.CommandTurn);
-  const sourceReplyCommandAuthorized =
-    typeof params.context.CommandAuthorized === "boolean"
-      ? params.context.CommandAuthorized
-      : undefined;
   const sourceReplyDeliveryMode =
-    sourceReplyChatType === "group" || sourceReplyChatType === "channel"
+    params.context.ChatType === "group" || params.context.ChatType === "channel"
       ? resolveChannelMessageSourceReplyDeliveryMode({
           cfg: params.cfg,
-          ctx: {
-            ChatType: sourceReplyChatType,
-            CommandTurn: sourceReplyCommandTurn,
-            CommandSource: sourceReplyCommandSource,
-            CommandAuthorized: sourceReplyCommandAuthorized,
-          },
+          ctx: params.context,
         })
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
@@ -719,7 +656,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
               channel: "whatsapp",
               accountId: params.route.accountId,
               agentId: params.route.agentId,
-              ctxPayload: params.context as FinalizedMsgContext,
+              ctxPayload: params.context,
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
@@ -907,3 +844,4 @@ async function finalizeWhatsAppStatusReaction(params: {
   }
   await params.controller.restoreInitial();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

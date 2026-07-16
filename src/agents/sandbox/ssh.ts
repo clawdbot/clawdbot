@@ -929,3 +929,4 @@ async function writeSecretMaterial(
   await fs.chmod(pathname, 0o600);
   return pathname;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

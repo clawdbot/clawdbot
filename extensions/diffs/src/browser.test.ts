@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
@@ -16,7 +16,6 @@ const { launchMock } = vi.hoisted(() => ({
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.js").PlaywrightDiffScreenshotter;
-let resetSharedBrowserStateForTests: typeof import("./browser.js").resetSharedBrowserStateForTests;
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -45,21 +44,17 @@ describe("PlaywrightDiffScreenshotter", () => {
   let outputPath: string;
   let cleanupRootDir: () => Promise<void>;
 
-  beforeAll(async () => {
-    ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
-      await import("./browser.js"));
-  });
-
   beforeEach(async () => {
     vi.useFakeTimers();
+    vi.resetModules();
+    ({ PlaywrightDiffScreenshotter } = await import("./browser.js"));
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();
-    await resetSharedBrowserStateForTests();
   });
 
   afterEach(async () => {
-    await resetSharedBrowserStateForTests();
+    await vi.runAllTimersAsync();
     vi.useRealTimers();
     await cleanupRootDir();
   });

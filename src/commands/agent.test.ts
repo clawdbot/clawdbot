@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/core";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+// Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
@@ -38,6 +39,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -45,18 +47,12 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
-const pluginRegistryMocks = vi.hoisted(() => ({
-  ensurePluginRegistryLoaded: vi.fn(),
-}));
+const agentHarnessPluginMocks = getAgentHarnessPluginMocks();
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
-}));
-
-vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => {
@@ -401,46 +397,10 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("enables Codex, provider owner, and memory slot plugins for one-shot OpenAI model overrides", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      mockConfig(home, storePath, { models: undefined });
-
-      await agentCommand(
-        {
-          message: "hi",
-          agentId: "main",
-          model: "openai/gpt-5.2",
-          allowModelOverride: true,
-        },
-        runtime,
-      );
-
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(1);
-      for (const [registryLoad] of pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls) {
-        expect(registryLoad?.scope).toBe("all");
-        expect(registryLoad?.config).toBeTypeOf("object");
-        expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
-        expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
-        expect(registryLoad?.onlyPluginIds).toEqual(["codex", "openai", "memory-core"]);
-      }
-      expectLastRunProviderModel("openai", "gpt-5.2");
-    });
-  });
-
-  it("does not enable Codex for one-shot OpenAI overrides when the provider forces OpenClaw", async () => {
+  it("passes one-shot OpenAI model overrides to harness plugin preparation", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
       const cfg = mockConfig(home, storePath, { models: undefined });
-      cfg.models = {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      };
 
       await agentCommand(
         {
@@ -452,7 +412,16 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
+      expect(agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: cfg,
+          provider: "openai",
+          modelId: "gpt-5.2",
+          agentId: "main",
+          workspaceDir: path.join(home, "openclaw"),
+        }),
+      );
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
@@ -2033,3 +2002,4 @@ describe("agentCommand", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

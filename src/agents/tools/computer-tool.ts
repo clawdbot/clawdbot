@@ -38,25 +38,21 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
 import { listNodes, type NodeListNode, resolveNodeIdFromList } from "./nodes-utils.js";
 
-export const COMPUTER_ACT_COMMAND = "computer.act";
+const COMPUTER_ACT_COMMAND = "computer.act";
 const SCREEN_SNAPSHOT_COMMAND = "screen.snapshot";
 
 // Reference frame width cap in pixels. The effective reference width is the
 // smaller of this cap and the model's image sanitization limit, so a persisted
 // screenshot that is replay-sanitized in later turns keeps the same pixel
 // dimensions the coordinates were issued against (see resolveReferenceWidth).
-export const COMPUTER_REF_WIDTH = 1280;
+const COMPUTER_REF_WIDTH = 1280;
 const SCREENSHOT_QUALITY = 0.85;
 // UI settle delay before the after-action screenshot.
 const AFTER_ACTION_SCREENSHOT_DELAY_MS = 500;
 const MAX_WAIT_SECONDS = 100;
 const MAX_HOLD_SECONDS = 10;
 
-const defaultWaitForPostActionSettle = (signal?: AbortSignal) =>
-  sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
-let waitForPostActionSettle = defaultWaitForPostActionSettle;
-
-export const COMPUTER_TOOL_ACTIONS = [
+const COMPUTER_TOOL_ACTIONS = [
   "screenshot",
   "left_click",
   "right_click",
@@ -234,7 +230,7 @@ function readModifiers(params: Record<string, unknown>, action: ComputerToolActi
 }
 
 /** Builds the computer.act wire params for one tool input action. */
-export function buildComputerActParams(params: {
+function buildComputerActParams(params: {
   action: ComputerToolAction;
   input: Record<string, unknown>;
   screenIndex: number;
@@ -513,7 +509,7 @@ function computerFrameImageIdentity(
     .digest("hex");
 }
 
-export function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
+function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
   if (contextEpoch.frameToolCallId === undefined && contextEpoch.frameImageIdentity === undefined) {
     return false;
   }
@@ -930,7 +926,7 @@ export function createComputerTool(options?: {
         if (action === "left_mouse_up") {
           heldButtonTarget = undefined;
         }
-        await waitForPostActionSettle(signal);
+        await sleep(AFTER_ACTION_SCREENSHOT_DELAY_MS, signal);
         try {
           const capture = await captureScreenshot({
             gatewayOpts,
@@ -956,10 +952,4 @@ export function createComputerTool(options?: {
       }),
   };
 }
-
-/** Test-only dependency override for the post-action UI settle delay. */
-export const testing = {
-  setWaitForPostActionSettleForTest(override?: typeof waitForPostActionSettle) {
-    waitForPostActionSettle = override ?? defaultWaitForPostActionSettle;
-  },
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

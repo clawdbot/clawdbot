@@ -1202,6 +1202,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
         bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
@@ -1235,7 +1236,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
     expect(plan.bootstrap).toEqual({
       workflow: "plugin-clawhub-new.yml",
-      ref: "main",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
@@ -1289,6 +1290,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowRef: `release-publish/${"d".repeat(12)}-12345`,
         bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
@@ -1308,7 +1310,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(plan.normal.shouldDispatch).toBe(false);
     expect(plan.bootstrap).toMatchObject({
       workflow: "plugin-clawhub-new.yml",
-      ref: "main",
+      ref: `release-publish/${"d".repeat(12)}-12345`,
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
@@ -1333,6 +1335,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
   it("rejects incompatible all-publishable plugin selection args", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([
+        "--bootstrap-workflow-ref",
+        `release-publish/${"d".repeat(12)}-12345`,
         "--bootstrap-workflow-sha",
         "d".repeat(40),
         "--release-tag",
@@ -1355,6 +1359,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact lowercase release SHA for bootstrap targeting", () => {
     const baseArgs = [
+      "--bootstrap-workflow-ref",
+      `release-publish/${"d".repeat(12)}-12345`,
       "--bootstrap-workflow-sha",
       "d".repeat(40),
       "--release-tag",
@@ -1376,6 +1382,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact parent release run attempt for bootstrap approval binding", () => {
     const args = [
+      "--bootstrap-workflow-ref",
+      `release-publish/${"d".repeat(12)}-12345`,
       "--bootstrap-workflow-sha",
       "d".repeat(40),
       "--release-tag",

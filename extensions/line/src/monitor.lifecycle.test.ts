@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 type LineHandleWebhook = (...args: unknown[]) => Promise<void>;
@@ -29,8 +29,6 @@ const {
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
-let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
-let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 type RegisteredRoute = {
@@ -142,8 +140,7 @@ vi.mock("./template-messages.js", () => ({
 
 describe("monitorLineProvider lifecycle", () => {
   beforeAll(async () => {
-    ({ monitorLineProvider, getLineRuntimeState, clearLineRuntimeStateForTests } =
-      await import("./monitor.js"));
+    ({ monitorLineProvider } = await import("./monitor.js"));
   });
 
   afterAll(() => {
@@ -161,7 +158,6 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   beforeEach(() => {
-    clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
@@ -198,10 +194,6 @@ describe("monitorLineProvider lifecycle", () => {
         },
       };
     });
-  });
-
-  afterEach(() => {
-    clearLineRuntimeStateForTests();
   });
 
   const createRouteResponse = () => {
@@ -289,7 +281,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
   });
 
-  it("records startup state under configured defaultAccount when accountId is omitted", async () => {
+  it("registers the configured defaultAccount when accountId is omitted", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
@@ -309,13 +301,14 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    expect(getLineRuntimeState("work")?.running).toBe(true);
-    expect(getLineRuntimeState("default")).toBeUndefined();
+    const registration = requireWebhookRegistration();
+    expect(registration.target.accountId).toBe("work");
+    expect(registration.route.accountId).toBe("work");
 
     monitor.stop();
   });
 
-  it("does not record running state when bot startup fails", async () => {
+  it("does not register a webhook when bot startup fails", async () => {
     createLineBotMock.mockImplementation(() => {
       throw new Error("line bot startup failed");
     });
@@ -329,7 +322,6 @@ describe("monitorLineProvider lifecycle", () => {
       }),
     ).rejects.toThrow("line bot startup failed");
 
-    expect(getLineRuntimeState("default")?.running).not.toBe(true);
     expect(registerWebhookTargetWithPluginRouteMock).not.toHaveBeenCalled();
   });
 

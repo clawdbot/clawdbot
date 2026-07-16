@@ -20,18 +20,11 @@ const configIoMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
 }));
-const pluginRegistryMocks = vi.hoisted(() => ({
-  ensurePluginRegistryLoaded: vi.fn(),
-}));
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
   loadConfig: configIoMocks.loadConfig,
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
-}));
-
-vi.mock("../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: pluginRegistryMocks.ensurePluginRegistryLoaded,
 }));
 
 const execFileAsync = promisify(execFile);

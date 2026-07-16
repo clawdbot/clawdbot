@@ -707,11 +707,17 @@ describe("update-cli", () => {
     } else {
       expect(packagePackCommandCall()).toBeUndefined();
     }
+    const allowScriptsIdentity = isNpmGitPackageSpec(spec)
+      ? `./${path.basename(installSpec)}`
+      : spec.toLowerCase().startsWith("openclaw@")
+        ? "openclaw"
+        : spec;
     const call = packageInstallCommandCall();
     expect(call?.[0]).toEqual([
       "npm",
       "i",
       "-g",
+      `--allow-scripts=${allowScriptsIdentity}`,
       installSpec,
       "--no-fund",
       "--no-audit",
@@ -4593,6 +4599,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -4603,6 +4610,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--omit=optional",
         "--no-fund",
@@ -7827,3 +7835,4 @@ describe("update-cli", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

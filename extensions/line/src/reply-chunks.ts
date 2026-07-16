@@ -44,6 +44,7 @@ export async function sendLineReplyChunks(
   }
 
   if (params.replyToken && !replyTokenUsed) {
+    let replySucceeded = false;
     try {
       const replyBatch = params.chunks.slice(0, 5);
       const remaining = params.chunks.slice(replyBatch.length);
@@ -66,6 +67,7 @@ export async function sendLineReplyChunks(
         accountId: params.accountId,
       });
       replyTokenUsed = true;
+      replySucceeded = true;
 
       for (const [i, chunk] of remaining.entries()) {
         const isLastChunk = i === remaining.length - 1;
@@ -84,6 +86,10 @@ export async function sendLineReplyChunks(
 
       return { replyTokenUsed };
     } catch (err) {
+      // A later push failure must not replay chunks that already used the reply token.
+      if (replySucceeded) {
+        throw err;
+      }
       params.onReplyError?.(err);
       replyTokenUsed = true;
     }

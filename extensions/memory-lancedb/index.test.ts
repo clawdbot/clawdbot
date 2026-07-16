@@ -3949,3 +3949,4 @@ describe("lancedb runtime loader", () => {
     expect(importBundled).toHaveBeenCalledTimes(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

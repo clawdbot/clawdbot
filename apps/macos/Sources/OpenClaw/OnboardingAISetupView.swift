@@ -69,8 +69,8 @@ enum OnboardingProviderAuthLink {
 
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
-    var crestodianChat: CrestodianOnboardingChatModel
-    @Binding var showCrestodianChat: Bool
+    var systemAgentChat: SystemAgentOnboardingChatModel
+    @Binding var showSystemAgentChat: Bool
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
 
@@ -84,8 +84,8 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: self.$showCrestodianChat) {
-            self.crestodianSheet
+        .sheet(isPresented: self.$showSystemAgentChat) {
+            self.systemAgentSheet
         }
         .sheet(isPresented: Binding(
             get: { self.model.activeAuthOption != nil },
@@ -185,13 +185,13 @@ struct OnboardingAISetupView: View {
             self.manualSection
         }
 
-        if CrestodianAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
+        if SystemAgentAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
             HStack {
                 Spacer(minLength: 0)
                 Button {
-                    self.showCrestodianChat = true
+                    self.showSystemAgentChat = true
                 } label: {
-                    Label("Need help? Chat with Crestodian", systemImage: "questionmark.bubble")
+                    Label("Need help? Chat with OpenClaw", systemImage: "questionmark.bubble")
                         .font(.caption)
                 }
                 .buttonStyle(.link)
@@ -392,29 +392,14 @@ struct OnboardingAISetupView: View {
                     self.model.retryFromScratch()
                 }
             }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if self.model.candidates.isEmpty || self.model.showManualEntry {
-                    self.manualForm
-                } else {
-                    Button {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.model.showManualEntry = true
-                        }
-                    } label: {
-                        Label("Connect with an API key or token instead…", systemImage: "key")
-                            .font(.callout)
-                    }
-                    .buttonStyle(.link)
-                    .disabled(self.model.isBusy)
-                }
-            }
+        } else if self.model.candidates.isEmpty || self.model.showManualEntry {
+            self.manualForm
         }
     }
 
     @ViewBuilder
     private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty {
+        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Sign in with a provider")
                     .font(.headline)
@@ -428,6 +413,9 @@ struct OnboardingAISetupView: View {
                 let more = self.model.authOptions.filter { !$0.featured }
                 ForEach(featured) { option in
                     self.providerAuthRow(option)
+                }
+                if !self.model.manualProviders.isEmpty {
+                    self.apiKeysRow
                 }
                 if !more.isEmpty {
                     DisclosureGroup("More sign-in options") {
@@ -447,6 +435,34 @@ struct OnboardingAISetupView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color(NSColor.controlBackgroundColor)))
         }
+    }
+
+    private var apiKeysRow: some View {
+        Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                self.model.showManualEntry = true
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "key.fill")
+                    .font(.title3)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("API Keys")
+                        .font(.callout.weight(.semibold))
+                    Text("Connect with an API key or token")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Text("Connect")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy)
+        .openClawSelectableRowChrome(selected: self.model.showManualEntry)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -704,19 +720,19 @@ struct OnboardingAISetupView: View {
         return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
     }
 
-    private var crestodianSheet: some View {
+    private var systemAgentSheet: some View {
         VStack(spacing: 8) {
             HStack {
-                Label("Crestodian — setup helper", systemImage: "lifepreserver")
+                Label("OpenClaw — setup helper", systemImage: "lifepreserver")
                     .font(.headline)
                 Spacer(minLength: 0)
                 Button("Done") {
-                    self.showCrestodianChat = false
+                    self.showSystemAgentChat = false
                 }
             }
             .padding([.top, .horizontal], 14)
-            CrestodianOnboardingChatView(model: self.crestodianChat)
-                .task { await self.crestodianChat.startIfNeeded() }
+            SystemAgentOnboardingChatView(model: self.systemAgentChat)
+                .task { await self.systemAgentChat.startIfNeeded() }
         }
         .frame(width: 520, height: 480)
     }

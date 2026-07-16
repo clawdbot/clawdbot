@@ -976,3 +976,4 @@ export function renderExpandedToolCardContent(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

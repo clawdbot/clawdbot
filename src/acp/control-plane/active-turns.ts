@@ -44,8 +44,3 @@ export function isAcpTurnActive(sessionKey: string): boolean {
   }
   return getAcpActiveTurnState().activeTurnKeys.has(normalizeActorKey(sessionKey));
 }
-
-/** Clears active-turn state for isolated tests. */
-export function resetAcpActiveTurnsForTests() {
-  getAcpActiveTurnState().activeTurnKeys.clear();
-}

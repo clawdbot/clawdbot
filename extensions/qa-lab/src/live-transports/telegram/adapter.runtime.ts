@@ -1,5 +1,4 @@
 // Qa Lab plugin module implements Telegram live transport adapter behavior.
-import type { TelegramBotUpdate } from "@openclaw/telegram/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
@@ -10,23 +9,34 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../shared/credential-lease.runtime.js";
-import { __testing as telegramLive } from "./telegram-live.runtime.js";
+import {
+  buildTelegramQaConfig,
+  callTelegramApi,
+  flushTelegramUpdates,
+  isRecoverableTelegramQaPollError,
+  normalizeTelegramObservedMessage,
+  parseTelegramQaCredentialPayload,
+  resolveTelegramQaRuntimeEnv,
+  waitForTelegramChannelRunning,
+  waitForTelegramPollRetryDelay,
+  type TelegramBotIdentity,
+  type TelegramQaRuntimeEnv,
+  type TelegramUpdate,
+} from "./telegram-api.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
-type TelegramRuntimeEnv = ReturnType<typeof telegramLive.resolveTelegramQaRuntimeEnv>;
-
 export async function createTelegramQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
-  const credentialLease = await acquireQaCredentialLease<TelegramRuntimeEnv>({
+  const credentialLease = await acquireQaCredentialLease<TelegramQaRuntimeEnv>({
     kind: "telegram",
     source: options.credentialSource,
     role: options.credentialRole,
-    resolveEnvPayload: () => telegramLive.resolveTelegramQaRuntimeEnv(),
-    parsePayload: telegramLive.parseTelegramQaCredentialPayload,
+    resolveEnvPayload: () => resolveTelegramQaRuntimeEnv(),
+    parsePayload: parseTelegramQaCredentialPayload,
   });
   try {
     assertQaGatewayCredentialLeaseQuarantine(credentialLease);
@@ -36,17 +46,26 @@ export async function createTelegramQaTransportAdapter(
   }
   const heartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
   const runtimeEnv = credentialLease.payload;
-  let driverIdentity: { id: number; username?: string };
-  let sutIdentity: { id: number; username?: string };
+  let driverIdentity: TelegramBotIdentity;
+  let sutIdentity: TelegramBotIdentity;
   let offset: number;
   try {
-    [driverIdentity, sutIdentity, offset] = await Promise.all([
-      telegramLive.callTelegramApi<{ id: number; username?: string }>(
-        runtimeEnv.driverToken,
-        "getMe",
-      ),
-      telegramLive.callTelegramApi<{ id: number; username?: string }>(runtimeEnv.sutToken, "getMe"),
-      telegramLive.flushTelegramUpdates(runtimeEnv.driverToken),
+    [driverIdentity, sutIdentity] = await Promise.all([
+      callTelegramApi<TelegramBotIdentity>(runtimeEnv.driverToken, "getMe"),
+      callTelegramApi<TelegramBotIdentity>(runtimeEnv.sutToken, "getMe"),
+    ]);
+    if (!driverIdentity.is_bot || !sutIdentity.is_bot) {
+      throw new Error("Telegram QA credentials must belong to bots.");
+    }
+    if (driverIdentity.id === sutIdentity.id) {
+      throw new Error("Telegram QA requires two distinct bots for driver and SUT.");
+    }
+    if (!sutIdentity.username?.trim()) {
+      throw new Error("Telegram QA requires the SUT bot to have a Telegram username.");
+    }
+    [offset] = await Promise.all([
+      flushTelegramUpdates(runtimeEnv.driverToken),
+      flushTelegramUpdates(runtimeEnv.sutToken),
     ]);
   } catch (error) {
     await heartbeat.stop();
@@ -64,39 +83,56 @@ export async function createTelegramQaTransportAdapter(
       if (stopped) {
         return;
       }
-      const updates = await telegramLive.callTelegramApi<TelegramBotUpdate[]>(
-        runtimeEnv.driverToken,
-        "getUpdates",
-        { offset, timeout: 1, allowed_updates: ["message", "edited_message"] },
-        6_000,
-      );
+      let updates: TelegramUpdate[];
+      try {
+        updates = await callTelegramApi<TelegramUpdate[]>(
+          runtimeEnv.driverToken,
+          "getUpdates",
+          { offset, timeout: 1, allowed_updates: ["message", "edited_message"] },
+          6_000,
+        );
+      } catch (error) {
+        if (!isRecoverableTelegramQaPollError(error)) {
+          throw error;
+        }
+        await waitForTelegramPollRetryDelay();
+        continue;
+      }
       for (const update of updates) {
         offset = Math.max(offset, update.update_id + 1);
-        const message = update.edited_message ?? update.message;
-        if (!message?.from?.id || message.from.id !== sutIdentity.id) {
+        const message = normalizeTelegramObservedMessage(update);
+        if (
+          !message ||
+          message.chatId !== Number(runtimeEnv.groupId) ||
+          message.senderId !== sutIdentity.id
+        ) {
           continue;
         }
-        const existingMessageId = busMessageIds.get(message.message_id);
-        if (update.edited_message && existingMessageId) {
-          await context.messages.editMessage({
-            accountId: options.sutAccountId?.trim() || "sut",
-            messageId: existingMessageId,
-            text: message.text ?? message.caption ?? "",
-          });
+        const existingMessageId = busMessageIds.get(message.messageId);
+        if (update.edited_message) {
+          if (existingMessageId) {
+            await context.messages.editMessage({
+              accountId: options.sutAccountId?.trim() || "sut",
+              messageId: existingMessageId,
+              text: message.text,
+              timestamp: message.timestamp,
+            });
+          }
           continue;
         }
         const outbound = await context.messages.addOutboundMessage({
           accountId: options.sutAccountId?.trim() || "sut",
           to: `${logicalConversationKind}:${logicalConversationId}`,
-          senderId: String(message.from.id),
-          senderName: message.from.username,
-          text: message.text ?? message.caption ?? "",
-          timestamp: message.date * 1_000,
-          replyToId: message.reply_to_message?.message_id
-            ? busMessageIds.get(message.reply_to_message.message_id)
+          senderId: String(message.senderId),
+          senderName: message.senderUsername,
+          text: message.text,
+          timestamp: message.timestamp,
+          replyToId: message.replyToMessageId
+            ? busMessageIds.get(message.replyToMessageId)
             : undefined,
         });
-        busMessageIds.set(message.message_id, outbound.id);
+        nativeMessageIds.set(outbound.id, message.messageId);
+        busMessageIds.set(message.messageId, outbound.id);
       }
     }
   };
@@ -127,7 +163,7 @@ export async function createTelegramQaTransportAdapter(
         ? input.text.replaceAll("@openclaw", `@${sutIdentity.username}`)
         : input.text;
       const nativeReplyToId = input.replyToId ? nativeMessageIds.get(input.replyToId) : undefined;
-      const sent = await telegramLive.callTelegramApi<{ message_id: number }>(
+      const sent = await callTelegramApi<{ message_id: number }>(
         runtimeEnv.driverToken,
         "sendMessage",
         {
@@ -161,14 +197,14 @@ export async function createTelegramQaTransportAdapter(
       busMessageIds.clear();
     },
     createGatewayConfig: () =>
-      telegramLive.buildTelegramQaConfig({} as OpenClawConfig, {
+      buildTelegramQaConfig({} as OpenClawConfig, {
         groupId: runtimeEnv.groupId,
         sutToken: runtimeEnv.sutToken,
         driverBotId: driverIdentity.id,
         sutAccountId: accountId,
       }),
     waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
-      await telegramLive.waitForTelegramChannelRunning(gateway as never, accountId, {
+      await waitForTelegramChannelRunning(gateway, accountId, {
         timeoutMs,
         pollMs: pollIntervalMs,
       }),

@@ -1,63 +1,15 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { VERSION } from "../version.js";
-import type { NodeInvokeRequestPayload } from "./invoke.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 import {
   NodeHostWorkerBridgeClient,
-  type NodeHostWorkerGatewayResponse,
+  parseNodeHostWorkerInput,
   stopNodeHostWorkerFromSignal,
 } from "./worker-support.js";
 
-type WorkerInput =
-  | { type: "invoke"; request: NodeInvokeRequestPayload }
-  | NodeHostWorkerGatewayResponse
-  | { type: "stop" };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function writeMessage(message: unknown): void {
   process.stdout.write(`${JSON.stringify(message)}\n`);
-}
-
-function parseInput(line: string): WorkerInput | null {
-  try {
-    const parsed = asRecord(JSON.parse(line));
-    const type = typeof parsed?.type === "string" ? parsed.type : "";
-    if (type === "invoke") {
-      const request = asRecord(parsed?.request);
-      if (
-        request &&
-        typeof request.id === "string" &&
-        typeof request.nodeId === "string" &&
-        typeof request.command === "string"
-      ) {
-        return { type, request: request as NodeInvokeRequestPayload };
-      }
-      return null;
-    }
-    if (type === "gateway-response") {
-      const id = typeof parsed?.id === "string" ? parsed.id : "";
-      if (!id) {
-        return null;
-      }
-      return parsed?.ok === true
-        ? { type, id, ok: true, result: parsed.result }
-        : {
-            type,
-            id,
-            ok: false,
-            error: typeof parsed?.error === "string" ? parsed.error : "Gateway request failed",
-          };
-    }
-    return type === "stop" ? { type } : null;
-  } catch {
-    return null;
-  }
 }
 
 function emitInventory(inventory: NodeHostInventory): void {
@@ -65,7 +17,7 @@ function emitInventory(inventory: NodeHostInventory): void {
 }
 
 export async function runNodeHostWorker(): Promise<void> {
-  const prepared = await prepareNodeHostRuntime();
+  const prepared = await prepareNodeHostRuntime({ enableDuplexPluginCommands: true });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
   let resolveStopped: (() => void) | undefined;
@@ -97,7 +49,7 @@ export async function runNodeHostWorker(): Promise<void> {
 
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on("line", (line) => {
-    const message = parseInput(line);
+    const message = parseNodeHostWorkerInput(line);
     if (!message) {
       writeMessage({ type: "protocol-error", error: "invalid worker request" });
       return;
@@ -109,6 +61,14 @@ export async function runNodeHostWorker(): Promise<void> {
     if (message.type === "stop") {
       input.close();
       void stop(0);
+      return;
+    }
+    if (message.type === "invoke-input") {
+      runtime.handleInput(message.invokeId, message.seq, message.payloadJSON);
+      return;
+    }
+    if (message.type === "invoke-cancel") {
+      runtime.cancel(message.invokeId);
       return;
     }
     void runtime.invoke(message.request);

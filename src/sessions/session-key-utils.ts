@@ -65,7 +65,7 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-export function isCasePreservingPeer(
+function isCasePreservingPeer(
   channel: string | undefined | null,
   peerKind: string | undefined | null,
 ): boolean {

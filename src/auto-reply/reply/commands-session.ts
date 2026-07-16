@@ -822,3 +822,4 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
 };
 
 export { handleAbortTrigger, handleStopCommand };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

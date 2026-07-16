@@ -2380,7 +2380,7 @@ describe("loadPluginManifestRegistry", () => {
   it("preserves qa runner descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
-      id: "qa-matrix",
+      id: "qa-runner-fixture",
       qaRunners: [
         {
           commandName: "matrix",
@@ -2391,7 +2391,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadSingleCandidateRegistry({
-      idHint: "qa-matrix",
+      idHint: "qa-runner-fixture",
       rootDir: dir,
       origin: "bundled",
     });
@@ -3167,3 +3167,4 @@ describe("loadPluginManifestRegistry", () => {
     expectNoRegistryDiagnosticContains(newerHost, "this host is 2026.3.21");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

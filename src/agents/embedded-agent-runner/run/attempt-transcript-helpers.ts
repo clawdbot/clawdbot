@@ -21,10 +21,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
-export function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map((message) => structuredClone(message));
-}
-
 export function flushSessionManagerTranscript(sessionManager: AttemptSessionManager): void {
   (
     sessionManager as unknown as {

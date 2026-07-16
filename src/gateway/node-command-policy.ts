@@ -8,7 +8,7 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  NODE_FILE_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -55,11 +55,16 @@ const HEALTH_DANGEROUS_COMMANDS = ["health.summary"];
 
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
-const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
+export const TALK_PTT_COMMANDS = [
+  "talk.ptt.start",
+  "talk.ptt.stop",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+];
 
 // The iPhone node owns the relay to its companion Watch. Keep these commands
 // out of the direct watchOS node surface, which has a separate fixed policy.
-const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
+export const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -67,7 +72,7 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  ...NODE_FILE_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -76,7 +81,7 @@ const SYSTEM_COMMANDS = [
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_FS_LIST_DIR_COMMAND,
+  ...NODE_FILE_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -101,7 +106,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...HEALTH_DANGEROUS_COMMANDS,
 ];
 
-const PLATFORM_DEFAULTS: Record<string, string[]> = {
+export const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ios: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
@@ -154,7 +159,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
-
 type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
 const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
@@ -314,33 +318,6 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
-
-export function filterLegacyNodeProtocolFeatures(params: {
-  caps: readonly string[];
-  commands: readonly string[];
-  pluginSurfaces: readonly string[];
-}): { caps: string[]; commands: string[] } {
-  // N-1 nodes predate plugin-hosted surfaces. Preserve their durable pairing
-  // declarations elsewhere, but hide unusable plugin features from this session.
-  const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return { caps: [...params.caps], commands: [...params.commands] };
-  }
-  const pluginIds = new Set([
-    ...registry.nodeHostCommands.map((entry) => entry.pluginId),
-    ...registry.nodeInvokePolicies.map((entry) => entry.pluginId),
-  ]);
-  const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
-  const pluginCommands = new Set([
-    ...registry.nodeHostCommands.map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
-  ]);
-  return {
-    caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
-    commands: params.commands.filter((command) => !pluginCommands.has(command)),
-  };
-}
-
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
   Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
     approvedCommands?: readonly string[];

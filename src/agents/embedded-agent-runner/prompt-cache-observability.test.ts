@@ -4,12 +4,18 @@ import {
   beginPromptCacheObservation,
   collectPromptCacheToolNames,
   completePromptCacheObservation,
-  resetPromptCacheObservabilityForTest,
 } from "./prompt-cache-observability.js";
+
+let testScope = 0;
+let currentTestScope = "";
+
+function scopedKey(value: string): string {
+  return `${value}:${currentTestScope}`;
+}
 
 describe("prompt cache observability", () => {
   beforeEach(() => {
-    resetPromptCacheObservabilityForTest();
+    currentTestScope = String(++testScope);
   });
 
   it("collects trimmed tool names only", () => {
@@ -35,7 +41,7 @@ describe("prompt cache observability", () => {
     // cache-affecting change.
     const first = beginPromptCacheObservation({
       sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionKey: scopedKey("agent:main"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -50,14 +56,14 @@ describe("prompt cache observability", () => {
     expect(
       completePromptCacheObservation({
         sessionId: "session-1",
-        sessionKey: "agent:main",
+        sessionKey: scopedKey("agent:main"),
         usage: { cacheRead: 8_000 },
       }),
     ).toBeNull();
 
     const second = beginPromptCacheObservation({
       sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionKey: scopedKey("agent:main"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -77,7 +83,7 @@ describe("prompt cache observability", () => {
     expect(
       completePromptCacheObservation({
         sessionId: "session-1",
-        sessionKey: "agent:main",
+        sessionKey: scopedKey("agent:main"),
         usage: { cacheRead: 2_000 },
       }),
     ).toEqual({
@@ -93,7 +99,7 @@ describe("prompt cache observability", () => {
 
   it("suppresses cache-break events for small drops", () => {
     beginPromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
       modelApi: "anthropic-messages",
@@ -102,12 +108,12 @@ describe("prompt cache observability", () => {
       toolNames: ["read"],
     });
     completePromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       usage: { cacheRead: 5_000 },
     });
 
     beginPromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
       modelApi: "anthropic-messages",
@@ -118,7 +124,7 @@ describe("prompt cache observability", () => {
 
     expect(
       completePromptCacheObservation({
-        sessionId: "session-1",
+        sessionId: scopedKey("session-1"),
         usage: { cacheRead: 4_600 },
       }),
     ).toBeNull();
@@ -128,7 +134,7 @@ describe("prompt cache observability", () => {
     // Tool list ordering is deterministic for payloads but should not create a
     // false cache-break diagnostic when the set is unchanged.
     beginPromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -137,12 +143,12 @@ describe("prompt cache observability", () => {
       toolNames: ["read", "write"],
     });
     completePromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       usage: { cacheRead: 8_000 },
     });
 
     const second = beginPromptCacheObservation({
-      sessionId: "session-1",
+      sessionId: scopedKey("session-1"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -159,7 +165,7 @@ describe("prompt cache observability", () => {
     // new session ids.
     beginPromptCacheObservation({
       sessionId: "isolated-run-1",
-      promptCacheKey: "openclaw-cron-stable-cache-key",
+      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
       sessionKey: "agent:cron:run:isolated-run-1",
       provider: "openai",
       modelId: "gpt-5.4",
@@ -170,14 +176,14 @@ describe("prompt cache observability", () => {
     });
     completePromptCacheObservation({
       sessionId: "isolated-run-1",
-      promptCacheKey: "openclaw-cron-stable-cache-key",
+      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
       sessionKey: "agent:cron:run:isolated-run-1",
       usage: { cacheRead: 8_000 },
     });
 
     const nextRun = beginPromptCacheObservation({
       sessionId: "isolated-run-2",
-      promptCacheKey: "openclaw-cron-stable-cache-key",
+      promptCacheKey: scopedKey("openclaw-cron-stable-cache-key"),
       sessionKey: "agent:cron:run:isolated-run-2",
       provider: "openai",
       modelId: "gpt-5.4",
@@ -193,7 +199,7 @@ describe("prompt cache observability", () => {
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {
     beginPromptCacheObservation({
-      sessionId: "session-0",
+      sessionId: scopedKey("session-0"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -202,13 +208,13 @@ describe("prompt cache observability", () => {
       toolNames: ["read"],
     });
     completePromptCacheObservation({
-      sessionId: "session-0",
+      sessionId: scopedKey("session-0"),
       usage: { cacheRead: 8_000 },
     });
 
     for (let index = 1; index <= 513; index += 1) {
       beginPromptCacheObservation({
-        sessionId: `session-${index}`,
+        sessionId: scopedKey(`session-${index}`),
         provider: "openai",
         modelId: "gpt-5.4",
         modelApi: "openai-responses",
@@ -219,7 +225,7 @@ describe("prompt cache observability", () => {
     }
 
     const restarted = beginPromptCacheObservation({
-      sessionId: "session-0",
+      sessionId: scopedKey("session-0"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -234,8 +240,8 @@ describe("prompt cache observability", () => {
 
   it("ignores missing usage and preserves the previous cache-read baseline", () => {
     beginPromptCacheObservation({
-      sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionId: scopedKey("session-1"),
+      sessionKey: scopedKey("agent:main"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -246,14 +252,14 @@ describe("prompt cache observability", () => {
       toolNames: ["read"],
     });
     completePromptCacheObservation({
-      sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionId: scopedKey("session-1"),
+      sessionKey: scopedKey("agent:main"),
       usage: { cacheRead: 8_000 },
     });
 
     beginPromptCacheObservation({
-      sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionId: scopedKey("session-1"),
+      sessionKey: scopedKey("agent:main"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -266,14 +272,14 @@ describe("prompt cache observability", () => {
 
     expect(
       completePromptCacheObservation({
-        sessionId: "session-1",
-        sessionKey: "agent:main",
+        sessionId: scopedKey("session-1"),
+        sessionKey: scopedKey("agent:main"),
       }),
     ).toBeNull();
 
     const resumed = beginPromptCacheObservation({
-      sessionId: "session-1",
-      sessionKey: "agent:main",
+      sessionId: scopedKey("session-1"),
+      sessionKey: scopedKey("agent:main"),
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
@@ -289,8 +295,8 @@ describe("prompt cache observability", () => {
 
     expect(
       completePromptCacheObservation({
-        sessionId: "session-1",
-        sessionKey: "agent:main",
+        sessionId: scopedKey("session-1"),
+        sessionKey: scopedKey("agent:main"),
         usage: { cacheRead: 2_000 },
       }),
     ).toEqual({

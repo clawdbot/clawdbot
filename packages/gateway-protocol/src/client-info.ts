@@ -78,6 +78,7 @@ export type GatewayClientInfo = {
 export const GATEWAY_CLIENT_CAPS = {
   INLINE_WIDGETS: "inline-widgets",
   TASK_SUGGESTIONS: "task-suggestions",
+  TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
 } as const;
 

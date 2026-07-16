@@ -172,24 +172,56 @@ function Test-NodeVersionSupported {
 }
 
 function Test-NodeSqliteSupported {
-    try {
-        $probe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { const value = db.prepare("SELECT sqlite_version() AS version").get()?.version; const match = typeof value === "string" ? /^(\d+)\.(\d+)\.(\d+)$/.exec(value) : null; const major = Number(match?.[1]); const minor = Number(match?.[2]); const patch = Number(match?.[3]); const safe = major > 3 || (major === 3 && (minor > 51 || (minor === 51 && patch >= 3) || (minor === 50 && patch >= 7) || (minor === 44 && patch >= 6))); if (!safe) process.exitCode = 1; } finally { db.close(); }'
-        $probe | & node - 2>$null
-        return ($LASTEXITCODE -eq 0)
-    } catch {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) {
         return $false
     }
+    $versionMatch = [regex]::Match($Version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$')
+    if (-not $versionMatch.Success) {
+        return $false
+    }
+    $major = [int]$versionMatch.Groups["major"].Value
+    $minor = [int]$versionMatch.Groups["minor"].Value
+    $patch = [int]$versionMatch.Groups["patch"].Value
+    return (
+        $major -gt 3 -or
+        (
+            $major -eq 3 -and
+            (
+                $minor -gt 51 -or
+                ($minor -eq 51 -and $patch -ge 3) -or
+                ($minor -eq 50 -and $patch -ge 7) -or
+                ($minor -eq 44 -and $patch -ge 6)
+            )
+        )
+    )
 }
 
 function Check-Node {
     try {
-        $nodeVersion = (node -v 2>$null)
+        $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $nodePath = $nodeCommand.Source
+        $nodeVersion = (& $nodePath -v 2>$null)
+        $sqliteProbe = 'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:"); try { process.stdout.write(String(db.prepare("SELECT sqlite_version() AS version").get().version)); } finally { db.close(); }'
+        $sqliteVersion = ($sqliteProbe | & $nodePath - 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            $sqliteVersion = $null
+        }
         if ($nodeVersion) {
-            if ((Test-NodeVersionSupported -Version $nodeVersion) -and (Test-NodeSqliteSupported)) {
+            if (
+                (Test-NodeVersionSupported -Version $nodeVersion) -and
+                (Test-NodeSqliteSupported -Version $sqliteVersion)
+            ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
             } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
-                Write-Host "[!] Node.js $nodeVersion uses an unsafe SQLite build; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
+                    "unavailable"
+                } else {
+                    $sqliteVersion
+                }
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
                 return $false
             } else {
                 Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow

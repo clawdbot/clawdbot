@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, createHash } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -18,6 +18,7 @@ import {
   runGit,
   type GitResult,
 } from "./git.js";
+import { worktreeOwnerMatches } from "./owner.js";
 import {
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
@@ -72,7 +73,7 @@ export type WorktreeCleanupLimits = {
 };
 
 type ManagedWorktreeGcParams = {
-  isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   limits?: WorktreeCleanupLimits;
 };
 
@@ -106,16 +107,6 @@ function validateName(name: string): string {
 
 function generateName(): string {
   return `wt-${randomBytes(4).toString("hex")}`;
-}
-
-function recordOwnerMatches(
-  record: ManagedWorktreeRecord,
-  params: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
-): boolean {
-  return (
-    record.ownerKind === (params.ownerKind ?? "manual") &&
-    (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
-  );
 }
 
 async function resolveRepository(repoRoot: string): Promise<{
@@ -394,7 +385,7 @@ export class ManagedWorktreeService {
     // Name reuse only ever adopts the caller's own record. Without this guard a
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
-    if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
+    if (existing?.name === name && !existing.removedAt && !worktreeOwnerMatches(existing, params)) {
       throw new Error(
         `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
       );
@@ -406,7 +397,7 @@ export class ManagedWorktreeService {
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
-      if (!recordOwnerMatches(existing, params)) {
+      if (!worktreeOwnerMatches(existing, params)) {
         throw new Error(
           `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
         );
@@ -430,7 +421,9 @@ export class ManagedWorktreeService {
     await fs.mkdir(root, { recursive: true });
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
-    let added = await runGit(repository.repoRoot, [
+    const runRepositorySetup = params.runSetupScript !== false;
+    const worktreeAddArgs = () => [
+      ...(runRepositorySetup ? [] : ["-c", `core.hooksPath=${os.devNull}`]),
       "worktree",
       "add",
       "-b",
@@ -438,7 +431,8 @@ export class ManagedWorktreeService {
       "--",
       worktreePath,
       gitBase,
-    ]);
+    ];
+    let added = await runGit(repository.repoRoot, worktreeAddArgs());
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
@@ -446,22 +440,14 @@ export class ManagedWorktreeService {
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await runGit(repository.repoRoot, [
-        "worktree",
-        "add",
-        "-b",
-        branch,
-        "--",
-        worktreePath,
-        gitBase,
-      ]);
+      added = await runGit(repository.repoRoot, worktreeAddArgs());
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
     try {
       await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      if (params.runSetupScript !== false) {
+      if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
     } catch (error) {
@@ -510,11 +496,15 @@ export class ManagedWorktreeService {
   }
 
   /** Resolves the canonical registry root and the caller's own checkout root. */
-  async resolveRepositoryPaths(
-    repoRoot: string,
-  ): Promise<{ canonicalRoot: string; sourceRoot: string }> {
+  async resolveRepositoryPaths(repoRoot: string): Promise<{
+    canonicalRoot: string;
+    sourceRoot: string;
+  }> {
     const resolved = await resolveRepository(repoRoot);
-    return { canonicalRoot: resolved.repoRoot, sourceRoot: resolved.sourceRoot };
+    return {
+      canonicalRoot: resolved.repoRoot,
+      sourceRoot: resolved.sourceRoot,
+    };
   }
 
   /**
@@ -764,9 +754,12 @@ export class ManagedWorktreeService {
     return true;
   }
 
-  async removeIfLosslessByPath(worktreePath: string): Promise<boolean> {
+  async removeIfLosslessByPath(
+    worktreePath: string,
+    owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
+  ): Promise<boolean> {
     const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
-    if (!record) {
+    if (!record || !worktreeOwnerMatches(record, owner)) {
       return false;
     }
     return await this.removeIfLossless(record.id);
@@ -796,7 +789,7 @@ export class ManagedWorktreeService {
           expiresWhenIdle &&
           now - record.lastActiveAt > IDLE_GC_MS
         ) {
-          if (await this.isProtectedFromAutoRemoval(record, params.isOwnerActive)) {
+          if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
             continue;
           }
           await this.remove({ id: record.id, reason: "idle-gc" });
@@ -827,16 +820,16 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Shared auto-removal guard for idle and limit cleanup: active owners, live run
-   * leases, and live/foreign git locks all veto removal; a dead lock is cleared.
+   * Shared auto-removal guard for idle and limit cleanup: owner protection, live
+   * run leases, and live/foreign git locks veto removal; a dead lock is cleared.
    */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
-    isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
+    shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
   ): Promise<boolean> {
     if (
       record.ownerId !== undefined &&
-      isOwnerActive?.(record.ownerKind, record.ownerId) === true
+      shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
     ) {
       return true;
     }
@@ -924,7 +917,7 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (await this.isProtectedFromAutoRemoval(record, params.isOwnerActive)) {
+        if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
           continue;
         }
         await this.remove({ id: record.id, reason: "limit-gc" });
@@ -994,3 +987,4 @@ export type {
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
 } from "./types.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

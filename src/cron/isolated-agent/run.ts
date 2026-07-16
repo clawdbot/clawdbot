@@ -235,8 +235,6 @@ async function retireRolledCronSessionMcpRuntime(params: {
   });
 }
 
-export type { RunCronAgentTurnResult } from "./run.types.js";
-
 type CronExecutionRuntime = typeof import("./run-executor.runtime.js");
 type CronExecutionResult = Awaited<ReturnType<CronExecutionRuntime["executeCronRun"]>>;
 type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
@@ -411,8 +409,8 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
   }
 }
 
-/** Exported for #91613 keyless-inherited delivery-context regression coverage. */
-export async function resolveCronDeliveryContext(params: {
+/** Resolves the delivery plan and concrete target for one isolated cron run. */
+async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
@@ -1860,3 +1858,4 @@ export async function runCronIsolatedAgentTurn(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

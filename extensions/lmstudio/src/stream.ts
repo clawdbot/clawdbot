@@ -84,12 +84,6 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
   return entry;
 }
 
-/** Test-only hook for clearing preload cooldown state between cases. */
-export function resetLmstudioPreloadCooldownForTest(): void {
-  preloadCooldown.clear();
-  preloadInFlight.clear();
-}
-
 function normalizeLmstudioModelKey(modelId: string): string {
   const trimmed = modelId.trim();
   if (trimmed.toLowerCase().startsWith("lmstudio/")) {

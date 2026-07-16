@@ -292,7 +292,18 @@ export function bootstrapApplication(): ApplicationRuntime {
   const sessions = createSessionCapability(gateway);
   const workboard = createWorkboardCapability();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const overlays = createApplicationOverlays(gateway);
+  const overlays = createApplicationOverlays(gateway, {
+    drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
+  });
+  // App-updater interlock: writing config (or restarting the gateway) while
+  // the updater runs can corrupt the install; pause config writes until the
+  // update settles. Wired app-lifetime so page unmounts cannot strand it.
+  const syncConfigWriteSuspension = () => {
+    const update = overlays.snapshot;
+    runtimeConfig.setWritesSuspended(update.updateRunning || update.updateReconciliationPending);
+  };
+  const stopConfigWriteSuspension = overlays.subscribe(syncConfigWriteSuspension);
+  syncConfigWriteSuspension();
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
@@ -412,6 +423,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       channels.dispose();
       sessions.dispose();
       workboard.dispose();
+      stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();

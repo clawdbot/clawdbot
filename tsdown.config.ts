@@ -228,7 +228,7 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    id === "@openclaw/acp-core" ||
+    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -318,23 +318,24 @@ function buildCoreDistEntries(): Record<string, string> {
 
 function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
-    // Mounted Docker harnesses run against the npm tarball image, so any
-    // internal module they assert must have a stable package dist entry.
+    // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
     "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
     "agents/embedded-agent-runner/run/runtime-context-prompt":
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
-    "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
+    "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/runtime.test-support": "src/commitments/runtime.test-support.ts",
     "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
-    "crestodian/crestodian": "src/crestodian/crestodian.ts",
-    "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
-    "crestodian/setup-inference": "src/crestodian/setup-inference.ts",
+    "system-agent/system-agent": "src/system-agent/system-agent.ts",
+    "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
+    "system-agent/setup-inference": "src/system-agent/setup-inference.ts",
     "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
@@ -401,7 +402,6 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
 
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
-    api: "packages/speech-core/api.ts",
     "runtime-api": "packages/speech-core/runtime-api.ts",
     speaker: "packages/speech-core/speaker.ts",
     "voice-models": "packages/speech-core/voice-models.ts",

@@ -15,7 +15,7 @@ import { failQueuedDelegatesCreatedAtOrAfter } from "../../auto-reply/continuati
 import {
   computeRequestCompactionContextUsage,
   releaseQueuedCompactionTolerant,
-} from "../../auto-reply/reply/agent-runner-execution.js";
+} from "../../auto-reply/reply/agent-runner-post-compaction-release.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -1086,6 +1086,7 @@ export async function runAgentAttempt(params: {
       bootstrapContextMode: params.opts.bootstrapContextMode,
       bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
       toolsAllow: params.opts.toolsAllow,
+      runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
       drainsContinuationDelegateQueue: params.opts.drainsContinuationDelegateQueue,
       internalEvents: params.opts.internalEvents,
       inputProvenance: params.opts.inputProvenance,
@@ -1771,3 +1772,4 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

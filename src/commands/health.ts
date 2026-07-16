@@ -6,6 +6,7 @@ import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
+import { redactChannelStatusSummaryBaseUrl } from "../channels/account-snapshot-fields.js";
 import {
   resolveChannelAccountConfigured,
   resolveChannelAccountEnabled,
@@ -667,14 +668,12 @@ export async function getHealthSnapshot(params?: {
             snapshot,
           })
         : undefined;
-      const record =
+      // Summary hooks overlay the safe snapshot, so reapply URL redaction after the final merge.
+      const record = redactChannelStatusSummaryBaseUrl(
         summary && typeof summary === "object"
           ? ({ ...snapshot, ...summary } as ChannelAccountHealthSummary)
-          : ({
-              ...snapshot,
-              accountId,
-              configured,
-            } satisfies ChannelAccountHealthSummary);
+          : ({ ...snapshot, accountId, configured } satisfies ChannelAccountHealthSummary),
+      );
       if (record.configured === undefined) {
         record.configured = configured;
       }
@@ -1077,3 +1076,4 @@ async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await loadConfigRuntime();
   return getRuntimeConfig();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

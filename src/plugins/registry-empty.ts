@@ -36,6 +36,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     coreGatewayMethodNames: [],
     httpRoutes: [],
     hostedMediaResolvers: [],
+    mcpServerConnectionResolvers: [],
     cliRegistrars: [],
     reloads: [],
     nodeHostCommands: [],

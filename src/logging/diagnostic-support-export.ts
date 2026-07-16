@@ -814,3 +814,4 @@ export async function writeDiagnosticSupportExport(
     manifest: artifact.manifest,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -668,14 +668,14 @@ describe("collectForbiddenPackPaths", () => {
     try {
       mkdirSync(join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
       writeFileSync(
-        join(tempRoot, "dist", "plugin-sdk", "testing.d.ts"),
+        join(tempRoot, "dist", "plugin-sdk", "channel-test-helpers.d.ts"),
         "//#region src/plugin-sdk/test-helpers/session.ts\n",
         "utf8",
       );
 
-      expect(collectForbiddenPackContentPaths(["dist/plugin-sdk/testing.d.ts"], tempRoot)).toEqual([
-        "dist/plugin-sdk/testing.d.ts",
-      ]);
+      expect(
+        collectForbiddenPackContentPaths(["dist/plugin-sdk/channel-test-helpers.d.ts"], tempRoot),
+      ).toEqual(["dist/plugin-sdk/channel-test-helpers.d.ts"]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

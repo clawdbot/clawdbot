@@ -16,7 +16,7 @@ Adds ComfyUI model provider support to OpenClaw.
 
 ## Surface
 
-providers: comfy; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders
+providers: `comfy`; contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
 
 ## Related docs
 

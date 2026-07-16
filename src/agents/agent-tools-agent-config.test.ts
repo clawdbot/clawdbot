@@ -504,11 +504,13 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerTools).toContain("cron");
     expect(ownerTools).toContain("gateway");
     expect(ownerTools).toContain("nodes");
+    expect(ownerTools).toContain("openclaw");
     expect(nonOwnerTools).not.toContain("exec");
     expect(nonOwnerTools).not.toContain("process");
     expect(nonOwnerTools).not.toContain("cron");
     expect(nonOwnerTools).not.toContain("gateway");
     expect(nonOwnerTools).not.toContain("nodes");
+    expect(nonOwnerTools).not.toContain("openclaw");
   });
 
   it("should let agent per-sender policy override global sender wildcard", () => {

@@ -5,7 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
-import { resolveLogFile } from "../../logging/log-tail.js";
+import { readLogWindowFully, resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -87,8 +87,8 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
       return [];
     }
     const buffer = Buffer.alloc(length);
-    const readResult = await handle.read(buffer, 0, length, start);
-    const text = buffer.toString("utf8", 0, readResult.bytesRead);
+    const bytesRead = await readLogWindowFully(handle, buffer, start);
+    const text = buffer.toString("utf8", 0, bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);

@@ -25,6 +25,12 @@ import {
   parseRuntimeResult,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 
 const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
 
@@ -45,10 +51,12 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
+  workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
 
 class WorkerTurnExecutionError extends Error {}
+class WorkerWorkspaceReconciliationError extends Error {}
 
 function required(value: string | undefined, field: string): string {
   const normalized = value?.trim();
@@ -142,6 +150,7 @@ async function failHandedOffTurn(params: {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   placement: ActiveWorkerPlacement;
+  turnClaim: WorkerSessionTurnClaim;
   error: unknown;
 }): Promise<void> {
   const primaryFailure = recoveryError(params.error);
@@ -162,6 +171,7 @@ async function failHandedOffTurn(params: {
   if (draining.state !== "draining") {
     return;
   }
+  releaseClaimIfOwned(params.placements, params.turnClaim);
   try {
     await params.environments.stopTunnel(
       params.placement.environmentId,
@@ -202,7 +212,9 @@ async function executeWorkerTurn(params: {
   onHandoff: () => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
+  turnClaim: WorkerSessionTurnClaim;
 }) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
@@ -216,6 +228,43 @@ async function executeWorkerTurn(params: {
     environment.attachedSessionIds[0] !== placement.sessionId
   ) {
     throw new Error("Active worker placement does not match its attached environment");
+  }
+  let manifestAccepted = false;
+  let journalOwner = {
+    sessionId: placement.sessionId,
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+    placementGeneration: placement.generation,
+  };
+  const journal = {
+    load: () => params.placements.loadWorkspaceReconciliation(journalOwner),
+    begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
+      params.placements.beginWorkspaceReconciliation(journalOwner, next),
+    commit: (manifestRef: string) => {
+      params.placements.updateWorkspaceBaseManifest({
+        claim: params.turnClaim,
+        manifestRef,
+      });
+      manifestAccepted = true;
+    },
+    abort: () => params.placements.abortWorkspaceReconciliation(journalOwner),
+  };
+  try {
+    await params.workspaceOperations.run(placement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace recovery lost its turn claim");
+      }
+      const pending = journal.load();
+      if (pending) {
+        await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
+        journal.abort();
+      }
+    });
+  } catch (error) {
+    throw new WorkerWorkspaceReconciliationError(
+      `Cloud worker workspace recovery could not complete: ${recoveryError(error)}`,
+      { cause: error },
+    );
   }
 
   const startedAt = Date.now();
@@ -340,10 +389,10 @@ async function executeWorkerTurn(params: {
   const processResult = await processPromise;
   if (processResult.code !== 0 || processResult.signal !== null || processResult.killed) {
     // Boxes are destroyed on failure, so the redacted stderr tail is the only forensics.
-    const detail = redactSensitiveText(processResult.stderr, { mode: "tools" })
-      .replace(/\s+/gu, " ")
-      .trim()
-      .slice(0, 400);
+    const detail = truncateUtf16Safe(
+      redactSensitiveText(processResult.stderr, { mode: "tools" }).replace(/\s+/gu, " ").trim(),
+      400,
+    );
     throw new Error(
       detail
         ? `Cloud worker process failed before completing the turn: ${detail}`
@@ -366,11 +415,31 @@ async function executeWorkerTurn(params: {
   ) {
     throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
   }
+  if (
+    (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||
+    currentPlacement.environmentId !== placement.environmentId ||
+    currentPlacement.activeOwnerEpoch !== placement.activeOwnerEpoch
+  ) {
+    throw new Error("Cloud worker placement changed before workspace reconciliation");
+  }
   const terminal = runtimeResult.transcriptLeafId
     ? completed.getEntry(runtimeResult.transcriptLeafId)
     : undefined;
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
+  }
+  const pendingWorkspaceResult = params.placements
+    .listPendingWorkspaceResults()
+    .some(
+      (pending) =>
+        pending.sessionId === params.turnClaim.sessionId &&
+        pending.claimId === params.turnClaim.claimId &&
+        pending.runId === params.turnClaim.runId,
+    );
+  if (!pendingWorkspaceResult) {
+    // The terminal live-event ACK and this fence are one SQLite transaction.
+    // Never accept process stdout as a weaker substitute for that durable owner.
+    throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const text = assistantText(terminal.message);
   const baseIndex = completed.getBranch().findIndex((entry) => entry.id === baseLeafId);
@@ -378,6 +447,46 @@ async function executeWorkerTurn(params: {
     .getBranch()
     .slice(baseIndex + 1)
     .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+  journalOwner = {
+    sessionId: currentPlacement.sessionId,
+    environmentId: currentPlacement.environmentId,
+    ownerEpoch: currentPlacement.activeOwnerEpoch,
+    placementGeneration: currentPlacement.generation,
+  };
+  try {
+    await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud worker workspace result lost its turn claim");
+      }
+      const quiescence = await tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
+      let resumed = false;
+      try {
+        const reconciliation = await tunnel.reconcileWorkspace({
+          localPath: turn.workspaceDir,
+          remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
+          baseManifestRef: currentPlacement.workspaceBaseManifestRef,
+          journal,
+        });
+        if (!manifestAccepted) {
+          throw new Error("Cloud worker workspace reconciliation was not durably accepted");
+        }
+        await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+        params.placements.acceptWorkspaceResult(params.turnClaim);
+        await quiescence.resume();
+        resumed = true;
+        params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+      } finally {
+        if (!resumed) {
+          await quiescence.resume();
+        }
+      }
+    });
+  } catch (error) {
+    throw new WorkerWorkspaceReconciliationError(
+      `Cloud worker finished, but its workspace result could not be reconciled: ${recoveryError(error)}`,
+      { cause: error },
+    );
+  }
   return {
     ...(text ? { payloads: [{ text }] } : {}),
     meta: {
@@ -395,6 +504,8 @@ async function executeWorkerTurn(params: {
 export function createWorkerSessionTurnPlacementProvider(
   options: WorkerTurnLauncherOptions,
 ): SessionPlacementAdmissionProvider {
+  const workspaceOperations =
+    options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator();
   return {
     async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
       if (!options.placements.get(claim.sessionId) && options.admitNewPlacements === false) {
@@ -442,14 +553,32 @@ export function createWorkerSessionTurnPlacementProvider(
           },
           placement,
           placements: options.placements,
+          workspaceOperations,
           turn,
+          turnClaim,
         });
-        if (!options.placements.validateTurnClaim(turnClaim)) {
-          throw new Error("Cloud worker turn ownership changed before result reconciliation");
-        }
-        options.placements.releaseTurn(turnClaim);
         return result;
       } catch (error) {
+        const pendingWorkspaceResult = options.placements
+          .listPendingWorkspaceResults()
+          .some(
+            (pending) =>
+              pending.sessionId === turnClaim.sessionId &&
+              pending.claimId === turnClaim.claimId &&
+              pending.runId === turnClaim.runId,
+          );
+        if (pendingWorkspaceResult) {
+          // A recovery sweep owns the still-live worker claim. Teardown here
+          // could discard the terminal event's durably fenced file results.
+          options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          throw error;
+        }
+        if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
+          // Recovery runs before remote launch. Preserve the journal's active
+          // generation; only the new admission claim belongs to this attempt.
+          releaseClaimIfOwned(options.placements, turnClaim);
+          throw error;
+        }
         if (error instanceof WorkerTurnExecutionError) {
           if (options.placements.validateTurnClaim(turnClaim)) {
             options.placements.releaseTurn(turnClaim);
@@ -461,6 +590,7 @@ export function createWorkerSessionTurnPlacementProvider(
             environments: options.environments,
             placements: options.placements,
             placement,
+            turnClaim,
             error,
           });
         } else {

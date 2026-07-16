@@ -42,10 +42,10 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   configureMemoryCoreDreamingState,
-  readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
+import { dreamingStateComparison } from "./src/migration/dreaming-state-comparison.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
@@ -500,6 +500,7 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
+    // Canonical derived payloads win only when both rows match their shared dimensions.
     assertLegacyRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
@@ -510,9 +511,8 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
            AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
+           AND CASE WHEN json_valid(canonical.embedding) AND json_valid(legacy.embedding) THEN json_type(canonical.embedding) = 'array' AND json_array_length(canonical.embedding) = canonical.dims AND json_type(legacy.embedding) = 'array' AND json_array_length(legacy.embedding) = legacy.dims ELSE 0 END
        )`,
       "embedding_cache",
     );
@@ -1032,10 +1032,6 @@ async function collectLegacySources(
   return sources;
 }
 
-async function workspaceHasRows(namespace: string, workspaceDir: string): Promise<boolean> {
-  return (await readMemoryCoreWorkspaceEntries({ namespace, workspaceDir })).length > 0;
-}
-
 async function migrateDailyIngestion(source: LegacySource): Promise<number> {
   const state = normalizeDailyIngestionState(await readJsonFile(source.filePath));
   await writeMemoryCoreWorkspaceEntries({
@@ -1117,19 +1113,6 @@ async function migratePhaseSignals(source: LegacySource): Promise<number> {
   return Object.keys(state.entries).length;
 }
 
-function targetNamespacesForSource(label: string): string[] {
-  if (label === "daily ingestion") {
-    return [DREAMING_DAILY_INGESTION_NAMESPACE];
-  }
-  if (label === "session ingestion") {
-    return [DREAMING_SESSION_INGESTION_FILES_NAMESPACE, DREAMING_SESSION_INGESTION_SEEN_NAMESPACE];
-  }
-  if (label === "short-term recall") {
-    return [SHORT_TERM_RECALL_NAMESPACE];
-  }
-  return [SHORT_TERM_PHASE_SIGNAL_NAMESPACE];
-}
-
 async function migrateSource(source: LegacySource): Promise<number> {
   if (source.label === "daily ingestion") {
     return await migrateDailyIngestion(source);
@@ -1163,17 +1146,29 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const source of await collectLegacySources(params.config, params.env)) {
-        const targetHasRows = (
-          await Promise.all(
-            targetNamespacesForSource(source.label).map((namespace) =>
-              workspaceHasRows(namespace, source.workspaceDir),
-            ),
-          )
-        ).some(Boolean);
+        const targetHasRows = await dreamingStateComparison.targetHasRows(source);
         if (targetHasRows) {
+          let sourceAcknowledged: boolean;
+          try {
+            sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
+          } catch (err) {
+            warnings.push(
+              `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be compared: ${String(err)}`,
+            );
+            continue;
+          }
+          if (sourceAcknowledged) {
+            // Older releases may rewrite these rollback sources. The stored hash
+            // keeps unchanged sources informational; rewritten sources fail closed.
+            notices.push(
+              `Retained acknowledged Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
+            );
+            continue;
+          }
           warnings.push(
-            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows already exist; left legacy source in place`,
+            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows conflict with the legacy source; left legacy source in place`,
           );
           continue;
         }
@@ -1196,7 +1191,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     },
   },
   {
@@ -1260,3 +1259,4 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
   },
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

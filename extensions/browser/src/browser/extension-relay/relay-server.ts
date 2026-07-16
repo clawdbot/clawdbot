@@ -15,6 +15,7 @@ import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { rawDataToString } from "../../infra/ws.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 
@@ -30,7 +31,7 @@ export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 
 /** Wire an accepted extension WebSocket to a bridge (shared by loopback + gateway paths). */
 export function attachExtensionWebSocket(bridge: ExtensionRelayBridge, ws: WebSocket): void {
-  bindSocket(ws, bridge.attachExtensionSocket(toBridgeSocket(ws)));
+  bindSocket(ws, bridge.attachExtensionSocket(ws));
 }
 
 /** Running relay server handle owned by the profile runtime state. */
@@ -191,7 +192,7 @@ export async function startExtensionRelayServer(params: {
     }
     if (path === "/cdp") {
       wss.handleUpgrade(req, socket, head, (ws) => {
-        bindSocket(ws, bridge.attachCdpClientSocket(toBridgeSocket(ws)));
+        bindSocket(ws, bridge.attachCdpClientSocket(ws));
       });
       return;
     }
@@ -222,40 +223,12 @@ export async function startExtensionRelayServer(params: {
   };
 }
 
-function toBridgeSocket(ws: WebSocket) {
-  return {
-    send: (data: string) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(data);
-      }
-    },
-    close: (code?: number, reason?: string) => {
-      try {
-        ws.close(code, reason);
-      } catch {
-        // already closing
-      }
-    },
-  };
-}
-
-/** Decode a ws frame (string | Buffer | Buffer[] | ArrayBuffer) to text. */
-function decodeWsData(data: import("ws").RawData | string): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data as ArrayBuffer).toString("utf8");
-}
-
 function bindSocket(
   ws: WebSocket,
   handlers: { onMessage: (raw: string) => void; onClose: () => void },
 ): void {
   ws.on("message", (data) => {
-    handlers.onMessage(decodeWsData(data));
+    handlers.onMessage(rawDataToString(data));
   });
   ws.on("close", handlers.onClose);
   ws.on("error", (err) => {

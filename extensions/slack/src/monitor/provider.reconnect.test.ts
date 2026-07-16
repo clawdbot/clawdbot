@@ -69,6 +69,24 @@ describe("slack socket reconnect helpers", () => {
     expect(status).not.toHaveProperty("lastEventAt");
   });
 
+  it("marks socket mode degraded when boot identity is unavailable", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
+
+    publishSlackConnectedStatus(setStatus, {
+      healthState: "degraded",
+      lastError: "auth.test returned no user_id",
+    });
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: 1_711_406_400_500,
+      healthState: "degraded",
+      lastError: "auth.test returned no user_id",
+    });
+  });
+
   it("marks socket mode disconnected when an error closes the socket", () => {
     const setStatus = vi.fn();
     const err = new Error("dns down");

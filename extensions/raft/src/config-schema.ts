@@ -10,7 +10,7 @@ const RaftAccountSchema = z
   })
   .strict();
 
-export const RaftConfigSchema = z
+const RaftConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),

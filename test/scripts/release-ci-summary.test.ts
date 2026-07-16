@@ -7,8 +7,10 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
+  artifactDownloadArgs,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
+  githubRestArgs,
   manifestChildEntries,
   parseReleaseCiSummaryArgs,
   readManifestArtifactArchive,
@@ -35,6 +37,19 @@ import {
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
+
+describe("GitHub API commands", () => {
+  it("delegates authentication to gh for REST and artifact requests", () => {
+    expect(githubRestArgs("actions/runs/123", "owner/repo")).toEqual([
+      "api",
+      "repos/owner/repo/actions/runs/123",
+    ]);
+    expect(artifactDownloadArgs(456, "owner/repo")).toEqual([
+      "api",
+      "repos/owner/repo/actions/artifacts/456/zip",
+    ]);
+  });
+});
 
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;

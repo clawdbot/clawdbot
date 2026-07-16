@@ -24,8 +24,6 @@ export function formatIso(iso?: string) {
 export function formatDuration(ms: number): string {
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
   return prettyMilliseconds(Math.max(0, roundedMs), {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 0,
     unitCount: 2,
   });
 }

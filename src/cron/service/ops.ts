@@ -1271,3 +1271,4 @@ export function wakeNow(
 ) {
   return wake(state, opts);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

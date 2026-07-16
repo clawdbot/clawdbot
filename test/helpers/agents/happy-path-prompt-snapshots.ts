@@ -12,7 +12,7 @@ import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
+import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
@@ -323,11 +323,16 @@ function textStats(value: string): { chars: number; roughTokens: number } {
 
 function createPrompt(ctx: TemplateContext, body: string): string {
   const inboundUserContext = buildInboundUserContextPrefix(ctx);
-  return buildReplyPromptBodies({
+  const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
+  return buildReplyPromptEnvelope({
     ctx,
     sessionCtx: ctx,
-    effectiveBaseBody: [inboundUserContext, body].filter(Boolean).join("\n\n"),
-    prefixedBody: [inboundUserContext, body].filter(Boolean).join("\n\n"),
+    baseBody: promptBody,
+    hasUserBody: true,
+    inboundUserContext: "",
+    isBareSessionReset: false,
+    startupAction: "new",
+    prefixedBody: promptBody,
   }).prefixedCommandBody;
 }
 
@@ -337,7 +342,7 @@ function createExtraSystemPrompt(params: {
   intro?: string;
 }): string {
   return [
-    buildInboundMetaSystemPrompt(params.ctx),
+    buildInboundMetaSystemPrompt(params.ctx, {}),
     params.chatContext,
     params.intro,
     params.ctx.GroupSystemPrompt,

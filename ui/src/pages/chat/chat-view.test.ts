@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render } from "lit";
+import { html, render, type ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -34,6 +34,7 @@ import {
   type ChatModelControlsProps,
 } from "./components/chat-model-controls.ts";
 import {
+  ChatTranscriptController,
   isChatThreadSearchOpen,
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
@@ -98,17 +99,43 @@ const buildChatItemsMock = vi.hoisted(() =>
       }
       const items: unknown[] = [];
       if (props.messages.length > 0) {
-        items.push({
-          kind: "group",
-          key: "group:assistant:test",
-          role: "assistant",
-          messages: props.messages.map((message, index) => ({
-            key: `message:${index}`,
-            message,
-          })),
-          timestamp: 1,
-          isStreaming: false,
-        });
+        const virtualRows = props.messages.every(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            (message as { testVirtualRow?: unknown }).testVirtualRow === true,
+        );
+        if (virtualRows) {
+          items.push(
+            ...props.messages.map((message, index) => {
+              const testMessage = message as {
+                testVirtualKey?: string;
+                testVirtualRole?: string;
+              };
+              const key = testMessage.testVirtualKey ?? String(index);
+              return {
+                kind: "group",
+                key: `group:${key}`,
+                role: testMessage.testVirtualRole ?? (index % 2 === 0 ? "user" : "assistant"),
+                messages: [{ key: `message:${key}`, message }],
+                timestamp: index + 1,
+                isStreaming: false,
+              };
+            }),
+          );
+        } else {
+          items.push({
+            kind: "group",
+            key: "group:assistant:test",
+            role: "assistant",
+            messages: props.messages.map((message, index) => ({
+              key: `message:${index}`,
+              message,
+            })),
+            timestamp: 1,
+            isStreaming: false,
+          });
+        }
       }
       // Mirrors buildChatItems: streamed text renders as a stream item; an
       // empty stream or a working run with no stream shows the reading
@@ -562,7 +589,14 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
 function createChatProps(
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ): Parameters<typeof renderChat>[0] {
+  const transcript = new ChatTranscriptController({
+    addController: () => undefined,
+    removeController: () => undefined,
+    requestUpdate: () => undefined,
+    updateComplete: Promise.resolve(true),
+  } satisfies ReactiveControllerHost);
   return {
+    transcript,
     paneId: "single",
     sessionKey: "main",
     onSessionKeyChange: () => undefined,
@@ -696,8 +730,6 @@ describe("chat history pagination", () => {
     const container = renderChatView({
       historyPagination: {
         loading: true,
-        manualFallback: false,
-        onLoadOlder: () => undefined,
       },
     });
     const threadInner = requireElement(container, ".chat-thread-inner", "chat thread inner");
@@ -711,24 +743,48 @@ describe("chat history pagination", () => {
     expect(sentinel.querySelector("button")).toBeNull();
   });
 
-  it("keeps a manual button only when IntersectionObserver is unavailable", () => {
-    const onLoadOlder = vi.fn();
+  it("loads older history from upward wheel and keyboard intent without a button", () => {
+    const onHistoryIntent = vi.fn();
     const container = renderChatView({
       historyPagination: {
         loading: false,
-        manualFallback: true,
-        onLoadOlder,
       },
+      onHistoryIntent,
     });
-    const button = requireElement(
-      container,
-      ".chat-history-fallback",
-      "history fallback",
-    ) as HTMLButtonElement;
+    const thread = requireElement(container, ".chat-thread", "chat thread");
+    const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
-    expect(button.textContent?.trim()).toBe(t("chat.loadOlder"));
-    button.click();
-    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    expect(sentinel.querySelector("button")).toBeNull();
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+    thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    expect(onHistoryIntent).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps wheel and touch history intent listeners passive", () => {
+    const addEventListener = vi.spyOn(EventTarget.prototype, "addEventListener");
+    try {
+      renderChatView({
+        historyPagination: {
+          loading: false,
+        },
+        onHistoryIntent: vi.fn(),
+      });
+
+      for (const eventName of ["wheel", "touchstart", "touchmove"]) {
+        expect(
+          addEventListener.mock.calls.some(
+            ([type, , options]) =>
+              type === eventName &&
+              typeof options === "object" &&
+              options !== null &&
+              "passive" in options &&
+              options.passive === true,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      addEventListener.mockRestore();
+    }
   });
 });
 
@@ -955,25 +1011,8 @@ describe("chat code-block copy", () => {
   });
 });
 
-describe("chat history render window", () => {
-  it("starts freshly loaded large histories with a small render window", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-
-    renderChatView({ messages });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
-    );
-  });
-
-  it("expands the history render window when the user scrolls to the top", () => {
+describe("chat transcript rendering", () => {
+  it("passes the full loaded history to one render path and leaves scroll ownership to the pane", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `message ${index}`,
@@ -983,205 +1022,125 @@ describe("chat history render window", () => {
     const onChatScroll = vi.fn();
 
     const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 120;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
+    const input = buildChatItemsMock.mock.lastCall?.[0] as Record<string, unknown>;
+    expect(input.messages).toBe(messages);
+    expect(input).not.toHaveProperty("historyRenderLimit");
 
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
-    );
-  });
-
-  it("preserves the visible anchor across repeated top-scroll expansion", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
-    const frameCallbacks: FrameRequestCallback[] = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      }),
-    );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    Object.defineProperties(thread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-    });
-    thread.scrollTop = 0;
+    onRequestUpdate.mockClear();
+    const thread = requireElement(container, ".chat-thread", "chat thread");
     thread.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    Object.defineProperty(thread, "scrollHeight", { configurable: true, value: 600 });
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
-    );
-    const firstExpandedThread = requireElement(
-      container,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    Object.defineProperties(firstExpandedThread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 600 },
-    });
-    for (const callback of frameCallbacks.splice(0)) {
-      callback(0);
-    }
-    expect(firstExpandedThread.scrollTop).toBe(300);
-
-    firstExpandedThread.scrollTop = 0;
-    firstExpandedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 80,
-      }),
-    );
-    const secondExpandedThread = requireElement(
-      container,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    Object.defineProperties(secondExpandedThread, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 900 },
-    });
-    for (const callback of frameCallbacks.splice(0)) {
-      callback(0);
-    }
-    expect(secondExpandedThread.scrollTop).toBe(300);
-    expect(onRequestUpdate).toHaveBeenCalledTimes(2);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not expand the history render window for bottom auto-scrolls inside the top threshold", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
-
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 30;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
+    expect(onChatScroll).toHaveBeenCalledOnce();
     expect(onRequestUpdate).not.toHaveBeenCalled();
-    expect(onChatScroll).toHaveBeenCalledTimes(1);
-
-    buildChatItemsMock.mockClear();
-    const rerenderedContainer = renderChatView({ messages, onRequestUpdate, onChatScroll });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
-    );
-
-    const rerenderedThread = requireElement(
-      rerenderedContainer,
-      ".chat-thread",
-      "chat thread",
-    ) as HTMLElement;
-    rerenderedThread.scrollTop = 0;
-    rerenderedThread.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(2);
   });
 
-  it("expands the history render window when the thread is already at the top", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
+  it("mounts a bounded end-anchored range for long transcripts", () => {
+    const messages = Array.from({ length: 500 }, (_, index) => ({
+      testVirtualRow: true,
       content: `message ${index}`,
-      timestamp: index,
     }));
-    const onRequestUpdate = vi.fn();
-    const onChatScroll = vi.fn();
 
-    const container = renderChatView({ messages, onRequestUpdate, onChatScroll });
-    const thread = requireElement(container, ".chat-thread", "chat thread") as HTMLElement;
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+    const container = renderChatView({ messages });
+    const rows = [...container.querySelectorAll(".chat-virtual-row")];
 
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onChatScroll).toHaveBeenCalledTimes(1);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(40);
+    expect(container.textContent).toContain("message 499");
+    expect(container.textContent).not.toContain("message 0");
+    expect(container.querySelector(".chat-thread")?.getAttribute("aria-live")).toBe("off");
+    expect(rows.every((row) => row.getAttribute("aria-live") === null)).toBe(true);
+    const announcement = requireElement(
+      container,
+      ".chat-transcript-announcement",
+      "chat transcript announcement",
+    );
+    expect(announcement.getAttribute("role")).toBe("status");
+    expect(announcement.getAttribute("aria-live")).toBe("polite");
+    expect(announcement.getAttribute("aria-atomic")).toBe("true");
+    expect(announcement.textContent).toBe("");
   });
 
-  it("expands the render window after render when the initial window cannot scroll", () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({
-      role: index % 2 === 0 ? "user" : "assistant",
-      content: `message ${index}`,
-      timestamp: index,
-    }));
-    const onRequestUpdate = vi.fn();
-    const onScrollToBottom = vi.fn();
-    const frameCallbacks: FrameRequestCallback[] = [];
-    vi.stubGlobal(
-      "requestAnimationFrame",
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      }),
+  it("announces only a genuinely appended assistant row", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const container = document.createElement("div");
+    const message = (key: string, role: "user" | "assistant", content: string) => ({
+      testVirtualRow: true,
+      testVirtualKey: key,
+      testVirtualRole: role,
+      content,
+    });
+    const renderMessages = (messages: unknown[]) =>
+      render(renderChat(createChatProps({ transcript, messages })), container);
+
+    const existing = [
+      message("user-1", "user", "Question"),
+      message("assistant-1", "assistant", "Existing answer"),
+    ];
+    renderMessages(existing);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+
+    renderMessages([
+      message("older-user", "user", "Older question"),
+      message("older-assistant", "assistant", "Older answer"),
+      ...existing,
+    ]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
+
+    renderMessages([
+      message("older-user", "user", "Older question"),
+      message("older-assistant", "assistant", "Older answer"),
+      ...existing,
+      message("user-2", "user", "New question"),
+      message("assistant-2", "assistant", "New answer"),
+    ]);
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "New answer",
     );
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  });
 
-    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
+  it("does not announce appended rows from an inactive split pane", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const container = document.createElement("div");
+    const existing = {
+      testVirtualRow: true,
+      testVirtualKey: "assistant-1",
+      testVirtualRole: "assistant",
+      content: "Existing answer",
+    };
+    const appended = {
+      testVirtualRow: true,
+      testVirtualKey: "assistant-2",
+      testVirtualRole: "assistant",
+      content: "New answer",
+    };
 
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 30,
-      }),
+    render(
+      renderChat(createChatProps({ announceTranscript: false, transcript, messages: [existing] })),
+      container,
     );
-    expect(frameCallbacks).toHaveLength(1);
-
-    itemAt(frameCallbacks, 0, "history growth frame")(0);
-
-    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
-    expect(onScrollToBottom).toHaveBeenCalledTimes(1);
-
-    buildChatItemsMock.mockClear();
-    renderChatView({ messages, onRequestUpdate, onScrollToBottom });
-
-    expect(buildChatItemsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        messages,
-        historyRenderLimit: 60,
-      }),
+    render(
+      renderChat(
+        createChatProps({
+          announceTranscript: false,
+          transcript,
+          messages: [existing, appended],
+        }),
+      ),
+      container,
     );
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
   });
 });
 
@@ -1650,6 +1609,7 @@ describe("chat composer workbench", () => {
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
     const backgroundTasks = {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: false,
       narrowLayout: false,
       connected: true,
@@ -1681,6 +1641,7 @@ describe("chat composer workbench", () => {
   it("shows the running-tasks status row after the turn settles, not while working", () => {
     const backgroundTasks = {
       agentId: "main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: true,
       narrowLayout: false,
       connected: true,
@@ -5562,3 +5523,4 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

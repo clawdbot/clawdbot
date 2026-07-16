@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 function dedupe(values: string[]): string[] {
@@ -153,26 +154,6 @@ function signalCliStartupMetadataProcessTree(
     }
   }
   child.kill(signal);
-}
-
-function resolveRootHelpBundleIdentity(
-  distDirOverride: string = distDir,
-): { bundleName: string; signature: string } | null {
-  const bundleName = readdirSync(distDirOverride).find(
-    (entry) =>
-      entry.startsWith("root-help-") &&
-      !entry.startsWith("root-help-metadata-") &&
-      entry.endsWith(".js"),
-  );
-  if (!bundleName) {
-    return null;
-  }
-  const bundlePath = path.join(distDirOverride, bundleName);
-  const raw = readFileSync(bundlePath, "utf8");
-  return {
-    bundleName,
-    signature: createHash("sha1").update(raw).digest("hex"),
-  };
 }
 
 function updateHashFromFiles(
@@ -591,7 +572,7 @@ export async function renderBundledRootHelpText(
       : extensionsDir,
   ),
 ): Promise<string> {
-  const bundleIdentity = resolveRootHelpBundleIdentity(_distDirOverride);
+  const bundleIdentity = resolveCliStartupRootHelpBundleIdentity(_distDirOverride);
   if (!bundleIdentity) {
     throw new Error("No root-help bundle found in dist; cannot write CLI startup metadata.");
   }
@@ -778,7 +759,7 @@ export async function writeCliStartupMetadata(options?: {
   const resolvedExtensionsDir = options?.extensionsDir ?? extensionsDir;
   const resolvedSourceRootDir = options?.sourceRootDir ?? rootDir;
   const channelCatalog = readBundledChannelCatalog(resolvedExtensionsDir);
-  const bundleIdentity = resolveRootHelpBundleIdentity(resolvedDistDir);
+  const bundleIdentity = resolveCliStartupRootHelpBundleIdentity(resolvedDistDir);
   const browserHelpSourceSignature = resolveBrowserHelpSourceSignature(resolvedSourceRootDir);
   const secretsHelpSourceSignature = resolveSecretsHelpSourceSignature(resolvedSourceRootDir);
   const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);

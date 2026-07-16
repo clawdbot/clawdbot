@@ -1494,6 +1494,28 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  it("classifies generic resource-exhausted codes as rate_limit", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        code: "RESOURCE_EXHAUSTED",
+        message: "",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it.each([
+    { provider: "openai", code: "SERVER_ERROR" },
+    { provider: "google", code: "UNAVAILABLE" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not report code-only $provider $code failures as empty responses",
+    ({ provider, code }) => {
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
+        "empty_response",
+      );
+    },
+  );
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
@@ -1698,3 +1720,4 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

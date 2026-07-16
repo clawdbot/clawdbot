@@ -91,12 +91,12 @@ function scheduleDrainSoon(debounceMs: number): void {
 }
 
 /** Installs runtime hooks for extraction tests or alternate batch extraction. */
-export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
+function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
 }
 
 /** Clears queued work, timers, and injected hooks for isolated tests. */
-export function resetCommitmentExtractionRuntimeForTests(): void {
+function resetCommitmentExtractionRuntimeForTests(): void {
   if (timer) {
     clearTimer(timer);
   }
@@ -299,7 +299,7 @@ function takeAgentBatch(
 }
 
 /** Drains queued extraction work in batches and returns processed item count. */
-export async function drainCommitmentExtractionQueue(): Promise<number> {
+async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
     return 0;
   }
@@ -356,4 +356,16 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
   } finally {
     draining = false;
   }
+}
+
+if (
+  process.env.VITEST ||
+  process.env.NODE_ENV === "test" ||
+  process.env.OPENCLAW_COMMITMENTS_SAFETY_E2E === "1"
+) {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commitmentRuntimeTestApi")] = {
+    configureCommitmentExtractionRuntime,
+    drainCommitmentExtractionQueue,
+    resetCommitmentExtractionRuntimeForTests,
+  };
 }

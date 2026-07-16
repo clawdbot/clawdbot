@@ -973,3 +973,4 @@ export function getSessionCompactionCheckpoint(params: {
     (checkpoint) => checkpoint.checkpointId === checkpointId,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

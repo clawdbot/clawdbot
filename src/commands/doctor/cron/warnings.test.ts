@@ -1,6 +1,16 @@
 // Doctor cron delivery-target advisory tests cover concrete-vs-pseudo channel detection.
 import { describe, expect, it, vi } from "vitest";
-import { collectCronDeliveryTargetAdvisory } from "./warnings.js";
+import { noteCronDeliveryTargetAdvisory } from "./warnings.js";
+
+const mocks = vi.hoisted(() => ({
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
+  note: vi.fn(),
+}));
+
+vi.mock("../../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+}));
+vi.mock("../../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const STORE_PATH = "/tmp/openclaw/cron/jobs.sqlite";
 
@@ -11,6 +21,24 @@ function job(overrides: Record<string, unknown>): Record<string, unknown> {
 /** Resolver thunk returning a fixed channel set; tracks whether it was invoked. */
 function availableChannels(...ids: string[]) {
   return vi.fn(() => ids);
+}
+
+function collectCronDeliveryTargetAdvisory(params: {
+  jobs: Array<Record<string, unknown>>;
+  storePath: string;
+  resolveAvailableChannelIds: () => string[];
+}): string | null {
+  mocks.note.mockClear();
+  mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() =>
+    params.resolveAvailableChannelIds().map((id) => ({ id })),
+  );
+  noteCronDeliveryTargetAdvisory({
+    cfg: {},
+    jobs: params.jobs,
+    storePath: params.storePath,
+  });
+  const body = mocks.note.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body : null;
 }
 
 describe("collectCronDeliveryTargetAdvisory", () => {

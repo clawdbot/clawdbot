@@ -8,7 +8,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.js";
+import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.test-support.js";
 import {
   clearSessionAuthProfileOverrideMock,
   compactEmbeddedAgentSessionMock,

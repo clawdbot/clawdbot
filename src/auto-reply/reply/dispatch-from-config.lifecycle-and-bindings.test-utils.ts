@@ -806,7 +806,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
     expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
-    expect(inboundClaimCall?.[1]?.senderIsOwner).toBe(true);
+    // Context OwnerAllowFrom authorizes commands but no longer grants owner status;
+    // only commands.ownerAllowFrom or operator.admin does (operator.write here does not).
+    expect(inboundClaimCall?.[1]?.senderIsOwner).toBe(false);
     expect(inboundClaimCall?.[1]).not.toHaveProperty("gatewayClientScopes");
     expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
@@ -1859,3 +1861,4 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

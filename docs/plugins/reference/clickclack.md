@@ -16,7 +16,7 @@ Adds the Clickclack channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: clickclack
+channels: `clickclack`
 
 ## Related docs
 

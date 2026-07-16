@@ -35,9 +35,9 @@ const hoisted = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  prepareProviderRuntimeAuthMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
-  resolveCopilotApiTokenMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
@@ -52,9 +52,9 @@ const {
   fetchMock,
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
+  prepareProviderRuntimeAuthMock,
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
-  resolveCopilotApiTokenMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
@@ -147,6 +147,10 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  prepareProviderRuntimeAuth: prepareProviderRuntimeAuthMock,
+}));
+
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
@@ -157,7 +161,6 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
     "User-Agent": "GitHubCopilotChat/0.35.0",
   }),
   COPILOT_INTEGRATION_ID: "vscode-chat",
-  resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -212,11 +215,13 @@ describe("describeImageWithModel", () => {
         return { authStorage, model, modelRegistry };
       },
     );
-    resolveCopilotApiTokenMock.mockResolvedValue({
-      token: "copilot-api-token",
-      expiresAt: Date.now() + 60_000,
-      source: "test",
-      baseUrl: "https://api.githubcopilot.com",
+    prepareProviderRuntimeAuthMock.mockImplementation(async (params: { provider: string }) => {
+      return params.provider === "github-copilot"
+        ? {
+            apiKey: "copilot-api-token",
+            baseUrl: "https://api.githubcopilot.com",
+          }
+        : undefined;
     });
   });
 
@@ -1547,10 +1552,12 @@ describe("describeImageWithModel", () => {
 
     expect(completeMock).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledOnce();
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "oauth-test",
-      config: {},
-    });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({ apiKey: "oauth-test", authMode: "oauth" }),
+      }),
+    );
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(setRuntimeApiKeyMock.mock.calls[0]?.[0]).toBe("github-copilot");
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
@@ -1620,10 +1627,12 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: sourceSecret,
-      config: {},
-    });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({ apiKey: sourceSentinel, authMode: "token" }),
+      }),
+    );
     const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(looksLikeSecretSentinel(storedToken)).toBe(true);
     expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
@@ -1641,7 +1650,7 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.githubcopilot.com",
       })),
     });
-    resolveCopilotApiTokenMock.mockRejectedValueOnce(
+    prepareProviderRuntimeAuthMock.mockRejectedValueOnce(
       new Error("Copilot token exchange failed: HTTP 401"),
     );
 
@@ -1782,3 +1791,4 @@ describe("describeImageWithModel", () => {
     expect(options.maxTokens).toBe(1024);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

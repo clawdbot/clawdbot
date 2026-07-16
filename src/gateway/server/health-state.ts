@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
+import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
@@ -36,6 +37,7 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
+    appliedConfigHash: getRuntimeConfigAppliedHash(),
     sessionDefaults: {
       defaultAgentId,
       mainKey,

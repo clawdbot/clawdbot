@@ -21,7 +21,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/matrix/src/matrix/monitor/threads.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix

@@ -38,7 +38,7 @@ const SmsAccountConfigSchema = z
     });
   });
 
-export const SmsConfigSchema = SmsAccountConfigSchema.extend({
+const SmsConfigSchema = SmsAccountConfigSchema.extend({
   accounts: z.record(z.string(), SmsAccountConfigSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 });

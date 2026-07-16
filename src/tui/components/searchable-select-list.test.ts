@@ -257,6 +257,16 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toContain("gpt");
   });
 
+  it("treats slashes as fuzzy token separators", () => {
+    const list = new SearchableSelectList(
+      [{ value: "sonnet", label: "Claude Sonnet", description: "anthropic" }],
+      5,
+      mockTheme,
+    );
+
+    expectSelectedValueForQuery(list, "anthropic/sonnet", "sonnet");
+  });
+
   it("preserves fuzzy ranking when only fuzzy matches exist", () => {
     const items = [
       { value: "xg---4", label: "xg---4", description: "Worse fuzzy match" },

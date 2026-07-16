@@ -48,7 +48,7 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
     if (!pidExists(pid)) {
       return true;
     }
-    Atomics.wait(waitView, 0, 0, 25);
+    Atomics.wait(waitView, 0, 0, 5);
   }
   return !pidExists(pid);
 }
@@ -61,7 +61,7 @@ function waitForPath(filePath: string, timeoutMs: number): boolean {
     if (existsSync(filePath)) {
       return true;
     }
-    Atomics.wait(waitView, 0, 0, 25);
+    Atomics.wait(waitView, 0, 0, 5);
   }
   return existsSync(filePath);
 }

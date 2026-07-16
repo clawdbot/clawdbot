@@ -447,9 +447,9 @@
         "proposal_id"
       ]
     },
-    "crestodian": {
+    "openclaw": {
       "emoji": "🦀",
-      "title": "Crestodian",
+      "title": "OpenClaw",
       "detailKeys": [
         "action",
         "path",
@@ -459,15 +459,10 @@
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",
-      "actions": {
-        "restart": {
-          "label": "restart",
-          "detailKeys": [
-            "reason",
-            "delayMs"
-          ]
-        }
-      }
+      "detailKeys": [
+        "action",
+        "path"
+      ]
     },
     "exec": {
       "emoji": "🛠️",
@@ -493,6 +488,45 @@
         "sessionKey",
         "model"
       ]
+    },
+    "sessions": {
+      "emoji": "🗂️",
+      "title": "Session Settings",
+      "actions": {
+        "patch": {
+          "label": "update",
+          "detailKeys": [
+            "sessionKey",
+            "label",
+            "pinned",
+            "archived",
+            "model",
+            "thinkingLevel"
+          ]
+        },
+        "group_list": {
+          "label": "groups"
+        },
+        "group_set": {
+          "label": "set groups",
+          "detailKeys": [
+            "names"
+          ]
+        },
+        "group_rename": {
+          "label": "rename group",
+          "detailKeys": [
+            "name",
+            "to"
+          ]
+        },
+        "group_delete": {
+          "label": "delete group",
+          "detailKeys": [
+            "name"
+          ]
+        }
+      }
     },
     "sessions_list": {
       "emoji": "🗂️",

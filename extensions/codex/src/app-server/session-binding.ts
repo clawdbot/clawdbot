@@ -1429,3 +1429,4 @@ export function resolveCodexAppServerBindingModelProvider(
     (isCodexAppServerNativeAuthProfile(params) ? PUBLIC_OPENAI_MODEL_PROVIDER : undefined)
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,9 +3,14 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { looksLikeUuid } from "./uuid.js";
 
+type SignalSenderAliases = {
+  e164?: string;
+  uuid?: string;
+};
+
 export type SignalSender =
-  | { kind: "phone"; raw: string; e164: string }
-  | { kind: "uuid"; raw: string };
+  | { kind: "phone"; raw: string; e164: string; aliases?: SignalSenderAliases }
+  | { kind: "uuid"; raw: string; aliases?: SignalSenderAliases };
 
 type SignalAllowEntry =
   | { kind: "any" }
@@ -23,13 +28,18 @@ export function resolveSignalSender(params: {
   sourceUuid?: string | null;
 }): SignalSender | null {
   const sourceNumber = params.sourceNumber?.trim();
+  const sourceUuid = params.sourceUuid?.trim();
   if (sourceNumber) {
     const e164 = normalizeE164(sourceNumber);
     if (e164) {
-      return { kind: "phone", raw: sourceNumber, e164 };
+      return {
+        kind: "phone",
+        raw: sourceNumber,
+        e164,
+        ...(sourceUuid ? { aliases: { uuid: sourceUuid } } : {}),
+      };
     }
   }
-  const sourceUuid = params.sourceUuid?.trim();
   if (sourceUuid) {
     return { kind: "uuid", raw: sourceUuid };
   }
@@ -104,12 +114,18 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
   if (parsed.some((entry) => entry.kind === "any")) {
     return true;
   }
+  // A sender carries an alias when signal-cli has both forms cached locally
+  // (e.g. after the daemon resolved a number → uuid for an outbound send).
+  // Treat both forms as the same identity so an allowlist entry approved as
+  // one form keeps matching after the other becomes available.
+  const senderE164 = sender.kind === "phone" ? sender.e164 : sender.aliases?.e164;
+  const senderUuid = sender.kind === "uuid" ? sender.raw : sender.aliases?.uuid;
   return parsed.some((entry) => {
-    if (entry.kind === "phone" && sender.kind === "phone") {
-      return entry.e164 === sender.e164;
+    if (entry.kind === "phone") {
+      return senderE164 !== undefined && entry.e164 === senderE164;
     }
-    if (entry.kind === "uuid" && sender.kind === "uuid") {
-      return entry.raw === sender.raw;
+    if (entry.kind === "uuid") {
+      return senderUuid !== undefined && entry.raw === senderUuid;
     }
     return false;
   });

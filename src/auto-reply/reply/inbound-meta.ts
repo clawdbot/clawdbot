@@ -9,12 +9,17 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
+import {
+  formatUntrustedJsonBlock,
+  MAX_UNTRUSTED_JSON_STRING_CHARS,
+  neutralizeMarkdownFences,
+} from "./untrusted-context.js";
 
-const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
@@ -201,17 +206,6 @@ function sanitizePromptBody(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
-function neutralizeMarkdownFences(value: string): string {
-  return value.replaceAll("```", "`\u200b``");
-}
-
-function truncateUntrustedJsonString(value: string): string {
-  if (value.length <= MAX_UNTRUSTED_JSON_STRING_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, MAX_UNTRUSTED_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
-}
-
 const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
 const HEAD_TAIL_MARKER_LENGTH = HEAD_TAIL_OMISSION_MARKER.length;
 const MIN_HEAD_TAIL_CHARS = 20;
@@ -238,21 +232,6 @@ function truncateBodyHeadTail(body: string, maxChars = MAX_UNTRUSTED_JSON_STRING
   const head = truncateUtf16Safe(body, headChars);
   const tail = sliceUtf16Safe(body, -tailChars);
   return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
-}
-
-function sanitizeUntrustedJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    return neutralizeMarkdownFences(truncateUntrustedJsonString(value));
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeUntrustedJsonValue(entry));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, sanitizeUntrustedJsonValue(entry)]),
-  );
 }
 
 function truncateUntrustedTranscriptField(value: string): string {
@@ -291,15 +270,6 @@ function formatUntrustedStructuredContextLabel(label: unknown): string {
   return normalized
     ? `${normalized} (untrusted metadata):`
     : "Structured object (untrusted metadata):";
-}
-
-function formatUntrustedJsonBlock(label: string, payload: unknown): string {
-  return [
-    label,
-    "```json",
-    JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
-    "```",
-  ].join("\n");
 }
 
 function buildConversationMentionMetadataPayload(
@@ -574,7 +544,10 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   return resolveMediaType(ctx.MediaType) ?? ctx.MediaTypes?.map(resolveMediaType).find(Boolean);
 }
 
-function resolveInboundFormattingHints(ctx: TemplateContext):
+function resolveInboundFormattingHints(
+  ctx: TemplateContext,
+  cfg: OpenClawConfig,
+):
   | {
       text_markup: string;
       rules: string[];
@@ -588,6 +561,7 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
   const agentPrompt = (getLoadedChannelPluginById(normalizedChannel) as ChannelPlugin | undefined)
     ?.agentPrompt;
   return agentPrompt?.inboundFormattingHints?.({
+    cfg,
     accountId: normalizePromptMetadataString(ctx.AccountId) ?? undefined,
   });
 }
@@ -595,7 +569,8 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
 /** Builds trusted system metadata for the inbound channel and formatting hints. */
 export function buildInboundMetaSystemPrompt(
   ctx: TemplateContext,
-  options?: { includeFormattingHints?: boolean },
+  cfg: OpenClawConfig,
+  options?: { includeFormattingHints?: boolean; formattingHintsCtx?: TemplateContext },
 ): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -618,8 +593,13 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    // Authoring hints follow the reply delivery channel, not the inbound event:
+    // system-event turns (heartbeat/cron) carry the persisted channel/account in
+    // formattingHintsCtx while ctx still identifies the system provider.
     response_format:
-      options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
+      options?.includeFormattingHints === false
+        ? undefined
+        : resolveInboundFormattingHints(options?.formattingHintsCtx ?? ctx, cfg),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
@@ -843,3 +823,4 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

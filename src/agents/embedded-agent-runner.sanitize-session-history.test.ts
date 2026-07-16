@@ -23,7 +23,6 @@ import {
   TEST_SESSION_ID,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
-import { OMITTED_ASSISTANT_REASONING_TEXT } from "./embedded-agent-runner/thinking.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
@@ -134,6 +133,7 @@ let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 let testTimestamp = 1;
 const nextTimestamp = () => testTimestamp++;
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 // Keep session-transcript-repair real: it is a pure repair boundary, and these
 // tests should fail if the shared sanitizer stops passing simple messages.
@@ -2658,3 +2658,4 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

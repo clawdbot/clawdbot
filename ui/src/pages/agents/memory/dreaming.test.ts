@@ -1387,3 +1387,4 @@ describe("dreaming controller", () => {
     expect(state.dreamDiaryActionMessage).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

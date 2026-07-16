@@ -1,35 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
-
-const PROVIDER_ELEMENT_NAME = "test-command-palette-context-provider";
-
-class CommandPaletteContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext<RouteId>) {
-    this.contextProvider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, CommandPaletteContextProvider);
-}
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -112,11 +94,10 @@ function createDeferred<T>() {
 }
 
 async function mountPalette(context: ApplicationContext<RouteId>) {
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as CommandPaletteContextProvider;
+  const provider = createApplicationContextProvider(context);
   const palette = document.createElement("openclaw-command-palette") as CommandPalette;
   palette.onNavigate = vi.fn();
   palette.onSelectSession = vi.fn();
-  provider.setContext(context);
   provider.append(palette);
   document.body.append(provider);
   await palette.updateComplete;

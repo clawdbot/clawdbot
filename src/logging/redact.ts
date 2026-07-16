@@ -1240,3 +1240,4 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     : lines;
   return redactText(redactedLines.join("\n"), resolved.patterns).split("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -41,7 +41,7 @@ const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let formatError: typeof import("./session.js").formatError;
-let OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV: typeof import("./session.js").OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV;
+const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
@@ -226,7 +226,6 @@ describe("web session", () => {
     ({
       createWaSocket,
       formatError,
-      OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV,
       waitForWaConnection,
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,

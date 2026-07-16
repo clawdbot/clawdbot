@@ -7,6 +7,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatErrorMessage,
@@ -16,6 +17,8 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
+/** user_list JSON can be larger than inbound webhook pre-auth payloads. */
+const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
 
@@ -147,7 +150,7 @@ export async function sendFileUrl(
  * The user_list endpoint uses the same base URL as the chatbot API but
  * with method=user_list instead of method=chatbot.
  */
-export async function fetchChatUsers(
+async function fetchChatUsers(
   incomingUrl: string,
   allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
@@ -182,31 +185,46 @@ export async function fetchChatUsers(
 
     const req = transport
       .get(listUrl, requestOptions, (res) => {
-        let data = "";
-        res.on("data", (c: Buffer) => {
-          data += c.toString();
-        });
-        res.on("end", () => {
-          const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
-          if (!result) {
-            log?.warn("fetchChatUsers: failed to parse user_list response");
-            finish(cached?.users ?? []);
-            return;
-          }
-
-          if (result.success) {
-            const users = result.data?.users ?? [];
-            chatUserCache.set(listUrl, {
-              users,
-              cachedAt: now,
+        void (async () => {
+          try {
+            const data = await readByteStreamWithLimit(res, {
+              maxBytes: USER_LIST_RESPONSE_MAX_BYTES,
+              onOverflow: ({ maxBytes }) =>
+                new Error(`user_list response exceeded ${maxBytes} bytes`),
             });
-            finish(users);
-            return;
-          }
+            if (settled) {
+              return;
+            }
+            const result = safeParseJsonWithSchema(
+              ChatUserListResponseSchema,
+              data.toString("utf8"),
+            );
+            if (!result) {
+              log?.warn("fetchChatUsers: failed to parse user_list response");
+              finish(cached?.users ?? []);
+              return;
+            }
 
-          log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
-          finish(cached?.users ?? []);
-        });
+            if (result.success) {
+              const users = result.data?.users ?? [];
+              chatUserCache.set(listUrl, {
+                users,
+                cachedAt: now,
+              });
+              finish(users);
+              return;
+            }
+
+            log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+            finish(cached?.users ?? []);
+          } catch (err) {
+            if (settled) {
+              return;
+            }
+            log?.warn(`fetchChatUsers: ${formatErrorMessage(err)}, using cached data`);
+            finish(cached?.users ?? []);
+          }
+        })();
       })
       .on("error", (err) => {
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
@@ -324,13 +342,10 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
         rejectUnauthorized: !allowInsecureSsl,
       },
       (res) => {
-        let data = "";
-        res.on("data", (chunk: Buffer) => {
-          data += chunk.toString();
-        });
         res.on("end", () => {
           resolve(res.statusCode === 200);
         });
+        res.resume();
       },
     );
 

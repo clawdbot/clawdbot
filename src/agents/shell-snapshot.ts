@@ -102,14 +102,7 @@ export async function maybeWrapCommandWithShellSnapshot(
   }
 }
 
-export function resetShellSnapshotCacheForTests(): void {
-  snapshotCache.clear();
-  cleanupPromise = null;
-}
-
-export function resolveShellSnapshotDir(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveShellSnapshotDir(env: Record<string, string | undefined> = process.env): string {
   return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
 }
 

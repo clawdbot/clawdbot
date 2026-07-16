@@ -3,7 +3,7 @@ import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
-import { testing } from "./monitor.js";
+import "./monitor.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const apiMocks = vi.hoisted(() => ({
@@ -15,6 +15,12 @@ const accessMocks = vi.hoisted(() => ({
   applyGoogleChatInboundAccessPolicy: vi.fn(),
 }));
 
+const routingMocks = vi.hoisted(() => ({
+  processEvent: undefined as
+    | ((event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>)
+    | undefined,
+}));
+
 vi.mock("./api.js", () => ({
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
   sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
@@ -22,6 +28,15 @@ vi.mock("./api.js", () => ({
 
 vi.mock("./monitor-access.js", () => ({
   applyGoogleChatInboundAccessPolicy: accessMocks.applyGoogleChatInboundAccessPolicy,
+}));
+
+vi.mock("./monitor-routing.js", () => ({
+  registerGoogleChatWebhookTarget: vi.fn(),
+  setGoogleChatWebhookEventProcessor: vi.fn(
+    (processEvent: (event: GoogleChatEvent, target: Record<string, unknown>) => Promise<void>) => {
+      routingMocks.processEvent = processEvent;
+    },
+  ),
 }));
 
 beforeEach(() => {
@@ -58,68 +73,28 @@ function createInboundClassificationHarness() {
   return { buildContext, core, resolveAgentRoute, runTurn };
 }
 
+async function processGoogleChatTestEvent(params: {
+  event: GoogleChatEvent;
+  account: ResolvedGoogleChatAccount;
+  config: Record<string, unknown>;
+  runtime: GoogleChatRuntimeEnv;
+  core: GoogleChatCoreRuntime;
+  mediaMaxMb: number;
+}): Promise<void> {
+  if (!routingMocks.processEvent) {
+    throw new Error("Expected Google Chat webhook event processor registration");
+  }
+  await routingMocks.processEvent(params.event, {
+    account: params.account,
+    config: params.config,
+    runtime: params.runtime,
+    core: params.core,
+    mediaMaxMb: params.mediaMaxMb,
+    path: "/googlechat",
+  });
+}
+
 describe("googlechat monitor bot loop protection", () => {
-  it("maps accepted bot-authored messages to shared channel-turn facts", () => {
-    expect(
-      testing.resolveGoogleChatBotLoopProtection({
-        allowBots: true,
-        isBotSender: true,
-        senderId: "users/other-bot",
-        appUserId: "users/app-bot",
-        accountId: "work",
-        conversationId: "spaces/AAA",
-        config: { maxEventsPerWindow: 3 },
-        defaultsConfig: { maxEventsPerWindow: 20 },
-        eventTime: "2026-03-22T00:00:00.000Z",
-      }),
-    ).toEqual({
-      scopeId: "work",
-      conversationId: "spaces/AAA",
-      senderId: "users/other-bot",
-      receiverId: "users/app-bot",
-      config: { maxEventsPerWindow: 3 },
-      defaultsConfig: { maxEventsPerWindow: 20 },
-      defaultEnabled: true,
-      nowMs: Date.parse("2026-03-22T00:00:00.000Z"),
-    });
-  });
-
-  it("does not guard human messages or the app's own echo", () => {
-    expect(
-      testing.resolveGoogleChatBotLoopProtection({
-        allowBots: true,
-        isBotSender: false,
-        senderId: "users/alice",
-        appUserId: "users/app",
-        accountId: "work",
-        conversationId: "spaces/AAA",
-      }),
-    ).toBeUndefined();
-    expect(
-      testing.resolveGoogleChatBotLoopProtection({
-        allowBots: true,
-        isBotSender: true,
-        senderId: "users/app",
-        appUserId: "users/app",
-        accountId: "work",
-        conversationId: "spaces/AAA",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("layers space bot loop overrides over account settings field-by-field", () => {
-    expect(
-      testing.resolveGoogleChatBotLoopProtectionConfig({
-        accountConfig: { windowSeconds: 120, cooldownSeconds: 240 },
-        groupConfig: { maxEventsPerWindow: 3 },
-      }),
-    ).toEqual({
-      maxEventsPerWindow: 3,
-      windowSeconds: 120,
-      cooldownSeconds: 240,
-    });
-  });
-
   it("suppresses bot loops before creating typing messages", async () => {
     const eventTimeMs = Date.parse("2026-03-22T00:00:00.000Z");
     const accountId = `bot-loop-typing-${eventTimeMs}`;
@@ -172,7 +147,7 @@ describe("googlechat monitor bot loop protection", () => {
       nowMs: eventTimeMs,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},
@@ -226,7 +201,7 @@ describe("googlechat monitor inbound space classification", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},
@@ -288,7 +263,7 @@ describe("googlechat monitor inbound space classification", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},
@@ -329,7 +304,7 @@ describe("googlechat monitor sender bot status", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event: botStatusEvent("BOT", "1"),
       account: {
         accountId: "work",
@@ -357,7 +332,7 @@ describe("googlechat monitor sender bot status", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event: botStatusEvent("HUMAN", "2"),
       account: {
         accountId: "work",
@@ -428,7 +403,7 @@ describe("googlechat monitor direct messages", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},
@@ -503,7 +478,7 @@ describe("googlechat monitor direct messages", () => {
       messageName: "spaces/DM/messages/typing",
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},
@@ -585,7 +560,7 @@ describe("googlechat monitor direct messages", () => {
       groupSystemPrompt: undefined,
     });
 
-    await testing.processMessageWithPipeline({
+    await processGoogleChatTestEvent({
       event,
       account,
       config: {},

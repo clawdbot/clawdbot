@@ -1,4 +1,3 @@
-// Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingProgressConfig,
@@ -13,6 +12,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
+import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type {
   DmConfig,
   MentionPatternsPolicyConfig,
@@ -96,6 +96,7 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
+  presenceEvents?: DiscordPresenceEventsConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -337,6 +338,7 @@ export type DiscordAccountConfig = {
   token?: SecretInput;
   /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
   applicationId?: string;
+  activities?: { clientSecret?: string; applicationId?: string };
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */

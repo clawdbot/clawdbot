@@ -29,7 +29,7 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const { createCronPromptExecutor } = await import("./run-executor.js");
+const { executeCronRun } = await import("./run-executor.js");
 
 function makeMessageToolPolicyJob(
   delivery: Record<string, unknown> = { mode: "none" },
@@ -336,53 +336,61 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     version: 1,
   };
 
-  function createMessageToolExecutor(
-    overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>,
-  ) {
-    const resolvedDelivery = overrides.resolvedDelivery ?? {};
-
-    return createCronPromptExecutor({
-      cfg: {},
-      cfgWithAgentDefaults: {},
-      job: makeMessageToolPolicyJob(),
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      agentSessionKey: "cron:message-tool-policy",
-      runSessionKey: "cron:message-tool-policy:run:test-session-id",
-      workspaceDir: "/tmp/workspace",
-      resolvedVerboseLevel: "off",
-      thinkLevel: undefined,
-      timeoutMs: 60_000,
-      suppressExecNotifyOnExit: true,
-      resolvedDeliveryOk: true,
-      messageToolPromptEnabled: true,
-      sourceDelivery: createSourceDeliveryPlan({
-        owner: "direct_fallback",
-        reason: "cron_announce",
-        target: {
-          channel: resolvedDelivery.channel ?? "messagechat",
-          to: resolvedDelivery.to,
-          accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
-        },
-        messageToolEnabled: true,
-        messageToolForced: false,
-        requireExplicitMessageTarget: true,
-        requireExplicitMessageTargetEvidence: true,
-        directFallback: true,
-      }),
-      skillsSnapshot: emptySkillsSnapshot,
-      agentPayload: null,
-      useSubagentFallbacks: false,
-      liveSelection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      cronSession: makeCronSession() as MutableCronSession,
-      abortReason: () => "aborted",
-      ...overrides,
-      resolvedDelivery,
-    });
+  function createMessageToolExecutor(overrides: Record<string, unknown>) {
+    const resolvedDelivery = (overrides.resolvedDelivery ?? {}) as {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
+    return {
+      runPrompt: async (commandBody: string) =>
+        await executeCronRun({
+          cfg: {},
+          cfgWithAgentDefaults: {},
+          job: makeMessageToolPolicyJob(),
+          agentId: "default",
+          agentDir: "/tmp/agent-dir",
+          agentSessionKey: "cron:message-tool-policy",
+          runSessionKey: "cron:message-tool-policy:run:test-session-id",
+          workspaceDir: "/tmp/workspace",
+          agentVerboseDefault: undefined,
+          thinkLevel: undefined,
+          timeoutMs: 60_000,
+          suppressExecNotifyOnExit: true,
+          resolvedDeliveryOk: true,
+          messageToolPromptEnabled: true,
+          sourceDelivery: createSourceDeliveryPlan({
+            owner: "direct_fallback",
+            reason: "cron_announce",
+            target: {
+              channel: resolvedDelivery.channel ?? "messagechat",
+              to: resolvedDelivery.to,
+              accountId: resolvedDelivery.accountId,
+              threadId: resolvedDelivery.threadId,
+            },
+            messageToolEnabled: true,
+            messageToolForced: false,
+            requireExplicitMessageTarget: true,
+            requireExplicitMessageTargetEvidence: true,
+            directFallback: true,
+          }),
+          skillsSnapshot: emptySkillsSnapshot,
+          agentPayload: null,
+          useSubagentFallbacks: false,
+          liveSelection: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          cronSession: makeCronSession() as MutableCronSession,
+          commandBody,
+          persistSessionEntry: async () => undefined,
+          abortReason: () => "aborted",
+          isAborted: () => false,
+          ...overrides,
+          resolvedDelivery,
+        } as never),
+    };
   }
 
   afterEach(() => {
@@ -2013,3 +2021,4 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -31,6 +31,7 @@ const {
   decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
+  enqueueSystemEventMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -175,6 +176,7 @@ const {
     decodeOpusStreamMock: vi.fn(),
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
+    enqueueSystemEventMock: vi.fn(),
   };
 });
 
@@ -245,6 +247,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     logVerbose: logVerboseMock,
   };
 });
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
+  enqueueSystemEvent: enqueueSystemEventMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/realtime-voice")>(
@@ -370,6 +376,8 @@ describe("DiscordVoiceManager", () => {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
     updateVoiceStateMock.mockClear();
+    enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
     createAudioResourceMock.mockClear();
     realtimeSessionMock.close.mockClear();
     realtimeSessionMock.connect.mockClear();
@@ -1125,6 +1133,543 @@ describe("DiscordVoiceManager", () => {
 
     expect(result.ok).toBe(true);
     expectConnectedStatus(manager, "1001");
+  });
+
+  it("enqueues the initial voice roster without speaking on its own", async () => {
+    const client = createClient();
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return {
+          listVoiceChannelStates: vi.fn(() => [
+            {
+              guild_id: "g1",
+              user_id: "u-owner",
+              channel_id: "1001",
+              member: {
+                nick: "Peter",
+                user: { id: "u-owner", username: "peter", global_name: "Peter" },
+              },
+            },
+            {
+              guild_id: "g1",
+              user_id: "u-friend",
+              channel_id: "1001",
+              member: {
+                nick: "Sam",
+                user: { id: "u-friend", username: "sam", global_name: "Sam" },
+              },
+            },
+            {
+              guild_id: "g1",
+              user_id: "bot-user",
+              channel_id: "1001",
+              member: {
+                nick: "Molty",
+                user: { id: "bot-user", username: "molty", global_name: "Molty" },
+              },
+            },
+          ]),
+        };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+    manager.setBotUserId("bot-user");
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
+    const [text, options] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    expect(text).toContain("Discord voice session roster");
+    expect(text).toContain('display_name="Peter"');
+    expect(text).toContain('display_name="Sam"');
+    expect(text).not.toContain("Molty");
+    expect(text).toContain("Do not respond to this event on its own");
+    expect(options).toEqual({
+      sessionKey: "discord:g1:c1",
+      contextKey: "discord:voice-membership:default:g1",
+      replace: true,
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an active roster from a new gateway guild snapshot", async () => {
+    const client = createClient();
+    let voiceStates = [
+      {
+        guild_id: "g1",
+        user_id: "u-before",
+        channel_id: "1001",
+        member: {
+          nick: "Before",
+          user: { id: "u-before", username: "before", global_name: "Before" },
+        },
+      },
+    ];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => voiceStates) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    enqueueSystemEventMock.mockClear();
+
+    voiceStates = [
+      {
+        guild_id: "g1",
+        user_id: "u-after",
+        channel_id: "1001",
+        member: {
+          nick: "After",
+          user: { id: "u-after", username: "after", global_name: "After" },
+        },
+      },
+    ];
+    manager.refreshGuildRoster("g1");
+
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    const refreshed = String(enqueueSystemEventMock.mock.calls[0]?.[0]);
+    expect(refreshed).toContain("Discord voice session roster");
+    expect(refreshed).toContain('user_id="u-after"');
+    expect(refreshed).not.toContain('user_id="u-before"');
+  });
+
+  it("does not retain full membership state for very large voice rosters", async () => {
+    const client = createClient();
+    let voiceStates = Array.from({ length: 5_000 }, (_, index) => ({
+      guild_id: "g1",
+      user_id: `u-${String(index).padStart(4, "0")}`,
+      channel_id: "1001",
+    }));
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => voiceStates) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+
+    const text = String(enqueueSystemEventMock.mock.calls[0]?.[0]);
+    expect(text.match(/^- user_id=/gm)).toHaveLength(20);
+    expect(text).toContain("- 4980 more participant(s)");
+    const entry = getSessionEntry(manager) as object;
+    const tracker = (
+      manager as unknown as {
+        membership: {
+          states: WeakMap<object, { inferredUserIds: Set<string> }>;
+        };
+      }
+    ).membership;
+    expect(tracker.states.get(entry)?.inferredUserIds.size).toBe(0);
+
+    const overflowParticipant = expectDefined(
+      voiceStates.at(-1),
+      "overflow participant test invariant",
+    );
+    await manager.handleVoiceStateUpdate(
+      { ...overflowParticipant, self_mute: true } as never,
+      overflowParticipant as never,
+    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
+
+    voiceStates = voiceStates.slice(0, -1);
+    await manager.handleVoiceStateUpdate(
+      { ...overflowParticipant, channel_id: null } as never,
+      overflowParticipant as never,
+    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain("A participant left");
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain('user_id="u-4999"');
+  });
+
+  it("closes queued roster context when the voice session ends", async () => {
+    const client = createClient();
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => []) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    await manager.leave({ guildId: "g1" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2));
+
+    const texts = enqueueSystemEventMock.mock.calls.map(([text]) => String(text));
+    expect(texts[0]).toContain("Discord voice session roster");
+    expect(texts[1]).toContain("Discord voice session ended");
+    expect(texts[1]).toContain("prior roster or membership updates");
+  });
+
+  it("enqueues only real participant joins and leaves for the active voice channel", async () => {
+    const client = createClient();
+    let voiceStates: Array<Record<string, unknown>> = [
+      {
+        guild_id: "g1",
+        user_id: "u-present",
+        channel_id: "1001",
+        member: {
+          nick: "Present",
+          user: { id: "u-present", username: "present", global_name: "Present" },
+        },
+      },
+      { guild_id: "g1", user_id: "bot-user", channel_id: "1001" },
+    ];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return {
+          listVoiceChannelStates: vi.fn(() => voiceStates),
+        };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    client.fetchMember.mockImplementation(async (_guildId: string, userId: string) => ({
+      nickname: userId === "u-present" ? "Present" : "New Friend",
+      roles: [],
+      user: { id: userId, username: userId, globalName: undefined, discriminator: "0" },
+    }));
+    const manager = createManager(undefined, client);
+    manager.setBotUserId("bot-user");
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    enqueueSystemEventMock.mockClear();
+
+    const joinedState = {
+      guild_id: "g1",
+      user_id: "u-new",
+      channel_id: "1001",
+      member: {
+        nick: "New Friend",
+        user: { id: "u-new", username: "new", global_name: "New Friend" },
+      },
+    };
+    voiceStates = [...voiceStates, joinedState];
+    await manager.handleVoiceStateUpdate(joinedState as never, null);
+
+    await manager.handleVoiceStateUpdate(
+      {
+        guild_id: "g1",
+        user_id: "u-new",
+        channel_id: "1001",
+        self_mute: true,
+      } as never,
+      joinedState as never,
+    );
+
+    voiceStates = voiceStates.filter((state) => state.user_id !== "u-new");
+    await manager.handleVoiceStateUpdate(
+      {
+        guild_id: "g1",
+        user_id: "u-new",
+        channel_id: null,
+        member: {
+          nick: "New Friend",
+          user: { id: "u-new", username: "new", global_name: "New Friend" },
+        },
+      } as never,
+      joinedState as never,
+    );
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-new",
+      channel_id: null,
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-elsewhere",
+      channel_id: "1002",
+    } as never);
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "bot-user",
+      channel_id: "1001",
+    } as never);
+
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2));
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    const texts = enqueueSystemEventMock.mock.calls.map(([text]) => String(text));
+    expect(texts[0]).toContain("A participant joined");
+    expect(texts[0]).toContain('display_name="New Friend"');
+    expect(texts[0]).toContain("Current participants other than the agent after this update");
+    expect(texts[0]).toContain('user_id="u-present"');
+    expect(texts[0]).toContain("This roster snapshot supersedes prior voice membership context");
+    expect(texts[1]).toContain("A participant left");
+    expect(texts[1]).toContain('user_id="u-new"');
+    expect(texts[1]).toContain("Current participants other than the agent after this update");
+    expect(texts[1]).toContain('user_id="u-present"');
+    expect(texts[1]).toContain("This roster snapshot supersedes prior voice membership context");
+    for (const call of enqueueSystemEventMock.mock.calls) {
+      expect(call[1]).toEqual({
+        sessionKey: "discord:g1:c1",
+        contextKey: "discord:voice-membership:default:g1",
+        replace: true,
+      });
+    }
+  });
+
+  it("keeps every burst membership update self-contained with a current roster", async () => {
+    const client = createClient();
+    const voiceStates: Array<Record<string, unknown>> = [];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => voiceStates) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    enqueueSystemEventMock.mockClear();
+
+    for (let index = 0; index < 25; index += 1) {
+      const joinedState = {
+        guild_id: "g1",
+        user_id: `u-${String(index).padStart(2, "0")}`,
+        channel_id: "1001",
+      };
+      voiceStates.push(joinedState);
+      await manager.handleVoiceStateUpdate(joinedState as never, null);
+    }
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(25));
+
+    for (const [text, options] of enqueueSystemEventMock.mock.calls) {
+      expect(String(text)).toContain("Current participants other than the agent after this update");
+      expect(String(text)).toContain(
+        "This roster snapshot supersedes prior voice membership context",
+      );
+      expect(options).toEqual({
+        sessionKey: "discord:g1:c1",
+        contextKey: "discord:voice-membership:default:g1",
+        replace: true,
+      });
+    }
+    const latest = String(enqueueSystemEventMock.mock.calls.at(-1)?.[0]);
+    expect(latest).toContain('user_id="u-00"');
+    expect(latest).toContain('user_id="u-19"');
+    expect(latest).toContain("5 more participant(s)");
+  });
+
+  it("keeps cache-race speakers in the roster until their leave events", async () => {
+    const client = createClient();
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => []) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(undefined, client);
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
+    enqueueSystemEventMock.mockClear();
+    const entry = getSessionEntry(manager);
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-raced-first");
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-raced-second");
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "u-raced-second",
+      channel_id: null,
+      member: {
+        nick: "Raced User",
+        user: { id: "u-raced-second", username: "raced", global_name: "Raced User" },
+      },
+    } as never);
+    await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledTimes(3));
+
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain(
+      "Voice activity established that a participant is present",
+    );
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain('user_id="u-raced-first"');
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain('user_id="u-raced-second"');
+    expect(String(enqueueSystemEventMock.mock.calls[2]?.[0])).toContain("A participant left");
+    expect(String(enqueueSystemEventMock.mock.calls[2]?.[0])).toContain('user_id="u-raced-first"');
+  });
+
+  it("publishes a membership change while startup label resolution is still pending", async () => {
+    const client = createClient();
+    const voiceStates: Array<Record<string, unknown>> = [
+      { guild_id: "g1", user_id: "u-slow", channel_id: "1001" },
+    ];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return {
+          listVoiceChannelStates: vi.fn(() => voiceStates),
+        };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    let resolveMember: (value: unknown) => void = () => {};
+    client.fetchMember.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMember = resolve;
+        }),
+    );
+    const manager = createManager(undefined, client);
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await vi.waitFor(() => expect(client.fetchMember).toHaveBeenCalledOnce());
+
+    const joinedState = {
+      guild_id: "g1",
+      user_id: "u-new",
+      channel_id: "1001",
+      member: {
+        nick: "New Friend",
+        user: { id: "u-new", username: "new", global_name: "New Friend" },
+      },
+    };
+    voiceStates.push(joinedState);
+    await manager.handleVoiceStateUpdate(joinedState as never, null);
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(String(enqueueSystemEventMock.mock.calls[1]?.[0])).toContain("A participant joined");
+    resolveMember({
+      nickname: "Slow User",
+      roles: [],
+      user: {
+        id: "u-slow",
+        username: "slow",
+        globalName: "Slow User",
+        discriminator: "0",
+      },
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps joins and followed-user moves independent from roster label resolution", async () => {
+    const client = createClient();
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return {
+          listVoiceChannelStates: vi.fn((_guildId: string, channelId: string) =>
+            channelId === "1001" ? [{ guild_id: "g1", user_id: "u-slow", channel_id: "1001" }] : [],
+          ),
+        };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    let resolveMember: (value: unknown) => void = () => {};
+    client.fetchMember.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMember = resolve;
+        }),
+    );
+    const manager = createManager(
+      {
+        voice: {
+          enabled: true,
+          mode: "stt-tts",
+          allowedChannels: [
+            { guildId: "g1", channelId: "1001" },
+            { guildId: "g1", channelId: "1002" },
+          ],
+          followUsers: ["u-owner"],
+        },
+      },
+      client,
+    );
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+    expect(result.ok).toBe(true);
+    await vi.waitFor(() => expect(client.fetchMember).toHaveBeenCalledOnce());
+
+    await manager.handleVoiceStateUpdate(
+      {
+        guild_id: "g1",
+        user_id: "u-owner",
+        channel_id: "1002",
+      } as never,
+      {
+        guild_id: "g1",
+        user_id: "u-owner",
+        channel_id: "1001",
+      } as never,
+    );
+
+    expectConnectedStatus(manager, "1002");
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(4);
+    expect(String(enqueueSystemEventMock.mock.calls[2]?.[0])).toContain(
+      "Discord voice session ended",
+    );
+    expect(String(enqueueSystemEventMock.mock.calls[3]?.[0])).toContain(
+      "Discord voice session roster",
+    );
+    resolveMember({
+      nickname: "Slow User",
+      roles: [],
+      user: {
+        id: "u-slow",
+        username: "slow",
+        globalName: "Slow User",
+        discriminator: "0",
+      },
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(4);
+
+    const texts = enqueueSystemEventMock.mock.calls.map(([text]) => String(text));
+    expect(texts[0]).toContain("Discord voice session roster");
+    expect(texts[0]).toContain('channel_id="1001"');
+    expect(texts[1]).toContain("A participant left");
+    expect(texts[2]).toContain("Discord voice session ended");
+    expect(texts[2]).toContain('channel_id="1001"');
+    expect(texts[3]).toContain("Discord voice session roster");
+    expect(texts[3]).toContain('channel_id="1002"');
+    expect(texts.slice(2).some((text) => text.includes('user_id="u-slow"'))).toBe(false);
   });
 
   it("follows configured users into voice channels", async () => {
@@ -6280,3 +6825,4 @@ describe("DiscordVoiceManager", () => {
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

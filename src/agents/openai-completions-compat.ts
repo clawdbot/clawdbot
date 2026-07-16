@@ -40,7 +40,7 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
 }
 
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
-export function resolveOpenAICompletionsCompatDefaults(
+function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
   const {
@@ -168,4 +168,10 @@ export function detectOpenAICompletionsCompat(
       ...capabilities,
     }),
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.openAICompletionsCompatTestApi")
+  ] = { resolveOpenAICompletionsCompatDefaults };
 }

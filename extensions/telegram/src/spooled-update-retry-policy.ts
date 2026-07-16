@@ -10,7 +10,7 @@ import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-d
 import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.types.js";
 
 export const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
-export const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_SPOOLED_RETRY_BASE_MS = 1_000;
 const TELEGRAM_SPOOLED_RETRY_MAX_MS = 3 * 60_000;
 const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {

@@ -18,6 +18,37 @@ afterEach(async () => {
 });
 
 describe("Discord model picker preference migration", () => {
+  it("plans legacy command deployment cache deletion without importing hashes", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "{malformed cache", "utf8");
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    expect(plans).toHaveLength(1);
+    const plan = plans?.[0];
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(plan).toMatchObject({
+      label: "Discord command deployment cache",
+      pluginId: "discord",
+      namespace: "command-deploy-hashes",
+      maxEntries: 10_000,
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+    });
+    expect(await plan.readEntries()).toEqual([]);
+  });
+
   it("plans legacy JSON import into plugin state", async () => {
     const stateDir = await makeStateDir();
     const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");

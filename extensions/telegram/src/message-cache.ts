@@ -101,7 +101,20 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cac
 // hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
-const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
+const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
+
+function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBucket> {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] as
+    | Map<string, TelegramMessageCacheBucket>
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, TelegramMessageCacheBucket>();
+  globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] = created;
+  return created;
+}
 
 export type PersistedTelegramMessageCacheValue = {
   version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
@@ -111,14 +124,10 @@ export type PersistedTelegramMessageCacheValue = {
   threadId?: string;
 };
 
-export type TelegramMessageCachePersistentStore = {
+type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
 };
-
-export function resetTelegramMessageCacheBucketsForTest(): void {
-  persistedMessageCacheBuckets.clear();
-}
 
 function telegramMessageCacheKey(params: {
   scopeKey: string | undefined;
@@ -414,6 +423,7 @@ function resolveMessageCacheBucket(params: {
       hydrated: true,
     };
   }
+  const persistedMessageCacheBuckets = getPersistedMessageCacheBuckets();
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;
@@ -882,3 +892,4 @@ export async function buildTelegramConversationContext(params: {
     compareCachedMessageNodes(left.node, right.node),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -218,7 +218,7 @@ async function saveBotFrameworkAttachmentView(params: {
  * path is not usable because the Bot Framework conversation ID (`a:...`) is
  * not a valid Graph chat identifier.
  */
-export async function downloadMSTeamsBotFrameworkAttachment(params: {
+async function downloadMSTeamsBotFrameworkAttachment(params: {
   serviceUrl: string;
   attachmentId: string;
   tokenProvider?: MSTeamsAccessTokenProvider;

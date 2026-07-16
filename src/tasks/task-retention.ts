@@ -5,7 +5,7 @@ import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
 
-export function resolveTaskRetentionMs(status: TaskStatus): number {
+function resolveTaskRetentionMs(status: TaskStatus): number {
   return status === "lost" ? LOST_TASK_RETENTION_MS : DEFAULT_TASK_RETENTION_MS;
 }
 

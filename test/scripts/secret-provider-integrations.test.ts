@@ -28,7 +28,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error("condition was not met before timeout");

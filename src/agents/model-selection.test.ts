@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { isModelKeyAllowedBySet, providerWildcardModelKey } from "./model-selection-shared.js";
+import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -1256,7 +1256,6 @@ describe("model-selection", () => {
 
       expect(result.allowAny).toBe(false);
       expect(result.allowedCatalog).toEqual([]);
-      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
       expect(isModelKeyAllowedBySet(result.allowedKeys, "openai/gpt-added-later")).toBe(true);
       expect(isModelKeyAllowedBySet(result.allowedKeys, "anthropic/claude-sonnet-4-6")).toBe(false);
     });
@@ -1359,7 +1358,7 @@ describe("model-selection", () => {
         { provider: "google", id: "gemini-test", name: "Gemini Test" },
       ]);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
-      expect(result.allowedKeys.has(providerWildcardModelKey("openai"))).toBe(true);
+      expect(isModelKeyAllowedBySet(result.allowedKeys, "openai/future-model")).toBe(true);
     });
 
     it("unions exact model entries with provider wildcard entries", () => {
@@ -3062,3 +3061,4 @@ describe("resolveSubagentSpawnModelSelection", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

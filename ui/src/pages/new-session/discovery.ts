@@ -15,6 +15,11 @@ export type DraftNode = {
   canBrowse: boolean;
 };
 
+export type DraftCloudProfile = {
+  id: string;
+  providerId: string;
+};
+
 export type BrowserTarget = { nodeId: string; label: string };
 
 export function readDraftNodes(value: unknown): DraftNode[] {
@@ -51,4 +56,18 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         left.displayName.localeCompare(right.displayName) ||
         left.nodeId.localeCompare(right.nodeId),
     );
+}
+
+export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
+  return (Array.isArray(value) ? value : [])
+    .flatMap((raw) => {
+      if (!raw || typeof raw !== "object") {
+        return [];
+      }
+      const profile = raw as { id?: unknown; providerId?: unknown };
+      const id = normalizeOptionalString(profile.id);
+      const providerId = normalizeOptionalString(profile.providerId);
+      return id && providerId ? [{ id, providerId }] : [];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
 }

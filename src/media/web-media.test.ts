@@ -1184,3 +1184,4 @@ describe("loadWebMedia", () => {
     await expectLoadWebMediaErrorCode(loadWebMedia("media://inbound/"), "invalid-path");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

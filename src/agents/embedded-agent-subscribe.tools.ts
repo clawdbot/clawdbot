@@ -1,6 +1,5 @@
-/**
- * Sanitizes, extracts, and classifies embedded-agent tool execution results.
- */
+/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -285,7 +284,8 @@ export function sanitizeToolResult(result: unknown): unknown {
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
-        const bytes = data?.length ?? (typeof entry.bytes === "number" ? entry.bytes : undefined);
+        const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+        const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
         const cleaned = { ...entry };
         delete cleaned.data;
         return Object.assign({}, cleaned, { bytes, omitted: true });
@@ -643,7 +643,7 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
-export function isToolResultMediaTrusted(
+function isToolResultMediaTrusted(
   toolName?: string,
   result?: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
@@ -656,6 +656,12 @@ export function isToolResultMediaTrusted(
     return true;
   }
   return isCoreToolResultMediaTrustedName(toolName);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedSubscribeToolsTestApi")
+  ] = { isToolResultMediaTrusted };
 }
 
 function isTrustedOwnedTtsLocalMedia(
@@ -1157,3 +1163,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

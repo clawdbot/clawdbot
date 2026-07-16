@@ -108,7 +108,6 @@ function formatDuration(ms: number): string {
   return prettyMilliseconds(Math.max(0, roundedMs), {
     compact: true,
     hideYear: true,
-    secondsDecimalDigits: 0,
   });
 }
 

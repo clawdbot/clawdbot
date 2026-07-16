@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 // Codex plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
@@ -20,6 +21,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import {
@@ -27,10 +29,11 @@ import {
   resolveCodexComputerUseConfig,
   type CodexAppServerStartOptions,
 } from "./config.js";
-import type {
-  CodexChatgptAuthTokensRefreshResponse,
-  CodexGetAccountResponse,
-  CodexLoginAccountParams,
+import {
+  isJsonObject,
+  type CodexChatgptAuthTokensRefreshResponse,
+  type CodexGetAccountResponse,
+  type CodexLoginAccountParams,
 } from "./protocol.js";
 import { isCodexAppServerNativeAuthProfile } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
@@ -46,7 +49,6 @@ const OPENAI_PROVIDER = "openai";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_ACCESS_TOKEN_ENV_VAR = "CODEX_ACCESS_TOKEN";
@@ -59,8 +61,8 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 const CODEX_AUTH_JSON_FILENAME = "auth.json";
 const CODEX_HOME_DIRNAME = ".codex";
-
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+export type CodexAppServerAuthRequirement = "api-key" | "subscription";
 const scopedOAuthRefreshQueues = new WeakMap<
   AuthProfileStore,
   Map<string, Promise<OAuthCredential>>
@@ -79,7 +81,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
     return params.startOptions;
   }
   const scopedStartOptions = await withCodexHomeEnvironment(
-    params.startOptions,
+    withEphemeralCodexAuthStore(params),
     params.agentDir,
     params.pluginConfig,
   );
@@ -250,7 +252,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
 
 /** Maps one prepared route to one mutually exclusive app-server auth handoff. */
 export async function resolveCodexAppServerPreparedAuthHandoff(params: {
-  authRequirement?: "api-key" | "subscription";
+  authRequirement?: CodexAppServerAuthRequirement;
   resolvedApiKey?: string;
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
@@ -281,7 +283,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     return { authProfileId, nativeAuthProfile };
   }
   if (!authProfileId || !nativeAuthProfile) {
-    throw new Error(params.subscriptionProfileRequiredError);
+    throw createCodexAppServerAuthError(params.subscriptionProfileRequiredError);
   }
 
   const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot({
@@ -291,7 +293,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     config: params.config,
   });
   if (!snapshot) {
-    throw new Error(params.subscriptionProfileUnusableError);
+    throw createCodexAppServerAuthError(params.subscriptionProfileUnusableError);
   }
   return {
     authProfileId,
@@ -419,9 +421,7 @@ function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
   return `CODEX_AUTH_JSON:sha256:${hash.digest("hex")}`;
 }
 
-export function resolveCodexAppServerHomeDir(agentDir: string): string {
-  return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
-}
+export { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 
 async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
@@ -476,6 +476,7 @@ export async function applyCodexAppServerAuthProfile(params: {
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   preparedAuth?: CodexAppServerResolvedPreparedAuth;
+  authRequirement?: CodexAppServerAuthRequirement;
   startOptions?: CodexAppServerStartOptions;
   config?: AuthProfileOrderConfig;
 }): Promise<void> {
@@ -491,16 +492,52 @@ export async function applyCodexAppServerAuthProfile(params: {
     return;
   }
   if (params.authProfileId === null) {
+    if (params.authRequirement === "subscription") {
+      const response = await params.client.request<CodexGetAccountResponse>("account/read", {
+        refreshToken: false,
+      });
+      if (!isJsonObject(response.account) || response.account.type !== "chatgpt") {
+        throw createCodexAppServerAuthError(
+          "Codex subscription auth profile could not produce login credentials.",
+        );
+      }
+    }
     return;
   }
-  const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
-    agentDir: params.agentDir,
-    authProfileId: params.authProfileId,
-    authProfileStore: params.authProfileStore,
-    config: params.config,
-  });
+  let loginParams: CodexLoginAccountParams | undefined;
+  try {
+    loginParams = await resolveCodexAppServerAuthProfileLoginParams({
+      agentDir: params.agentDir,
+      authProfileId: params.authProfileId,
+      authProfileStore: params.authProfileStore,
+      config: params.config,
+    });
+  } catch (error) {
+    if (
+      params.authRequirement === "subscription" &&
+      error instanceof CodexAppServerAuthProfileUnavailableError
+    ) {
+      throw createCodexAppServerAuthError(
+        "Codex subscription auth profile could not produce login credentials.",
+        error,
+      );
+    }
+    throw error;
+  }
+  if (params.authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
+    throw createCodexAppServerAuthError(
+      "Codex subscription auth profile could not produce login credentials.",
+    );
+  }
   if (!loginParams) {
-    if (params.startOptions?.transport !== "stdio") {
+    // Observe native state only for explicit API-key routes. A subscription
+    // route must fail here so profile rotation can run before billing changes.
+    if (params.authRequirement === "subscription") {
+      throw createCodexAppServerAuthError(
+        "Codex subscription auth profile could not produce login credentials.",
+      );
+    }
+    if (params.authRequirement !== "api-key" || params.startOptions?.transport !== "stdio") {
       return;
     }
     const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
@@ -517,13 +554,40 @@ export async function applyCodexAppServerAuthProfile(params: {
   await params.client.request("account/login/start", loginParams);
 }
 
-function resolveCodexAppServerAuthProfileLoginParams(params: {
+function createCodexAppServerAuthError(message: string, cause?: unknown): Error & { status: 401 } {
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
+  return Object.assign(error, { status: 401 as const });
+}
+
+class CodexAppServerAuthProfileUnavailableError extends Error {}
+
+async function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexLoginAccountParams | undefined> {
-  return resolveCodexAppServerAuthProfileLoginParamsInternal(params);
+  const store = resolveCodexAppServerAuthProfileStore(params);
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
+  const profile = profileId ? store.profiles[profileId] : undefined;
+  if (profileId && !profile) {
+    throw new CodexAppServerAuthProfileUnavailableError(
+      `Codex app-server auth profile "${profileId}" was not found.`,
+    );
+  }
+  if (profileId && profile && !isCodexAppServerAuthProfileCredential(profile, params.config)) {
+    throw new CodexAppServerAuthProfileUnavailableError(
+      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
+    );
+  }
+  return await resolveCodexAppServerAuthProfileLoginParamsInternal({
+    ...params,
+    authProfileStore: store,
+  });
 }
 
 export async function refreshCodexAppServerAuthTokens(params: {
@@ -584,7 +648,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     config: params.config,
   });
   if (!loginParams) {
-    throw new Error(
+    throw new CodexAppServerAuthProfileUnavailableError(
       `Codex app-server auth profile "${profileId}" does not contain usable credentials.`,
     );
   }

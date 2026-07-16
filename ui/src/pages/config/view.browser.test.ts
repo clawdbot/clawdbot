@@ -15,6 +15,8 @@ describe("config view", () => {
     saving: false,
     applying: false,
     updating: false,
+    autoSaveStatus: "idle" as const,
+    needsApply: false,
     connected: true,
     schema: {
       type: "object",
@@ -27,20 +29,16 @@ describe("config view", () => {
     showModeToggle: true,
     formValue: {},
     originalValue: {},
-    searchQuery: "",
     activeSection: null,
     activeSubsection: null,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onViewStateChange: vi.fn(),
     onFormPatch: vi.fn(),
-    onSearchChange: vi.fn(),
     onSectionChange: vi.fn(),
-    onReload: vi.fn(),
-    onReset: vi.fn(),
     onSave: vi.fn(),
     onApply: vi.fn(),
-    onUpdate: vi.fn(),
+    onRawDiscard: vi.fn(),
     onSubsectionChange: vi.fn(),
     version: "2026.3.11",
     theme: "claw" as ThemeName,
@@ -63,6 +61,10 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
+    chatFollowUpMode: "steer" as const,
+    setChatFollowUpMode: vi.fn(),
+    catalogOpenTarget: "viewer" as const,
+    setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });
@@ -87,30 +89,13 @@ describe("config view", () => {
     }
   });
 
-  function findActionButtons(container: HTMLElement): {
-    clearButton?: HTMLButtonElement;
-    saveButton?: HTMLButtonElement;
-    applyButton?: HTMLButtonElement;
-    updateButton?: HTMLButtonElement;
-  } {
-    const buttons = Array.from(container.querySelectorAll("button"));
-    return {
-      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
-      saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
-      applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
-      updateButton: buttons.find((btn) => btn.textContent?.trim() === "Update"),
-    };
-  }
-
-  function requireActionButton(
-    button: HTMLButtonElement | undefined,
+  function findOptionalButtonByText(
+    container: HTMLElement,
     text: string,
-  ): HTMLButtonElement {
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error(`Expected ${text} action button`);
-    }
-    return button;
+  ): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === text,
+    );
   }
 
   function renderConfigView(overrides: Partial<ConfigProps> = {}): {
@@ -158,25 +143,20 @@ describe("config view", () => {
     return button;
   }
 
-  function findInteractiveByText(container: HTMLElement, text: string): HTMLElement {
-    const element = Array.from(container.querySelectorAll<HTMLElement>("button, wa-tab")).find(
-      (candidate) => candidate.textContent?.trim() === text,
+  function sectionTabLabels(container: HTMLElement): Array<string | undefined> {
+    return Array.from(container.querySelectorAll(".config-toolbar wa-radio")).map((tab) =>
+      tab.textContent?.trim(),
     );
-    if (!element) {
-      throw new Error(`Expected interactive control with text "${text}"`);
-    }
-    return element;
   }
 
   function selectConfigTab(container: HTMLElement, name: string) {
-    const group = queryRequired(container, "wa-tab-group", HTMLElement);
-    group.dispatchEvent(
-      new CustomEvent("wa-tab-show", {
-        bubbles: true,
-        composed: true,
-        detail: { name },
-      }),
-    );
+    const group = queryRequired(
+      container,
+      ".config-toolbar wa-radio-group",
+      HTMLElement,
+    ) as HTMLElement & { value: string };
+    group.value = name;
+    group.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   function queryRequired<T extends Element>(
@@ -192,132 +172,182 @@ describe("config view", () => {
     return element;
   }
 
-  it("updates save/apply disabled state from form safety and raw dirtiness", () => {
-    const container = document.createElement("div");
-
-    const renderCase = (overrides: Partial<ConfigProps>) =>
-      render(renderConfig({ ...baseProps(), ...overrides }), container);
-
-    renderCase({
+  it("drops the legacy actions toolbar and keeps form mode button-free", () => {
+    const { container } = renderConfigView({
       schema: {
         type: "object",
         properties: {
-          mixed: {
-            anyOf: [{ type: "string" }, { type: "object", properties: {} }],
-          },
+          gateway: { type: "object", properties: { mode: { type: "string" } } },
         },
       },
-      schemaLoading: false,
-      uiHints: {},
-      formMode: "form",
-      formValue: { mixed: "x" },
+      formValue: { gateway: { mode: "remote" } },
+      originalValue: { gateway: { mode: "local" } },
     });
-    let actionButtons = findActionButtons(container);
-    let saveButton = requireActionButton(actionButtons.saveButton, "Save");
-    let applyButton = requireActionButton(actionButtons.applyButton, "Apply");
-    expect(saveButton.disabled).toBe(false);
+
+    expect(container.querySelector(".config-actions")).toBeNull();
+    expect(container.querySelector(".config-layout")).toBeNull();
+    expect(container.querySelector(".config-search__input")).toBeNull();
+    for (const label of ["Reload", "Clear", "Save", "Apply", "Update"]) {
+      expect(findOptionalButtonByText(container, label)).toBeUndefined();
+    }
+    // Idle autosave renders no status row beyond the mode toggle.
+    expect(container.querySelector(".config-toolbar__status .settings-status")).toBeNull();
+  });
+
+  it("renders the inline autosave status and retries failed saves", () => {
+    const onSave = vi.fn();
+    const { container } = renderConfigView({ autoSaveStatus: "saving", onSave });
+    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
+    expect(status.textContent?.trim()).toBe("Saving…");
+    expect(
+      status.querySelector(".settings-status")?.classList.contains("settings-status--accent"),
+    ).toBe(true);
+
+    const saved = renderConfigView({ autoSaveStatus: "saved" });
+    expect([
+      ...queryRequired(saved.container, ".config-toolbar__status .settings-status", HTMLElement)
+        .classList,
+    ]).toContain("settings-status--ok");
+    expect(saved.container.textContent).toContain("Saved");
+
+    const failed = renderConfigView({ autoSaveStatus: "error", onSave });
+    const failedStatus = queryRequired(failed.container, ".config-toolbar__status", HTMLElement);
+    expect(failedStatus.textContent).toContain("Save failed");
+    expect(
+      failedStatus.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
+    ).toBe(true);
+    findButtonByText(failed.container, "Retry").click();
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers only a reload on base-hash conflicts instead of a retry", () => {
+    const onSave = vi.fn();
+    const onRawDiscard = vi.fn();
+    const { container } = renderConfigView({ autoSaveStatus: "conflict", onSave, onRawDiscard });
+
+    const status = queryRequired(container, ".config-toolbar__status", HTMLElement);
+    expect(status.textContent).toContain("Settings changed elsewhere");
+    expect(
+      status.querySelector(".settings-status")?.classList.contains("settings-status--danger"),
+    ).toBe(true);
+    expect(findOptionalButtonByText(container, "Retry")).toBeUndefined();
+    findButtonByText(container, "Reload").click();
+    expect(onRawDiscard).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("shows the restart banner after a save and wires it to apply", () => {
+    const onApply = vi.fn();
+    const { container } = renderConfigView({ needsApply: true, onApply });
+
+    const banner = queryRequired(container, ".config-apply-banner", HTMLElement);
+    expect(banner.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
+    const applyButton = findButtonByText(container, "Restart & apply");
     expect(applyButton.disabled).toBe(false);
+    applyButton.click();
+    expect(onApply).toHaveBeenCalledTimes(1);
 
-    renderCase({
-      schema: null,
-      formMode: "form",
-      formValue: { gateway: { mode: "local" } },
-      originalValue: {},
+    const busy = renderConfigView({ needsApply: true, applying: true, onApply });
+    const busyButton = findButtonContainingText(busy.container, "Applying…");
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+
+    // Any in-flight write, pending load, or dirty raw draft gates the action.
+    for (const overrides of [
+      { saving: true },
+      { loading: true },
+      { updating: true },
+      { autoSaveStatus: "saving" as const },
+      { formMode: "raw" as const, raw: '{\n  "a": 1\n}\n', originalRaw: "{\n}\n" },
+    ]) {
+      const gated = renderConfigView({ needsApply: true, ...overrides });
+      expect(findButtonByText(gated.container, "Restart & apply").disabled).toBe(true);
+    }
+
+    const cleared = renderConfigView({ needsApply: false });
+    expect(cleared.container.querySelector(".config-apply-banner")).toBeNull();
+  });
+
+  it("keeps explicit open/save/discard controls in raw mode", () => {
+    const onSave = vi.fn();
+    const onRawDiscard = vi.fn();
+    const onOpenFile = vi.fn();
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      onSave,
+      onRawDiscard,
+      onOpenFile,
     });
-    actionButtons = findActionButtons(container);
-    saveButton = requireActionButton(actionButtons.saveButton, "Save");
-    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
-    expect(saveButton.disabled).toBe(true);
-    expect(applyButton.disabled).toBe(true);
 
-    renderCase({
+    const actions = queryRequired(container, ".config-raw-actions", HTMLElement);
+    expect(
+      [...actions.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["Open", "Discard", "Save"]);
+    findButtonContainingText(actions, "Open").click();
+    findButtonByText(actions, "Discard").click();
+    findButtonByText(actions, "Save").click();
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(onRawDiscard).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins the raw editor while an unsaved raw draft is authoritative", () => {
+    const { container } = renderConfigView({
+      formMode: "form",
+      rawDraftPending: true,
+      raw: '{\n  "a": 1\n}\n',
+      originalRaw: "{\n}\n",
+      needsApply: true,
+    });
+
+    // The capability refuses form submissions and apply until the raw draft
+    // is saved or discarded — so the raw actions must stay on screen and the
+    // Form toggle + restart action are gated instead of failing generically.
+    expect(container.querySelector(".config-raw-actions")).not.toBeNull();
+    expect(findButtonByText(container, "Form").disabled).toBe(true);
+    expect(findButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
+
+  it("disables raw save/discard without changes and locks the editor while busy", () => {
+    const clean = renderConfigView({
       formMode: "raw",
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    actionButtons = findActionButtons(container);
-    let clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    saveButton = requireActionButton(actionButtons.saveButton, "Save");
-    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
-    expect(clearButton.disabled).toBe(true);
-    expect(saveButton.disabled).toBe(true);
-    expect(applyButton.disabled).toBe(true);
+    expect(findButtonByText(clean.container, "Save").disabled).toBe(true);
+    expect(findButtonByText(clean.container, "Discard").disabled).toBe(true);
 
-    const onReset = vi.fn();
-    renderCase({
-      formMode: "raw",
-      raw: '{\n  gateway: { mode: "local" }\n}\n',
-      originalRaw: "{\n}\n",
-      onReset,
-    });
-    actionButtons = findActionButtons(container);
-    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    saveButton = requireActionButton(actionButtons.saveButton, "Save");
-    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
-    expect(clearButton.disabled).toBe(false);
-    expect(saveButton.disabled).toBe(false);
-    expect(applyButton.disabled).toBe(false);
-
-    clearButton.click();
-    expect(onReset).toHaveBeenCalledTimes(1);
-  });
-
-  it("locks config editors and adjacent actions while a config operation is pending", () => {
-    const container = document.createElement("div");
-    const renderCase = (overrides: Partial<ConfigProps>) =>
-      render(
-        renderConfig({
-          ...baseProps(),
-          schema: {
-            type: "object",
-            properties: {
-              gateway: { type: "object", properties: { mode: { type: "string" } } },
-            },
-          },
-          formValue: { gateway: { mode: "remote" } },
-          originalValue: { gateway: { mode: "local" } },
-          ...overrides,
-        }),
-        container,
-      );
-
-    renderCase({ saving: true });
-    let busyButton = findButtonContainingText(container, "Saving…");
-    let actionButtons = findActionButtons(container);
-    let clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    const applyButton = requireActionButton(actionButtons.applyButton, "Apply");
-    expect(busyButton.disabled).toBe(true);
-    expect(busyButton.getAttribute("aria-busy")).toBe("true");
-    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(true);
-    expect(applyButton.disabled).toBe(true);
-    expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
-
-    renderCase({ applying: true });
-    busyButton = findButtonContainingText(container, "Applying…");
-    actionButtons = findActionButtons(container);
-    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    expect(busyButton.disabled).toBe(true);
-    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(true);
-
-    renderCase({ updating: true });
-    busyButton = findButtonContainingText(container, "Updating…");
-    actionButtons = findActionButtons(container);
-    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
-    expect(busyButton.disabled).toBe(true);
-    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(true);
-
-    renderCase({
+    const saving = renderConfigView({
       formMode: "raw",
       raw: '{\n  gateway: { mode: "remote" }\n}\n',
       originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
       saving: true,
     });
-    const rawEditor = container.querySelector(".config-raw-field textarea");
+    const busyButton = findButtonContainingText(saving.container, "Saving…");
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+    const rawEditor = saving.container.querySelector(".config-raw-field textarea");
     expect(rawEditor).toBeInstanceOf(HTMLTextAreaElement);
     expect(rawEditor?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("locks form inputs while a config operation is pending", () => {
+    const { container } = renderConfigView({
+      applying: true,
+      schema: {
+        type: "object",
+        properties: {
+          gateway: { type: "object", properties: { mode: { type: "string" } } },
+        },
+      },
+      formValue: { gateway: { mode: "remote" } },
+      originalValue: { gateway: { mode: "local" } },
+    });
+    expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -334,6 +364,34 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Raw");
     btn.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
+  });
+
+  it("shows the form safety warning only in form mode", () => {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      schema: {
+        type: "object",
+        properties: {
+          lastTouchedAt: {
+            anyOf: [{ type: "string" }, {}],
+          },
+        },
+      },
+      formValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
+      originalValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
+    };
+
+    render(renderConfig({ ...props, formMode: "form" }), container);
+    expect(normalizedText(container)).toContain(
+      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+    );
+
+    render(renderConfig({ ...props, formMode: "raw" }), container);
+    expect(normalizedText(container)).not.toContain(
+      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+    );
+    expect(container.querySelector(".config-raw-field")).not.toBeNull();
   });
 
   it("forces Form mode and disables Raw mode when raw text is unavailable", () => {
@@ -361,13 +419,7 @@ describe("config view", () => {
     const rawButton = findButtonByText(container, "Raw");
     expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
     expect(rawButton.disabled).toBe(true);
-    expect(
-      queryRequired(container, ".config-actions__notice", HTMLElement).textContent?.trim(),
-    ).toBe("Raw mode disabled (snapshot cannot safely round-trip raw text).");
-    const actionButtons = queryRequired(container, ".config-actions__buttons", HTMLElement);
-    expect(
-      [...actionButtons.querySelectorAll("button")].map((button) => button.textContent?.trim()),
-    ).toEqual(["Reload", "Clear", "Save", "Apply", "Update"]);
+    expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
     expect(container.querySelector(".config-raw-field")).toBeNull();
 
     rawButton.click();
@@ -392,23 +444,23 @@ describe("config view", () => {
       container,
     );
 
-    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(tabs).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    expect(container.querySelector("wa-tab-group")?.getAttribute("activation")).toBe("manual");
+    expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
+    // Segmented pills replaced the old tab strip and the inner panel chrome.
+    expect(container.querySelector("wa-tab-group")).toBeNull();
+    expect(container.querySelector(".config-layout")).toBeNull();
 
-    const btn = findInteractiveByText(container, "Gateway");
     selectConfigTab(container, "gateway");
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const settings = findInteractiveByText(container, "Settings");
-    expect(settings.hasAttribute("active")).toBe(true);
-    expect(btn.hasAttribute("active")).toBe(false);
-    expect(btn.getAttribute("aria-controls")).toBe("config-section-panel");
+    const active = container.querySelector(".config-toolbar .settings-segmented__btn--active");
+    expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
+
+    onSectionChange.mockClear();
+    selectConfigTab(container, "root");
+    expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
   it("renders the virtual Notifications tab in Communication settings", () => {
@@ -435,10 +487,7 @@ describe("config view", () => {
       },
     });
 
-    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(tabs).toContain("Notifications");
+    expect(sectionTabLabels(container)).toContain("Notifications");
 
     selectConfigTab(container, "__notifications__");
     expect(onSectionChange).toHaveBeenCalledWith("__notifications__");
@@ -575,10 +624,7 @@ describe("config view", () => {
       },
     });
 
-    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(tabs).toEqual(["Channels", "Messages"]);
+    expect(sectionTabLabels(container)).toEqual(["Channels", "Messages"]);
   });
 
   it("does not normalize off-scope schema sections for scoped config tabs", () => {
@@ -620,29 +666,6 @@ describe("config view", () => {
         label.textContent?.trim(),
       ),
     ).toEqual(["Telegram"]);
-  });
-
-  it("renders and wires the search field controls", () => {
-    const container = document.createElement("div");
-    const onSearchChange = vi.fn();
-    render(
-      renderConfig({
-        ...baseProps(),
-        searchQuery: "gateway",
-        onSearchChange,
-      }),
-      container,
-    );
-
-    const icon = queryRequired(container, ".config-search__icon", SVGElement);
-    expect(icon.closest(".config-search__input-row")).toBeInstanceOf(HTMLElement);
-
-    const input = container.querySelector(".config-search__input");
-    expect(input).toBeInstanceOf(HTMLInputElement);
-    const searchInput = input as HTMLInputElement;
-    searchInput.value = "gateway";
-    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
   it("shows the section heading outside the group in single-section form view", () => {
@@ -713,25 +736,6 @@ describe("config view", () => {
         title.textContent?.trim(),
       ),
     ).toEqual(["Authentication", "Gateway"]);
-  });
-
-  it("clears the active search query", () => {
-    const container = document.createElement("div");
-    const onSearchChange = vi.fn();
-    render(
-      renderConfig({
-        ...baseProps(),
-        searchQuery: "gateway",
-        onSearchChange,
-      }),
-      container,
-    );
-    const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
-    if (!clearButton) {
-      throw new Error("Expected config search clear button");
-    }
-    clearButton.click();
-    expect(onSearchChange).toHaveBeenCalledWith("");
   });
 
   it("keeps sensitive raw config hidden until reveal before editing", () => {
@@ -823,56 +827,13 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"remote"');
   });
 
-  it("preserves UTF-16 boundaries in pending change summaries", () => {
-    const boundaryValue = `${"A".repeat(35)}😀ZZZZZ`;
-    const adjacentValue = `${"B".repeat(34)}😀YYYYYY`;
+  it("does not render a pending-changes panel for form drafts (they auto-save)", () => {
     const { container } = renderConfigView({
-      formValue: {
-        boundary: boundaryValue,
-        adjacent: adjacentValue,
-      },
-      originalValue: {
-        boundary: "before",
-        adjacent: "before",
-      },
+      formValue: { boundary: "after" },
+      originalValue: { boundary: "before" },
     });
 
-    const items = Array.from(container.querySelectorAll(".config-diff__item"));
-    const values = new Map(
-      items.map((item) => [
-        item.querySelector(".config-diff__path")?.textContent?.trim(),
-        item.querySelector(".config-diff__to")?.textContent?.trim(),
-      ]),
-    );
-
-    expect(values.get("boundary")).toBe(`"${"A".repeat(35)}...`);
-    expect(values.get("adjacent")).toBe(`"${"B".repeat(34)}😀...`);
-  });
-
-  it("renders array diff summaries without serializing array values", () => {
-    const poison = {
-      value: "TOKEN_AFTER",
-      toJSON: () => {
-        throw new Error("array value should not be serialized");
-      },
-    };
-    const { container } = renderConfigView({
-      formValue: {
-        items: [poison],
-      },
-      originalValue: {
-        items: [],
-      },
-    });
-
-    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
-    expect(details.querySelector(".config-diff__summary span")?.textContent?.trim()).toBe(
-      "View 1 pending change",
-    );
-    const item = queryRequired(container, ".config-diff__item", HTMLElement);
-    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe("items");
-    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe("[0 items]");
-    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe("[1 item]");
+    expect(container.querySelector(".config-diff")).toBeNull();
   });
 
   it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
@@ -1108,7 +1069,6 @@ describe("config view", () => {
     rerender();
 
     expect(container.querySelector(".config-diff")).toBeNull();
-    expect(container.querySelector(".config-status")?.textContent?.trim()).toBe("No changes");
   });
 
   it("renders structured SecretRef values without stringifying", () => {
@@ -1341,6 +1301,17 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const followUpSelect = queryRequired(
+      container,
+      "[data-settings-follow-up-mode]",
+      HTMLSelectElement,
+    );
+    expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
+    expect(followUpSelect.value).toBe("steer");
+    expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
+      "steer",
+      "queue",
+    ]);
     const microphoneSelect = queryRequired(
       container,
       "[data-settings-microphone]",
@@ -1349,3 +1320,4 @@ describe("config view", () => {
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

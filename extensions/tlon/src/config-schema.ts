@@ -10,7 +10,7 @@ const TlonChannelRuleSchema = z.object({
   allowedShips: z.array(ShipSchema).optional(),
 });
 
-export const TlonAuthorizationSchema = z.object({
+const TlonAuthorizationSchema = z.object({
   channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
@@ -45,7 +45,7 @@ const TlonAccountSchema = z.object({
   ...tlonCommonConfigFields,
 });
 
-export const TlonConfigSchema = z.object({
+const TlonConfigSchema = z.object({
   ...tlonCommonConfigFields,
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),

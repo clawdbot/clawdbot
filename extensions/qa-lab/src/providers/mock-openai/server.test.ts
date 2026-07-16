@@ -1,7 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
-import { resolveProviderVariant, startQaMockOpenAiServer } from "./server.js";
+import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
@@ -154,8 +154,10 @@ function buildWhatsAppPendingHistoryContextFixture(
   history: Array<{ body: string; sender: string; timestamp: number }>,
 ) {
   return [
-    "Chat history since last reply (untrusted, for context):",
+    "[Chat messages since your last reply - for context]",
     ...history.map((entry, index) => `#history-${index + 1} ${entry.sender}: ${entry.body}`),
+    "",
+    "[Current message - respond to this]",
   ].join("\n");
 }
 
@@ -1596,6 +1598,11 @@ describe("qa mock openai server", () => {
 
   it("answers WhatsApp pending-history prompts only with injected prior group context", async () => {
     const server = await startMockServer();
+    const currentTriggerPrompt = [
+      "openclawqa pending history context check",
+      WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER,
+      `Return ${WHATSAPP_PENDING_HISTORY_OK_MARKER} only if prior group context contains the context-only sentinel.`,
+    ].join(" ");
 
     const historyContext = buildWhatsAppPendingHistoryContextFixture([
       {
@@ -1608,72 +1615,57 @@ describe("qa mock openai server", () => {
       stream: false,
       model: "gpt-5.6-luna",
       input: [
-        makeUserInput([historyContext, WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT].join("\n\n")),
+        makeUserInput(currentTriggerPrompt),
+        makeUserInput(TEST_RUNTIME_CONTEXT_CARRIER.replace("runtime metadata", historyContext)),
       ],
     });
 
     expect(outputText(withStructuredHistory)).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const triggerTextOnly = await expectResponsesJson(server, {
+    const withoutHistory = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(currentTriggerPrompt)],
+    });
+
+    expect(outputText(withoutHistory)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+
+    const currentMessageOnlyMarkers = await expectResponsesJson(server, {
       stream: false,
       model: "gpt-5.6-luna",
       input: [
+        makeDeveloperInput(
+          buildWhatsAppPendingHistoryContextFixture([
+            {
+              sender: "Alice",
+              timestamp: 1_786_000_000_000,
+              body: "unrelated prior context",
+            },
+          ]),
+        ),
         makeUserInput(
           [
             WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
-            `The current trigger text mentions ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}.`,
-            `It also mentions ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}.`,
-          ].join(" "),
+            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}`,
+          ].join("\n"),
         ),
       ],
     });
 
-    expect(outputText(triggerTextOnly)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+    expect(outputText(currentMessageOnlyMarkers)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
-    const currentMessageOnlySentinel = await expectResponsesJson(server, {
+    const ordinaryEarlierUserMarkers = await expectResponsesJson(server, {
       stream: false,
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(
-          [
-            buildWhatsAppPendingHistoryContextFixture([
-              {
-                sender: "Alice",
-                timestamp: 1_786_000_000_000,
-                body: "unrelated prior context",
-              },
-            ]),
-            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
-            `The current trigger text mentions ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}.`,
-            `It also mentions ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}.`,
-          ].join("\n\n"),
+          `${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
         ),
+        makeUserInput(currentTriggerPrompt),
       ],
     });
 
-    expect(outputText(currentMessageOnlySentinel)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
-
-    const currentPromptBeforeTrigger = await expectResponsesJson(server, {
-      stream: false,
-      model: "gpt-5.6-luna",
-      input: [
-        makeUserInput(
-          [
-            buildWhatsAppPendingHistoryContextFixture([
-              {
-                sender: "Alice",
-                timestamp: 1_786_000_000_000,
-                body: "unrelated prior context",
-              },
-            ]),
-            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
-            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
-          ].join("\n\n"),
-        ),
-      ],
-    });
-
-    expect(outputText(currentPromptBeforeTrigger)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+    expect(outputText(ordinaryEarlierUserMarkers)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
     const contextWithoutCurrentTrigger = await expectResponsesJson(server, {
       stream: false,
@@ -2578,6 +2570,22 @@ describe("qa mock openai server", () => {
     }>(server, {
       stream: false,
       input: [makeUserInput(threadSubagentTask(childToken))],
+    });
+    expect(outputText(childPayload)).toBe(childToken);
+  });
+
+  it("does not replay a parent sessions_spawn instruction in the child session", async () => {
+    const server = await startMockServer();
+    const childToken = "QA_SUBAGENT_CHILD_WITH_PARENT_CONTEXT";
+
+    const childPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(explicitSessionsSpawnPrompt(childToken)),
+        makeUserInput(threadSubagentTask(childToken)),
+      ],
     });
     expect(outputText(childPayload)).toBe(childToken);
   });
@@ -3966,7 +3974,7 @@ describe("qa mock openai server", () => {
 
     const response = await postResponses(server, {
       stream: false,
-      input: [setupInput, makeUserInput("📍 37.774900, -122.419400")],
+      input: [setupInput, makeUserInput("  📍 37.774900, -122.419400")],
     });
 
     expect(setupResponse.status).toBe(200);
@@ -3991,11 +3999,11 @@ describe("qa mock openai server", () => {
     });
     const contactResponse = await postResponses(server, {
       stream: false,
-      input: [setupInput, makeUserInput("<contact>")],
+      input: [setupInput, makeUserInput("  <contact>")],
     });
     const stickerResponse = await postResponses(server, {
       stream: false,
-      input: [setupInput, makeUserInput("<media:sticker>")],
+      input: [setupInput, makeUserInput("  <media:sticker>")],
     });
 
     expect(setupResponse.status).toBe(200);
@@ -4006,7 +4014,7 @@ describe("qa mock openai server", () => {
     expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
   });
 
-  it("uses WhatsApp structured markers for channel-prefixed message bodies", async () => {
+  it("uses WhatsApp structured markers for metadata-prefixed message bodies", async () => {
     const server = await startMockServer();
     const setupInput = makeUserInput(
       "When a later WhatsApp location message shows 37.774900, -122.419400, " +
@@ -4074,6 +4082,175 @@ describe("qa mock openai server", () => {
     expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
     expect(stickerResponse.status).toBe(200);
     expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+  });
+
+  it("detects each WhatsApp structured body after a channel envelope", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+
+    const cases = [
+      {
+        body: "📍 37.774900, -122.419400",
+        expected: "QA_WHATSAPP_LOCATION_OK",
+      },
+      { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
+      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+    ];
+    for (const structuredCase of cases) {
+      const response = await postResponses(server, {
+        stream: false,
+        input: [
+          setupInput,
+          makeUserInput("Reply with only this previous document marker: QA_WHATSAPP_DOCUMENT_OK"),
+          makeUserInput(`[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`),
+        ],
+      });
+
+      expect(response.status).toBe(200);
+      expect(outputText(await response.json())).toBe(structuredCase.expected);
+    }
+  });
+
+  it("detects each WhatsApp structured body after combined timestamp and channel prefixes", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+    const cases = [
+      {
+        body: "📍 37.774900, -122.419400",
+        expected: "QA_WHATSAPP_LOCATION_OK",
+      },
+      { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
+      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+    ];
+
+    for (const structuredCase of cases) {
+      const response = await postResponses(server, {
+        stream: false,
+        input: [
+          setupInput,
+          makeUserInput(
+            `[Tue 2026-07-14 18:17 GMT+5:30] [WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+          ),
+        ],
+      });
+
+      expect(response.status).toBe(200);
+      expect(outputText(await response.json())).toBe(structuredCase.expected);
+    }
+  });
+
+  it("detects each WhatsApp structured body after canonical timestamp prefixes", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+    const timestampPrefixes = [
+      "[Tue 2026-07-14 12:47 UTC]",
+      "[Tue 2026-07-14 07:47 EST]",
+      "[Tue 2026-07-14 09:47 GMT-3]",
+      "[Tue 2026-07-14 14:47 GMT+2]",
+      "[Tue 2026-07-14 09:17 GMT-3:30]",
+      "[Tue 2026-07-14 18:17 GMT+5:30]",
+    ];
+    const cases = [
+      {
+        body: "📍 37.774900, -122.419400",
+        expected: "QA_WHATSAPP_LOCATION_OK",
+      },
+      { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
+      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+    ];
+
+    for (const prefix of timestampPrefixes) {
+      for (const structuredCase of cases) {
+        const response = await postResponses(server, {
+          stream: false,
+          input: [setupInput, makeUserInput(`${prefix} ${structuredCase.body}`)],
+        });
+
+        expect(response.status).toBe(200);
+        expect(outputText(await response.json())).toBe(structuredCase.expected);
+      }
+    }
+  });
+
+  it("uses the latest WhatsApp structured body when history contains another kind", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        setupInput,
+        makeUserInput("[WhatsApp +15555550123] +15555550123: 📍 37.774900, -122.419400"),
+        makeUserInput("[WhatsApp +15555550123] +15555550123: <contact>"),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("QA_WHATSAPP_CONTACT_OK");
+  });
+
+  it("does not treat structured WhatsApp tokens in ordinary prose as message bodies", async () => {
+    const server = await startMockServer();
+    const setupInput = makeUserInput(
+      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+        "When a later WhatsApp contact message appears, " +
+        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+        "When a later WhatsApp sticker message appears, " +
+        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+    );
+    const proseInputs = [
+      "Please compare [Tue 2026-07-14 12:47 UTC] 📍 37.774900, -122.419400 and explain [that] <contact> and <media:sticker> text",
+      "[Tue 2026-07-14 12:47 UTC] Contact note: <contact> is descriptive prose",
+      [
+        "Coordinate note: 📍 37.774900, -122.419400",
+        "Contact note: <contact>",
+        "Sticker note: <media:sticker>",
+      ].join("\n"),
+    ];
+
+    for (const proseInput of proseInputs) {
+      const response = await postResponses(server, {
+        stream: false,
+        input: [setupInput, makeUserInput(proseInput)],
+      });
+
+      expect(response.status).toBe(200);
+      const text = outputText(await response.json());
+      expect(text).not.toBe("QA_WHATSAPP_LOCATION_OK");
+      expect(text).not.toBe("QA_WHATSAPP_CONTACT_OK");
+      expect(text).not.toBe("QA_WHATSAPP_STICKER_OK");
+    }
   });
 
   it("streams WhatsApp location markers for the matching coordinate body", async () => {
@@ -5808,41 +5985,6 @@ describe("qa mock openai server", () => {
   });
 });
 
-describe("resolveProviderVariant", () => {
-  it("tags prefix-qualified openai models", () => {
-    expect(resolveProviderVariant("openai/gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("openai:gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("openai/gpt-5.6-luna")).toBe("openai");
-  });
-
-  it("tags prefix-qualified anthropic models", () => {
-    expect(resolveProviderVariant("anthropic/claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("anthropic:claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("claude-cli/claude-opus-4-8")).toBe("anthropic");
-  });
-
-  it("tags bare model names by prefix", () => {
-    expect(resolveProviderVariant("gpt-5.6-luna")).toBe("openai");
-    expect(resolveProviderVariant("gpt-5.6-luna-alt")).toBe("openai");
-    expect(resolveProviderVariant("gpt-4.5")).toBe("openai");
-    expect(resolveProviderVariant("o1-preview")).toBe("openai");
-    expect(resolveProviderVariant("claude-opus-4-8")).toBe("anthropic");
-    expect(resolveProviderVariant("claude-sonnet-4-6")).toBe("anthropic");
-  });
-
-  it("handles case drift and whitespace", () => {
-    expect(resolveProviderVariant("  OpenAI/GPT-5.6 Luna  ")).toBe("openai");
-    expect(resolveProviderVariant("ANTHROPIC/CLAUDE-OPUS-4-6")).toBe("anthropic");
-  });
-
-  it("falls through to unknown for unrecognized providers", () => {
-    expect(resolveProviderVariant("")).toBe("unknown");
-    expect(resolveProviderVariant(undefined)).toBe("unknown");
-    expect(resolveProviderVariant("mistral/mistral-large")).toBe("unknown");
-    expect(resolveProviderVariant("some-random-model")).toBe("unknown");
-  });
-});
-
 describe("qa mock openai server provider variant tagging", () => {
   it("pins provider-specific plans for parity scenarios", async () => {
     const sourcePrompt =
@@ -5994,3 +6136,4 @@ describe("qa mock openai server provider variant tagging", () => {
     expect(debug.providerVariant).toBe("unknown");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -39,6 +39,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
+import type { InventoryRemovalPrompt } from "./view.types.ts";
 
 export type NodesRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
@@ -93,6 +94,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   @state() execApprovalsSelectedAgent: string | null = null;
   @state() private execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() private execApprovalsTargetNodeId: string | null = null;
+  @state() private inventoryRemovalPrompt: InventoryRemovalPrompt | null = null;
 
   private routeDataInitialized = false;
   private hasBoundGateway = false;
@@ -180,6 +182,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     this.connected = false;
     this.presence = [];
     this.canPairDevice = false;
+    this.inventoryRemovalPrompt = null;
     super.disconnectedCallback();
   }
 
@@ -255,6 +258,10 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   }
 
   private resetServerState(snapshot: ApplicationGatewaySnapshot) {
+    // The removal prompt targets entries on the gateway it was opened against.
+    // Drop it on client change/disconnect so a confirm can never fire removal
+    // RPCs at a different gateway that reuses the same device ids.
+    this.inventoryRemovalPrompt = null;
     const next = createInitialNodesState(snapshot);
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
@@ -337,6 +344,19 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     );
   }
 
+  private confirmInventoryRemoval() {
+    const prompt = this.inventoryRemovalPrompt;
+    this.inventoryRemovalPrompt = null;
+    if (!prompt) {
+      return;
+    }
+    if (prompt.kind === "entry") {
+      void removeInventoryEntry(this, prompt.entry);
+      return;
+    }
+    void removeStaleInventoryEntries(this, prompt.entries);
+  }
+
   private resolveExecApprovalsTarget(): ExecApprovalsTarget {
     return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
       ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
@@ -384,8 +404,19 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onNodeApprove: (requestId) => void approveNodePairingRequest(this, requestId),
           onNodeReject: (requestId) => void rejectNodePairingRequest(this, requestId),
-          onInventoryRemove: (entry) => void removeInventoryEntry(this, entry),
-          onInventoryCleanup: (entries) => void removeStaleInventoryEntries(this, entries),
+          inventoryRemovalPrompt: this.inventoryRemovalPrompt,
+          onInventoryRemove: (entry) => {
+            this.inventoryRemovalPrompt = { kind: "entry", entry };
+          },
+          onInventoryCleanup: (entries) => {
+            if (entries.length > 0) {
+              this.inventoryRemovalPrompt = { kind: "stale", entries };
+            }
+          },
+          onInventoryRemovalConfirm: () => this.confirmInventoryRemoval(),
+          onInventoryRemovalCancel: () => {
+            this.inventoryRemovalPrompt = null;
+          },
           onDeviceRotate: (deviceId, role, scopes) =>
             void rotateDeviceToken(this, {
               deviceId,

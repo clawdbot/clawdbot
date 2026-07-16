@@ -31,12 +31,14 @@ const CANVAS_NODE_COMMANDS = [
 function createLazyCanvasTool(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 }): AnyAgentTool {
   const loadTool = createLazyRuntimeModule(() =>
     import("./src/tool.js").then(({ createCanvasTool }) =>
       createCanvasTool({
         config: params.config,
         workspaceDir: params.workspaceDir,
+        agentSessionKey: params.agentSessionKey,
       }),
     ),
   );
@@ -143,7 +145,7 @@ export default definePluginEntry({
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
-      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
       foregroundRestrictedOnIos: true,
       handle: async (ctx) => {
         const params =
@@ -176,6 +178,7 @@ export default definePluginEntry({
       createLazyCanvasTool({
         config: ctx.runtimeConfig ?? ctx.config,
         workspaceDir: ctx.workspaceDir,
+        agentSessionKey: ctx.sessionKey,
       }),
     );
     api.registerTool(

@@ -125,6 +125,54 @@ function streamedErrorResponse(body: string, limit: number) {
 }
 
 describe("ClickClack HTTP client", () => {
+  it("replaces the authenticated bot command menu", async () => {
+    const botCommand = {
+      id: "botcmd_1",
+      workspace_id: "wsp_1",
+      bot_user_id: "usr_bot",
+      command: "/status",
+      description: "Show agent status",
+      args_hint: "",
+      created_at: "2026-07-15T00:00:00.000Z",
+      updated_at: "2026-07-15T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ bot_commands: [botCommand] }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "fake",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    const result = await client.setBotCommands([
+      {
+        command: "status",
+        description: "Show agent status",
+        args_hint: "",
+      },
+    ]);
+
+    expect(result).toEqual([botCommand]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/bots/self/commands",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(requestBodyJson(init)).toEqual({
+      commands: [
+        {
+          command: "status",
+          description: "Show agent status",
+          args_hint: "",
+        },
+      ],
+    });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer fake");
+    expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
   it("adds paged tail queries without changing the legacy events result", async () => {
     const fetchMock = vi.fn(async () => Response.json({ events: [], tail_cursor: "cursor-900" }));
     const client = createClickClackClient({

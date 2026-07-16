@@ -1,6 +1,5 @@
 /** Doctor repair for main sessions accidentally occupied by synthetic heartbeat transcripts. */
 import fs from "node:fs";
-import path from "node:path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { note } from "../../packages/terminal-core/src/note.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
@@ -14,6 +13,7 @@ import { updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -40,14 +40,6 @@ type HeartbeatMainSessionRepairCandidate = {
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
 }
 
 function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
@@ -127,7 +119,7 @@ function summarizeTranscriptHeartbeatMessages(
  * Metadata ownership is preferred, but transcript inspection catches older stores that lack the
  * heartbeat isolation marker while still containing no human user messages.
  */
-export function resolveHeartbeatMainSessionRepairCandidate(params: {
+function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
   transcriptPath?: string;
 }): HeartbeatMainSessionRepairCandidate | null {
@@ -185,7 +177,7 @@ function resolveHeartbeatMainRecoveryKey(params: {
 }
 
 /** Moves a poisoned main-session entry to a recovery key without overwriting existing entries. */
-export function moveHeartbeatMainSessionEntry(params: {
+function moveHeartbeatMainSessionEntry(params: {
   store: Record<string, SessionEntry>;
   mainKey: string;
   recoveredKey: string;
@@ -199,48 +191,13 @@ export function moveHeartbeatMainSessionEntry(params: {
   return true;
 }
 
-function resolveTuiLastSessionPath(stateDir: string): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
-
-/** Removes TUI restore pointers that would reopen an archived heartbeat-owned main session. */
-export function clearTuiLastSessionPointers(params: {
-  filePath: string;
-  sessionKeys: ReadonlySet<string>;
-}): number {
-  if (params.sessionKeys.size === 0 || !existsFile(params.filePath)) {
-    return 0;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(params.filePath, "utf8"));
-  } catch {
-    return 0;
-  }
-  const store = asNullableObjectRecord(parsed);
-  if (!store) {
-    return 0;
-  }
-  let removed = 0;
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(store)) {
-    const record = asNullableObjectRecord(value);
-    const sessionKey = record?.sessionKey;
-    if (typeof sessionKey === "string" && params.sessionKeys.has(sessionKey)) {
-      removed += 1;
-      continue;
-    }
-    next[key] = value;
-  }
-  if (removed === 0) {
-    return 0;
-  }
-  try {
-    fs.writeFileSync(params.filePath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  } catch {
-    return 0;
-  }
-  return removed;
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHeartbeatMainSessionRepairTestApi")
+  ] = {
+    moveHeartbeatMainSessionEntry,
+    resolveHeartbeatMainSessionRepairCandidate,
+  };
 }
 
 /**
@@ -324,10 +281,17 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   params.store[recoveredKey] = movedEntry;
   delete params.store[mainKey];
-  const clearedPointers = clearTuiLastSessionPointers({
-    filePath: resolveTuiLastSessionPath(params.stateDir),
-    sessionKeys: new Set([mainKey]),
-  });
+  let clearedPointers = 0;
+  try {
+    clearedPointers = clearTuiLastSessionPointers({
+      stateDir: params.stateDir,
+      sessionKeys: new Set([mainKey]),
+    });
+  } catch (error) {
+    params.warnings.push(
+      `- Moved heartbeat-owned main session ${mainKey}, but could not clear its TUI restore pointers: ${String(error)}`,
+    );
+  }
   params.changes.push(`- Moved heartbeat-owned main session ${mainKey} to ${recoveredKey}.`);
   if (clearedPointers > 0) {
     params.changes.push(

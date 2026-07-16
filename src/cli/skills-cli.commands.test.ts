@@ -1467,3 +1467,4 @@ describe("skills cli commands", () => {
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

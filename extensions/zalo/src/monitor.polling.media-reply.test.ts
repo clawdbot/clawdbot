@@ -37,8 +37,6 @@ vi.mock("./outbound-media.js", async () => {
   };
 });
 
-import { clearHostedZaloMediaForTest } from "./outbound-media.js";
-
 function installZaloRuntimeForTest(): void {
   setZaloRuntime({
     state: {
@@ -124,7 +122,6 @@ describe("Zalo polling media replies", () => {
 
   beforeEach(async () => {
     await resetLifecycleTestState();
-    await clearHostedZaloMediaForTest();
     resetPluginStateStoreForTests();
     installZaloRuntimeForTest();
     prepareHostedZaloMediaUrlMock.mockReset();
@@ -144,26 +141,31 @@ describe("Zalo polling media replies", () => {
         });
       },
     );
-    setLifecycleRuntimeCore({
-      routing: {
-        resolveAgentRoute:
-          resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+    setLifecycleRuntimeCore(
+      {
+        routing: {
+          resolveAgentRoute:
+            resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+        },
+        reply: {
+          finalizeInboundContext:
+            finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+          dispatchReplyWithBufferedBlockDispatcher:
+            dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        },
+        session: {
+          recordInboundSession:
+            recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+        },
       },
-      reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      session: {
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-      },
-    });
+      {
+        openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("zalo", options),
+      } as PluginRuntime["state"],
+    );
   });
 
   afterAll(async () => {
-    await clearHostedZaloMediaForTest();
     await resetLifecycleTestState();
   });
 

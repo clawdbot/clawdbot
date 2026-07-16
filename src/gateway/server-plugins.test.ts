@@ -324,6 +324,25 @@ async function createSubagentRuntime(
   return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
+function registerActivePluginToolOwnership(
+  pluginId: string,
+  names: string[],
+  declaredNames: string[] = names,
+): void {
+  const registry = runtimeRegistryModule.getActivePluginRegistry();
+  if (!registry) {
+    throw new Error("Expected an active plugin registry");
+  }
+  registry.tools.push({
+    pluginId,
+    factory: () => null,
+    names,
+    declaredNames,
+    optional: true,
+    source: `/tmp/${pluginId}/index.js`,
+  });
+}
+
 async function reloadFallbackGatewayContextModule() {
   // Existing runtimes retain the old module graph; only the process-global state owner
   // must reload to prove a restarted Gateway can replace their fallback context.
@@ -870,6 +889,29 @@ describe("loadGatewayPlugins", () => {
     ).resolves.toEqual({ status: "ok" });
   });
 
+  test("carries scoped delivery media only in the synthetic client context", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("scoped-delivery-media"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.params).not.toHaveProperty("internalDeliveryMediaUrls");
+      expect(opts.req.params).not.toHaveProperty("internalDeliverySuppressText");
+      expect(opts.client?.internal?.internalDeliveryMediaUrls).toEqual(["/tmp/proof.png"]);
+      expect(opts.client?.internal?.internalDeliverySuppressText).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:main" },
+        {
+          forceSyntheticClient: true,
+          internalDeliveryMediaUrls: ["/tmp/proof.png"],
+          internalDeliverySuppressText: true,
+        },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
   test("uses one timeout budget across accepted and final in-process responses", async () => {
     vi.useFakeTimers();
     try {
@@ -900,6 +942,24 @@ describe("loadGatewayPlugins", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("reports accepted in-process agent requests before their final response", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("accepted-callback"));
+    const onAccepted = vi.fn();
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(true, { status: "accepted", runId: "run-callback" });
+      opts.respond(true, { status: "ok", runId: "run-callback" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "s-callback" },
+        { expectFinal: true, onAccepted },
+      ),
+    ).resolves.toEqual({ status: "ok", runId: "run-callback" });
+    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-callback" });
   });
 
   test("clears final-response timeout when handler rejects after accepted response", async () => {
@@ -1007,6 +1067,34 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test("honors trusted plugin node scopes inside a narrower Gateway request", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "opencode" }));
+    loadGatewayStartupPluginsForTest();
+    const scope = {
+      context: createTestContext("nodes-invoke-read-caller"),
+      client: {
+        connect: { scopes: ["operator.read"] },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "opencode", pluginOrigin: "bundled" },
+        () =>
+          runtime.nodes.invoke({
+            nodeId: "node-1",
+            command: "opencode.sessions.list.v1",
+            scopes: ["operator.write"],
+          }),
+      ),
+    );
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("opencode");
   });
 
   test("dispatches gateway methods with the trusted plugin identity", async () => {
@@ -1224,6 +1312,133 @@ describe("loadGatewayPlugins", () => {
 
     expect(getRequiredLastDispatchedParams().cwd).toBe("/tmp/managed-worktree");
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
+  });
+
+  test("forwards exact plugin-owned additive tools through internal run metadata", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("tools-also-allow"));
+    registerActivePluginToolOwnership("workboard", [
+      "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+    ]);
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-tools-also-allow",
+          message: "finish the card",
+          toolsAlsoAllow: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+        }),
+    );
+
+    expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete"],
+    });
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("toolsAlsoAllow");
+  });
+
+  test("rejects additive subagent tools not registered by the calling plugin", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("foreign-tools-also-allow"));
+    registerActivePluginToolOwnership("workboard", ["workboard_complete"]);
+    registerActivePluginToolOwnership("other-plugin", ["other_plugin_tool"]);
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "workboard", pluginOrigin: "bundled" },
+        () =>
+          runtime.run({
+            sessionKey: "s-foreign-tools-also-allow",
+            message: "finish the card",
+            toolsAlsoAllow: ["other_plugin_tool"],
+          }),
+      ),
+    ).rejects.toThrow('plugin "workboard" does not uniquely own subagent tool "other_plugin_tool"');
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test("accepts additive tools declared by an unnamed plugin factory", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("declared-tools-also-allow"));
+    registerActivePluginToolOwnership("workboard", [], ["workboard_complete"]);
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-declared-tools-also-allow",
+          message: "finish the card",
+          toolsAlsoAllow: ["workboard_complete"],
+        }),
+    );
+
+    expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_complete"],
+    });
+  });
+
+  test("rejects core and ambiguously-owned additive tool names", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("colliding-tools-also-allow"));
+    registerActivePluginToolOwnership("workboard", ["exec", "workboard_complete"]);
+    registerActivePluginToolOwnership("other-plugin", ["workboard_complete"]);
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("workboard", () =>
+        runtime.run({
+          sessionKey: "s-core-tools-also-allow",
+          message: "run a command",
+          toolsAlsoAllow: ["exec"],
+        }),
+      ),
+    ).rejects.toThrow('plugin "workboard" may not add core tool "exec" to subagent runs');
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("workboard", () =>
+        runtime.run({
+          sessionKey: "s-ambiguous-tools-also-allow",
+          message: "finish the card",
+          toolsAlsoAllow: ["workboard_complete"],
+        }),
+      ),
+    ).rejects.toThrow(
+      'plugin "workboard" does not uniquely own subagent tool "workboard_complete"',
+    );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test("clears inherited additive grants when a scoped plugin run requests none", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    const scope = {
+      context: createTestContext("clear-tools-also-allow"),
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "other-plugin",
+          runtimePluginToolGrant: {
+            pluginId: "other-plugin",
+            toolNames: ["other_plugin_tool"],
+          },
+        },
+      } as unknown as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+      pluginId: "workboard",
+      pluginOrigin: "bundled" as const,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "s-clear-tools-also-allow",
+        message: "do normal work",
+      }),
+    );
+
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
+    expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {
@@ -1843,3 +2058,4 @@ describe("loadGatewayPlugins", () => {
     ).rejects.toThrow("No scope set and no fallback context available");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

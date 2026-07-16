@@ -2,10 +2,11 @@
 // Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { writePackageDistInventory } from "./lib/package-dist-inventory.ts";
+import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventory.ts";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
@@ -17,14 +18,84 @@ const requiredControlUiAssetPrefix = "dist/control-ui/assets/";
 const requiredControlUiCompressionSuffixes = [".br", ".gz"] as const;
 const DEFAULT_PREPACK_COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
+const PREPARED_RELEASE_ENV = "OPENCLAW_PREPACK_PREPARED";
+const OCM_INTERNAL_NPM_BIN_ENV = "OCM_INTERNAL_NPM_BIN";
+const OCM_WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
+const OCM_ADAPTER_BASENAME = "ocm-npm-workspace-deps.mjs";
+const NPM_COMMAND_ENV = "npm_command";
+const SELF_CONTAINED_SOURCE_PACK_COMMAND =
+  "node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog";
 
 type PreparedFileReader = {
   existsSync: typeof existsSync;
   readdirSync: typeof readdirSync;
 };
 
+type PackageManifest = {
+  dependencies?: Record<string, unknown>;
+  name?: unknown;
+};
+
+function ocmExternalizesWorkspacePackage(packageName: string, env: NodeJS.ProcessEnv): boolean {
+  if (env[NPM_COMMAND_ENV] !== "pack") {
+    return false;
+  }
+  const adapterPath = env[OCM_INTERNAL_NPM_BIN_ENV]?.trim();
+  if (!adapterPath || basename(adapterPath) !== OCM_ADAPTER_BASENAME) {
+    return false;
+  }
+  const workspaceDirs = (env[OCM_WORKSPACE_DIRS_ENV] ?? "")
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  // OCM uses these same manifests to pack and install dependencies beside the root archive.
+  // Require the exact package here so unrelated ambient paths cannot bypass the plain-pack guard.
+  return workspaceDirs.some((workspaceDir) => {
+    try {
+      const manifest = JSON.parse(
+        readFileSync(join(workspaceDir, "package.json"), "utf8"),
+      ) as PackageManifest;
+      return manifest.name === packageName;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function normalizeFiles(files: Iterable<string>): Set<string> {
   return new Set(Array.from(files, (file) => file.replace(/\\/g, "/")));
+}
+
+export function collectSourcePackWorkspaceDependencyErrors(
+  packageJson: PackageManifest,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (env[PREPARED_RELEASE_ENV]?.trim() === "1") {
+    return [];
+  }
+  const aiDependency = packageJson.dependencies?.["@openclaw/ai"];
+  if (typeof aiDependency !== "string" || !aiDependency.trim().startsWith("workspace:")) {
+    return [];
+  }
+  if (ocmExternalizesWorkspacePackage("@openclaw/ai", env)) {
+    return [];
+  }
+  return [
+    `plain root packing cannot safely resolve @openclaw/ai from ${aiDependency}: pnpm rewrites the workspace dependency to an exact version without bundling the package`,
+    `use \`${SELF_CONTAINED_SOURCE_PACK_COMMAND}\` for a self-contained source package; official npm release automation prepares and publishes @openclaw/ai separately`,
+  ];
+}
+
+function ensureSupportedSourcePack(env: NodeJS.ProcessEnv = process.env): void {
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as PackageManifest;
+  const errors = collectSourcePackWorkspaceDependencyErrors(packageJson, env);
+  if (errors.length === 0) {
+    return;
+  }
+  for (const error of errors) {
+    console.error(`prepack: ${error}`);
+  }
+  process.exit(1);
 }
 
 export function collectPreparedPrepackErrors(
@@ -221,7 +292,7 @@ function runBuildSmoke(): void {
 }
 
 async function writeDistInventory(): Promise<void> {
-  await writePackageDistInventory(process.cwd());
+  await writePackageDistInventoryForPublish(process.cwd());
 }
 
 export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -234,6 +305,7 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
 }
 
 async function main(): Promise<void> {
+  ensureSupportedSourcePack();
   const buildEnv = resolvePrepackBuildEnvironment();
   runPnpm(["build"], buildEnv);
   runPnpm(["ui:build"], buildEnv);

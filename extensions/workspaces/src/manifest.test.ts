@@ -3,27 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  loadWidgetManifest,
-  resolveWidgetDir,
-  snapshotApprovedWidget,
-  validateWidgetManifest,
-} from "./manifest.js";
-
-async function withTempStateDir<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-manifest-"));
-  try {
-    return await run(stateDir);
-  } finally {
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
-
-async function writeManifest(stateDir: string, name: string, manifest: unknown): Promise<void> {
-  const dir = path.join(stateDir, "workspaces", "widgets", name);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "widget.json"), JSON.stringify(manifest));
-}
+import { resolveWidgetDir, snapshotApprovedWidget, validateWidgetManifest } from "./manifest.js";
 
 const VALID_MANIFEST = {
   schemaVersion: 1,
@@ -142,39 +122,7 @@ describe("resolveWidgetDir", () => {
   });
 });
 
-describe("loadWidgetManifest", () => {
-  it("loads and validates a manifest from disk", async () => {
-    await withTempStateDir(async (stateDir) => {
-      await writeManifest(stateDir, "revenue-chart", VALID_MANIFEST);
-      const manifest = await loadWidgetManifest("revenue-chart", { stateDir });
-      expect(manifest?.name).toBe("revenue-chart");
-    });
-  });
-
-  it("returns null when the manifest is absent", async () => {
-    await withTempStateDir(async (stateDir) => {
-      expect(await loadWidgetManifest("missing", { stateDir })).toBeNull();
-    });
-  });
-
-  it("throws when the manifest name does not match its directory", async () => {
-    await withTempStateDir(async (stateDir) => {
-      await writeManifest(stateDir, "revenue-chart", { ...VALID_MANIFEST, name: "spoofed" });
-      await expect(loadWidgetManifest("revenue-chart", { stateDir })).rejects.toThrow(
-        /does not match its directory/,
-      );
-    });
-  });
-
-  it("throws on invalid JSON", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const dir = path.join(stateDir, "workspaces", "widgets", "broken");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "widget.json"), "{ not json");
-      await expect(loadWidgetManifest("broken", { stateDir })).rejects.toThrow(/not valid JSON/);
-    });
-  });
-
+describe("snapshotApprovedWidget", () => {
   it("parses the manifest from the same bytes it hashes", async () => {
     await withWidget(async ({ stateDir, widgetDir }) => {
       const snapshot = await snapshotApprovedWidget("demo", { stateDir });

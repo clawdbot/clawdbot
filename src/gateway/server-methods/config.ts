@@ -1,5 +1,4 @@
-// Config gateway methods expose config get/set/patch/apply/schema operations
-// with validation, redaction restoration, secret prep, and reload planning.
+// Config gateway methods: validation, redaction, secrets, reload planning.
 import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
@@ -31,11 +30,7 @@ import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
-import {
-  redactConfigObject,
-  redactConfigSnapshot,
-  restoreRedactedValues,
-} from "../../config/redact-snapshot.js";
+import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +47,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { diffConfigPaths } from "../config-diff.js";
+import { createConfigGetResponse } from "../config-get-response.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
   formatControlPlaneActor,
@@ -602,6 +598,9 @@ async function respondWithConfigRestartWrite(params: {
     {
       ok: true,
       path: params.writeResult.path,
+      // Additive ack hash: matches the hash config.get would report for the
+      // persisted bytes, so writers can adopt it without a reload.
+      ...(params.writeResult.hash ? { hash: params.writeResult.hash } : {}),
       config: redactConfigObject(params.writeResult.config, params.uiHints),
       restart,
       sentinel: {
@@ -688,7 +687,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const snapshot = await readConfigFileSnapshot();
     const schema = loadSchemaWithPlugins();
-    respond(true, redactConfigSnapshot(snapshot, schema.uiHints), undefined);
+    respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!assertValidParams(params, validateConfigSchemaParams, "config.schema", respond)) {
@@ -757,6 +756,9 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
+        // Additive ack hash: matches the hash config.get would report for the
+        // persisted bytes, so writers can adopt it without a reload.
+        ...(writeResult.hash ? { hash: writeResult.hash } : {}),
         config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
       },
       undefined,
@@ -1010,3 +1012,4 @@ export const configHandlers: GatewayRequestHandlers = {
     }
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

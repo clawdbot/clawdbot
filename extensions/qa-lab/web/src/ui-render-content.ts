@@ -1,6 +1,12 @@
+import {
+  conversationSelectionKey,
+  findConversationBySelectionKey,
+  messageConversationSelectionKey,
+  threadConversationSelectionKey,
+} from "./ui-conversation-key.js";
 import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso, formatTime } from "./ui-render-utils.js";
-import type { Attachment, Message, SeedScenario, UiState } from "./ui-types.js";
+import type { Attachment, Conversation, Message, SeedScenario, UiState } from "./ui-types.js";
 
 function attachmentSourceUrl(attachment: Attachment): string | null {
   if (attachment.url?.trim()) {
@@ -53,7 +59,8 @@ function renderMessageAttachments(message: Message): string {
 }
 
 function deriveSelectedConversation(state: UiState): string | null {
-  return state.selectedConversationId ?? state.snapshot?.conversations[0]?.id ?? null;
+  const first = state.snapshot?.conversations[0];
+  return state.selectedConversationKey ?? (first ? conversationSelectionKey(first) : null);
 }
 
 function deriveSelectedThread(state: UiState): string | null {
@@ -63,7 +70,10 @@ function deriveSelectedThread(state: UiState): string | null {
 function filteredMessages(state: UiState) {
   const messages = state.snapshot?.messages ?? [];
   return messages.filter((message) => {
-    if (state.selectedConversationId && message.conversation.id !== state.selectedConversationId) {
+    if (
+      state.selectedConversationKey &&
+      messageConversationSelectionKey(message) !== state.selectedConversationKey
+    ) {
       return false;
     }
     if (state.selectedThreadId && message.threadId !== state.selectedThreadId) {
@@ -73,19 +83,35 @@ function filteredMessages(state: UiState) {
   });
 }
 
+function formatConversationLabel(
+  conversation: Conversation,
+  conversations: Conversation[],
+): string {
+  const label = conversation.title || conversation.id;
+  const hasAccountCollision = conversations.some(
+    (candidate) =>
+      candidate.accountId !== conversation.accountId &&
+      candidate.kind === conversation.kind &&
+      candidate.id === conversation.id,
+  );
+  return hasAccountCollision ? `${label} (${conversation.accountId})` : label;
+}
+
 export function renderChatView(state: UiState): string {
   const conversations = state.snapshot?.conversations ?? [];
   const channels = conversations.filter((c) => c.kind === "channel");
   const dms = conversations.filter((c) => c.kind === "direct");
   const threads = (state.snapshot?.threads ?? []).filter(
-    (t) => !state.selectedConversationId || t.conversationId === state.selectedConversationId,
+    (thread) =>
+      !state.selectedConversationKey ||
+      threadConversationSelectionKey(thread) === state.selectedConversationKey,
   );
   const selectedConv = deriveSelectedConversation(state);
   const selectedThread = deriveSelectedThread(state);
-  const activeConversation = conversations.find((c) => c.id === selectedConv);
+  const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
   const messages = filteredMessages({
     ...state,
-    selectedConversationId: selectedConv,
+    selectedConversationKey: selectedConv,
     selectedThreadId: selectedThread,
   });
 
@@ -103,9 +129,9 @@ export function renderChatView(state: UiState): string {
                   : channels
                       .map(
                         (c) => `
-                          <button class="chat-sidebar-item${c.id === selectedConv ? " active" : ""}" data-conversation-id="${esc(c.id)}">
+                          <button class="chat-sidebar-item${conversationSelectionKey(c) === selectedConv ? " active" : ""}" data-conversation-key="${esc(conversationSelectionKey(c))}">
                             <span class="chat-sidebar-icon">#</span>
-                            <span class="chat-sidebar-label">${esc(c.title || c.id)}</span>
+                            <span class="chat-sidebar-label">${esc(formatConversationLabel(c, conversations))}</span>
                           </button>`,
                       )
                       .join("")
@@ -121,9 +147,9 @@ export function renderChatView(state: UiState): string {
                   : dms
                       .map(
                         (c) => `
-                          <button class="chat-sidebar-item${c.id === selectedConv ? " active" : ""}" data-conversation-id="${esc(c.id)}">
+                          <button class="chat-sidebar-item${conversationSelectionKey(c) === selectedConv ? " active" : ""}" data-conversation-key="${esc(conversationSelectionKey(c))}">
                             <span class="chat-sidebar-icon">\u25CF</span>
-                            <span class="chat-sidebar-label">${esc(c.title || c.id)}</span>
+                            <span class="chat-sidebar-label">${esc(formatConversationLabel(c, conversations))}</span>
                           </button>`,
                       )
                       .join("")
@@ -142,7 +168,7 @@ export function renderChatView(state: UiState): string {
                     ${threads
                       .map(
                         (t) => `
-                          <button class="chat-sidebar-item${t.id === selectedThread ? " active" : ""}" data-thread-select="${esc(t.id)}" data-thread-conv="${esc(t.conversationId)}">
+                          <button class="chat-sidebar-item${t.id === selectedThread ? " active" : ""}" data-thread-select="${esc(t.id)}" data-thread-conversation-key="${esc(threadConversationSelectionKey(t))}">
                             <span class="chat-sidebar-icon">\u21B3</span>
                             <span class="chat-sidebar-label">${esc(t.title)}</span>
                           </button>`,
@@ -159,7 +185,7 @@ export function renderChatView(state: UiState): string {
       <div class="chat-main">
         <!-- Channel header -->
         <div class="chat-channel-header">
-          <span class="chat-channel-name">${esc(activeConversation?.title || selectedConv || "No conversation")}</span>
+          <span class="chat-channel-name">${esc(activeConversation?.title || activeConversation?.id || "No conversation")}</span>
           ${activeConversation ? `<span class="chat-channel-kind">${activeConversation.kind}</span>` : ""}
           ${state.bootstrap?.runner.status === "running" ? '<span class="live-indicator"><span class="live-dot"></span>LIVE</span>' : ""}
         </div>

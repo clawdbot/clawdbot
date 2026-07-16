@@ -167,9 +167,7 @@ function readIMessageCatchupCursor(accountId: string): IMessageCatchupCursor | n
   );
 }
 
-export async function loadIMessageCatchupCursor(
-  accountId: string,
-): Promise<IMessageCatchupCursor | null> {
+async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
   return readIMessageCatchupCursor(accountId);
 }
 
@@ -188,7 +186,7 @@ function buildIMessageCatchupCursor(next: {
   };
 }
 
-export async function saveIMessageCatchupCursor(
+async function saveIMessageCatchupCursor(
   accountId: string,
   next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
   options: { allowCursorRewindForRetries?: boolean } = {},
@@ -208,10 +206,6 @@ export async function saveIMessageCatchupCursor(
     }
     return cursor;
   });
-}
-
-export function resetIMessageCatchupCursorStoreForTest(): void {
-  openCatchupCursorStore().clear();
 }
 
 /**

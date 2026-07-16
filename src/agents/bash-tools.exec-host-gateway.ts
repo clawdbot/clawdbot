@@ -1262,3 +1262,4 @@ export async function processGatewayAllowlist(
 
   return { execCommandOverride: enforcedCommand };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

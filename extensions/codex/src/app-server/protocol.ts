@@ -562,7 +562,7 @@ type CodexPluginListMarketplaceKind =
   | "created-by-me-remote";
 
 type CodexPluginListParams = {
-  cwds: string[];
+  cwds?: string[];
   marketplaceKinds?: CodexPluginListMarketplaceKind[];
 };
 

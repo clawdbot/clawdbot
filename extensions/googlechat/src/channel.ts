@@ -86,6 +86,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     groups: googlechatGroupsAdapter,
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
+      targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
       resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {

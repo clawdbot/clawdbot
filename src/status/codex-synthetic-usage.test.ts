@@ -43,6 +43,41 @@ describe("mergeUsageSummaries", () => {
     });
   });
 
+  it("lets preferred billing replace duplicate secondary entries without dropping siblings", () => {
+    const merged = mergeUsageSummaries(
+      {
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "Week", usedPercent: 40 }],
+            billing: [
+              { type: "balance", amount: 12.5, unit: "credits" },
+              { type: "spend", amount: 20, unit: "usd", period: "month" },
+            ],
+          },
+        ],
+      },
+      {
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "Codex",
+            windows: [{ label: "5h", usedPercent: 10 }],
+            billing: [{ type: "balance", amount: 8, unit: "credits" }],
+          },
+        ],
+      },
+    );
+
+    expect(merged.providers[0]?.billing).toEqual([
+      { type: "balance", amount: 8, unit: "credits" },
+      { type: "spend", amount: 20, unit: "usd", period: "month" },
+    ]);
+  });
+
   it("ranks billing-only snapshots above errors", () => {
     const merged = mergeUsageSummaries(
       {

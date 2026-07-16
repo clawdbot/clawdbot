@@ -5,8 +5,8 @@ import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-contex
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
-  resetToolPolicyWarningCacheForTest,
 } from "./tool-policy-pipeline.js";
+import { resetToolPolicyWarningCacheForTest } from "./tool-policy-pipeline.test-support.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
 const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({

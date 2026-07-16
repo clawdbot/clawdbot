@@ -21,7 +21,6 @@ export {
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
   dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   resolveChunkMode,
   resolveTextChunkLimit,
   type getReplyFromConfig,

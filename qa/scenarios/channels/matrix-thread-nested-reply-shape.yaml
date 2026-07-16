@@ -1,0 +1,20 @@
+title: Matrix nested thread reply shape
+scenario:
+  id: matrix-thread-nested-reply-shape
+  surface: channels
+  coverage:
+    primary:
+      - channels.threads
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runThreadNestedReplyShapeScenario
+  args:
+    - expr: "scenarioContext"

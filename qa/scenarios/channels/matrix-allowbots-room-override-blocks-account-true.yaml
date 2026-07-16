@@ -1,0 +1,31 @@
+title: Matrix room allowBots=false overrides account allowBots=true
+scenario:
+  id: matrix-allowbots-room-override-blocks-account-true
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-policy
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        allowBots: true
+        configuredBotRoles:
+          - observer
+        groupAllowRoles:
+          - driver
+          - observer
+        groupsByKey:
+          main:
+            allowBots: false
+            requireMention: false
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsRoomOverrideBlocksAccountTrueScenario
+  args:
+    - expr: "scenarioContext"

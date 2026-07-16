@@ -74,6 +74,32 @@ describe("cron protocol validators", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
   });
 
+  it("accepts toolsAllow on systemEvent payloads", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        payload: {
+          kind: "systemEvent",
+          text: "tick",
+          toolsAllow: ["read", "cron"],
+          toolsAllowIsDefault: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "systemEvent",
+            toolsAllow: ["read", "cron"],
+            toolsAllowIsDefault: true,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects invalid trigger scripts and additional properties", () => {
     expect(validateCronAddParams({ ...minimalAddParams, trigger: { script: "" } })).toBe(false);
     expect(

@@ -1,7 +1,10 @@
 // Covers detached task runtime spawning, events, and cancellation handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cancelDetachedTaskRunById,
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+} from "./detached-task-runtime-state.js";
+import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
@@ -9,16 +12,16 @@ import {
   findDetachedTaskRun,
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
-  getDetachedTaskLifecycleRuntimeRegistration,
-  registerDetachedTaskRuntime,
   recordTaskRunProgressByRunId,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "./task-runtime.test-helpers.js";
 
 const { mockFindTaskByRunIdForStatus, mockListTasksForSessionKeyForStatus, mockLogWarn } =
   vi.hoisted(() => ({
@@ -273,7 +276,7 @@ describe("detached-task-runtime", () => {
         createdAtOrAfter: 1,
       }),
     ).toEqual({ lookup: "available", task: runningTask });
-    await cancelDetachedTaskRunById({
+    await getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById({
       cfg: {} as never,
       taskId: runningTask.taskId,
     });
@@ -334,7 +337,7 @@ describe("detached-task-runtime", () => {
       ...getDetachedTaskLifecycleRuntime(),
     };
 
-    registerDetachedTaskRuntime("tests/detached-runtime", runtime);
+    registerDetachedTaskLifecycleRuntime("tests/detached-runtime", runtime);
 
     const registration = getDetachedTaskLifecycleRuntimeRegistration();
     expect(registration?.pluginId).toBe("tests/detached-runtime");

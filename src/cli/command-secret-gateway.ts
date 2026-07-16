@@ -98,7 +98,7 @@ const commandSecretGatewayDeps: CommandSecretGatewayDeps = {
   resolveRuntimeWebTools,
 };
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides: Partial<CommandSecretGatewayDeps>): () => void {
     const previous = { ...commandSecretGatewayDeps };
     Object.assign(commandSecretGatewayDeps, overrides);
@@ -116,6 +116,11 @@ export const testing = {
     });
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandSecretGatewayTestApi")] =
+    testing;
+}
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
@@ -1180,3 +1185,4 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     hadUnresolvedTargets: Object.values(targetStatesByPath).includes("unresolved"),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1499,8 +1499,11 @@ describe("runHeartbeatOnce", () => {
 
   async function runHeartbeatFileScenario(params: {
     fileState: HeartbeatFileState;
+    source?: "notifications-event";
     reason?: "interval" | "wake";
+    unscheduled?: boolean;
     queueCronEvent?: boolean;
+    queueSystemEvent?: boolean;
     replyText?: string;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
@@ -1564,7 +1567,7 @@ describe("runHeartbeatOnce", () => {
       agents: {
         defaults: {
           workspace: workspaceDir,
-          heartbeat: { every: "5m", target: "whatsapp" },
+          ...(params.unscheduled ? {} : { heartbeat: { every: "5m", target: "whatsapp" } }),
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1578,6 +1581,9 @@ describe("runHeartbeatOnce", () => {
         contextKey: "cron:qmd-maintenance",
       });
     }
+    if (params.queueSystemEvent) {
+      enqueueSystemEvent("Discord online-presence event", { sessionKey });
+    }
 
     const replySpy = vi.fn();
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
@@ -1588,12 +1594,16 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
-      ...(params.reason === "wake"
-        ? { source: "hook" as const, intent: "immediate" as const }
-        : params.reason === "interval"
-          ? { source: "interval" as const, intent: "scheduled" as const }
-          : {}),
+      ...(params.source
+        ? { source: params.source, intent: "immediate" as const }
+        : params.reason === "wake"
+          ? { source: "hook" as const, intent: "immediate" as const }
+          : params.reason === "interval"
+            ? { source: "interval" as const, intent: "scheduled" as const }
+            : {}),
       reason: params.reason,
+      ...(params.source ? { sessionKey } : {}),
+      ...(params.source ? { heartbeat: { target: "last" as const } } : {}),
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
     return { res, replySpy, sendWhatsApp, workspaceDir };
@@ -1749,7 +1759,10 @@ tasks:
       name: string;
       fileState: HeartbeatFileState;
       reason?: "interval" | "wake";
+      source?: "notifications-event";
+      unscheduled?: boolean;
       queueCronEvent?: boolean;
+      queueSystemEvent?: boolean;
       expectedStatus: "ran" | "skipped";
       expectedSkipReason?: "empty-heartbeat-file";
       expectedSendCalls: number;
@@ -1789,6 +1802,18 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "wake event processed",
+      },
+      {
+        name: "empty file + post-update notification wake runs",
+        fileState: "empty",
+        source: "notifications-event",
+        reason: "wake",
+        unscheduled: true,
+        queueSystemEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "post-update event processed",
       },
       {
         name: "empty file + queued cron interval runs",
@@ -1973,3 +1998,4 @@ tasks:
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

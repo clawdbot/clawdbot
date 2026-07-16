@@ -147,7 +147,7 @@ extension OnboardingView {
         .disabled(self.installingCLI)
         .onChange(of: self.state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
-            // retires route-owned AI/Crestodian state. This nested observer owns probe copy only.
+            // retires route-owned AI/OpenClaw state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,
                 suppressReset: self.suppressRemoteProbeReset)

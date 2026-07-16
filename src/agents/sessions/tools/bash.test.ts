@@ -4,7 +4,8 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import type { BashOperations } from "./bash-operations.js";
-import { createBashTool, createLocalBashOperations, resolveBashTimeoutMs } from "./bash.js";
+import { createBashTool, createLocalBashOperations } from "./bash.js";
+import { resolveBashTimeoutMs } from "./bash.test-support.js";
 
 describe("bash tool timeout helpers", () => {
   it("converts positive timeout seconds to timer-safe milliseconds", () => {

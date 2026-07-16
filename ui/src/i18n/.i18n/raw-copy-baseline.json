@@ -5,21 +5,21 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "browser panel"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "command palette"
     },
     {
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-host.ts",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -83,6 +83,13 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
+      "text": "OPENCLAW_GATEWAY_TOKEN ("
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/components/login-gate.ts",
       "text": "ws://127.0.0.1:18789"
     },
     {
@@ -98,6 +105,13 @@
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
       "text": "esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/sidebar-update-card.ts",
+      "text": "v"
     },
     {
       "count": 1,
@@ -292,6 +306,41 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/about/view.ts",
+      "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "assistant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "chats"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "Full vault breakdown:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "Imported chats clustered around"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
       "text": "memory-wiki"
     },
@@ -301,6 +350,34 @@
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
       "text": "plugins.entries.memory-wiki.enabled = true"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "Selected section:"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "Showing the first chunk of this page"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "user ·"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.ts",
+      "text": "Vault ·"
     },
     {
       "count": 2,
@@ -366,6 +443,20 @@
       "text": "NIP-05"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Compacting context..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Context compacted"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -380,6 +471,13 @@
       "text": "Esc"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Replying to"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -387,11 +485,39 @@
       "text": "Tab"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "text": "% ctx"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message.ts",
       "text": "JSON"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "text": "R"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "text": "W"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-thread.ts",
+      "text": "pinned"
     },
     {
       "count": 1,
@@ -444,6 +570,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/cron/view-runs.ts",
+      "text": "ms"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
@@ -467,6 +600,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/memory-import/view.ts",
+      "text": "/memory/imports/"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
     },
@@ -485,11 +625,25 @@
       "text": "https://mcp.example.com/mcp · npx some-mcp-server"
     },
     {
+      "count": 4,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/plugins/view.ts",
+      "text": "v"
+    },
+    {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/profile/profile-page.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skill-workshop/view.ts",
+      "text": "v"
     },
     {
       "count": 1,

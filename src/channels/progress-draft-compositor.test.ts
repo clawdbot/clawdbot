@@ -1,6 +1,9 @@
 // Progress draft compositor tests cover streamed draft composition for channel progress updates.
 import { describe, expect, it, vi } from "vitest";
-import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
+import {
+  createChannelProgressDraftCompositor,
+  PROGRESS_STATUS_PREAMBLE_FRESH_MS,
+} from "./progress-draft-compositor.js";
 import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
 
 describe("createChannelProgressDraftCompositor", () => {
@@ -103,6 +106,29 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.beginNewTurn()).toBe(false);
   });
 
+  it("cancels a delayed draft when the final reply starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      progress.markFinalReplyStarted();
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
+
+      expect(progress.hasStarted).toBe(false);
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not resurrect progress after suppression", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
@@ -150,9 +176,17 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
-    await progress.pushCommentaryProgress("Checking the workspace", { itemId: "c1" });
+    const rejected = await progress.pushCommentaryProgress(
+      "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
+      { itemId: "silent" },
+    );
+    const accepted = await progress.pushCommentaryProgress("Checking the workspace", {
+      itemId: "c1",
+    });
 
     const rendered = update.mock.calls.map((call) => call[0]);
+    expect(rejected).toBe(false);
+    expect(accepted).toBe(true);
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
@@ -317,6 +351,278 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
+  it("hands preambles to the commentary lane when it is enabled", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    // The opt-in 💬 lane renders every preamble as an interleaved line; the
+    // headline must decline so it cannot replace those documented lines.
+    expect(await progress.pushPreambleHeadline("Reading the workspace.")).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(false);
+  });
+
+  it("holds a preamble headline until the gate starts and hides the implicit label", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    expect(await progress.pushPreambleHeadline("  Reading\n the workspace. ")).toBe(false);
+    expect(await progress.pushPreambleHeadline("   ")).toBe(false);
+    expect(progress.hasStarted).toBe(false);
+    expect(update).not.toHaveBeenCalled();
+
+    await progress.start();
+
+    expect(update).toHaveBeenCalledWith("Reading the workspace.", { flush: true, lines: [] });
+  });
+
+  it("rejects control-only preambles without clobbering a valid headline", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    expect(progress.hasStatusHeadline).toBe(false);
+    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(false);
+    await progress.pushPreambleHeadline(
+      "[[reply_to_current]] Reading   the workspace. [[audio_as_voice]]",
+    );
+    expect(progress.hasStatusHeadline).toBe(true);
+    await progress.start();
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
+      flush: true,
+      lines: [],
+    });
+
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    const calls = update.mock.calls.length;
+    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
+    expect(
+      await progress.pushPreambleHeadline("[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]"),
+    ).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(true);
+    expect(update).toHaveBeenCalledTimes(calls);
+
+    await progress.pushNarrationProgress("Utility filler.");
+    expect(update).toHaveBeenLastCalledWith("Utility filler.", expect.anything());
+    await progress.pushNarrationProgress("");
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", expect.anything());
+  });
+
+  it("retracts only the matching preamble headline", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "preamble-1" });
+    await progress.pushPreambleHeadline("Checking the config.", { itemId: "preamble-2" });
+    const callsBeforeStaleRetraction = update.mock.calls.length;
+
+    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-1" })).toBe(false);
+    expect(update).toHaveBeenCalledTimes(callsBeforeStaleRetraction);
+    expect(progress.hasStatusHeadline).toBe(true);
+
+    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-2" })).toBe(true);
+    expect(progress.hasStatusHeadline).toBe(false);
+    expect(update).toHaveBeenLastCalledWith("Shelling", expect.anything());
+  });
+
+  it("keeps a fresh preamble ahead of later narration", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS - 1;
+    await progress.pushNarrationProgress("Utility narration should wait.");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nReading the workspace.",
+      expect.anything(),
+    );
+  });
+
+  it("uses newer narration after the preamble becomes stale", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushNarrationProgress("Comparing the configuration now.");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nComparing the configuration now.",
+      expect.anything(),
+    );
+  });
+
+  it("refreshes a new preamble item when its text matches the stale item", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "first" });
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushNarrationProgress("Comparing the configuration now.");
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "second" });
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nReading the workspace.",
+      expect.anything(),
+    );
+  });
+
+  it("refreshes to retained narration when a visible preamble expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.start();
+      await progress.pushPreambleHeadline("Reading the workspace.");
+      await progress.pushNarrationProgress("Comparing the configuration now.");
+      expect(update).toHaveBeenLastCalledWith(
+        "Shelling\n\nReading the workspace.",
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
+
+      expect(update).toHaveBeenLastCalledWith(
+        "Shelling\n\nComparing the configuration now.",
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending preamble-expiry refresh when the final starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update: vi.fn(),
+      });
+
+      await progress.start();
+      await progress.pushPreambleHeadline("Reading the workspace.");
+      await progress.pushNarrationProgress("Comparing the configuration now.");
+      expect(vi.getTimerCount()).toBe(1);
+
+      progress.markFinalReplyStarted();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns to the retained preamble when narration clears", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushNarrationProgress("Comparing the configuration now.");
+    await progress.pushNarrationProgress("");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nReading the workspace.",
+      expect.anything(),
+    );
+  });
+
+  it("clears both status sources on reset", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.");
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushNarrationProgress("Comparing the configuration now.");
+    progress.reset();
+    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Next", expect.anything());
+  });
+
   it("holds narration behind the initial progress delay", async () => {
     vi.useFakeTimers();
     try {
@@ -346,7 +652,7 @@ describe("createChannelProgressDraftCompositor", () => {
     }
   });
 
-  it("ignores narration once the final reply started and resets it per turn", async () => {
+  it("ignores status updates once the final reply started and clears both per turn", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
@@ -356,14 +662,19 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
+    await progress.start();
+    expect(progress.isVisible).toBe(true);
+    await progress.pushPreambleHeadline("Checking the primary turn.");
     await progress.pushNarrationProgress("Working on it.");
     progress.markFinalReplyStarted();
+    expect(progress.isVisible).toBe(false);
+    expect(await progress.pushPreambleHeadline("Too late.")).toBe(false);
     expect(await progress.pushNarrationProgress("Too late.")).toBe(false);
 
     progress.markFinalReplyDelivered();
     progress.beginNewTurn();
     await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
-    // The queued turn starts without the primary turn's stale narration.
+    // The queued turn starts without either primary-turn status source.
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Next", expect.anything());
   });
 

@@ -67,6 +67,7 @@ What the key fields do:
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model
 - `config.modelFallback` is used only when no explicit or inherited model resolves
+- `config.fastMode` optionally overrides fast mode for recall without changing the main agent
 - `config.promptStyle: "balanced"` is the default for `recent` mode
 - active memory still runs only for eligible interactive persistent chat sessions (see [When it runs](#when-it-runs))
 
@@ -504,6 +505,15 @@ adds user-visible latency):
 thinking: "medium"; // default: "off"
 ```
 
+`config.fastMode` overrides fast mode only for the blocking memory sub-agent.
+Use `true`, `false`, or `"auto"`; leave it unset to inherit the normal
+agent, session, and model defaults. `"auto"` uses the recall model's configured
+`fastAutoOnSeconds` cutoff:
+
+```json5
+fastMode: true;
+```
+
 `config.promptAppend` adds operator instructions after the default prompt
 and before the conversation context — pair it with a custom `toolsAllow` when
 a non-core memory plugin needs specific tool order or query shaping:
@@ -574,6 +584,7 @@ All active memory configuration lives under `plugins.entries.active-memory`.
 | `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking sub-agent is when deciding whether to return memory                                                                                                                                                     |
 | `config.toolsAllow`          | `string[]`                                                                                           | Concrete memory tool names the blocking sub-agent may call; defaults to `["memory_search", "memory_get"]`, or `["memory_recall"]` when `plugins.slots.memory` is `memory-lancedb`; wildcards, `group:*` entries, and core agent tools are ignored |
 | `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking sub-agent; default `off` for speed                                                                                                                                                                    |
+| `config.fastMode`            | `boolean \| "auto"`                                                                                  | Optional fast-mode override for the blocking sub-agent; unset inherits normal agent, session, and model defaults                                                                                                                                  |
 | `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                                                                                  |
 | `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                                                                                          |
 | `config.timeoutMs`           | `number`                                                                                             | Hard timeout for the blocking sub-agent (range 250-120000 ms; default 15000)                                                                                                                                                                      |

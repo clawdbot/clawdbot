@@ -3,20 +3,14 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -24,15 +18,15 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type { InputProvenance } from "./input-provenance.js";
+import {
+  NOTIFY_BY_SESSION_STATE_EVENT_KIND as NOTIFY_BY_KIND,
+  type SessionStateActorType,
+  type SessionStateEventKind,
+} from "./session-state-event-kinds.js";
+import { enqueueSessionStateNotice, isNotifiableWatcherKey } from "./session-state-notices.js";
+import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 
-export type SessionStateActorType = "human" | "agent" | "system";
-type SessionStateEventKind =
-  | "human_direct_message"
-  | "run_completed"
-  | "run_failed"
-  | "child_spawned"
-  | "goal_changed"
-  | "compacted";
+export type { SessionStateActorType } from "./session-state-event-kinds.js";
 
 type SessionStateEventInput = {
   sessionKey: string;
@@ -45,6 +39,7 @@ type SessionStateEventInput = {
   dedupeKey?: string;
   summary: string;
   payload?: Record<string, unknown>;
+  occurredAt?: number;
   watcherSessionKeys?: readonly string[];
 };
 
@@ -73,19 +68,8 @@ type SessionWatchCursorRow = Selectable<OpenClawStateKyselyDatabase["session_wat
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
-const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const log = createSubsystemLogger("sessions/state-events");
 let lastPruneAt = 0;
-
-// Future utility-model materiality belongs at this single deterministic seam; no config until then.
-const NOTIFY_BY_KIND: Record<SessionStateEventKind, boolean> = {
-  human_direct_message: true,
-  goal_changed: true,
-  run_completed: false,
-  run_failed: false,
-  child_spawned: false,
-  compacted: false,
-};
 
 function getSessionStateKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionStateDatabase>(db);
@@ -145,65 +129,6 @@ function bindSessionStateEvent(
     summary: input.summary,
     payload_json: input.payload ? JSON.stringify(input.payload) : null,
   };
-}
-
-function encodeNoticeTarget(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("hex");
-}
-
-export function decodeSessionStateNoticeContextKey(contextKey: string): string | undefined {
-  if (!contextKey.startsWith(SESSION_STATE_CONTEXT_PREFIX)) {
-    return undefined;
-  }
-  const encoded = contextKey.slice(SESSION_STATE_CONTEXT_PREFIX.length);
-  if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
-    return undefined;
-  }
-  return Buffer.from(encoded, "hex").toString("utf8");
-}
-
-// Terse on purpose: this line lands in model prompts, possibly repeatedly across
-// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
-// and the reconciliation call must be self-contained (explicit target sessionKey).
-function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
-}
-
-function shouldWakeWatcher(watcherSessionKey: string): boolean {
-  return !isSubagentSessionKey(watcherSessionKey);
-}
-
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices or cursors.
-function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
-function enqueueSessionStateNotice(params: {
-  watcherSessionKey: string;
-  targetSessionKey: string;
-  lastSeenSequence: number;
-}): void {
-  enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
-    sessionKey: params.watcherSessionKey,
-    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
-  });
-  if (!shouldWakeWatcher(params.watcherSessionKey)) {
-    return;
-  }
-  // intent "immediate": event-intent wakes defer on heartbeat dueness, which would
-  // delay stale-state notices by up to the whole heartbeat interval. Task/cron
-  // wake-now paths use the same class; the flood guard remains the backstop.
-  requestHeartbeat({
-    source: "session-state",
-    intent: "immediate",
-    reason: `session-state:${params.targetSessionKey}`,
-    sessionKey: params.watcherSessionKey,
-  });
 }
 
 function readCursor(
@@ -311,11 +236,24 @@ export function classifySessionStateActor(opts: {
 }
 
 /** Append a signal-log event without allowing signaling failure to fail the originating action. */
+const SESSION_STATE_OCCURRED_AT_MAX_SKEW_MS = 24 * 60 * 60_000;
+
+// Upstream-sourced event times are display/history truth only. Bookkeeping clocks
+// (heads, cursors, prune scheduling) must use local time, or one skewed upstream
+// timestamp could age-out watch cursors instantly; the clamp bounds retention skew.
+function clampSessionStateOccurredAt(value: number | undefined, now: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return now;
+  }
+  return Math.min(Math.max(value, now - SESSION_STATE_OCCURRED_AT_MAX_SKEW_MS), now);
+}
+
 export function recordSessionStateEvent(
   input: SessionStateEventInput,
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): SessionStateEventRecord | undefined {
-  const occurredAt = options.now ?? Date.now();
+  const now = options.now ?? Date.now();
+  const occurredAt = clampSessionStateOccurredAt(input.occurredAt, now);
   const notices: Array<{
     watcherSessionKey: string;
     targetSessionKey: string;
@@ -353,7 +291,7 @@ export function recordSessionStateEvent(
             session_key: input.sessionKey,
             agent_id: input.agentId,
             last_sequence: insertedSequence,
-            updated_at: occurredAt,
+            updated_at: now,
           })
           .onConflict((conflict) =>
             // (session_key, agent_id) composite identity: under session.scope="global"
@@ -361,7 +299,7 @@ export function recordSessionStateEvent(
             // would let agents overwrite each other's version heads.
             conflict.columns(["session_key", "agent_id"]).doUpdateSet({
               last_sequence: insertedSequence,
-              updated_at: occurredAt,
+              updated_at: now,
             }),
           ),
       );
@@ -388,7 +326,7 @@ export function recordSessionStateEvent(
             watcherSessionKey,
             targetSessionKey: input.sessionKey,
             sequence: insertedSequence,
-            now: occurredAt,
+            now,
           });
           continue;
         }
@@ -400,7 +338,7 @@ export function recordSessionStateEvent(
           watcherSessionKey,
           targetSessionKey: input.sessionKey,
           sequence: insertedSequence,
-          now: occurredAt,
+          now,
         });
         notices.push({ watcherSessionKey, targetSessionKey: input.sessionKey, lastSeenSequence });
       }
@@ -418,8 +356,8 @@ export function recordSessionStateEvent(
     for (const notice of notices) {
       enqueueSessionStateNotice(notice);
     }
-    if (occurredAt - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
-      pruneSessionStateEvents({ ...options, now: occurredAt });
+    if (now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
+      pruneSessionStateEvents({ ...options, now });
     }
     return event;
   } catch (error) {
@@ -628,6 +566,7 @@ export function handleSessionStateSessionDeleted(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
+  deleteSessionUpstreamLink(sessionKey, agentId, options);
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);
@@ -710,7 +649,7 @@ export function sweepSessionStateWatchNotices(
 }
 
 /** Enforce bounded retained history without regressing durable per-session heads. */
-export function pruneSessionStateEvents(
+function pruneSessionStateEvents(
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): void {
   const now = options.now ?? Date.now();
@@ -900,35 +839,45 @@ export function registerSessionStateWatch(
   }
 }
 
-/** Record a direct human turn when the target has a parent or registered watcher. */
-export function recordSessionHumanDirectMessage(params: {
-  sessionKey: string;
-  entry?: SessionEntry;
-  agentId?: string;
-  actor: { actorType: SessionStateActorType; actorId?: string };
-  channel?: string;
-  runId?: string;
-}): void {
+export function recordSessionHumanDirectMessage(
+  params: {
+    sessionKey: string;
+    entry?: SessionEntry;
+    agentId?: string;
+    actor: { actorType: SessionStateActorType; actorId?: string };
+    channel?: string;
+    runId?: string;
+    dedupeKey?: string;
+    payload?: Record<string, unknown>;
+    occurredAt?: number;
+  },
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): SessionStateEventRecord | undefined {
   const watcherSessionKey = params.entry?.spawnedBy ?? params.entry?.parentSessionKey;
   if (params.actor.actorType !== "human") {
-    return;
+    return undefined;
   }
-  // Unparented sessions record only when someone explicitly watches them: one
-  // indexed existence probe keeps ordinary un-watched human turns write-free.
-  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey)) {
-    return;
+  // One indexed watcher probe keeps ordinary un-watched human turns write-free.
+  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey, options)) {
+    return undefined;
   }
-  recordSessionStateEvent({
-    sessionKey: params.sessionKey,
-    sessionId: params.entry?.sessionId,
-    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-    kind: "human_direct_message",
-    actorType: "human",
-    ...(params.actor.actorId ? { actorId: params.actor.actorId } : {}),
-    runId: params.runId,
-    summary: `human message via ${params.channel?.trim() || "unknown"}`,
-    ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
-  });
+  return recordSessionStateEvent(
+    {
+      sessionKey: params.sessionKey,
+      sessionId: params.entry?.sessionId,
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+      kind: "human_direct_message",
+      actorType: "human",
+      ...(params.actor.actorId ? { actorId: params.actor.actorId } : {}),
+      runId: params.runId,
+      ...(params.dedupeKey ? { dedupeKey: params.dedupeKey } : {}),
+      summary: `human message via ${params.channel?.trim() || "unknown"}`,
+      payload: params.payload,
+      ...(params.occurredAt === undefined ? {} : { occurredAt: params.occurredAt }),
+      ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
+    },
+    options,
+  );
 }
 
 /** Seed the parent cursor at the child-spawn version. */
@@ -983,7 +932,4 @@ export function recordSubagentTerminalState(params: {
   });
 }
 
-export const sessionStateEventStoreLimits = {
-  maxRows: SESSION_STATE_MAX_ROWS,
-  retentionMs: SESSION_STATE_RETENTION_MS,
-} as const;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

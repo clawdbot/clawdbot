@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
+import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.test-support.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";

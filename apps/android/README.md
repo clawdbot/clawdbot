@@ -18,6 +18,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words
 - [x] Screen tab full functionality
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
 - [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases

@@ -6,7 +6,11 @@ import {
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
-import { resolveEquivalentWhatsAppDirectChatJids, type LidLookup } from "./text-runtime.js";
+import { resolveEquivalentWhatsAppDirectChatJids } from "./text-runtime.js";
+
+type LidLookup = NonNullable<
+  NonNullable<Parameters<typeof resolveEquivalentWhatsAppDirectChatJids>[1]>["lidLookup"]
+>;
 
 const resolverMocks = vi.hoisted(() => ({
   resolveWhatsAppApproval: vi.fn(),

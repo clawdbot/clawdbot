@@ -65,8 +65,6 @@ export function formatDuration(durationMs: number): string {
   const roundedMs =
     durationMs < 1000 ? Math.round(durationMs) : Math.round(durationMs / 1000) * 1000;
   return prettyMilliseconds(roundedMs, {
-    millisecondsDecimalDigits: 0,
-    secondsDecimalDigits: 0,
     unitCount: 2,
   });
 }

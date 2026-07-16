@@ -773,3 +773,4 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

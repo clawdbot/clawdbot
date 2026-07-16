@@ -1318,3 +1318,4 @@ describe("readClaudeCliFallbackSeed", () => {
     expect(seed?.summaryText).toBe("trailing summary without boundary");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,6 +17,18 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThread, JsonValue } from "./protocol.js";
+import {
+  attachCodexMirrorIdentity,
+  attachUpstreamUserText,
+  readMirrorIdentity,
+  readUpstreamUserText,
+} from "./upstream-prompt-provenance.js";
+import {
+  buildResolvedCodexUserPromptMessage,
+  buildCodexUserPromptMessage,
+} from "./user-prompt-message.js";
+
+export { buildCodexUserPromptMessage };
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
@@ -25,7 +37,6 @@ type CodexAppServerTranscriptMirrorResult = {
   userMessagesPresent: MirroredUserMessage[];
 };
 
-const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
 const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
@@ -321,79 +332,6 @@ function attachCodexMirrorOrigin(message: AgentMessage): AgentMessage {
   } as unknown as AgentMessage;
 }
 
-function buildSenderLabel(params: {
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-}): string | undefined {
-  const label = params.senderName ?? params.senderUsername ?? params.senderE164 ?? params.senderId;
-  if (!label) {
-    return undefined;
-  }
-  if (!params.senderId || label.includes(params.senderId)) {
-    return label;
-  }
-  return `${label} (${params.senderId})`;
-}
-
-function buildCodexUserPromptMessageFromPrepared(
-  params: EmbeddedRunAttemptParams,
-  preparedUserMessage: MirroredUserMessage | undefined,
-): AgentMessage {
-  const senderId = normalizeOptionalString(params.senderId);
-  const senderName = normalizeOptionalString(params.senderName);
-  const senderUsername = normalizeOptionalString(params.senderUsername);
-  const senderE164 = normalizeOptionalString(params.senderE164);
-  const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
-  const sourceChannel = normalizeOptionalString(
-    params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
-  );
-  if (preparedUserMessage) {
-    return {
-      role: "user",
-      timestamp: Date.now(),
-      ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
-      ...(sourceChannel ? { sourceChannel } : {}),
-      ...(senderId ? { senderId } : {}),
-      ...(senderName ? { senderName } : {}),
-      ...(senderUsername ? { senderUsername } : {}),
-      ...(senderE164 ? { senderE164 } : {}),
-      ...(senderLabel ? { senderLabel } : {}),
-      ...(preparedUserMessage as unknown as Record<string, unknown>),
-    } as AgentMessage;
-  }
-  return {
-    role: "user",
-    content: params.prompt,
-    timestamp: Date.now(),
-    ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
-    ...(sourceChannel ? { sourceChannel } : {}),
-    ...(senderId ? { senderId } : {}),
-    ...(senderName ? { senderName } : {}),
-    ...(senderUsername ? { senderUsername } : {}),
-    ...(senderE164 ? { senderE164 } : {}),
-    ...(senderLabel ? { senderLabel } : {}),
-  } as AgentMessage;
-}
-
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
-  return buildCodexUserPromptMessageFromPrepared(
-    params,
-    params.userTurnTranscriptRecorder?.message,
-  );
-}
-
-async function buildResolvedCodexUserPromptMessage(
-  params: EmbeddedRunAttemptParams,
-): Promise<AgentMessage> {
-  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-  return buildCodexUserPromptMessageFromPrepared(
-    params,
-    resolvedMessage ?? params.userTurnTranscriptRecorder?.message,
-  );
-}
-
 async function mirrorBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
@@ -452,10 +390,15 @@ async function resolveFinalCodexMirrorMessages(params: {
   ) {
     return params.messagesSnapshot;
   }
-  const resolvedPrompt = attachCodexMirrorIdentity(
+  const promptSnapshot = params.messagesSnapshot.find((message) => message.role === "user");
+  const resolvedBase = attachCodexMirrorIdentity(
     await buildResolvedCodexUserPromptMessage(params.params),
     `${params.turnId}:prompt`,
   );
+  const upstreamUserText = readUpstreamUserText(promptSnapshot);
+  const resolvedPrompt = upstreamUserText
+    ? attachUpstreamUserText(resolvedBase, upstreamUserText)
+    : resolvedBase;
   const firstUserIndex = params.messagesSnapshot.findIndex((message) => message.role === "user");
   if (firstUserIndex === -1) {
     return [resolvedPrompt, ...params.messagesSnapshot];
@@ -493,15 +436,19 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   cwd: string;
   threadId: string;
   turnId: string;
+  upstreamUserText: string;
 }): Promise<void> {
   if (params.params.suppressNextUserMessagePersistence) {
     return;
   }
   try {
     const mirrorPromise = (async () => {
-      const userPromptMessage = attachCodexMirrorIdentity(
-        await buildResolvedCodexUserPromptMessage(params.params),
-        `${params.turnId}:prompt`,
+      const userPromptMessage = attachUpstreamUserText(
+        attachCodexMirrorIdentity(
+          await buildResolvedCodexUserPromptMessage(params.params),
+          `${params.turnId}:prompt`,
+        ),
+        params.upstreamUserText,
       );
       const mirrorResult = await mirror({
         agentId: params.agentId,
@@ -522,38 +469,6 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", { error });
   }
-}
-
-/**
- * Tag a message with a stable logical identity for mirror dedupe. Callers
- * should use a value that is invariant for the same logical message across
- * re-emits (e.g. `${turnId}:prompt`, `${turnId}:assistant`) but distinct
- * for genuinely-distinct messages (different turns, different kinds). When
- * present this identity replaces the role/content fingerprint in the
- * idempotency key, so the dedupe survives caller-scope rotation without
- * collapsing distinct same-content turns.
- */
-export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
-  const record = message as unknown as Record<string, unknown>;
-  const existing = record["__openclaw"];
-  const baseMeta =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: { ...baseMeta, [MIRROR_IDENTITY_META_KEY]: identity },
-  } as unknown as T;
-}
-
-function readMirrorIdentity(message: MirroredAgentMessage): string | undefined {
-  const record = message as unknown as { __openclaw?: unknown };
-  const meta = record["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const id = (meta as Record<string, unknown>)[MIRROR_IDENTITY_META_KEY];
-  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 // Fallback content fingerprint for callers that did not tag the message

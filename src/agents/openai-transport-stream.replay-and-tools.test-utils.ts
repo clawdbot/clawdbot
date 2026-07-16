@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
   makeCompletionsModel,
@@ -12,6 +12,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("openai transport stream", () => {
   it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
@@ -1910,7 +1911,8 @@ describe("openai transport stream", () => {
     }));
 
     try {
-      const { testing: isolatedTesting } = await import("./openai-transport-stream.js");
+      const { testing: isolatedTesting } =
+        await import("./openai-transport-stream.test-support.js");
       const isolatedBuildOpenAIResponsesParams = isolatedTesting.buildOpenAIResponsesParams;
       const model = makeResponsesModel({
         id: "gpt-5.4",
@@ -1955,3 +1957,4 @@ describe("openai transport stream", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

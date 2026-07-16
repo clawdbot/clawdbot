@@ -1,4 +1,7 @@
+#[cfg(target_os = "linux")]
+mod canvas;
 mod cli;
+mod discovery;
 mod gateway;
 mod installer;
 mod tray;
@@ -6,7 +9,7 @@ mod tray;
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot};
 use installer::InstallChannel;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,12 +18,56 @@ use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
 
+#[derive(Default)]
+struct NavigationState {
+    // One lock owns both fields so the intent check and WebView navigation cannot interleave.
+    remote_dashboard: bool,
+    watch_generation: u64,
+}
+
+impl NavigationState {
+    fn cancel_watchdog(&mut self) {
+        self.watch_generation = self.watch_generation.wrapping_add(1);
+    }
+
+    fn select_remote(&mut self) {
+        self.cancel_watchdog();
+        self.remote_dashboard = true;
+    }
+
+    fn permit_local(&mut self, force: bool, expected_generation: Option<u64>) -> bool {
+        if expected_generation.is_some_and(|expected| expected != self.watch_generation) {
+            return false;
+        }
+        if self.remote_dashboard && !force {
+            return false;
+        }
+        if force {
+            self.cancel_watchdog();
+            self.remote_dashboard = false;
+        }
+        true
+    }
+
+    fn begin_watchdog(&mut self) -> Option<u64> {
+        if self.remote_dashboard {
+            return None;
+        }
+        self.cancel_watchdog();
+        Some(self.watch_generation)
+    }
+
+    fn watchdog_is_current(&self, generation: u64) -> bool {
+        !self.remote_dashboard && self.watch_generation == generation
+    }
+}
+
 struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
+    navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
     local_url: Url,
     tray: Mutex<Option<tray::TrayHandles>>,
-    watch_generation: AtomicU64,
     quitting: AtomicBool,
 }
 
@@ -34,10 +81,10 @@ impl DesktopState {
         Self {
             inner: Arc::new(DesktopInner {
                 cli: Mutex::new(None),
+                navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
                 local_url,
                 tray: Mutex::new(None),
-                watch_generation: AtomicU64::new(0),
                 quitting: AtomicBool::new(false),
             }),
         }
@@ -63,9 +110,11 @@ impl DesktopState {
             Err(error) => return Err(error.to_string()),
         };
         let ready = gateway::ensure_ready(&cli)?;
-        self.navigate(app, &ready.dashboard_url)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
         self.update_tray(&ready.snapshot);
-        self.start_watchdog(app.clone());
+        if navigated {
+            self.start_watchdog(app.clone());
+        }
         Ok(ready.snapshot)
     }
 
@@ -83,9 +132,11 @@ impl DesktopState {
         let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
         *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
         let ready = gateway::ensure_ready(&cli)?;
-        self.navigate(app, &ready.dashboard_url)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
         self.update_tray(&ready.snapshot);
-        self.start_watchdog(app.clone());
+        if navigated {
+            self.start_watchdog(app.clone());
+        }
         Ok(ready.snapshot)
     }
 
@@ -105,20 +156,28 @@ impl DesktopState {
         let cli = self.resolve_cli().map_err(|error| error.to_string())?;
         let snapshot = gateway::act(&cli, action)?;
         if matches!(action, GatewayAction::Stop) {
-            self.show_local(app, "stopped")?;
+            self.show_local(app, "stopped", false, None)?;
             self.update_tray(&snapshot);
             return Ok(snapshot);
         }
 
         let ready = gateway::dashboard(&cli, snapshot)?;
-        self.navigate(app, &ready.dashboard_url)?;
+        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true)?;
         self.update_tray(&ready.snapshot);
-        self.start_watchdog(app.clone());
+        if navigated {
+            self.start_watchdog(app.clone());
+        }
         Ok(ready.snapshot)
     }
 
+    pub fn connect_explicit_local(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
+        // The click returns immediately; a later remote selection still wins while connect runs.
+        self.show_local(app, "reconnecting", true, None)?;
+        self.connect(app)
+    }
+
     pub fn show_error(&self, app: &AppHandle, _error: &str) {
-        let _ = self.show_local(app, "error");
+        let _ = self.show_local(app, "error", false, None);
         self.update_tray(&GatewaySnapshot::reconnecting("Gateway action failed."));
         tray::show_window(app);
     }
@@ -153,34 +212,100 @@ impl DesktopState {
         }
     }
 
-    fn navigate(&self, app: &AppHandle, target: &str) -> Result<(), String> {
+    // Caller holds the navigation lock, keeping the final arbitration check and navigation atomic.
+    fn navigate_locked(
+        &self,
+        app: &AppHandle,
+        target: &str,
+        reveal_window: bool,
+    ) -> Result<(), String> {
         let url =
             Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.".to_string())?;
         main_window(app)?
             .navigate(url)
             .map_err(|error| format!("Could not open dashboard: {error}"))?;
+        if reveal_window {
+            tray::show_window(app);
+        }
+        Ok(())
+    }
+
+    fn navigate_local(
+        &self,
+        app: &AppHandle,
+        target: &str,
+        force: bool,
+        expected_generation: Option<u64>,
+        reveal_window: bool,
+    ) -> Result<bool, String> {
+        let mut navigation = self
+            .inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+        if !navigation.permit_local(force, expected_generation) {
+            return Ok(false);
+        }
+        self.navigate_locked(app, target, reveal_window)?;
+        Ok(true)
+    }
+
+    pub fn navigate_remote(&self, app: &AppHandle, target: Url) -> Result<(), String> {
+        let mut navigation = self
+            .inner
+            .navigation
+            .lock()
+            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?;
+        let window = main_window(app)?;
+        navigation.select_remote();
+        if let Err(error) = window.navigate(target) {
+            navigation.remote_dashboard = false;
+            return Err(format!("Could not open discovered gateway: {error}"));
+        }
         tray::show_window(app);
         Ok(())
     }
 
-    fn show_local(&self, app: &AppHandle, mode: &str) -> Result<(), String> {
+    fn show_local(
+        &self,
+        app: &AppHandle,
+        mode: &str,
+        force: bool,
+        expected_generation: Option<u64>,
+    ) -> Result<bool, String> {
         let mut url = self.inner.local_url.clone();
         url.query_pairs_mut().clear().append_pair("mode", mode);
-        main_window(app)?
-            .navigate(url)
-            .map_err(|error| format!("Could not open local screen: {error}"))
+        // Status/watchdog updates may change the hidden WebView, but must not reveal it.
+        self.navigate_local(app, url.as_str(), force, expected_generation, false)
     }
 
     fn cancel_watchdog(&self) {
-        self.inner.watch_generation.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut navigation) = self.inner.navigation.lock() {
+            navigation.cancel_watchdog();
+        }
+    }
+
+    fn watchdog_is_current(&self, generation: u64) -> bool {
+        self.inner
+            .navigation
+            .lock()
+            .is_ok_and(|navigation| navigation.watchdog_is_current(generation))
     }
 
     fn start_watchdog(&self, app: AppHandle) {
-        let generation = self.inner.watch_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = {
+            let Ok(mut navigation) = self.inner.navigation.lock() else {
+                return;
+            };
+            let Some(generation) = navigation.begin_watchdog() else {
+                return;
+            };
+            generation
+        };
         let state = self.clone();
         thread::spawn(move || loop {
             thread::sleep(CONNECTED_WATCH_INTERVAL);
-            if state.inner.watch_generation.load(Ordering::SeqCst) != generation {
+            if !state.watchdog_is_current(generation) {
                 return;
             }
             let Ok(_operation) = state.inner.operation.try_lock() else {
@@ -199,11 +324,16 @@ impl DesktopState {
             }
 
             let mut displayed_phase = snapshot.phase;
-            let _ = state.show_local(&app, local_mode(&snapshot));
+            if matches!(
+                state.show_local(&app, local_mode(&snapshot), false, Some(generation)),
+                Ok(false)
+            ) {
+                return;
+            }
             state.update_tray(&snapshot);
             drop(_operation);
             loop {
-                if state.inner.watch_generation.load(Ordering::SeqCst) != generation {
+                if !state.watchdog_is_current(generation) {
                     return;
                 }
                 if let Ok(_operation) = state.inner.operation.try_lock() {
@@ -214,14 +344,29 @@ impl DesktopState {
                     state.update_tray(&snapshot);
                     if snapshot.reachable {
                         if let Ok(ready) = gateway::dashboard(&cli, snapshot) {
-                            if state.navigate(&app, &ready.dashboard_url).is_ok() {
-                                state.update_tray(&ready.snapshot);
-                                break;
+                            match state.navigate_local(
+                                &app,
+                                &ready.dashboard_url,
+                                false,
+                                Some(generation),
+                                false,
+                            ) {
+                                Ok(true) => {
+                                    state.update_tray(&ready.snapshot);
+                                    break;
+                                }
+                                Ok(false) => return,
+                                Err(_) => {}
                             }
                         }
                     } else if snapshot.phase != displayed_phase {
                         displayed_phase = snapshot.phase;
-                        let _ = state.show_local(&app, local_mode(&snapshot));
+                        if matches!(
+                            state.show_local(&app, local_mode(&snapshot), false, Some(generation),),
+                            Ok(false)
+                        ) {
+                            return;
+                        }
                     }
                 }
                 thread::sleep(RECONNECT_INTERVAL);
@@ -235,6 +380,46 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
         "stopped"
     } else {
         "reconnecting"
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::NavigationState;
+
+    #[test]
+    fn newer_remote_selection_blocks_older_local_navigation() {
+        let mut navigation = NavigationState::default();
+        assert!(navigation.permit_local(false, None));
+
+        navigation.select_remote();
+
+        assert!(!navigation.permit_local(false, None));
+        assert!(navigation.remote_dashboard);
+    }
+
+    #[test]
+    fn newer_remote_selection_invalidates_watchdog_navigation() {
+        let mut navigation = NavigationState::default();
+        let watchdog = navigation.begin_watchdog().expect("watchdog generation");
+
+        navigation.select_remote();
+
+        assert!(!navigation.permit_local(false, Some(watchdog)));
+        assert!(!navigation.watchdog_is_current(watchdog));
+    }
+
+    #[test]
+    fn explicit_local_then_later_remote_preserves_latest_intent() {
+        let mut navigation = NavigationState::default();
+        navigation.select_remote();
+        assert!(navigation.permit_local(true, None));
+        assert!(!navigation.remote_dashboard);
+
+        navigation.select_remote();
+
+        assert!(!navigation.permit_local(false, None));
+        assert!(navigation.remote_dashboard);
     }
 }
 
@@ -279,21 +464,46 @@ async fn gateway_action(
 }
 
 fn main() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let window = app
-                .get_webview_window("main")
-                .expect("tauri.conf.json must define the main window");
-            let state = DesktopState::new(window.url()?);
-            app.manage(state.clone());
-            state.set_tray(tray::build(app, state.clone())?);
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            bootstrap,
-            install_cli,
-            gateway_action
-        ])
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "linux")]
+    let builder = canvas::register_protocol(builder);
+
+    let builder = builder.setup(|app| {
+        let window = app
+            .get_webview_window("main")
+            .expect("tauri.conf.json must define the main window");
+        let state = DesktopState::new(window.url()?);
+        app.manage(state.clone());
+        app.manage(discovery::GatewayDiscovery::default());
+        #[cfg(target_os = "linux")]
+        match canvas::CanvasBridge::start(app.handle().clone()) {
+            Ok(bridge) => {
+                app.manage(bridge);
+            }
+            Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
+        }
+        state.set_tray(tray::build(app, state.clone())?);
+        Ok(())
+    });
+    #[cfg(target_os = "linux")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        bootstrap,
+        canvas::canvas_a2ui_action,
+        discovery::connect_discovered_gateway,
+        discovery::discover_gateways,
+        install_cli,
+        gateway_action
+    ]);
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        bootstrap,
+        discovery::connect_discovered_gateway,
+        discovery::discover_gateways,
+        install_cli,
+        gateway_action
+    ]);
+
+    let app = builder
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.app_handle().state::<DesktopState>();
@@ -303,6 +513,16 @@ fn main() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("OpenClaw desktop app failed");
+    app.run(|app, event| {
+        #[cfg(target_os = "linux")]
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(bridge) = app.try_state::<canvas::CanvasBridge>() {
+                bridge.shutdown();
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (app, event);
+    });
 }

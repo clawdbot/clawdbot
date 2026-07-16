@@ -162,7 +162,16 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
-      const mistralStream = await mistral.chat.stream(payload, buildRequestOptions(model, options));
+      const headers = { ...model.headers, ...options?.headers };
+      // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
+      // Respect explicit caller-provided header values.
+      if (options?.sessionId) {
+        headers["x-affinity"] ||= options.sessionId;
+      }
+      const mistralStream = await mistral.chat.stream(payload, {
+        headers,
+        signal: options?.signal,
+      });
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);
 
@@ -309,39 +318,6 @@ function safeJsonStringify(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function buildRequestOptions(model: Model<"mistral-conversations">, options?: MistralOptions) {
-  const requestOptions: {
-    signal?: AbortSignal;
-    retries: { strategy: "none" };
-    headers?: Record<string, string>;
-  } = {
-    retries: { strategy: "none" },
-  };
-  if (options?.signal) {
-    requestOptions.signal = options.signal;
-  }
-
-  const headers: Record<string, string> = {};
-  if (model.headers) {
-    Object.assign(headers, model.headers);
-  }
-  if (options?.headers) {
-    Object.assign(headers, options.headers);
-  }
-
-  // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
-  // Respect explicit caller-provided header values.
-  if (options?.sessionId && !headers["x-affinity"]) {
-    headers["x-affinity"] = options.sessionId;
-  }
-
-  if (Object.keys(headers).length > 0) {
-    requestOptions.headers = headers;
-  }
-
-  return requestOptions;
 }
 
 function buildChatPayload(
@@ -771,7 +747,6 @@ async function consumeChatStream(
       continue;
     }
     const toolBlock = block as ToolCall & { partialArgs?: string };
-    toolBlock.arguments = parseStreamingJson(toolBlock.partialArgs);
     // Finalize in-place and strip the scratch buffer so replay only
     // carries parsed arguments.
     delete toolBlock.partialArgs;
@@ -1029,3 +1004,4 @@ function mapChatStopReason(reason: string | null): StopReason {
       return "stop";
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -47,6 +47,7 @@ class AndroidScreenshotModeTest {
     assertEquals(HomeDestination.Chat, AndroidScreenshotScene.Chat.homeDestination)
     assertEquals(HomeDestination.Voice, AndroidScreenshotScene.Voice.homeDestination)
     assertEquals(HomeDestination.Settings, AndroidScreenshotScene.Settings.homeDestination)
+    assertEquals(HomeDestination.Settings, AndroidScreenshotScene.VoiceWake.homeDestination)
   }
 
   @Test
@@ -62,5 +63,13 @@ class AndroidScreenshotModeTest {
     assertEquals(HomeDestination.Settings, parsed?.homeDestination)
     assertEquals(SettingsRoute.Gateway, parsed?.settingsRoute)
     assertNull(AndroidScreenshotScene.Settings.settingsRoute)
+  }
+
+  @Test
+  fun voiceWakeSceneTargetsVoiceSettings() {
+    val scene = AndroidScreenshotScene.fromRawValue("voice-wake")
+
+    assertEquals(AndroidScreenshotScene.VoiceWake, scene)
+    assertEquals(SettingsRoute.Voice, scene.settingsRoute)
   }
 }

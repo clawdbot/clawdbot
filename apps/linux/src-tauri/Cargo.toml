@@ -13,6 +13,14 @@ path = "src/main.rs"
 tauri-build = "2.6.3"
 
 [dependencies]
+base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+mdns-sd = { version = "0.20", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tauri = { version = "2.11.5", features = ["image-png", "tray-icon"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cairo-rs = { version = "0.18.5", features = ["png"] }
+libc = "0.2.186"
+webkit2gtk = "2.0.2"

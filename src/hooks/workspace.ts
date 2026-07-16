@@ -196,7 +196,7 @@ function loadHooksFromDir(params: {
   return hooks;
 }
 
-export function loadHookEntriesFromDir(params: {
+function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;

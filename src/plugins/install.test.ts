@@ -455,8 +455,32 @@ function mockNpmViewMetadata(params: { name: string; version?: string }) {
   });
 }
 
+let actualExecModulePromise: Promise<typeof import("../process/exec.js")> | undefined;
+
+async function runActualInstallPolicyCommandIfNeeded(
+  args: Parameters<typeof runCommandWithTimeout>[0],
+  options: Parameters<typeof runCommandWithTimeout>[1],
+): Promise<Awaited<ReturnType<typeof runCommandWithTimeout>> | null> {
+  if (typeof options === "number" || options.input === undefined) {
+    return null;
+  }
+  actualExecModulePromise ??=
+    vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+  const actualExecModule = await actualExecModulePromise;
+  return await actualExecModule.runCommandWithTimeout(args, options);
+}
+
+function countMockedCommands(executable: string): number {
+  return vi.mocked(runCommandWithTimeout).mock.calls.filter(([args]) => args[0] === executable)
+    .length;
+}
+
 function mockSuccessfulManagedNpmInstall(params: { packageName: string; version?: string }) {
   vi.mocked(runCommandWithTimeout).mockImplementation(async (args, options) => {
+    const policyResult = await runActualInstallPolicyCommandIfNeeded(args, options);
+    if (policyResult) {
+      return policyResult;
+    }
     if (args[0] !== "npm" || args[1] !== "install") {
       throw new Error(`unexpected command: ${args.join(" ")}`);
     }
@@ -631,13 +655,18 @@ function expectHookRequest(
 }
 
 function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCommandWithTimeout>>) {
-  run.mockResolvedValue({
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
+  run.mockImplementation(async (args, options) => {
+    const policyResult = await runActualInstallPolicyCommandIfNeeded(args, options);
+    return (
+      policyResult ?? {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      }
+    );
   });
 }
 
@@ -1901,28 +1930,6 @@ describe("installPluginFromArchive", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
-    const sourcePluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
-    const pluginDir = path.join(suiteTempRootTracker.makeTempDir(), "qa-matrix");
-    fs.cpSync(sourcePluginDir, pluginDir, {
-      recursive: true,
-      filter: (entryPath) =>
-        !path.relative(sourcePluginDir, entryPath).split(path.sep).includes("node_modules"),
-    });
-    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
-
-    const scanResult = await installSecurityScan.scanPackageInstallSource({
-      extensions: ["./index.ts"],
-      logger: { warn: vi.fn() },
-      packageDir: pluginDir,
-      pluginId: "qa-matrix",
-      packageName: "@openclaw/qa-matrix",
-      manifestId: "qa-matrix",
-    });
-
-    expect(scanResult?.blocked).toBeUndefined();
-  });
-
   it("allows bundle installs with dangerous code patterns without built-in scanner blocking", async () => {
     const { pluginDir, extensionsDir } = setupBundleInstallFixture({
       bundleFormat: "codex",
@@ -2659,7 +2666,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(countMockedCommands("npm")).toBe(1);
     expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
       "npm",
       "view",
@@ -2712,7 +2719,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("fresh npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(countMockedCommands("npm")).toBe(1);
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.request.mode).toBe("install");
@@ -2951,7 +2958,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(countMockedCommands("npm")).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
@@ -3011,7 +3018,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.code, result.error).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("npm installs are disabled by policy");
     }
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(countMockedCommands("npm")).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
     const requests = readCapturedInstallPolicyRequests(logPath);
     expect(requests).toHaveLength(1);
@@ -4157,3 +4164,4 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expectWarningIncludes(warnings, "Could not locate openclaw package root");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

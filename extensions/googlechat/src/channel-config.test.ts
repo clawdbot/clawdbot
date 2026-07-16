@@ -2,17 +2,17 @@
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  clearGoogleChatApprovalCardBindingsForTest,
   registerGoogleChatApprovalCardBinding,
+  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { googlechatPlugin } from "./channel.js";
 import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
-  beforeEach(() => {
-    clearGoogleChatApprovalCardBindingsForTest();
+  afterEach(() => {
+    unregisterGoogleChatApprovalCardBindings(["token-1"]);
   });
 
   it("keeps setup metadata aligned with the runtime plugin", () => {

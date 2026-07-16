@@ -132,7 +132,7 @@ function matchesWhatsAppApprovalPendingText(params: {
   );
 }
 
-export function matchesWhatsAppApprovalResolvedText(params: {
+function matchesWhatsAppApprovalResolvedText(params: {
   approvalId: string;
   approvalKind: WhatsAppQaApprovalKind;
   decision?: WhatsAppQaApprovalDecision;
@@ -152,7 +152,7 @@ export function matchesWhatsAppApprovalResolvedText(params: {
   return params.text.includes(params.approvalId) && params.text.includes(heading);
 }
 
-export function formatWhatsAppApprovalWaitDiagnostics(params: {
+function formatWhatsAppApprovalWaitDiagnostics(params: {
   approvalId: string;
   approvalKind: WhatsAppQaApprovalKind;
   decision?: WhatsAppQaApprovalDecision;

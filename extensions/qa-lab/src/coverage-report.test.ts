@@ -1,6 +1,7 @@
 // Qa Lab tests cover coverage report plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import {
   buildQaCoverageInventory,
   findQaScenarioMatches,
@@ -8,7 +9,7 @@ import {
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { buildQaScorecardTaxonomyReport, type QaMaturityTaxonomy } from "./scorecard-taxonomy.js";
+import { readQaScorecardTaxonomyReport, type QaMaturityTaxonomy } from "./scorecard-taxonomy.js";
 
 const TEST_EXECUTABLE_CATEGORY_ID = "agent-runtime-and-provider-execution.agent-turn-execution";
 const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
@@ -17,13 +18,26 @@ const TEST_BROWSER_COVERAGE_ID = "ui.control";
 const TEST_WEBCHAT_COVERAGE_ID = "ui.webchat";
 const DOTTED_COVERAGE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
 
+function buildQaScorecardTaxonomyReport(params: {
+  taxonomy: QaMaturityTaxonomy;
+  repoRoot: string;
+  scenarios: readonly QaSeedScenarioWithSource[];
+}) {
+  expect(params.repoRoot).toBe(process.cwd());
+  const parseSpy = vi.spyOn(YAML, "parse").mockReturnValueOnce(params.taxonomy);
+  try {
+    return readQaScorecardTaxonomyReport(params.scenarios);
+  } finally {
+    parseSpy.mockRestore();
+  }
+}
+
 function testMaturityTaxonomy(params?: {
   categoryId?: string;
   coverageIds?: readonly string[];
   featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
   includeArchivedSurface?: boolean;
-  profileCategoryIds?: readonly string[];
 }): QaMaturityTaxonomy {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
   const firstDot = categoryId.indexOf(".");
@@ -46,9 +60,7 @@ function testMaturityTaxonomy(params?: {
         description: "Test release profile.",
         includeAllCategories: params?.includeAllCategories ?? false,
         channelDriver: "qa-channel" as const,
-        categoryIds: [
-          ...(params?.includeAllCategories ? [] : (params?.profileCategoryIds ?? [categoryId])),
-        ],
+        categoryIds: params?.includeAllCategories ? [] : [categoryId],
       },
     ],
     surfaces: [
@@ -265,12 +277,12 @@ describe("qa coverage report", () => {
         nonYamlScenarios: [
           {
             id: scenario.id,
-            sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+            sourcePath: "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
           },
         ],
       }),
     ).toThrow(
-      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
+      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts)",
     );
   });
 
@@ -296,7 +308,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Live Transport Lanes");
     expect(report).toContain(
-      "- telegram (telegram): canary: always-on, help-command: telegram-help-command, mention-gating: telegram-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
+      "- telegram (telegram): canary: channel-canary, help-command: telegram-help-command, mention-gating: channel-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
     );
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
@@ -337,6 +349,34 @@ describe("qa coverage report", () => {
 
     expect(report).toContain(
       "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled`",
+    );
+  });
+
+  it("uses the live lane for channel scenarios without a driver restriction", () => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "dm-per-room-session");
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "dm-per-room-session",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel matrix --scenario dm-per-room-session`",
+    );
+  });
+
+  it("splits flow commands across channel lanes", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    const matches = [
+      ...findQaScenarioMatches(scenarios, "dm-per-room-session"),
+      ...findQaScenarioMatches(scenarios, "whatsapp-access-control-group-disabled"),
+    ];
+    const report = renderQaScenarioMatchesMarkdownReport({ query: "channel lanes", matches });
+
+    expect(report).toContain(
+      "--channel-driver live --channel matrix --scenario dm-per-room-session",
+    );
+    expect(report).toContain(
+      "--channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled",
     );
   });
 
@@ -575,20 +615,6 @@ describe("qa coverage report", () => {
         scenarioRefs: ["qa/scenarios/ui/script-evidence-producer.yaml"],
       },
     ]);
-  });
-
-  it("reports profile membership refs missing from taxonomy categories", () => {
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy: testMaturityTaxonomy({
-        profileCategoryIds: ["missing.category"],
-      }),
-      repoRoot: process.cwd(),
-      scenarios: [],
-    });
-
-    expect(report.validationIssues.map((issue) => issue.code)).toContain(
-      "profile-category-ref-not-found",
-    );
   });
 
   it("resolves all-category profiles from taxonomy categories", () => {

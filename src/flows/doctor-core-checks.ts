@@ -439,7 +439,10 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   defaultEnabled: false,
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
-    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    const detected = await detectLegacyStateMigrations({
+      cfg: ctx.cfg,
+      doctorOnlyStateMigrations: true,
+    });
     return [
       ...detected.preview.map(
         (line): HealthFinding => ({
@@ -1192,3 +1195,4 @@ export function createCoreHealthChecks(
 }
 
 export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

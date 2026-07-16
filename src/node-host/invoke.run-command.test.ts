@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./invoke.js";
+import { testing } from "./invoke.test-support.js";
 
 describe("runCommand", () => {
   afterEach(() => {

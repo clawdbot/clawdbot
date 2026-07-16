@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/workboard-contract",
+  "version": "0.0.0-private",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/workboard-contract",
+      "version": "0.0.0-private"
+    }
+  }
+}

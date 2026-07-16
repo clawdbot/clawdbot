@@ -97,6 +97,15 @@ export async function cleanupCodexAttempt(
     }
   }
   await releaseSandboxExecEnvironment();
+  await runAgentCleanupStep({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    step: "codex-scoped-mcp-dispose",
+    log: embeddedAgentLog,
+    cleanup: async () => {
+      await prompt.context.attemptTools.scopedMcpTools?.dispose();
+    },
+  });
   runAbortController.signal.removeEventListener("abort", abortListener);
   steeringQueueRef.current?.cancel();
   freezeRunTerminalOutcome();

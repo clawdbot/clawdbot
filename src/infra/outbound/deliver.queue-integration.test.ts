@@ -1,10 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -99,7 +96,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   beforeEach(() => {
-    resetMessageAuditEventsForTest();
     tmpDir = fixtures.tmpDir();
     setActivePluginRegistry(
       createTestRegistry([
@@ -113,7 +109,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   afterEach(() => {
-    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });

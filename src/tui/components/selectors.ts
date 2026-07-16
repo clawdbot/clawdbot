@@ -1,15 +1,15 @@
 // Selector components adapt Pi TUI list controls for OpenClaw settings.
-import { type SelectItem, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
+import { type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import {
   filterableSelectListTheme,
   searchableSelectListTheme,
   settingsListTheme,
 } from "../theme/theme.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
-import { SearchableSelectList } from "./searchable-select-list.js";
+import { SearchableSelectList, type SearchableSelectItem } from "./searchable-select-list.js";
 
 /** Creates a themed searchable select list for TUI overlays. */
-export function createSearchableSelectList(items: SelectItem[], maxVisible = 7) {
+export function createSearchableSelectList(items: SearchableSelectItem[], maxVisible = 7) {
   return new SearchableSelectList(items, maxVisible, searchableSelectListTheme);
 }
 

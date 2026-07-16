@@ -120,18 +120,6 @@ function getInvalidTokenRateLimiter(account: ResolvedSynologyChatAccount): Inval
   return rl;
 }
 
-export function clearSynologyWebhookRateLimiterStateForTest(): void {
-  for (const limiter of rateLimiters.values()) {
-    limiter.clear();
-  }
-  rateLimiters.clear();
-  for (const limiter of invalidTokenRateLimiters.values()) {
-    limiter.clear();
-  }
-  invalidTokenRateLimiters.clear();
-  webhookInFlightLimiter.clear();
-}
-
 function getSynologyWebhookInvalidTokenRateLimitKey(params: {
   req: IncomingMessage;
   trustedProxies?: string[];

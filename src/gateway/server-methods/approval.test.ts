@@ -18,6 +18,7 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -62,8 +63,14 @@ function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
       resolveAllowedDecisions: resolvePluginApprovalRequestAllowedDecisions,
       resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
+    systemAgent: new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      persistence,
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+    }),
   };
-  managersForCleanup.push(managers.exec, managers.plugin);
+  managersForCleanup.push(managers.exec, managers.plugin, managers.systemAgent);
   return managers;
 }
 
@@ -164,6 +171,28 @@ function registerPlugin(
   return { record, decision };
 }
 
+function registerSystemAgent(
+  manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>,
+  id: string,
+) {
+  const record = manager.create(
+    {
+      title: "OpenClaw change",
+      description: "Set gateway.port to 19001",
+      command: "Set gateway.port to 19001",
+      proposalHash: "a".repeat(64),
+      allowedDecisions: ["allow-once", "deny"],
+      agentId: "main",
+      sessionKey: "agent:main:child",
+      sessionId: "delegation-1",
+    },
+    600_000,
+    id,
+  );
+  const decision = manager.register(record, 600_000);
+  return { record, decision };
+}
+
 function createClient(params: {
   scopes?: string[];
   deviceId?: string;
@@ -237,6 +266,39 @@ describe("unified approval handlers", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
+  });
+
+  it("resolves a system-agent proposal only through unified operator approval", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:proposal-1");
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "system-agent", decision: "allow-once" },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: {
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "system-agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
@@ -1337,3 +1399,4 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

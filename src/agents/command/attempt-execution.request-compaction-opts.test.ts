@@ -30,10 +30,10 @@ vi.mock("../cli-runner.js", () => ({
 
 // Spy on the post-compaction release while keeping the rest of the module real
 // (computeRequestCompactionContextUsage is used by the closure under test).
-vi.mock("../../auto-reply/reply/agent-runner-execution.js", async () => {
+vi.mock("../../auto-reply/reply/agent-runner-post-compaction-release.js", async () => {
   const actual = await vi.importActual<
-    typeof import("../../auto-reply/reply/agent-runner-execution.js")
-  >("../../auto-reply/reply/agent-runner-execution.js");
+    typeof import("../../auto-reply/reply/agent-runner-post-compaction-release.js")
+  >("../../auto-reply/reply/agent-runner-post-compaction-release.js");
   return {
     ...actual,
     releaseQueuedCompactionTolerant: releaseQueuedCompactionTolerantMock,

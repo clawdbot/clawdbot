@@ -1,7 +1,7 @@
 // MCP loopback tool schema projection.
 // Converts gateway-scoped tools into MCP tools/list-compatible schemas.
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -55,6 +55,69 @@ function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unkno
   } catch {
     return undefined;
   }
+}
+
+function readLiteralSchemaValues(schema: Record<string, unknown>): unknown[] | undefined {
+  const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+  if (Object.hasOwn(schema, "const")) {
+    if (!enumValues) {
+      return [schema.const];
+    }
+    return enumValues.some((value) => isDeepStrictEqual(value, schema.const)) ? [schema.const] : [];
+  }
+  return enumValues;
+}
+
+function uniqueLiteralValues(values: unknown[]): unknown[] {
+  return values.filter(
+    (value, index) =>
+      values.findIndex((candidate) => isDeepStrictEqual(candidate, value)) === index,
+  );
+}
+
+const SCHEMA_ANNOTATION_KEYS = new Set([
+  "$comment",
+  "default",
+  "deprecated",
+  "description",
+  "example",
+  "examples",
+  "readOnly",
+  "title",
+  "writeOnly",
+]);
+
+function readLiteralValidationConstraints(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(schema).filter(
+      ([key]) => key !== "const" && key !== "enum" && !SCHEMA_ANNOTATION_KEYS.has(key),
+    ),
+  );
+}
+
+function mergeLiteralSchemas(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const existingValues = readLiteralSchemaValues(existing);
+  const incomingValues = readLiteralSchemaValues(incoming);
+  if (existingValues === undefined || incomingValues === undefined) {
+    return undefined;
+  }
+  const existingConstraints = readLiteralValidationConstraints(existing);
+  const incomingConstraints = readLiteralValidationConstraints(incoming);
+  if (!isDeepStrictEqual(existingConstraints, incomingConstraints)) {
+    return undefined;
+  }
+  const values = uniqueLiteralValues([...existingValues, ...incomingValues]);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const merged: Record<string, unknown> = { ...existing, enum: values };
+  delete merged.const;
+  return merged;
 }
 
 function flattenUnionSchema(
@@ -111,20 +174,14 @@ function flattenUnionSchema(
           }
           continue;
         }
-        if (Array.isArray(existing.enum) && Array.isArray(incoming.enum)) {
-          mergedProps[key] = {
-            ...existing,
-            enum: uniqueValues([...(existing.enum as unknown[]), ...(incoming.enum as unknown[])]),
-          };
+        if (isDeepStrictEqual(existing, incoming)) {
           continue;
         }
-        if ("const" in existing && "const" in incoming && existing.const !== incoming.const) {
-          const merged: Record<string, unknown> = {
-            ...existing,
-            enum: [existing.const, incoming.const],
-          };
-          delete merged.const;
-          mergedProps[key] = merged;
+        // A prior const merge becomes an enum. Treat both as one literal family
+        // so later union variants cannot silently disappear based on ordering.
+        const mergedLiterals = mergeLiteralSchemas(existing, incoming);
+        if (mergedLiterals) {
+          mergedProps[key] = mergedLiterals;
           continue;
         }
         warnSchemaOnce(

@@ -83,4 +83,22 @@ describe("resolveCronExecutionRetryHint", () => {
       });
     }
   });
+
+  it("classifies session lifecycle claim conflicts as transient regardless of retryOn (#106875)", () => {
+    for (const message of [
+      'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      'Error: Session "agent:main:cron:job-1" was deleted while starting work. Retry.',
+    ]) {
+      expect(resolveCronExecutionRetryHint(message, ["network"])).toEqual({ retryable: true });
+    }
+  });
+
+  it("does not classify archived-session work-start errors as transient", () => {
+    expect(
+      resolveCronExecutionRetryHint(
+        'Error: Session "agent:main:main" is archived. Restore it before starting new work.',
+      ),
+    ).toEqual({ retryable: false });
+  });
 });

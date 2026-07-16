@@ -21,12 +21,13 @@ export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 export type ExecApprovalRequest = {
   id: string;
-  kind: "exec" | "plugin";
+  kind: "exec" | "plugin" | "system-agent";
   request: ExecApprovalRequestPayload;
   pluginTitle?: string;
   pluginDescription?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  proposalHash?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -105,7 +106,7 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
-export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -159,7 +160,7 @@ export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolve
   };
 }
 
-export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -198,6 +199,70 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
     createdAtMs,
     expiresAtMs,
   };
+}
+
+function parseSystemAgentApprovalRequested(payload: unknown): ExecApprovalRequest | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const id = normalizeOptionalString(payload.id) ?? "";
+  const request = isRecord(payload.request) ? payload.request : {};
+  const title = normalizeOptionalString(request.title) ?? "";
+  const description = normalizeOptionalString(request.description);
+  const command = normalizeOptionalString(request.command);
+  const proposalHash = normalizeOptionalString(request.proposalHash);
+  const createdAtMs = typeof payload.createdAtMs === "number" ? payload.createdAtMs : 0;
+  const expiresAtMs = typeof payload.expiresAtMs === "number" ? payload.expiresAtMs : 0;
+  if (!id || !title || !description || !command || !proposalHash || !createdAtMs || !expiresAtMs) {
+    return null;
+  }
+  return {
+    id,
+    kind: "system-agent",
+    request: {
+      command,
+      agentId: typeof request.agentId === "string" ? request.agentId : null,
+      sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      allowedDecisions: ["allow-once", "deny"],
+    },
+    pluginTitle: title,
+    pluginDescription: description,
+    proposalHash,
+    createdAtMs,
+    expiresAtMs,
+  };
+}
+
+export function parseApprovalRequestedEvent(
+  event: string,
+  payload: unknown,
+): ExecApprovalRequest | null {
+  if (event === "exec.approval.requested") {
+    return parseExecApprovalRequested(payload);
+  }
+  if (event === "plugin.approval.requested") {
+    return parsePluginApprovalRequested(payload);
+  }
+  return event === "openclaw.approval.requested"
+    ? parseSystemAgentApprovalRequested(payload)
+    : null;
+}
+
+export async function resolveApprovalRequest(
+  client: NonNullable<ExecApprovalPromptState["client"]>,
+  approval: ExecApprovalRequest,
+  decision: ExecApprovalDecision,
+): Promise<void> {
+  if (approval.kind === "system-agent") {
+    await client.request("approval.resolve", {
+      id: approval.id,
+      kind: "system-agent",
+      decision,
+    });
+    return;
+  }
+  const method = approval.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+  await client.request(method, { id: approval.id, decision });
 }
 
 function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
@@ -364,9 +429,10 @@ export async function refreshPendingApprovalQueue(
   refreshes.add(refresh);
   const refreshStartedWith = pruneExecApprovalQueue(state.execApprovalQueue);
   try {
-    const [execResult, pluginResult] = await Promise.allSettled([
+    const [execResult, pluginResult, systemAgentResult] = await Promise.allSettled([
       client.request("exec.approval.list", {}),
       client.request("plugin.approval.list", {}),
+      client.request("openclaw.approval.list", {}),
     ]);
     const execApprovals =
       execResult.status === "fulfilled"
@@ -376,8 +442,12 @@ export async function refreshPendingApprovalQueue(
       pluginResult.status === "fulfilled"
         ? (parseApprovalList(pluginResult.value, parsePluginApprovalRequested) ?? [])
         : currentApprovalsForKind(state.execApprovalQueue, "plugin");
+    const systemAgentApprovals =
+      systemAgentResult.status === "fulfilled"
+        ? (parseApprovalList(systemAgentResult.value, parseSystemAgentApprovalRequested) ?? [])
+        : currentApprovalsForKind(state.execApprovalQueue, "system-agent");
     const refreshed = mergeRefreshedApprovalQueue(
-      sortApprovalsNewestFirst([...execApprovals, ...pluginApprovals]),
+      sortApprovalsNewestFirst([...execApprovals, ...pluginApprovals, ...systemAgentApprovals]),
       refreshStartedWith,
       state.execApprovalQueue,
       refresh.removedIds,

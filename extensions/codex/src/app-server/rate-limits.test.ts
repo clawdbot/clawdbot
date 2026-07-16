@@ -4,11 +4,33 @@ import {
   buildCodexAppServerUsageSnapshot,
   formatCodexUsageLimitErrorMessage,
   resolveCodexUsageLimitResetAtMs,
+  shouldRefreshCodexRateLimitsForUsageLimitMessage,
   summarizeCodexAccountUsage,
   summarizeCodexRateLimits,
 } from "./rate-limits.js";
 
 describe("formatCodexUsageLimitErrorMessage", () => {
+  it("does not infer a Codex usage limit from unrelated prose", () => {
+    expect(
+      formatCodexUsageLimitErrorMessage({
+        message: "The workspace usage limit setting could not be loaded.",
+      }),
+    ).toBeUndefined();
+    expect(shouldRefreshCodexRateLimitsForUsageLimitMessage("temporary usage limit warning")).toBe(
+      false,
+    );
+  });
+
+  it("accepts normalized structured Codex usage-limit error info", () => {
+    const message = formatCodexUsageLimitErrorMessage({
+      message: "quota exhausted",
+      codexErrorInfo: "usage_limit-exceeded",
+    });
+
+    expect(message?.startsWith("You've reached your Codex subscription usage limit.")).toBe(true);
+    expect(shouldRefreshCodexRateLimitsForUsageLimitMessage(message)).toBe(true);
+  });
+
   it("gives actionable guidance when Codex omits reset details", () => {
     const message = formatCodexUsageLimitErrorMessage({
       message: "You've reached your usage limit.",

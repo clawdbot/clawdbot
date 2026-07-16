@@ -2,11 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
-import {
-  isHostedOllamaCloud,
-  isLocalOllamaBaseUrl,
-  resolveOllamaDiscoveryResult,
-} from "./discovery-shared.js";
+import { isLocalOllamaBaseUrl, resolveOllamaDiscoveryResult } from "./discovery-shared.js";
 
 describe("isLocalOllamaBaseUrl", () => {
   it.each([
@@ -47,31 +43,6 @@ describe("isLocalOllamaBaseUrl", () => {
   });
 });
 
-describe("isHostedOllamaCloud", () => {
-  it.each([
-    "https://ollama.com",
-    "https://ollama.com:11434",
-    "https://api.ollama.com",
-    "https://api.ollama.com/v1",
-    "https://sub.ollama.com",
-  ])("classifies %s as hosted cloud", (baseUrl) => {
-    expect(isHostedOllamaCloud(baseUrl)).toBe(true);
-  });
-
-  it.each([
-    undefined,
-    "",
-    "http://localhost:11434",
-    "http://127.0.0.1:11434",
-    "https://ollama.mycompany.com",
-    "https://ollama.example.com",
-    "http://10.0.0.5:11434",
-    "not a url",
-  ])("classifies %s as not hosted cloud", (baseUrl) => {
-    expect(isHostedOllamaCloud(baseUrl)).toBe(false);
-  });
-});
-
 describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
   const discoveredModel = {
     id: "discovered-model",
@@ -106,14 +77,20 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     models: [discoveredModel],
   });
 
-  it("returns null for remote base URL without explicit models", async () => {
+  it.each([
+    "https://ollama.com",
+    "https://ollama.com:11434",
+    "https://api.ollama.com",
+    "https://api.ollama.com/v1",
+    "https://sub.ollama.com",
+  ])("returns null for hosted base URL %s without explicit models", async (baseUrl) => {
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
         config: {
           models: {
             providers: {
               ollama: {
-                baseUrl: "https://ollama.com",
+                baseUrl,
                 apiKey: "test-key",
                 api: "ollama",
               },
@@ -191,14 +168,23 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     expect(providerCalled).toBe(false);
   });
 
-  it("still auto-discovers for remote self-hosted base URL when no explicit models", async () => {
+  it.each([
+    undefined,
+    "",
+    "http://localhost:11434",
+    "http://127.0.0.1:11434",
+    "https://ollama.mycompany.com",
+    "https://ollama.example.com",
+    "http://10.0.0.5:11434",
+    "not a url",
+  ])("still auto-discovers for non-hosted base URL %s", async (baseUrl) => {
     const result = await resolveOllamaDiscoveryResult({
       ctx: {
         config: {
           models: {
             providers: {
               ollama: {
-                baseUrl: "https://ollama.mycompany.com",
+                baseUrl,
                 apiKey: "test-key",
                 api: "ollama",
               },

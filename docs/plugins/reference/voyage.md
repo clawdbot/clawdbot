@@ -16,4 +16,4 @@ Adds memory embedding provider support.
 
 ## Surface
 
-contracts: memoryEmbeddingProviders
+contracts: `memoryEmbeddingProviders`

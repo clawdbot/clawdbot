@@ -21,10 +21,6 @@ const OBSERVED_APPROVAL_PROMPT_TARGET_TTL_MS = 5 * 60 * 1000;
 
 const accountIdsWithCompletedNoTargetDiscovery = new Set<string>();
 
-export function clearIMessageApprovalReactionPollerStateForTest(): void {
-  accountIdsWithCompletedNoTargetDiscovery.clear();
-}
-
 type ChatListEntry = {
   id?: number | null;
 };

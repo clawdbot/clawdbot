@@ -913,3 +913,4 @@ export function resetPluginsCliTestState() {
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

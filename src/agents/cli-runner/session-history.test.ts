@@ -5,6 +5,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -12,12 +13,13 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
-  MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS,
-  MAX_CLI_SESSION_HISTORY_FILE_BYTES,
-  MAX_CLI_SESSION_HISTORY_MESSAGES,
-  MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+
+const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
 
 function createSessionTranscript(params: {
   rootDir: string;

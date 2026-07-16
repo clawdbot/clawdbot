@@ -1611,3 +1611,4 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("explicit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

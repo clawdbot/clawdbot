@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
-  testing,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
+import { testing } from "../tool-search.test-support.js";
 import { createAgentHarnessToolSurfaceRuntime } from "./tool-surface-bridge.js";
 
 function tools(names: string[]) {
@@ -25,25 +25,25 @@ function createRuntime(config: OpenClawConfig) {
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
   it("suppresses catalog controls for a host-scoped ring-zero run", () => {
-    const crestodian = {
-      ...createStubTool("crestodian"),
+    const openclaw = {
+      ...createStubTool("openclaw"),
       catalogMode: "direct-only" as const,
     };
 
-    runWithAgentRingZeroTools([crestodian], () => {
+    runWithAgentRingZeroTools([openclaw], () => {
       const runtime = createAgentHarnessToolSurfaceRuntime({
         config: { tools: { toolSearch: true } },
         executeTool: async () => ({ content: [], details: {} }),
         modelToolsEnabled: true,
-        runtimeToolAllowlist: ["crestodian"],
-        toolsAllow: ["crestodian"],
+        runtimeToolAllowlist: ["openclaw"],
+        toolsAllow: ["openclaw"],
       });
 
       expect(runtime.codeModeControlsEnabled).toBe(false);
       expect(runtime.toolSearchControlsEnabled).toBe(false);
       expect(runtime.includeToolSearchControls).toBe(false);
-      expect(runtime.runtimeToolAllowlist).toEqual(["crestodian"]);
-      expect(runtime.compactTools([crestodian]).tools).toEqual([crestodian]);
+      expect(runtime.runtimeToolAllowlist).toEqual(["openclaw"]);
+      expect(runtime.compactTools([openclaw]).tools).toEqual([openclaw]);
       runtime.cleanup();
     });
   });

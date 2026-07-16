@@ -2074,3 +2074,4 @@ export function createSubagentRegistryLifecycleController(params: {
     startSubagentAnnounceCleanupFlow,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

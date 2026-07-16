@@ -141,7 +141,7 @@ async function isPortBusy(port: number): Promise<boolean> {
   return (await probePortUsage(port)) !== "free";
 }
 
-export function parseLsofOutput(output: string): PortProcess[] {
+function parseLsofOutput(output: string): PortProcess[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const results: PortProcess[] = [];
   let current: Partial<PortProcess> = {};
@@ -170,7 +170,7 @@ export function parseLsofOutput(output: string): PortProcess[] {
   return results;
 }
 
-export function listPortListeners(port: number): PortProcess[] {
+function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
@@ -362,7 +362,7 @@ export async function forceFreePortAndWait(
  * - EACCES: bind to a privileged port as non-root.
  * - EINVAL, etc.: other unrecoverable OS errors.
  */
-export function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
+function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
     srv.unref();

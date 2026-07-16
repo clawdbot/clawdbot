@@ -140,6 +140,13 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   };
 }
 
+function expectUsageLimitPromptError(value: unknown): Error & { status: 429 } {
+  expect(value).toBeInstanceOf(Error);
+  const error = value as Error & { status?: unknown };
+  expect(error.status).toBe(429);
+  return error as Error & { status: 429 };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -465,6 +472,18 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
   });
 
+  it("tags mirrored prompts with the exact upstream user text", async () => {
+    const projector = await createProjector(undefined, {
+      upstreamUserText: "decorated upstream prompt",
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage["__openclaw"]).toMatchObject({
+      upstreamUserText: "decorated upstream prompt",
+    });
+  });
+
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
     const params = await createParams();
     const projector = await createProjector({
@@ -693,6 +712,83 @@ describe("CodexAppServerEventProjector", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
+  });
+
+  it("supersedes terminal assistant text before raw image persistence settles", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
+      }),
+    );
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
+
+    let resolveMedia: (() => void) | undefined;
+    const mediaPersistence = new Promise<void>((resolve) => {
+      resolveMedia = resolve;
+    });
+    const mediaProjection = (
+      projector as unknown as {
+        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
+      }
+    ).generatedMediaProjection;
+    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
+
+    const pending = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "image-after-answer",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
+    resolveMedia?.();
+    await pending;
+  });
+
+  it("does not let delayed raw completion consume a newer assistant echo", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-a", text: "rewritten A" },
+      }),
+    );
+
+    const rawAnswerA = projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-a",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original A" }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-b", text: "rewritten B" },
+      }),
+    );
+    await rawAnswerA;
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "answer-b",
+          role: "assistant",
+          content: [{ type: "output_text", text: "original B" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["rewritten B"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
   });
 
   it("keeps raw image-generation results replay-invalid when media save fails", async () => {
@@ -1048,17 +1144,21 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    expect(echoState.toolProgressEchoesByItem.size).toBe(1);
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    expect(echoState.size).toBe(1);
+    const state = echoState.get("cmd-streamed-echo");
     // Stream owns one dedicated slot; FIFO stays empty for pure stream accumulation.
     expect(state?.rawSignatures).toEqual([]);
     const latestRaw = state?.streamedRawSignature;
@@ -1110,16 +1210,20 @@ describe("CodexAppServerEventProjector", () => {
         delta: rawOutput,
       }),
     );
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          rawSignatures: Array<{ length: number; prefix: string }>;
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<
+            string,
+            {
+              rawSignatures: Array<{ length: number; prefix: string }>;
+              streamedRawSignature?: { length: number; prefix: string };
+            }
+          >;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-streamed-echo-newline");
     expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
     await projector.handleNotification(
@@ -1754,9 +1858,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Wait until the reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
+    expect(promptError.message).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1783,8 +1888,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1823,8 +1929,9 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Next reset in");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1849,9 +1956,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    const promptError = expectUsageLimitPromptError(result.promptError);
+    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
+    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(promptError.message).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -3788,15 +3896,14 @@ describe("CodexAppServerEventProjector", () => {
       );
     }
 
-    const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<
-        string,
-        {
-          streamedRawSignature?: { length: number; prefix: string };
-        }
-      >;
-    };
-    const state = echoState.toolProgressEchoesByItem.get("cmd-freeze-prefix");
+    const echoState = (
+      projector as unknown as {
+        toolProgressProjection: {
+          echoesByItem: Map<string, { streamedRawSignature?: { length: number; prefix: string } }>;
+        };
+      }
+    ).toolProgressProjection.echoesByItem;
+    const state = echoState.get("cmd-freeze-prefix");
     expect(state?.streamedRawSignature).toBeDefined();
     expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
     expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
@@ -6043,3 +6150,4 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.scope).toBe("thread");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -594,7 +594,6 @@ export function formatBuildAllDuration(durationMs) {
         ? Math.round(clampedMs / 10) * 10
         : Math.round(clampedMs / 100) * 100;
   return prettyMilliseconds(roundedMs, {
-    millisecondsDecimalDigits: 0,
     secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
   });
 }

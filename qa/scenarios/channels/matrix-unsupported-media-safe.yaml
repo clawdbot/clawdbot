@@ -1,0 +1,34 @@
+title: Matrix unsupported media safety
+scenario:
+  id: matrix-unsupported-media-safe
+  surface: channels
+  coverage:
+    primary:
+      - channels.inbound-media-normalization
+    secondary:
+      - runtime.delivery
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runUnsupportedMediaSafeScenario
+  args:
+    - expr: "scenarioContext"

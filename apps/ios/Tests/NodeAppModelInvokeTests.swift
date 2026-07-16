@@ -6904,6 +6904,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 gatewayStatusText: "Connected",
                 gatewayConnected: true,
                 agentName: "Main",
+                agentAvatarURL: "https://example.com/avatar.png",
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
                 talkStatus: OpenClawWatchAppStatus(code: .talkOff),
@@ -6941,6 +6942,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let nestedApprovals = try #require(
             combined[OpenClawWatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
+        #expect(nestedApp["agentAvatarUrl"] as? String == "https://example.com/avatar.png")
+        #expect(nestedApp["agentAvatarURL"] == nil)
         let nestedChatStatus = try #require(nestedApp["chatStatus"] as? [String: Any])
         #expect(nestedChatStatus["code"] as? String == "chatConnectIPhone")
         #expect(nestedApp["chatStatusCode"] == nil)

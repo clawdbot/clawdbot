@@ -1,23 +1,45 @@
 // Imessage tests cover catchup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getIMessageRuntime } from "../runtime.js";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import {
   advanceIMessageCatchupCursor,
   capFailureRetriesMap,
-  loadIMessageCatchupCursor,
+  IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
   performIMessageCatchup,
-  resetIMessageCatchupCursorStoreForTest,
   resolveCatchupConfig,
-  saveIMessageCatchupCursor,
+  resolveIMessageCatchupCursorKey,
   type CatchupDispatchFn,
   type CatchupFetchFn,
+  type IMessageCatchupCursor,
   type IMessageCatchupRow,
 } from "./catchup.js";
 
 beforeEach(() => {
   installIMessageStateRuntimeForTest();
-  resetIMessageCatchupCursorStoreForTest();
 });
+
+function openCatchupCursorStore() {
+  return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
+    namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+    maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+  });
+}
+
+async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
+  return openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId)) ?? null;
+}
+
+async function saveIMessageCatchupCursor(
+  accountId: string,
+  cursor: Omit<IMessageCatchupCursor, "updatedAt">,
+): Promise<void> {
+  openCatchupCursorStore().register(resolveIMessageCatchupCursorKey(accountId), {
+    ...cursor,
+    updatedAt: Date.now(),
+  });
+}
 
 describe("resolveCatchupConfig", () => {
   it("falls back to defaults when raw is undefined", () => {
@@ -56,57 +78,7 @@ describe("resolveCatchupConfig", () => {
   });
 });
 
-describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
-  it("returns null when no cursor exists", async () => {
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor).toBeNull();
-  });
-
-  it("round-trips a cursor without failureRetries", async () => {
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 42,
-    });
-    const cursor = await loadIMessageCatchupCursor("primary");
-    if (!cursor) {
-      throw new Error("expected iMessage catchup cursor");
-    }
-    expect(cursor.lastSeenMs).toBe(1_700_000_000_000);
-    expect(cursor.lastSeenRowid).toBe(42);
-    expect(cursor.failureRetries).toBeUndefined();
-  });
-
-  it("round-trips a cursor with failureRetries", async () => {
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 42,
-      failureRetries: { "GUID-A": 3 },
-    });
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.failureRetries).toEqual({ "GUID-A": 3 });
-  });
-
-  it("drops malformed failureRetries entries on load", async () => {
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 42,
-      failureRetries: {
-        "GUID-A": 3,
-        "GUID-B": -1,
-        "GUID-C": Number.NaN,
-      } as Record<string, number>,
-    });
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.failureRetries).toEqual({ "GUID-A": 3 });
-  });
-
-  it("isolates state per accountId", async () => {
-    await saveIMessageCatchupCursor("a", { lastSeenMs: 100, lastSeenRowid: 1 });
-    await saveIMessageCatchupCursor("b", { lastSeenMs: 200, lastSeenRowid: 2 });
-    expect((await loadIMessageCatchupCursor("a"))?.lastSeenRowid).toBe(1);
-    expect((await loadIMessageCatchupCursor("b"))?.lastSeenRowid).toBe(2);
-  });
-
+describe("advanceIMessageCatchupCursor", () => {
   it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
     const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
     await saveIMessageCatchupCursor("primary", {

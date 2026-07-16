@@ -1,0 +1,17 @@
+title: Slack portable table renders as a native data table
+scenario:
+  id: slack-table-presentation-native
+  surface: channels
+  coverage:
+    primary: [channels.media-rich-content]
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-table-presentation-native }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackTablePresentationNativeScenario
+  args: [{ expr: slackScenarioContext }]

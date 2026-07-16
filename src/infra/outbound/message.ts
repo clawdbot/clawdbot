@@ -48,8 +48,6 @@ const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
-
 type MessageSendParams = {
   to: string;
   content: string;
@@ -79,6 +77,7 @@ type MessageSendParams = {
   accountId?: string;
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
   threadId?: string | number;
   dryRun?: boolean;
@@ -88,7 +87,7 @@ type MessageSendParams = {
   mediaAccess?: OutboundMediaAccess;
   deps?: OutboundSendDeps;
   cfg?: OpenClawConfig;
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
   /** Optional W3C trace-context carrier supplied by continuation return fallbacks. */
   traceparent?: string;
@@ -127,7 +126,7 @@ type MessagePollParams = {
   isAnonymous?: boolean;
   dryRun?: boolean;
   cfg?: OpenClawConfig;
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
 };
 
@@ -198,12 +197,11 @@ async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  return (
-    await resolveMessageChannelSelection({
-      cfg: params.cfg,
-      channel: params.channel,
-    })
-  ).channel;
+  const selection = await resolveMessageChannelSelection({
+    cfg: params.cfg,
+    channel: params.channel,
+  });
+  return selection.channel;
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
@@ -287,12 +285,12 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: MessageGatewayOptions) {
+function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
   return resolveOutboundMessageGatewayOptions(opts);
 }
 
 async function callMessageGateway<T>(params: {
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
@@ -411,6 +409,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       to: resolvedTarget.to,
       session: outboundSession,
       accountId: params.accountId,
+      conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
       threadId: params.threadId,

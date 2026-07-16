@@ -1,0 +1,17 @@
+title: WhatsApp group pending history reaches mentioned turns
+scenario:
+  id: whatsapp-group-pending-history-context
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-pending-history-context }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupPendingHistoryContextScenario
+  args: [{ expr: whatsappScenarioContext }]

@@ -23,7 +23,7 @@ import {
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
-export function isHttpMediaUrl(value: string): boolean {
+function isHttpMediaUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
     return parsed.protocol === "http:" || parsed.protocol === "https:";

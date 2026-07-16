@@ -109,6 +109,13 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
 
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
+      const workingLabel = page.locator(".chat-working-indicator__status > .agent-chat__sr-only");
+      expect(await workingLabel.textContent()).toBe("Working…");
+      expect(
+        await page
+          .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
+          .count(),
+      ).toBe(0);
       await page.clock.runFor(177_000);
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
@@ -116,7 +123,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.screenshot({ fullPage: true, path: path.join(artifactDir, "web-ui-chat.png") });
 
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
-      await page.getByText(reply).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(reply).waitFor({ timeout: 10_000 });
       await writeFile(
         path.join(artifactDir, "web-ui-chat-proof.json"),
         `${JSON.stringify(

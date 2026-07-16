@@ -59,6 +59,20 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(3);
   });
 
+  it("derives visible dashboard depth from parentSessionKey", () => {
+    const depth = getSubagentDepthFromSessionStore("agent:main:dashboard:child", {
+      store: {
+        "agent:main:main": { sessionId: "root" },
+        "agent:main:dashboard:child": {
+          sessionId: "child",
+          parentSessionKey: "agent:main:main",
+        },
+      },
+    });
+
+    expect(depth).toBe(1);
+  });
+
   it("resolves depth when caller is identified by sessionId", () => {
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
@@ -100,6 +114,41 @@ describe("getSubagentDepthFromSessionStore", () => {
 
     expect(depth).toBe(2);
   });
+
+  it("resolves a cross-agent parent outside the supplied child store", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-cross-agent-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const parentKey = "agent:main:dashboard:parent";
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          storePath: storeTemplate.replaceAll("{agentId}", "main"),
+          sessionKey: parentKey,
+        },
+        {
+          sessionId: "parent",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+        },
+      );
+
+      const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
+        cfg: { session: { store: storeTemplate } },
+        store: {
+          "agent:work:dashboard:child": {
+            sessionId: "child",
+            parentSessionKey: parentKey,
+          },
+        },
+      });
+
+      expect(depth).toBe(3);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to session-key segment counting when metadata is missing", () => {
     const key = "agent:main:subagent:flat";
     const depth = getSubagentDepthFromSessionStore(key, {

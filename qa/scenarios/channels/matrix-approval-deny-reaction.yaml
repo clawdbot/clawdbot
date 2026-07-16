@@ -1,0 +1,28 @@
+title: Matrix approval deny reaction resolves the metadata-bearing event
+scenario:
+  id: matrix-approval-deny-reaction
+  surface: channels
+  coverage:
+    primary:
+      - channels.native-approval-prompts
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        approvalForwarding:
+          exec: true
+        dm:
+          enabled: true
+        execApprovals:
+          enabled: true
+          target: channel
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-approval.js
+  call: runApprovalDenyReactionScenario
+  args:
+    - expr: "scenarioContext"

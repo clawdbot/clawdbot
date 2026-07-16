@@ -997,3 +997,4 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

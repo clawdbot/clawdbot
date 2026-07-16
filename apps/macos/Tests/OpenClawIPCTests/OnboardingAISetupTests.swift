@@ -29,15 +29,15 @@ private actor ActivationMarkerObservation {
 
 private final class ActivationOwnerObservation: @unchecked Sendable {
     private let lock = NSLock()
-    private var observedOwner: OnboardingCrestodianResumeStore.ActivationOwner?
+    private var observedOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
 
-    func record(_ owner: OnboardingCrestodianResumeStore.ActivationOwner?) {
+    func record(_ owner: OnboardingSystemAgentResumeStore.ActivationOwner?) {
         lock.lock()
         defer { self.lock.unlock() }
         observedOwner = owner
     }
 
-    func value() -> OnboardingCrestodianResumeStore.ActivationOwner? {
+    func value() -> OnboardingSystemAgentResumeStore.ActivationOwner? {
         lock.lock()
         defer { self.lock.unlock() }
         return observedOwner
@@ -281,7 +281,7 @@ private func respondToAISetupPreparation(
     if respondToAISetupHealth(task: task, request: request) {
         return true
     }
-    guard request.method == "crestodian.setup.detect" else { return false }
+    guard request.method == "openclaw.setup.detect" else { return false }
     let modelRef = kind == "codex-cli" ? "openai/gpt-5.5" : "claude-cli/claude-opus-4-8"
     task.emitReceiveSuccess(.data(detectedSetupResponse(
         id: request.id,
@@ -384,7 +384,7 @@ private func makeAISetupSession(
             }
             await recorder.record(message)
             switch request.method {
-            case "crestodian.setup.detect":
+            case "openclaw.setup.detect":
                 let modelRef = detectedKind == "codex-cli"
                     ? "openai/gpt-5.5"
                     : "claude-cli/claude-opus-4-8"
@@ -393,7 +393,7 @@ private func makeAISetupSession(
                     kind: detectedKind,
                     modelRef: modelRef
                 )))
-            case "crestodian.setup.activate":
+            case "openclaw.setup.activate":
                 if indeterminateActivationAfterDispatch {
                     task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
                     return
@@ -423,15 +423,15 @@ private func makeRestartingAISetupSession(
             await recorder.record(message)
             if generation == 0 {
                 switch request.method {
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(
                         id: request.id,
                         kind: "codex-cli",
                         modelRef: "openai/gpt-5.5"
                     )))
-                case "crestodian.setup.activate":
+                case "openclaw.setup.activate":
                     let owner = UserDefaults(suiteName: suiteName).flatMap {
-                        OnboardingCrestodianResumeStore.activationOwner(
+                        OnboardingSystemAgentResumeStore.activationOwner(
                             for: "local",
                             defaults: $0
                         )
@@ -444,7 +444,7 @@ private func makeRestartingAISetupSession(
                 return
             }
             switch request.method {
-            case "crestodian.setup.detect":
+            case "openclaw.setup.detect":
                 let response = postRestartConfiguredModel.map {
                     persistedDetectedSetupResponse(id: request.id, configuredModel: $0)
                 } ?? detectedSetupResponse(
@@ -453,7 +453,7 @@ private func makeRestartingAISetupSession(
                     modelRef: "openai/gpt-5.5"
                 )
                 task.emitReceiveSuccess(.data(response))
-            case "crestodian.setup.verify":
+            case "openclaw.setup.verify":
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             default:
                 break
@@ -731,7 +731,7 @@ struct OnboardingAISetupTests {
             #"""
             {"type":"hello-ok","protocol":4,
              "server":{"version":"test","connId":"test"},
-             "features":{"methods":[],"events":[],"capabilities":["crestodian-setup-model-ref"]},
+             "features":{"methods":[],"events":[],"capabilities":["openclaw-setup-model-ref"]},
              "snapshot":{"presence":[],"health":{},
                          "stateVersion":{"presence":0,"health":0},"uptimeMs":0},
              "auth":{},"policy":{}}
@@ -739,30 +739,30 @@ struct OnboardingAISetupTests {
         )
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
 
-        #expect(hello.supportsServerCapability(.crestodianSetupModelRef))
+        #expect(hello.supportsServerCapability(.systemAgentSetupModelRef))
     }
 
     @Test func `only definitive failures can clear an activation marker`() {
         let unknownMethod = GatewayResponseError(
-            method: "crestodian.setup.activate",
+            method: "openclaw.setup.activate",
             code: "UNKNOWN_METHOD",
             message: "unknown method",
             details: nil
         )
         let invalidParams = GatewayResponseError(
-            method: "crestodian.setup.activate",
+            method: "openclaw.setup.activate",
             code: "INVALID_REQUEST",
-            message: "invalid crestodian.setup.activate params: kind is required",
+            message: "invalid openclaw.setup.activate params: kind is required",
             details: nil
         )
         let indeterminate = GatewayResponseError(
-            method: "crestodian.setup.activate",
+            method: "openclaw.setup.activate",
             code: "UNAVAILABLE",
             message: "Setup inference activation is indeterminate",
             details: nil
         )
         let genericInvalidRequest = GatewayResponseError(
-            method: "crestodian.setup.activate",
+            method: "openclaw.setup.activate",
             code: "INVALID_REQUEST",
             message: "activation failed after dispatch",
             details: nil
@@ -796,7 +796,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupPreparation(task: task, request: request, kind: "claude-cli") {
                     return
                 }
-                guard request.method == "crestodian.setup.activate" else { return }
+                guard request.method == "openclaw.setup.activate" else { return }
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             })
         })
@@ -818,17 +818,38 @@ struct OnboardingAISetupTests {
 
         #expect(model.connected)
         #expect(handedOff)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .completed)
 
         model.clearCompletedHandoffIfOwned()
 
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
+    }
+
+    @Test func `adopts pending activation stored under the retired crestodian key`() throws {
+        let suiteName = "OnboardingRetiredKeyMigrationTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        _ = OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        let payload = try #require(defaults.object(forKey: onboardingSystemAgentPendingKey))
+        defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
+        defaults.set(payload, forKey: onboardingSystemAgentPendingRetiredKey)
+
+        guard case .activating = OnboardingSystemAgentResumeStore.pendingState(
+            for: "local",
+            defaults: defaults
+        ) else {
+            Issue.record("expected the retired-key activation lease to survive the rename")
+            return
+        }
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) != nil)
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) == nil)
     }
 
     @Test func `managed Gateway restart reconciles exact persisted activation before handoff`() async throws {
@@ -862,19 +883,19 @@ struct OnboardingAISetupTests {
         let activationOwner = try #require(ownerObservation.value())
         #expect(session.snapshotMakeCount() >= 2)
         #expect(await (recorder.snapshot()).methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
-            "crestodian.setup.detect",
-            "crestodian.setup.verify",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.verify",
         ])
         #expect(model.connected)
         #expect(model.connectedModelRef == "openai/gpt-5.5")
         #expect(handoffCount == 1)
-        #expect(OnboardingCrestodianResumeStore.activationOwner(
+        #expect(OnboardingSystemAgentResumeStore.activationOwner(
             for: "local",
             defaults: defaults
         ) == activationOwner)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .completed)
@@ -913,14 +934,14 @@ struct OnboardingAISetupTests {
 
         let activationOwner = try #require(ownerObservation.value())
         #expect(Array(reconciledRequests.methods.prefix(3)) == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
-            "crestodian.setup.detect",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+            "openclaw.setup.detect",
         ])
-        #expect(!reconciledRequests.methods.contains("crestodian.setup.verify"))
+        #expect(!reconciledRequests.methods.contains("openclaw.setup.verify"))
         #expect(!model.connected)
         #expect(handoffCount == 0)
-        #expect(OnboardingCrestodianResumeStore.isOwned(
+        #expect(OnboardingSystemAgentResumeStore.isOwned(
             by: activationOwner,
             for: "local",
             defaults: defaults
@@ -939,7 +960,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupPreparation(task: task, request: request, kind: "claude-cli") {
                     return
                 }
-                guard request.method == "crestodian.setup.activate" else { return }
+                guard request.method == "openclaw.setup.activate" else { return }
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             })
         })
@@ -956,15 +977,15 @@ struct OnboardingAISetupTests {
 
         await model.detectAndAutoConnect()
         await model.activate(kind: "claude-cli")
-        let completedOwner = try #require(OnboardingCrestodianResumeStore.activationOwner(
+        let completedOwner = try #require(OnboardingSystemAgentResumeStore.activationOwner(
             for: "local",
             defaults: defaults
         ))
-        let replacementOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "replacement-activation",
             routeFingerprint: completedOwner.routeFingerprint
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: replacementOwner,
             defaults: defaults
@@ -972,12 +993,12 @@ struct OnboardingAISetupTests {
 
         model.clearCompletedHandoffIfOwned()
 
-        #expect(OnboardingCrestodianResumeStore.isOwned(
+        #expect(OnboardingSystemAgentResumeStore.isOwned(
             by: replacementOwner,
             for: "local",
             defaults: defaults
         ))
-        guard case .activating = OnboardingCrestodianResumeStore.pendingState(
+        guard case .activating = OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         )
@@ -998,14 +1019,14 @@ struct OnboardingAISetupTests {
                 if respondToAISetupPreparation(task: task, request: request, kind: "claude-cli") {
                     return
                 }
-                guard request.method == "crestodian.setup.activate",
+                guard request.method == "openclaw.setup.activate",
                       let callbackDefaults = UserDefaults(suiteName: suiteName),
-                      let originalOwner = OnboardingCrestodianResumeStore.activationOwner(
+                      let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
                           for: "local",
                           defaults: callbackDefaults
                       )
                 else { return }
-                OnboardingCrestodianResumeStore.markPending(
+                OnboardingSystemAgentResumeStore.markPending(
                     routeIdentity: "local",
                     activationOwner: .init(
                         id: replacementID,
@@ -1035,11 +1056,11 @@ struct OnboardingAISetupTests {
         #expect(!model.connected)
         #expect(handoffCount == 0)
         #expect(model.phase == .ready)
-        #expect(OnboardingCrestodianResumeStore.activationOwner(
+        #expect(OnboardingSystemAgentResumeStore.activationOwner(
             for: "local",
             defaults: defaults
         )?.id == replacementID)
-        guard case .activating = OnboardingCrestodianResumeStore.pendingState(
+        guard case .activating = OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         )
@@ -1060,7 +1081,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
                     return
                 }
-                guard request.method == "crestodian.setup.activate" else { return }
+                guard request.method == "openclaw.setup.activate" else { return }
                 await configGate.armNextRead()
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             })
@@ -1091,7 +1112,7 @@ struct OnboardingAISetupTests {
         #expect(!model.connected)
         #expect(model.phase == .idle)
         #expect(handoffCount == 0)
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "local",
             defaults: defaults
         ))
@@ -1118,48 +1139,48 @@ struct OnboardingAISetupTests {
             onboardingVisible: true,
             expectedMode: .remote,
             currentMode: .remote,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             setupOwnsInferenceTransition: false
         ))
         #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: false,
             expectedMode: .remote,
             currentMode: .remote,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             setupOwnsInferenceTransition: false
         ))
         #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: true,
             expectedMode: .remote,
             currentMode: .local,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             setupOwnsInferenceTransition: false
         ))
         #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: true,
             expectedMode: .unconfigured,
             currentMode: .unconfigured,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             setupOwnsInferenceTransition: false
         ))
     }
 
-    @Test func `fresh inference transition owns the Crestodian handoff`() {
+    @Test func `fresh inference transition owns the OpenClaw handoff`() {
         #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: true,
             expectedMode: .local,
             currentMode: .local,
-            crestodianResumePending: false,
+            systemAgentResumePending: false,
             setupOwnsInferenceTransition: true
         ))
     }
 
-    @Test func `pending Crestodian handoff cannot be mistaken for an existing install`() {
+    @Test func `pending OpenClaw handoff cannot be mistaken for an existing install`() {
         #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
             onboardingVisible: true,
             expectedMode: .local,
             currentMode: .local,
-            crestodianResumePending: true,
+            systemAgentResumePending: true,
             setupOwnsInferenceTransition: false
         ))
     }
@@ -1196,7 +1217,7 @@ struct OnboardingAISetupTests {
                     return
                 }
                 await recorder.record(message)
-                if request.method == "crestodian.setup.verify" {
+                if request.method == "openclaw.setup.verify" {
                     task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
                 }
             })
@@ -1215,7 +1236,7 @@ struct OnboardingAISetupTests {
         await model.verifyPendingConfiguredInference()
 
         let requests = await recorder.snapshot()
-        #expect(requests.methods == ["crestodian.setup.verify"])
+        #expect(requests.methods == ["openclaw.setup.verify"])
         #expect(model.connected)
         #expect(model.connectedModelRef == "openai/gpt-5.5")
         #expect(model.connectedLatencyMs == 42)
@@ -1231,7 +1252,7 @@ struct OnboardingAISetupTests {
                     return
                 }
                 await recorder.record(message)
-                guard request.method == "crestodian.setup.verify" else { return }
+                guard request.method == "openclaw.setup.verify" else { return }
                 await gate.wait()
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             })
@@ -1252,11 +1273,11 @@ struct OnboardingAISetupTests {
         let second = Task { await model.verifyPendingConfiguredInference() }
         await Task.yield()
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.verify"])
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.verify"])
         await gate.release()
         #expect(await first.value == .connected)
         #expect(await second.value == .connected)
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.verify"])
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.verify"])
     }
 
     @Test func `pending verification revalidates route after shared task completes`() async throws {
@@ -1269,7 +1290,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupHealth(task: task, request: request) {
                     return
                 }
-                guard request.method == "crestodian.setup.verify" else { return }
+                guard request.method == "openclaw.setup.verify" else { return }
                 task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
             })
         })
@@ -1303,10 +1324,10 @@ struct OnboardingAISetupTests {
                 }
                 await recorder.record(message)
                 switch request.method {
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     await gate.wait()
                     task.emitReceiveSuccess(.data(actionableDetectedSetupResponse(id: request.id)))
-                case "crestodian.setup.activate":
+                case "openclaw.setup.activate":
                     task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
                 default:
                     break
@@ -1335,7 +1356,7 @@ struct OnboardingAISetupTests {
         await gate.release()
         await settleQueuedAISetupTasks()
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.detect"])
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.detect"])
         #expect(view.aiSetup.phase == .idle)
     }
 
@@ -1343,14 +1364,14 @@ struct OnboardingAISetupTests {
         let suiteName = "OnboardingPendingVerificationFailureTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
                 guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
                 if respondToAISetupHealth(task: task, request: request) {
                     return
                 }
-                guard request.method == "crestodian.setup.verify" else { return }
+                guard request.method == "openclaw.setup.verify" else { return }
                 task.emitReceiveSuccess(.data(rejectedSetupVerificationResponse(id: request.id)))
             })
         })
@@ -1372,7 +1393,7 @@ struct OnboardingAISetupTests {
         #expect(model.pendingActivationVerification)
         #expect(model.detectError?.detail == "expired login")
         #expect(outcome == .notConnected)
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `completed activation receipt survives verification transport failure`() async throws {
@@ -1386,7 +1407,7 @@ struct OnboardingAISetupTests {
                 if respondToAISetupHealth(task: task, request: request) {
                     return
                 }
-                guard request.method == "crestodian.setup.verify" else { return }
+                guard request.method == "openclaw.setup.verify" else { return }
                 await recorder.record(message)
                 let verifyCount = await recorder.snapshot().methods.count
                 let response = verifyCount == 1
@@ -1401,16 +1422,16 @@ struct OnboardingAISetupTests {
             sessionBox: WebSocketSessionBox(session: session)
         )
         let route = try #require(await gateway.captureRoute())
-        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "completed-before-verification",
             routeFingerprint: #require(route.activationOwnershipFingerprint)
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             defaults: defaults
         )
-        #expect(OnboardingCrestodianResumeStore.markCompleted(
+        #expect(OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: "local",
             activationOwner: activationOwner,
             defaults: defaults
@@ -1427,7 +1448,7 @@ struct OnboardingAISetupTests {
         #expect(failedOutcome == .notConnected)
         #expect(model.pendingActivationVerification)
         #expect(!model.connected)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .completed)
@@ -1437,19 +1458,19 @@ struct OnboardingAISetupTests {
 
         #expect(retryOutcome == .connected)
         #expect(model.connected)
-        #expect(requests.methods == ["crestodian.setup.verify", "crestodian.setup.verify"])
+        #expect(requests.methods == ["openclaw.setup.verify", "openclaw.setup.verify"])
     }
 
-    @Test func `pending Crestodian marker is app local and clearable`() throws {
-        let suiteName = "OnboardingCrestodianResumeStoreTests-\(UUID().uuidString)"
+    @Test func `pending OpenClaw marker is app local and clearable`() throws {
+        let suiteName = "OnboardingSystemAgentResumeStoreTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "local", defaults: defaults)
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
-        OnboardingCrestodianResumeStore.clear(defaults: defaults)
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
+        OnboardingSystemAgentResumeStore.clear(defaults: defaults)
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `persisted route owner ignores tunnel URL but changes with Gateway auth`() async throws {
@@ -1513,13 +1534,13 @@ struct OnboardingAISetupTests {
                     "routeFingerprint": "password-derived-verifier",
                 ],
             ],
-        ], forKey: onboardingCrestodianPendingKey)
+        ], forKey: onboardingSystemAgentPendingKey)
 
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
-        #expect(defaults.object(forKey: onboardingCrestodianPendingKey) == nil)
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) == nil)
     }
 
     @Test func `ownerless v2 completion record is scrubbed`() throws {
@@ -1529,13 +1550,13 @@ struct OnboardingAISetupTests {
         defaults.set([
             "version": 2,
             "records": ["local": ["phase": "completed"]],
-        ], forKey: onboardingCrestodianPendingKey)
+        ], forKey: onboardingSystemAgentPendingKey)
 
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
-        #expect(defaults.object(forKey: onboardingCrestodianPendingKey) == nil)
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) == nil)
     }
 
     @Test func `activation fails closed when Keychain binding is unavailable`() async throws {
@@ -1561,8 +1582,8 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         await model.activate(kind: "codex-cli")
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.detect"])
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.detect"])
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(model.phase == .ready)
         guard case let .failed(failure) = model.statuses["codex-cli"] else {
             Issue.record("expected secure-storage failure")
@@ -1588,15 +1609,15 @@ struct OnboardingAISetupTests {
                     "routeFingerprint": "password-derived-verifier",
                 ],
             ],
-        ], forKey: onboardingCrestodianPendingKey)
+        ], forKey: onboardingSystemAgentPendingKey)
 
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults,
             now: now
         ) == .activating(deadline: deadline))
         let migrated = try #require(
-            defaults.dictionary(forKey: onboardingCrestodianPendingKey)
+            defaults.dictionary(forKey: onboardingSystemAgentPendingKey)
         )
         let records = try #require(migrated["records"] as? [String: Any])
         let local = try #require(records["local"] as? [String: Any])
@@ -1606,13 +1627,13 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `legacy marker relaunch migrates to a full conservative lease`() throws {
-        let suiteName = "OnboardingLegacyCrestodianResumeStoreTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingLegacySystemAgentResumeStoreTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        defaults.set("local", forKey: onboardingCrestodianPendingKey)
+        defaults.set("local", forKey: onboardingSystemAgentPendingKey)
 
-        let migrated = OnboardingCrestodianResumeStore.pendingState(
+        let migrated = OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults,
             now: now
@@ -1625,15 +1646,15 @@ struct OnboardingAISetupTests {
         let leaseDeadline = try #require(deadline)
 
         #expect(leaseDeadline == now.addingTimeInterval(
-            OnboardingCrestodianResumeStore.legacyActivationLeaseSeconds
+            OnboardingSystemAgentResumeStore.legacyActivationLeaseSeconds
         ))
-        #expect(defaults.object(forKey: onboardingCrestodianPendingKey) is [String: Any])
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) is [String: Any])
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults,
             now: now.addingTimeInterval(484)
         ) == .activating(deadline: leaseDeadline))
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults,
             now: now.addingTimeInterval(486)
@@ -1647,8 +1668,8 @@ struct OnboardingAISetupTests {
         let url = try #require(URL(string: "ws://localhost:18789"))
         let appState = AppState(preview: true)
         appState.connectionMode = .local
-        let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(state: appState)
-        OnboardingCrestodianResumeStore.markPending(
+        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: appState)
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: routeIdentity,
             activationTimeoutMs: 30000,
             defaults: defaults
@@ -1673,7 +1694,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { routeIdentity }
         )
 
@@ -1683,7 +1704,7 @@ struct OnboardingAISetupTests {
 
         #expect(await (recorder.snapshot()).methods == ["agents.list"])
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: routeIdentity,
             defaults: defaults
         ))
@@ -1697,12 +1718,12 @@ struct OnboardingAISetupTests {
         let url = try #require(URL(string: "ws://localhost:18789"))
         let appState = AppState(preview: true)
         appState.connectionMode = .local
-        let routeIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity(state: appState)
-        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: appState)
+        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "expired-owner",
             routeFingerprint: "selected-route"
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: routeIdentity,
             activationOwner: activationOwner,
             activationTimeoutMs: 0,
@@ -1721,15 +1742,15 @@ struct OnboardingAISetupTests {
                 switch request.method {
                 case "agents.list":
                     task.emitReceiveSuccess(.data(missingConfiguredModelResponse(id: request.id)))
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                        await markerObservation.record(!OnboardingCrestodianResumeStore.isPending(
+                        await markerObservation.record(!OnboardingSystemAgentResumeStore.isPending(
                             for: routeIdentity,
                             defaults: callbackDefaults
                         ))
                     }
                     task.emitReceiveSuccess(.data(actionableDetectedSetupResponse(id: request.id)))
-                case "crestodian.setup.activate":
+                case "openclaw.setup.activate":
                     task.emitReceiveSuccess(.data(failedActivationResponse(id: request.id)))
                 default:
                     break
@@ -1743,7 +1764,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { routeIdentity }
         )
 
@@ -1753,8 +1774,8 @@ struct OnboardingAISetupTests {
 
         #expect(requests.methods == [
             "agents.list",
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
         ])
         #expect(await markerObservation.value())
         #expect(!view.aiSetup.waitingForPendingActivationDeadline)
@@ -1766,15 +1787,15 @@ struct OnboardingAISetupTests {
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let routeIdentity = "local"
-        let originalOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let originalOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "expired-owner-a",
             routeFingerprint: "selected-route"
         )
-        let replacementOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "expired-owner-b",
             routeFingerprint: "selected-route"
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: routeIdentity,
             activationOwner: originalOwner,
             activationTimeoutMs: 0,
@@ -1789,7 +1810,7 @@ struct OnboardingAISetupTests {
                 switch request.method {
                 case "agents.list":
                     if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                        OnboardingCrestodianResumeStore.markPending(
+                        OnboardingSystemAgentResumeStore.markPending(
                             routeIdentity: routeIdentity,
                             activationOwner: replacementOwner,
                             activationTimeoutMs: 0,
@@ -1798,7 +1819,7 @@ struct OnboardingAISetupTests {
                         )
                     }
                     task.emitReceiveSuccess(.data(missingConfiguredModelResponse(id: request.id)))
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 default:
                     break
@@ -1815,7 +1836,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { routeIdentity }
         )
 
@@ -1824,12 +1845,12 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         #expect(await (recorder.snapshot()).methods == ["agents.list"])
-        #expect(OnboardingCrestodianResumeStore.isOwned(
+        #expect(OnboardingSystemAgentResumeStore.isOwned(
             by: replacementOwner,
             for: routeIdentity,
             defaults: defaults
         ))
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: defaults
         ) == .activationExpired)
@@ -1841,11 +1862,11 @@ struct OnboardingAISetupTests {
         let suiteName = "OnboardingStaleMissingConnectedTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             defaults: defaults
         )
-        OnboardingCrestodianResumeStore.markCompleted(
+        OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: "local",
             defaults: defaults
         )
@@ -1859,7 +1880,7 @@ struct OnboardingAISetupTests {
                 case "agents.list":
                     await gate.wait()
                     task.emitReceiveSuccess(.data(missingConfiguredModelResponse(id: request.id)))
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 default:
                     break
@@ -1876,7 +1897,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
 
@@ -1894,7 +1915,7 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         #expect(view.aiSetup.connected)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .completed)
@@ -1922,7 +1943,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" },
             configuredGatewayProbeTimeoutMs: 1
         )
@@ -1940,7 +1961,7 @@ struct OnboardingAISetupTests {
         #expect(view.aiSetup.phase == .ready)
         #expect(view.aiSetup.configuredGatewayProbeUnavailable)
         #expect(view.aiSetup.detectError != nil)
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `configured gateway probe refuses an unpersisted endpoint selection`() async throws {
@@ -2009,14 +2030,14 @@ struct OnboardingAISetupTests {
             let suiteName = "OnboardingUnavailableGatewayMarkerTests-\(markerPhase)-\(UUID().uuidString)"
             let defaults = try #require(UserDefaults(suiteName: suiteName))
             defer { defaults.removePersistentDomain(forName: suiteName) }
-            OnboardingCrestodianResumeStore.markPending(
+            OnboardingSystemAgentResumeStore.markPending(
                 routeIdentity: "local",
                 activationTimeoutMs: markerPhase == "expired" ? 0 : 30000,
                 defaults: defaults,
                 now: markerPhase == "expired" ? Date(timeIntervalSinceNow: -10) : Date()
             )
             if markerPhase == "completed" {
-                OnboardingCrestodianResumeStore.markCompleted(
+                OnboardingSystemAgentResumeStore.markCompleted(
                     ifOwnedBy: "local",
                     defaults: defaults
                 )
@@ -2042,7 +2063,7 @@ struct OnboardingAISetupTests {
             let view = OnboardingView(
                 state: appState,
                 aiSetupGateway: gateway,
-                crestodianDefaults: defaults,
+                systemAgentDefaults: defaults,
                 aiSetupRouteIdentityProvider: { "local" }
             )
             view.onboardingVisible = true
@@ -2058,7 +2079,7 @@ struct OnboardingAISetupTests {
             #expect(await (recorder.snapshot()).methods == ["agents.list"])
             #expect(view.aiSetup.phase == .ready)
             #expect(view.aiSetup.configuredGatewayProbeUnavailable)
-            let pendingState = OnboardingCrestodianResumeStore.pendingState(
+            let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             )
@@ -2076,7 +2097,7 @@ struct OnboardingAISetupTests {
             #expect(retried.methods == ["agents.list", "agents.list"])
             #expect(view.aiSetup.phase == .ready)
             #expect(view.aiSetup.configuredGatewayProbeUnavailable)
-            #expect(OnboardingCrestodianResumeStore.pendingState(
+            #expect(OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) == pendingState)
@@ -2096,7 +2117,7 @@ struct OnboardingAISetupTests {
                 }
                 await recorder.record(message)
                 switch request.method {
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 case "agents.list":
                     let probeCount = await recorder.snapshot().methods.filter { $0 == "agents.list" }.count
@@ -2119,7 +2140,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
         view.onboardingVisible = true
@@ -2143,10 +2164,10 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         #expect(requests.methods == [
-            "crestodian.setup.detect",
+            "openclaw.setup.detect",
             "agents.list",
             "agents.list",
-            "crestodian.setup.detect",
+            "openclaw.setup.detect",
         ])
         #expect(view.aiSetup.phase == .ready)
         #expect(!view.aiSetup.configuredGatewayProbeUnavailable)
@@ -2157,7 +2178,7 @@ struct OnboardingAISetupTests {
         let suiteName = "OnboardingUnavailableActiveLeaseRetryTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationTimeoutMs: 30000,
             defaults: defaults
@@ -2184,7 +2205,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
 
@@ -2202,7 +2223,7 @@ struct OnboardingAISetupTests {
 
         #expect(await (recorder.snapshot()).methods == ["agents.list", "agents.list"])
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `verified configured model stays read only until pending deadline`() async throws {
@@ -2212,7 +2233,7 @@ struct OnboardingAISetupTests {
         let url = try #require(URL(string: "ws://localhost:18789"))
         let appState = AppState(preview: true)
         appState.connectionMode = .local
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationTimeoutMs: 30000,
             defaults: defaults
@@ -2234,7 +2255,7 @@ struct OnboardingAISetupTests {
                         ? missingConfiguredModelResponse(id: request.id)
                         : configuredModelResponse(id: request.id)
                     task.emitReceiveSuccess(.data(response))
-                case "crestodian.setup.verify":
+                case "openclaw.setup.verify":
                     task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
                 default:
                     break
@@ -2248,7 +2269,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
 
@@ -2260,7 +2281,7 @@ struct OnboardingAISetupTests {
         )
         await configuredProbe.value
         for _ in 0 ..< 200 {
-            if case .verified = OnboardingCrestodianResumeStore.pendingState(
+            if case .verified = OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) {
@@ -2273,14 +2294,14 @@ struct OnboardingAISetupTests {
         #expect(Array(methods.prefix(3)) == [
             "agents.list",
             "agents.list",
-            "crestodian.setup.verify",
+            "openclaw.setup.verify",
         ])
-        #expect(!methods.contains("crestodian.setup.detect"))
-        #expect(!methods.contains("crestodian.setup.activate"))
+        #expect(!methods.contains("openclaw.setup.detect"))
+        #expect(!methods.contains("openclaw.setup.activate"))
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
         #expect({
-            if case .verified = OnboardingCrestodianResumeStore.pendingState(
+            if case .verified = OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) {
@@ -2306,25 +2327,25 @@ struct OnboardingAISetupTests {
             }))
         )
         let seedRoute = try #require(await seedGateway.captureRoute())
-        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "active-before-auth-replacement",
             routeFingerprint: #require(seedRoute.activationOwnershipFingerprint)
         )
-        _ = try #require(OnboardingCrestodianResumeStore.markPending(
+        _ = try #require(OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:ssh:stable-gateway",
             activationOwner: activationOwner,
             activationTimeoutMs: 30000,
             defaults: defaults
         ))
         if wasVerified {
-            OnboardingCrestodianResumeStore.markVerified(
+            OnboardingSystemAgentResumeStore.markVerified(
                 ifOwnedBy: "remote:ssh:stable-gateway",
                 activationOwner: activationOwner,
                 defaults: defaults
             )
         }
         let expectedDeadline: Date
-        switch OnboardingCrestodianResumeStore.pendingState(
+        switch OnboardingSystemAgentResumeStore.pendingState(
             for: "remote:ssh:stable-gateway",
             defaults: defaults
         ) {
@@ -2361,11 +2382,11 @@ struct OnboardingAISetupTests {
         #expect(!model.pendingActivationVerification)
         #expect(model.waitingForPendingActivationDeadline)
         #expect(scheduledDeadlines == [expectedDeadline])
-        #expect(OnboardingCrestodianResumeStore.activationOwner(
+        #expect(OnboardingSystemAgentResumeStore.activationOwner(
             for: "remote:ssh:stable-gateway",
             defaults: defaults
         ) == activationOwner)
-        let pendingState = OnboardingCrestodianResumeStore.pendingState(
+        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
             for: "remote:ssh:stable-gateway",
             defaults: defaults
         )
@@ -2397,9 +2418,9 @@ struct OnboardingAISetupTests {
                 }
                 await recorder.record(message)
                 switch request.method {
-                case "crestodian.setup.verify":
+                case "openclaw.setup.verify":
                     task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 default:
                     break
@@ -2412,18 +2433,18 @@ struct OnboardingAISetupTests {
             sessionBox: WebSocketSessionBox(session: session)
         )
         let route = try #require(await gateway.captureRoute())
-        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "expired-activation",
             routeFingerprint: #require(route.activationOwnershipFingerprint)
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             activationTimeoutMs: 0,
             defaults: defaults,
             now: Date(timeIntervalSinceNow: -10)
         )
-        OnboardingCrestodianResumeStore.markVerified(
+        OnboardingSystemAgentResumeStore.markVerified(
             ifOwnedBy: "local",
             activationOwner: activationOwner,
             defaults: defaults
@@ -2443,8 +2464,8 @@ struct OnboardingAISetupTests {
         #expect(outcome == .freshSetupAllowed)
         #expect(!model.connected)
         #expect(!handedOff)
-        #expect(requests.methods == ["crestodian.setup.verify", "crestodian.setup.detect"])
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(requests.methods == ["openclaw.setup.verify", "openclaw.setup.detect"])
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
@@ -2462,16 +2483,16 @@ struct OnboardingAISetupTests {
             }))
         )
         let seedRoute = try #require(await seedGateway.captureRoute())
-        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "completed-activation",
             routeFingerprint: #require(seedRoute.activationOwnershipFingerprint)
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             defaults: defaults
         )
-        #expect(OnboardingCrestodianResumeStore.markCompleted(
+        #expect(OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: "local",
             activationOwner: activationOwner,
             defaults: defaults
@@ -2487,7 +2508,7 @@ struct OnboardingAISetupTests {
                         return
                     }
                     await recorder.record(message)
-                    if request.method == "crestodian.setup.detect" {
+                    if request.method == "openclaw.setup.detect" {
                         task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                     }
                 })
@@ -2505,8 +2526,8 @@ struct OnboardingAISetupTests {
 
         #expect(outcome == .freshSetupAllowed)
         #expect(!relaunched.connected)
-        #expect(requests.methods == ["crestodian.setup.detect"])
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(requests.methods == ["openclaw.setup.detect"])
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
@@ -2564,24 +2585,24 @@ struct OnboardingAISetupTests {
                 sessionBox: WebSocketSessionBox(session: seedSession)
             )
             let seedLease = try await seedGateway.acquireServerLease()
-            let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+            let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
                 id: "completed-device-token-activation",
                 routeFingerprint: #require(await seedGateway.activationOwnershipFingerprint(
                     ifCurrentServerLease: seedLease
                 ))
             )
             #expect(await seedGateway.authSource() == .deviceToken)
-            OnboardingCrestodianResumeStore.markPending(
+            OnboardingSystemAgentResumeStore.markPending(
                 routeIdentity: "local",
                 activationOwner: activationOwner,
                 defaults: defaults
             )
-            #expect(OnboardingCrestodianResumeStore.markCompleted(
+            #expect(OnboardingSystemAgentResumeStore.markCompleted(
                 ifOwnedBy: "local",
                 activationOwner: activationOwner,
                 defaults: defaults
             ))
-            let persistedReceipt = String(describing: defaults.object(forKey: onboardingCrestodianPendingKey))
+            let persistedReceipt = String(describing: defaults.object(forKey: onboardingSystemAgentPendingKey))
             #expect(!persistedReceipt.contains(originalToken))
             #expect(DeviceAuthStore.loadToken(
                 deviceId: identity.deviceId,
@@ -2614,12 +2635,12 @@ struct OnboardingAISetupTests {
 
             #expect(outcome == .freshSetupAllowed)
             #expect(!relaunched.connected)
-            #expect(requests.methods == ["crestodian.setup.detect"])
-            #expect(OnboardingCrestodianResumeStore.pendingState(
+            #expect(requests.methods == ["openclaw.setup.detect"])
+            #expect(OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) == .none)
-            #expect(!String(describing: defaults.object(forKey: onboardingCrestodianPendingKey))
+            #expect(!String(describing: defaults.object(forKey: onboardingSystemAgentPendingKey))
                 .contains(replacementToken))
             await replacementGateway.shutdown()
         }
@@ -2642,23 +2663,23 @@ struct OnboardingAISetupTests {
                     }
                     await recorder.record(message)
                     switch request.method {
-                    case "crestodian.setup.verify":
+                    case "openclaw.setup.verify":
                         if let callbackDefaults = UserDefaults(suiteName: suiteName),
-                           let originalOwner = OnboardingCrestodianResumeStore.activationOwner(
+                           let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
                                for: "local",
                                defaults: callbackDefaults
                            )
                         {
-                            let replacementOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+                            let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
                                 id: replacementID,
                                 routeFingerprint: originalOwner.routeFingerprint
                             )
-                            OnboardingCrestodianResumeStore.markPending(
+                            OnboardingSystemAgentResumeStore.markPending(
                                 routeIdentity: "local",
                                 activationOwner: replacementOwner,
                                 defaults: callbackDefaults
                             )
-                            OnboardingCrestodianResumeStore.markCompleted(
+                            OnboardingSystemAgentResumeStore.markCompleted(
                                 ifOwnedBy: "local",
                                 activationOwner: replacementOwner,
                                 defaults: callbackDefaults
@@ -2672,16 +2693,16 @@ struct OnboardingAISetupTests {
             }))
         )
         let route = try #require(await gateway.captureRoute())
-        let activationOwner = try OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "completed-before-relaunch",
             routeFingerprint: #require(route.activationOwnershipFingerprint)
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             defaults: defaults
         )
-        #expect(OnboardingCrestodianResumeStore.markCompleted(
+        #expect(OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: "local",
             activationOwner: activationOwner,
             defaults: defaults
@@ -2701,12 +2722,12 @@ struct OnboardingAISetupTests {
         #expect(outcome == .notConnected)
         #expect(!relaunched.connected)
         #expect(handoffCount == 0)
-        #expect(requests.methods == ["crestodian.setup.verify"])
-        #expect(OnboardingCrestodianResumeStore.activationOwner(
+        #expect(requests.methods == ["openclaw.setup.verify"])
+        #expect(OnboardingSystemAgentResumeStore.activationOwner(
             for: "local",
             defaults: defaults
         )?.id == replacementID)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .completed)
@@ -2716,22 +2737,22 @@ struct OnboardingAISetupTests {
         let suiteName = "OnboardingOwnedActivationMutationTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: "owned-activation",
             routeFingerprint: "owned-route"
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             defaults: defaults
         )
 
-        OnboardingCrestodianResumeStore.markVerified(
+        OnboardingSystemAgentResumeStore.markVerified(
             ifOwnedBy: "local",
             defaults: defaults
         )
         #expect({
-            if case .activating = OnboardingCrestodianResumeStore.pendingState(
+            if case .activating = OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) {
@@ -2739,16 +2760,16 @@ struct OnboardingAISetupTests {
             }
             return false
         }())
-        #expect(!OnboardingCrestodianResumeStore.markCompleted(
+        #expect(!OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: "local",
             defaults: defaults
         ))
 
-        OnboardingCrestodianResumeStore.clear(
+        OnboardingSystemAgentResumeStore.clear(
             ifOwnedBy: "local",
             defaults: defaults
         )
-        #expect(OnboardingCrestodianResumeStore.isOwned(
+        #expect(OnboardingSystemAgentResumeStore.isOwned(
             by: activationOwner,
             for: "local",
             defaults: defaults
@@ -2756,62 +2777,62 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `pending marker for another route is preserved`() throws {
-        let suiteName = "OnboardingCrestodianRouteMismatchTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingSystemAgentRouteMismatchTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults
         )
 
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults
         ))
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults
         ))
     }
 
     @Test func `A to B to A preserves first activation lease`() throws {
-        let suiteName = "OnboardingCrestodianMultiRouteTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingSystemAgentMultiRouteTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults,
             now: now
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-b",
             defaults: defaults,
             now: now.addingTimeInterval(1)
         )
 
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults,
             now: now.addingTimeInterval(2)
         ))
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults,
             now: now.addingTimeInterval(2)
         ))
 
-        OnboardingCrestodianResumeStore.clear(
+        OnboardingSystemAgentResumeStore.clear(
             ifOwnedBy: "remote:id:gateway-b",
             defaults: defaults
         )
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults,
             now: now.addingTimeInterval(2)
         ))
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults,
             now: now.addingTimeInterval(2)
@@ -2819,15 +2840,15 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `route reset clears only current route lease`() throws {
-        let suiteName = "OnboardingCrestodianRouteResetTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingSystemAgentRouteResetTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let routeIdentity = AISetupRouteIdentity("remote:id:gateway-b")
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults
         )
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-b",
             defaults: defaults
         )
@@ -2838,42 +2859,42 @@ struct OnboardingAISetupTests {
 
         model.resetForGatewayChange()
 
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults
         ))
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults
         ))
     }
 
     @Test func `gateway selection reset preserves in flight lease`() throws {
-        let suiteName = "OnboardingCrestodianSelectionResetTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingSystemAgentSelectionResetTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let appState = AppState(preview: true)
         appState.connectionMode = .local
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             defaults: defaults
         )
         let view = OnboardingView(
             state: appState,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
 
         view.resetGatewayBoundAIState()
 
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "local",
             defaults: defaults
         ))
     }
 
     @Test func `v1 route marker migrates without blocking another route`() throws {
-        let suiteName = "OnboardingCrestodianV1MigrationTests-\(UUID().uuidString)"
+        let suiteName = "OnboardingSystemAgentV1MigrationTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -2881,10 +2902,10 @@ struct OnboardingAISetupTests {
             "version": 1,
             "routeIdentity": "remote:id:gateway-a",
             "phase": "verified",
-        ], forKey: onboardingCrestodianPendingKey)
+        ], forKey: onboardingSystemAgentPendingKey)
 
         #expect({
-            if case .verified = OnboardingCrestodianResumeStore.pendingState(
+            if case .verified = OnboardingSystemAgentResumeStore.pendingState(
                 for: "remote:id:gateway-a",
                 defaults: defaults,
                 now: now
@@ -2893,17 +2914,17 @@ struct OnboardingAISetupTests {
             }
             return false
         }())
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-b",
             defaults: defaults,
             now: now
         )
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults,
             now: now
         ))
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults,
             now: now
@@ -2911,28 +2932,28 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `fallback remote route identity omits auth but preserves endpoint`() {
-        let authenticatedIdentity = OnboardingCrestodianResumeStore.routeIdentity(
+        let authenticatedIdentity = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
             remoteURL: "wss://user:secret@gateway.example.test/path?tenant=team-a&token=secret#fragment",
             remoteTarget: ""
         )
-        let cleanIdentity = OnboardingCrestodianResumeStore.routeIdentity(
+        let cleanIdentity = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
             remoteURL: "wss://gateway.example.test/path?tenant=team-a",
             remoteTarget: ""
         )
-        let otherEndpointIdentity = OnboardingCrestodianResumeStore.routeIdentity(
+        let otherEndpointIdentity = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
             remoteURL: "wss://gateway.example.test/other",
             remoteTarget: ""
         )
-        let otherQueryIdentity = OnboardingCrestodianResumeStore.routeIdentity(
+        let otherQueryIdentity = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
@@ -2949,7 +2970,7 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `fallback route identity distinguishes local state dirs and ssh gateway ports`() {
-        let localA = OnboardingCrestodianResumeStore.routeIdentity(
+        let localA = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .local,
             preferredGatewayID: nil,
             remoteTransport: .direct,
@@ -2957,7 +2978,7 @@ struct OnboardingAISetupTests {
             remoteTarget: "",
             localStateDir: URL(fileURLWithPath: "/tmp/openclaw-state-a")
         )
-        let localB = OnboardingCrestodianResumeStore.routeIdentity(
+        let localB = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .local,
             preferredGatewayID: nil,
             remoteTransport: .direct,
@@ -2965,7 +2986,7 @@ struct OnboardingAISetupTests {
             remoteTarget: "",
             localStateDir: URL(fileURLWithPath: "/tmp/openclaw-state-b")
         )
-        let sshA = OnboardingCrestodianResumeStore.routeIdentity(
+        let sshA = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .ssh,
@@ -2973,7 +2994,7 @@ struct OnboardingAISetupTests {
             remoteTarget: "user@gateway.example.test",
             sshRemotePort: 18789
         )
-        let sshB = OnboardingCrestodianResumeStore.routeIdentity(
+        let sshB = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .ssh,
@@ -2988,14 +3009,14 @@ struct OnboardingAISetupTests {
     }
 
     @Test func `fallback remote route identity canonicalizes the persisted URL`() {
-        let beforePersistence = OnboardingCrestodianResumeStore.routeIdentity(
+        let beforePersistence = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
             remoteURL: "ws://localhost",
             remoteTarget: ""
         )
-        let afterPersistence = OnboardingCrestodianResumeStore.routeIdentity(
+        let afterPersistence = OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: .remote,
             preferredGatewayID: nil,
             remoteTransport: .direct,
@@ -3020,7 +3041,7 @@ struct OnboardingAISetupTests {
                 let requestDefaults = UserDefaults(suiteName: suiteName)
                 await observation.record(
                     requestDefaults.map {
-                        OnboardingCrestodianResumeStore.isPending(
+                        OnboardingSystemAgentResumeStore.isPending(
                             for: "local",
                             defaults: $0
                         )
@@ -3044,7 +3065,7 @@ struct OnboardingAISetupTests {
         await model.activate(kind: "codex-cli")
 
         #expect(await observation.value())
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `stale queued detection cannot probe a replacement Gateway`() async throws {
@@ -3074,7 +3095,7 @@ struct OnboardingAISetupTests {
 
         let requests = await waitForAISetupRequests(recorder, count: 1)
         await settleQueuedAISetupTasks()
-        #expect(requests.methods == ["crestodian.setup.detect"])
+        #expect(requests.methods == ["openclaw.setup.detect"])
         #expect(requests.apiKeys.isEmpty)
         #expect(model.phase == .ready)
     }
@@ -3105,8 +3126,8 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         let requests = await recorder.snapshot()
-        #expect(requests.methods == ["crestodian.setup.detect"])
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(requests.methods == ["openclaw.setup.detect"])
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults
         ))
@@ -3141,9 +3162,9 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         let requests = await recorder.snapshot()
-        #expect(requests.methods == ["crestodian.setup.detect"])
+        #expect(requests.methods == ["openclaw.setup.detect"])
         #expect(!requests.apiKeys.contains("old-route-secret"))
-        #expect(!OnboardingCrestodianResumeStore.isPending(
+        #expect(!OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults
         ))
@@ -3174,8 +3195,8 @@ struct OnboardingAISetupTests {
         config.switchToken(to: "token-b", afterReads: 2)
         await model.activate(kind: "codex-cli")
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.detect"])
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.detect"])
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(!model.pendingActivationVerification)
         #expect(model.phase == .ready)
     }
@@ -3208,9 +3229,9 @@ struct OnboardingAISetupTests {
         }
 
         let requests = await recorder.snapshot()
-        #expect(requests.methods == ["crestodian.setup.detect"])
+        #expect(requests.methods == ["openclaw.setup.detect"])
         #expect(!requests.apiKeys.contains("must-not-send"))
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(!model.pendingActivationVerification)
         #expect(model.detectError != nil)
     }
@@ -3237,7 +3258,7 @@ struct OnboardingAISetupTests {
                 ) {
                     return
                 }
-                guard request.method == "crestodian.setup.activate" else { return }
+                guard request.method == "openclaw.setup.activate" else { return }
                 await gate.wait()
                 throw CancellationError()
             })
@@ -3264,10 +3285,10 @@ struct OnboardingAISetupTests {
         await activation.value
 
         #expect(await (recorder.snapshot()).methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
         ])
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(model.pendingActivationVerification)
         #expect(model.waitingForPendingActivationDeadline)
         #expect(model.isBusy)
@@ -3308,8 +3329,8 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         await model.activate(kind: "codex-cli")
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.activate"])
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.activate"])
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(model.pendingActivationVerification)
         #expect(model.waitingForPendingActivationDeadline)
         #expect(model.phase == .detecting)
@@ -3333,14 +3354,14 @@ struct OnboardingAISetupTests {
                     }
                     await recorder.record(message)
                     if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                        let pendingState = OnboardingCrestodianResumeStore.pendingState(
+                        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                             for: "local",
                             defaults: callbackDefaults
                         )
                         if case let .activating(deadline) = pendingState {
                             await markerObservation.record(deadline: deadline)
                         }
-                        OnboardingCrestodianResumeStore.clear(
+                        OnboardingSystemAgentResumeStore.clear(
                             ifOwnedBy: "local",
                             defaults: callbackDefaults
                         )
@@ -3356,7 +3377,7 @@ struct OnboardingAISetupTests {
         )
         var scheduledDeadlines: [(deadline: Date, routeIdentity: String)] = []
         model.onPendingActivationDeadline = { deadline, routeIdentity in
-            #expect(OnboardingCrestodianResumeStore.isPending(
+            #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: routeIdentity,
                 defaults: defaults
             ))
@@ -3366,15 +3387,15 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         await model.activate(kind: "codex-cli")
 
-        #expect(await (recorder.snapshot()).methods == ["crestodian.setup.activate"])
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.activate"])
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(model.pendingActivationVerification)
         #expect(model.waitingForPendingActivationDeadline)
         #expect(model.phase == .detecting)
         #expect(scheduledDeadlines.count == 1)
         #expect(scheduledDeadlines.first?.routeIdentity == "local")
         let originalDeadline = try #require(await markerObservation.deadline())
-        let restoredState = OnboardingCrestodianResumeStore.pendingState(
+        let restoredState = OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         )
@@ -3411,9 +3432,9 @@ struct OnboardingAISetupTests {
                     }
                     await recorder.record(message)
                     switch request.method {
-                    case "crestodian.setup.activate":
+                    case "openclaw.setup.activate":
                         if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                            OnboardingCrestodianResumeStore.clear(
+                            OnboardingSystemAgentResumeStore.clear(
                                 ifOwnedBy: "local",
                                 defaults: callbackDefaults
                             )
@@ -3421,9 +3442,9 @@ struct OnboardingAISetupTests {
                         task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
                     case "agents.list":
                         task.emitReceiveSuccess(.data(configuredModelResponse(id: request.id)))
-                    case "crestodian.setup.verify":
+                    case "openclaw.setup.verify":
                         task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                    case "crestodian.setup.detect":
+                    case "openclaw.setup.detect":
                         task.emitReceiveSuccess(.data(detectedSetupResponse(
                             id: request.id,
                             kind: "codex-cli",
@@ -3438,7 +3459,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
         view.onboardingVisible = true
@@ -3452,7 +3473,7 @@ struct OnboardingAISetupTests {
 
         await view.aiSetup.detectAndAutoConnect()
         await view.aiSetup.activate(kind: "codex-cli")
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(scheduledDeadlines.count == 1)
 
         let initialRecheck = try #require(view.probeConfiguredGatewayForDashboard(
@@ -3465,15 +3486,15 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         #expect(requests.methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
             "agents.list",
-            "crestodian.setup.verify",
+            "openclaw.setup.verify",
         ])
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
         #expect({
-            if case .verified = OnboardingCrestodianResumeStore.pendingState(
+            if case .verified = OnboardingSystemAgentResumeStore.pendingState(
                 for: "local",
                 defaults: defaults
             ) {
@@ -3482,11 +3503,11 @@ struct OnboardingAISetupTests {
             return false
         }())
 
-        let activationOwner = try #require(OnboardingCrestodianResumeStore.activationOwner(
+        let activationOwner = try #require(OnboardingSystemAgentResumeStore.activationOwner(
             for: "local",
             defaults: defaults
         ))
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "local",
             activationOwner: activationOwner,
             activationTimeoutMs: 0,
@@ -3503,20 +3524,20 @@ struct OnboardingAISetupTests {
         await settleQueuedAISetupTasks()
 
         #expect(completedRequests.methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
             "agents.list",
-            "crestodian.setup.verify",
+            "openclaw.setup.verify",
             "agents.list",
-            "crestodian.setup.verify",
-            "crestodian.setup.detect",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
         ])
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.phase == .ready)
         #expect(!view.aiSetup.pendingActivationVerification)
         #expect(!view.aiSetup.waitingForPendingActivationDeadline)
         #expect(handoffCount == 0)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
@@ -3539,14 +3560,14 @@ struct OnboardingAISetupTests {
                 }
                 await recorder.record(message)
                 switch request.method {
-                case "crestodian.setup.activate":
+                case "openclaw.setup.activate":
                     if let requestDefaults = UserDefaults(suiteName: suiteName),
-                       let activationOwner = OnboardingCrestodianResumeStore.activationOwner(
+                       let activationOwner = OnboardingSystemAgentResumeStore.activationOwner(
                            for: "local",
                            defaults: requestDefaults
                        )
                     {
-                        OnboardingCrestodianResumeStore.markPending(
+                        OnboardingSystemAgentResumeStore.markPending(
                             routeIdentity: "local",
                             activationOwner: activationOwner,
                             activationTimeoutMs: 0,
@@ -3557,7 +3578,7 @@ struct OnboardingAISetupTests {
                     task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
                 case "agents.list":
                     task.emitReceiveSuccess(.data(missingConfiguredModelResponse(id: request.id)))
-                case "crestodian.setup.detect":
+                case "openclaw.setup.detect":
                     task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
                 default:
                     break
@@ -3571,7 +3592,7 @@ struct OnboardingAISetupTests {
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
-            crestodianDefaults: defaults,
+            systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" }
         )
         var recheckTask: Task<Void, Never>?
@@ -3593,15 +3614,15 @@ struct OnboardingAISetupTests {
 
         #expect(recheckRoute == "local")
         #expect(requests.methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
             "agents.list",
-            "crestodian.setup.detect",
+            "openclaw.setup.detect",
         ])
         #expect(view.aiSetup.phase == .ready)
         #expect(!view.aiSetup.pendingActivationVerification)
         #expect(!view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(OnboardingCrestodianResumeStore.pendingState(
+        #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: "local",
             defaults: defaults
         ) == .none)
@@ -3643,10 +3664,10 @@ struct OnboardingAISetupTests {
         }
 
         #expect(await (recorder.snapshot()).methods == [
-            "crestodian.setup.detect",
-            "crestodian.setup.activate",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
         ])
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(model.pendingActivationVerification)
         #expect(model.waitingForPendingActivationDeadline)
         #expect(model.phase == .detecting)
@@ -3680,21 +3701,21 @@ struct OnboardingAISetupTests {
 
         await model.detectAndAutoConnect()
         let staleActivation = Task { await model.activate(kind: "codex-cli") }
-        while !OnboardingCrestodianResumeStore.isPending(
+        while !OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
             defaults: defaults
         ) {
             await Task.yield()
         }
         model.resetForGatewayChange()
-        OnboardingCrestodianResumeStore.markPending(
+        OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: "remote:id:gateway-b",
             defaults: defaults
         )
         staleActivation.cancel()
         await staleActivation.value
 
-        #expect(OnboardingCrestodianResumeStore.isPending(
+        #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-b",
             defaults: defaults
         ))
@@ -3708,13 +3729,13 @@ struct OnboardingAISetupTests {
             defaults: defaults,
             routeIdentityProvider: { "local" }
         )
-        OnboardingCrestodianResumeStore.markPending(routeIdentity: "local", defaults: defaults)
+        OnboardingSystemAgentResumeStore.markPending(routeIdentity: "local", defaults: defaults)
 
         model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
-        #expect(OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
 
         model.resetForGatewayChange()
-        #expect(!OnboardingCrestodianResumeStore.isPending(for: "local", defaults: defaults))
+        #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
     @Test func `retired setup socket requires a fresh detection lease`() {

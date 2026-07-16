@@ -1,8 +1,10 @@
 // Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
+import { once } from "node:events";
 import http2 from "node:http2";
+import tls from "node:tls";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { openProxyConnectTunnel } from "@openclaw/proxyline";
 import { toErrorObject } from "./errors.js";
-import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
   getActiveManagedProxyTlsOptions,
@@ -77,6 +79,86 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
   return normalized as ApnsAuthority;
 }
 
+function normalizeConnectProxyUrl(proxyUrl: URL): URL {
+  const normalized = new URL(proxyUrl);
+  normalized.pathname = "/";
+  normalized.search = "";
+  normalized.hash = "";
+  try {
+    // Proxyline decodes auth from its socket callback. Validate first so bad
+    // config rejects normally instead of escaping the EventEmitter boundary.
+    decodeURIComponent(normalized.username);
+    decodeURIComponent(normalized.password);
+  } catch (err) {
+    throw new Error(
+      `Proxy CONNECT failed via ${normalized.origin}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  return normalized;
+}
+
+async function openApnsTlsTunnel(params: {
+  proxyUrl: URL;
+  proxyTls?: ManagedProxyTlsOptions;
+  targetHost: string;
+  targetPort: number;
+  timeoutMs: number;
+}): Promise<tls.TLSSocket> {
+  // CONNECT ignores URL paths. Strip path metadata before Proxyline sees it so
+  // tokens embedded in a configured proxy URL cannot surface in errors.
+  const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
+  const deadline = Date.now() + params.timeoutMs;
+  const proxySocket = await openProxyConnectTunnel({
+    proxyUrl,
+    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
+    targetHost: params.targetHost,
+    targetPort: params.targetPort,
+    timeoutMs: params.timeoutMs,
+  });
+
+  const abortController = new AbortController();
+  let targetTlsSocket: tls.TLSSocket | undefined;
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    targetTlsSocket = tls.connect({
+      socket: proxySocket,
+      servername: params.targetHost,
+      ALPNProtocols: ["h2"],
+    });
+    timeout = setTimeout(
+      () => abortController.abort(new Error(`Proxy CONNECT timed out after ${params.timeoutMs}ms`)),
+      Math.max(1, deadline - Date.now()),
+    );
+    timeout.unref?.();
+    await Promise.race([
+      once(targetTlsSocket, "secureConnect", { signal: abortController.signal }),
+      once(targetTlsSocket, "close", { signal: abortController.signal }).then(() => {
+        throw new Error("APNs TLS tunnel closed before secureConnect");
+      }),
+    ]);
+    if (targetTlsSocket.alpnProtocol !== "h2") {
+      throw new Error(
+        `APNs TLS tunnel negotiated ${targetTlsSocket.alpnProtocol || "no ALPN protocol"} instead of h2`,
+      );
+    }
+    return targetTlsSocket;
+  } catch (err) {
+    targetTlsSocket?.destroy();
+    proxySocket.destroy();
+    const failure = abortController.signal.aborted ? abortController.signal.reason : err;
+    throw new Error(
+      `Proxy CONNECT failed via ${proxyUrl.origin}: ${failure instanceof Error ? failure.message : String(failure)}`,
+      { cause: err },
+    );
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    abortController.abort();
+  }
+}
+
 async function openProxiedApnsHttp2Session(params: {
   authority: ApnsAuthority;
   proxyUrl: ActiveManagedProxyUrl;
@@ -84,7 +166,7 @@ async function openProxiedApnsHttp2Session(params: {
   timeoutMs: number;
 }): Promise<http2.ClientHttp2Session> {
   const apnsHost = new URL(params.authority).hostname;
-  const tlsSocket = await openHttpConnectTunnel({
+  const tlsSocket = await openApnsTlsTunnel({
     proxyUrl: params.proxyUrl,
     ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
     targetHost: apnsHost,

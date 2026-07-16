@@ -201,7 +201,7 @@ export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFil
 }
 
 /** Fetches an input source URL through SSRF, redirect, timeout, and byte-limit guards. */
-export async function fetchWithGuard(params: {
+async function fetchWithGuard(params: {
   url: string;
   maxBytes: number;
   timeoutMs: number;

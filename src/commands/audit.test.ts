@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { auditListCommand, testApi } from "./audit.js";
+import { auditListCommand } from "./audit.js";
+import { testApi } from "./audit.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),

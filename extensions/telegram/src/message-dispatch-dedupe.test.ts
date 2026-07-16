@@ -7,16 +7,16 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildTelegramMessageDispatchAccountReplayKey,
-  buildTelegramMessageDispatchReplayKey,
   claimTelegramMessageDispatchReplay,
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
-  forgetTelegramMessageDispatchReplay,
   releaseTelegramMessageDispatchReplay,
   TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-  TelegramMessageDispatchReplayForgetError,
-  type TelegramMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
+
+type TelegramMessageDispatchReplayGuard = Parameters<
+  typeof claimTelegramMessageDispatchReplay
+>[0]["guard"];
 
 const tempDirs: string[] = [];
 let previousStateDir: string | undefined;
@@ -36,10 +36,7 @@ function message(params?: { chatId?: number; messageId?: number }): Message {
 }
 
 function storedReplayKey(accountId: string, msg: Message): string {
-  const key = buildTelegramMessageDispatchReplayKey(msg);
-  if (!key) {
-    throw new Error("expected replay key");
-  }
+  const key = JSON.stringify(["message", String(msg.chat.id), msg.message_id]);
   return buildTelegramMessageDispatchAccountReplayKey({ accountId, key });
 }
 
@@ -89,13 +86,6 @@ afterEach(() => {
 });
 
 describe("Telegram message dispatch replay guard", () => {
-  it("keys messages by chat id and message id", () => {
-    expect(buildTelegramMessageDispatchReplayKey(message())).toBe(
-      JSON.stringify(["message", "1234", 42]),
-    );
-    expect(buildTelegramMessageDispatchReplayKey(message({ messageId: 0 }))).toBeNull();
-  });
-
   it("persists committed dispatches across guard recreation", async () => {
     const writer = createTelegramMessageDispatchReplayGuard();
     const first = await claimTelegramMessageDispatchReplay({
@@ -349,29 +339,6 @@ describe("Telegram message dispatch replay guard", () => {
     await expect(duplicate).resolves.toEqual({
       kind: "claimed",
       key: first.key,
-    });
-  });
-
-  it("fails rollback when a committed dispatch key cannot be forgotten", async () => {
-    const guard = {
-      claim: async () => ({ kind: "claimed" }),
-      commit: async () => true,
-      forget: async (key: string) => key !== "failed-key",
-      hasRecent: async () => false,
-      warmup: async () => 0,
-      clearMemory: () => {},
-      memorySize: () => 0,
-      release: () => {},
-    } satisfies TelegramMessageDispatchReplayGuard;
-
-    await expect(
-      forgetTelegramMessageDispatchReplay({
-        guard,
-        keys: ["ok-key", "failed-key", "failed-key"],
-      }),
-    ).rejects.toMatchObject({
-      name: TelegramMessageDispatchReplayForgetError.name,
-      failures: [{ key: "failed-key" }],
     });
   });
 });

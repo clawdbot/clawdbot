@@ -7,6 +7,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { createInitialNodesState, loadNodes } from "../../lib/nodes/index.ts";
 import type { NodesRouteData } from "./nodes-page.ts";
 import "./nodes-page.ts";
+import type { InventoryRemovalPrompt } from "./view.types.ts";
 
 type TestNodesPage = HTMLElement & {
   context: ApplicationContext;
@@ -18,6 +19,7 @@ type TestNodesPage = HTMLElement & {
   presence: PresenceEntry[];
   lastError: string | null;
   chatError: string | null;
+  inventoryRemovalPrompt: InventoryRemovalPrompt | null;
   routeData?: NodesRouteData;
   subscriptions: {
     hostConnected: () => void;
@@ -159,5 +161,25 @@ describe("NodesPage gateway lifecycle", () => {
     expect(page.nodesLoading).toBe(false);
 
     page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+  });
+
+  it("drops a pending removal prompt when the connection resets", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
+    page.client = client;
+    page.connected = true;
+    page.context = {
+      runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
+    } as unknown as ApplicationContext;
+    page.inventoryRemovalPrompt = {
+      kind: "entry",
+      entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
+    };
+
+    // Disconnect resets server state; the confirm must not survive onto a
+    // different gateway that reuses the same device ids.
+    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+
+    expect(page.inventoryRemovalPrompt).toBeNull();
   });
 });

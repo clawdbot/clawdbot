@@ -4,6 +4,11 @@ export const BROWSER_PANEL_TOGGLE_EVENT = "openclaw:browser-toggle";
 export type TerminalPanelToggleDetail = {
   dock?: "bottom" | "right";
   open?: boolean;
+  catalog?: {
+    catalogId: string;
+    hostId: string;
+    threadId: string;
+  };
 };
 
 export type BrowserPanelToggleDetail = {

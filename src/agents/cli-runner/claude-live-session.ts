@@ -42,7 +42,7 @@ import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import { LIVE_SESSION_LIMITS } from "./claude-live-session-limits.js";
+import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import { createCliOutputFailoverError } from "./output-error.js";
@@ -137,7 +137,7 @@ function sha256(value: string): string {
 }
 
 /** Closes all live Claude CLI sessions and clears creation promises for tests. */
-export function resetClaudeLiveSessionsForTest(): void {
+function resetClaudeLiveSessionsForTest(): void {
   for (const session of liveSessions.values()) {
     closeLiveSession(session, "restart");
   }
@@ -259,7 +259,7 @@ function stripLiveProcessArgs(
 }
 
 /** Builds Claude CLI args for stream-json live sessions, stripping one-shot session flags. */
-export function buildClaudeLiveArgs(params: {
+function buildClaudeLiveArgs(params: {
   args: string[];
   backend: CliBackendConfig;
   systemPrompt: string;
@@ -291,6 +291,13 @@ export function buildClaudeLiveArgs(params: {
   return params.permissionMode
     ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
     : liveArgs;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
+    buildClaudeLiveArgs,
+    resetClaudeLiveSessionsForTest,
+  };
 }
 
 type ClaudeLiveSessionOwner = {
@@ -863,7 +870,7 @@ function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): Claude
   return {
     security,
     ask,
-    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+    permissionMode: resolveClaudeLiveMode(security, ask, process.getuid?.()),
   };
 }
 
@@ -1646,3 +1653,4 @@ export async function runClaudeLiveSessionTurn(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -429,7 +429,7 @@ export function resolveGoogleMeetConfig(input: unknown): GoogleMeetConfig {
   return resolveGoogleMeetConfigWithEnv(input);
 }
 
-export function resolveGoogleMeetConfigWithEnv(
+function resolveGoogleMeetConfigWithEnv(
   input: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): GoogleMeetConfig {

@@ -33,11 +33,8 @@ vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => 
   loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
 
-import {
-  collectCodexRouteWarnings,
-  maybeRepairCodexRoutes,
-  repairCodexSessionStoreRoutes,
-} from "./codex-route-warnings.js";
+import { repairCodexSessionStoreRoutes } from "./codex-route-session-repair.test-support.js";
+import { collectCodexRouteWarnings, maybeRepairCodexRoutes } from "./codex-route-warnings.js";
 
 describe("collectCodexRouteWarnings", () => {
   beforeEach(() => {
@@ -4491,3 +4488,4 @@ describe("collectCodexRouteWarnings", () => {
     });
   }
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

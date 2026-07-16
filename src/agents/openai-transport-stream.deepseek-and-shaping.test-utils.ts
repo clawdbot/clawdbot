@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenAICompletionsParams,
   createOpenAICompletionsTransportStreamFn,
-  testing,
 } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
@@ -21,6 +20,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 describe("openai transport stream", () => {
@@ -1326,3 +1326,4 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

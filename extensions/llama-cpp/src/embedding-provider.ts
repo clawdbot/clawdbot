@@ -29,7 +29,7 @@ type LlamaCppEmbeddingProviderRuntimeOptions = {
 
 const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
-export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
+const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_CACHE_FILE_NAME =
   "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
@@ -133,7 +133,7 @@ function formatErrorMessage(err: unknown): string {
   return String(err);
 }
 
-export function formatLlamaCppSetupError(err: unknown): string {
+function formatLlamaCppSetupError(err: unknown): string {
   const detail = formatErrorMessage(err);
   const missing = isNodeLlamaCppMissing(err);
   return [
@@ -195,7 +195,7 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
   return adapted;
 }
 
-export async function createLlamaCppMemoryEmbeddingProvider(
+async function createLlamaCppMemoryEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
   runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
 ): Promise<MemoryEmbeddingProviderCreateResult> {

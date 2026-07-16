@@ -295,7 +295,7 @@ export function selectRetainedMSTeamsPolls(
   return retained.slice(retained.length - MSTEAMS_MAX_POLLS);
 }
 
-export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
+function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => parseStrictNonNegativeInteger(entry))

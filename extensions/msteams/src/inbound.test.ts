@@ -128,11 +128,11 @@ describe("msteams inbound", () => {
           content:
             '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
             '<strong itemprop="mri">Bob</strong>' +
-            '<p itemprop="copy">2 &lt; 3 &amp; 4 &gt; 1</p>' +
+            '<p itemprop="copy">2 &lt; 3 &amp; 4 &gt; 1; &copy;&Tab;keep &amp;lt; literal</p>' +
             "</blockquote>",
         },
       ]);
-      expect(result).toEqual({ sender: "Bob", body: "2 < 3 & 4 > 1" });
+      expect(result).toEqual({ sender: "Bob", body: "2 < 3 & 4 > 1; © keep &lt; literal" });
     });
 
     it("handles multiline body by collapsing whitespace", () => {

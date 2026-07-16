@@ -27,7 +27,7 @@ import type { MusicGenerationResult } from "./types.js";
 const log = createSubsystemLogger("music-generation");
 
 /** Injectable dependencies used by tests and alternate runtime hosts. */
-export type MusicGenerationRuntimeDeps = {
+type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;

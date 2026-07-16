@@ -1,12 +1,10 @@
 // Channel ingress runtime tests cover inbound message normalization and runtime contracts.
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { AccessFacts } from "../channels/turn/types.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
-import { projectIngressAccessFacts } from "./channel-ingress.js";
 
 const identity = {
   primary: { normalize: (value) => value.trim().toLowerCase(), sensitivity: "pii" },
@@ -27,28 +25,6 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
-  it("omits projected command facts unless command policy was requested", async () => {
-    const normalMessage = await resolve();
-
-    expect(projectIngressAccessFacts(normalMessage.ingress).commands).toBeUndefined();
-
-    const commandMessage = await resolve({
-      command: { useAccessGroups: true, allowTextCommands: true, hasControlCommand: true },
-    });
-
-    const commandFacts = projectIngressAccessFacts(commandMessage.ingress).commands;
-    expect(commandFacts?.authorized).toBe(true);
-    expect(commandFacts?.authorizers).toEqual([]);
-    expect(commandFacts?.useAccessGroups).toBe(true);
-    expect(commandFacts?.allowTextCommands).toBe(true);
-  });
-
-  it("keeps command authorizers required on public AccessFacts", () => {
-    expectTypeOf<NonNullable<AccessFacts["commands"]>["authorizers"]>().toEqualTypeOf<
-      Array<{ configured: boolean; allowed: boolean }>
-    >();
-  });
-
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {
     const sender = "Secret-Sender@example.test";
     const readStoreAllowFrom = vi.fn(async () => ["secret-sender@example.test"]);

@@ -365,6 +365,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     isInactiveThreadBootstrapBinding,
     usesSupervisionConnection,
     startupAuthProfileId,
+    startupAuthRequirement: preparedAuthRoute?.authRequirement,
     startupPreparedAuth,
     startupClientAuthProfileId,
     effectiveWorkspace,

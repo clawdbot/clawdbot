@@ -6,7 +6,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -38,7 +38,7 @@ type DiscordChannelOverrideConfig = {
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
-export type DiscordGuildEntryResolved = {
+export type DiscordGuildEntryResolved = Pick<DiscordGuildEntry, "presenceEvents"> & {
   id?: string;
   slug?: string;
   requireMention?: boolean;
@@ -182,10 +182,7 @@ function resolveDiscordUserAllowed(params: {
   );
 }
 
-export function resolveDiscordRoleAllowed(params: {
-  allowList?: string[];
-  memberRoleIds: string[];
-}) {
+function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds: string[] }) {
   // Role allowlists accept role IDs only. Names are ignored.
   const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
   if (!allowList) {

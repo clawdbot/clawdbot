@@ -9,13 +9,10 @@ import {
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "../agents/provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "../agents/provider-secret-egress.js";
 import { providerUsesCredentialScopedModelMetadata } from "../agents/runtime-plan/credential-scoped-model.js";
 import type { Model } from "../llm/types.js";
-import { resolveCopilotApiToken } from "../plugin-sdk/provider-auth.js";
+import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import type { ImageDescriptionRequest } from "./types.js";
 
 type ImageRuntimeParams = {
@@ -119,26 +116,30 @@ async function prepareResolvedImageRuntime(
     return { apiKey: "", model: applySecretRefHeaderSentinels(model, params.cfg) };
   }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
-  // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
-  // a short-lived Copilot API token so the integrator scope (vscode-chat)
-  // matches what runtime chat requests send.
-  if (model.provider === "github-copilot") {
-    const copilotToken = await resolveCopilotApiToken({
-      githubToken: unwrapSecretSentinelsForProviderEgress(
-        apiKey,
-        "GitHub Copilot image-auth exchange",
-      ),
-      config: params.cfg,
-    });
-    const protectedAuth = protectPreparedProviderRuntimeAuth({
+  const preparedAuth = protectPreparedProviderRuntimeAuth({
+    provider: model.provider,
+    preparedAuth: await prepareProviderRuntimeAuth({
       provider: model.provider,
-      preparedAuth: { apiKey: copilotToken.token, baseUrl: copilotToken.baseUrl },
-    });
-    apiKey = protectedAuth?.apiKey ?? copilotToken.token;
-    const runtimeBaseUrl = protectedAuth?.baseUrl?.trim();
-    if (runtimeBaseUrl) {
-      model = { ...model, baseUrl: runtimeBaseUrl };
-    }
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      context: {
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        apiKey,
+        authMode: apiKeyInfo.mode,
+        profileId: apiKeyInfo.profileId,
+      },
+    }),
+  });
+  apiKey = preparedAuth?.apiKey?.trim() || apiKey;
+  const runtimeBaseUrl = preparedAuth?.baseUrl?.trim();
+  if (runtimeBaseUrl) {
+    model = { ...model, baseUrl: runtimeBaseUrl };
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model: applySecretRefHeaderSentinels(model, params.cfg) };

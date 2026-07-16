@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 type MonitorTelegramOpts = import("./monitor.types.js").MonitorTelegramOpts;
 let monitorTelegramProvider: typeof import("./monitor.js").monitorTelegramProvider;
-let resetTelegramPollingLeasesForTests: typeof import("./polling-lease.js").resetTelegramPollingLeasesForTests;
+let resetTelegramPollingLeasesForTests: typeof import("./runtime.test-support.js").resetTelegramPollingLeasesForTest;
 
 type MockCtx = {
   message: {
@@ -390,7 +390,8 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   beforeAll(async () => {
     ({ monitorTelegramProvider } = await import("./monitor.js"));
-    ({ resetTelegramPollingLeasesForTests } = await import("./polling-lease.js"));
+    ({ resetTelegramPollingLeasesForTest: resetTelegramPollingLeasesForTests } =
+      await import("./runtime.test-support.js"));
     resetTelegramPollingLeasesForTests();
     await monitorWithAutoAbort();
   });

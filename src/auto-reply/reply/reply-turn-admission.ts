@@ -91,8 +91,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
   return Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, Math.max(1, remainingMs));
 }
 
-/** Waits for or claims the per-session reply run slot. */
-export async function admitReplyTurn(params: {
+type ReplyTurnAdmissionParams = {
   sessionKey: string;
   sessionId: string;
   expectedSessionId?: string;
@@ -112,21 +111,42 @@ export async function admitReplyTurn(params: {
   waitForActive?: boolean;
   retainLifecycleAdmissionOnActive?: boolean;
   onLifecycleInterrupt?: () => void;
-  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
-}): Promise<ReplyTurnAdmission> {
+  /** Reports one interval while blocked behind an older lane owner or its delivery barrier. */
+  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+};
+
+type WaitForReplyAdmission = <T>(wait: () => Promise<T>) => Promise<T>;
+
+/** Waits for or claims the per-session reply run slot. */
+export async function admitReplyTurn(
+  params: ReplyTurnAdmissionParams,
+): Promise<ReplyTurnAdmission> {
+  let admissionWaitReported = false;
+  const waitForAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
+    if (!admissionWaitReported) {
+      admissionWaitReported = true;
+      params.onReplyAdmissionWaitChange?.(true);
+    }
+    return await wait();
+  };
+  try {
+    return await admitReplyTurnWithWaitSignal(params, waitForAdmission);
+  } finally {
+    if (admissionWaitReported) {
+      params.onReplyAdmissionWaitChange?.(false);
+    }
+  }
+}
+
+async function admitReplyTurnWithWaitSignal(
+  params: ReplyTurnAdmissionParams,
+  waitForAdmission: WaitForReplyAdmission,
+): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
   let expectedSessionId = params.expectedSessionId;
   const waitTimeoutMs =
     params.waitTimeoutMs ??
     (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
-  const waitForFollowupAdmission = async <T>(wait: () => Promise<T>): Promise<T> => {
-    params.onFollowupAdmissionWaitChange?.(true);
-    try {
-      return await wait();
-    } finally {
-      params.onFollowupAdmissionWaitChange?.(false);
-    }
-  };
   while (true) {
     if (isAbortSignalAborted(params.upstreamAbortSignal)) {
       return { status: "skipped", reason: "aborted" };
@@ -280,7 +300,7 @@ export async function admitReplyTurn(params: {
         if (params.kind === "heartbeat") {
           return { status: "skipped", reason: "active-run" };
         }
-        const followupAdmission = await waitForFollowupAdmission(() =>
+        const followupAdmission = await waitForAdmission(() =>
           waitForReplyRunFollowupAdmission(
             params.sessionKey,
             waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -315,9 +335,11 @@ export async function admitReplyTurn(params: {
       }
       const activeWaitTimeoutMs =
         params.kind === "visible" ? resolveVisibleActiveWaitMs(activeOperation) : waitTimeoutMs;
-      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, activeWaitTimeoutMs, {
-        signal: params.upstreamAbortSignal,
-      });
+      const ended = await waitForAdmission(() =>
+        replyRunRegistry.waitForIdle(params.sessionKey, activeWaitTimeoutMs, {
+          signal: params.upstreamAbortSignal,
+        }),
+      );
       if (!ended) {
         if (params.kind === "visible" && !isAbortSignalAborted(params.upstreamAbortSignal)) {
           // Visible turns block on active work like before, but in bounded wait

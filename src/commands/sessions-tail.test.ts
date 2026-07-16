@@ -15,7 +15,8 @@ import {
 } from "../trajectory/paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
+import { sessionsTailCommand } from "./sessions-tail.js";
+import { setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -77,7 +78,7 @@ async function waitForRuntimeOutput(
       throw new Error(`Timed out waiting for output containing ${pattern}`);
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }
@@ -389,6 +390,154 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("python ok");
+  });
+
+  it("preserves UTF-8 characters split across follow reads", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        sourceSeq: 1,
+        type: "session.started",
+        ts: "2026-05-18T12:04:17.000Z",
+      }),
+    ]);
+    const appendedEvent = makeEvent({
+      sourceSeq: 2,
+      type: "prompt.skipped",
+      ts: "2026-05-18T12:04:21.000Z",
+      data: { reason: "猫" },
+    });
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "session.started");
+      const line = Buffer.from(`${JSON.stringify(appendedEvent)}\n`, "utf8");
+      const marker = Buffer.from("猫", "utf8");
+      const markerOffset = line.indexOf(marker);
+      expect(markerOffset).toBeGreaterThanOrEqual(0);
+
+      fs.appendFileSync(trajectoryPath, line.subarray(0, markerOffset + 1));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      fs.appendFileSync(trajectoryPath, line.subarray(markerOffset + 1));
+      await waitForRuntimeOutput(runtime, "prompt skipped");
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("prompt skipped: 猫");
+    expect(output).not.toContain("�");
+  });
+
+  it("preserves UTF-8 characters split before follow starts", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        sourceSeq: 1,
+        type: "session.started",
+        ts: "2026-05-18T12:04:17.000Z",
+      }),
+    ]);
+    const appendedEvent = makeEvent({
+      sourceSeq: 2,
+      type: "prompt.skipped",
+      ts: "2026-05-18T12:04:21.000Z",
+      data: { reason: "猫" },
+    });
+    const line = Buffer.from(`${JSON.stringify(appendedEvent)}\n`, "utf8");
+    const markerOffset = line.indexOf(Buffer.from("猫", "utf8"));
+    expect(markerOffset).toBeGreaterThanOrEqual(0);
+    fs.appendFileSync(trajectoryPath, line.subarray(0, markerOffset + 1));
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "session.started");
+      fs.appendFileSync(trajectoryPath, line.subarray(markerOffset + 1));
+      await waitForRuntimeOutput(runtime, "prompt skipped");
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("prompt skipped: 猫");
+    expect(output).not.toContain("�");
+  });
+
+  it("resets split UTF-8 state when the followed file is replaced", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    const startedEvent = makeEvent({
+      sourceSeq: 1,
+      type: "session.started",
+      ts: "2026-05-18T12:04:17.000Z",
+    });
+    await appendEvents([startedEvent]);
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "session.started");
+      const partialLine = Buffer.from(
+        `${JSON.stringify(
+          makeEvent({
+            sourceSeq: 2,
+            type: "prompt.skipped",
+            ts: "2026-05-18T12:04:20.000Z",
+            data: { reason: "猫" },
+          }),
+        )}\n`,
+        "utf8",
+      );
+      const markerOffset = partialLine.indexOf(Buffer.from("猫", "utf8"));
+      expect(markerOffset).toBeGreaterThanOrEqual(0);
+      fs.appendFileSync(trajectoryPath, partialLine.subarray(0, markerOffset + 1));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+
+      const replacementPath = `${trajectoryPath}.replacement`;
+      writeJsonl(replacementPath, [
+        startedEvent,
+        makeEvent({
+          sourceSeq: 3,
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "rotation", success: true },
+        }),
+      ]);
+      fs.renameSync(replacementPath, trajectoryPath);
+      await waitForRuntimeOutput(runtime, "rotation ok");
+
+      appendJsonl(
+        trajectoryPath,
+        makeEvent({
+          sourceSeq: 4,
+          type: "prompt.skipped",
+          ts: "2026-05-18T12:04:22.000Z",
+          data: { reason: "clean" },
+        }),
+      );
+      await waitForRuntimeOutput(runtime, "prompt skipped: clean");
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    expect(runtimeOutput(runtime)).not.toContain("�");
   });
 
   it("continues following when SQLite trajectory rows are appended", async () => {

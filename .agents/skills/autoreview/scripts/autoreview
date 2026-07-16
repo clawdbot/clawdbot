@@ -201,7 +201,8 @@ SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=[ \t]*\()|"
     r"(?P<reference_value>[A-Za-z_$][A-Za-z0-9_$]*"
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
-    r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
     r"(?![A-Za-z0-9_./+=:@#$%&*!?-])|"
     r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{8,}))"
 )
@@ -269,13 +270,25 @@ POWERSHELL_ENV_REFERENCE_PATTERN = re.compile(
 )
 MAX_BUNDLE_TEXT_BYTES = 180_000
 MAX_REVIEW_PROMPT_BYTES = 512_000
+MAX_REVIEW_CHUNK_CONTEXT_BYTES = 64_000
+MAX_REVIEW_PASSES = 8
+
+
+class ReviewChunk(NamedTuple):
+    content: str
+    context: str = ""
 SECRET_PLACEHOLDER_VALUES = {
     "changeme",
+    "decoy-token",
     "dummy",
     "example",
     "fake",
     "gateway-token",
+    "matrix_qa_e2ee_cli_gateway",
+    "matrix_qa_e2ee_thread",
+    "matrix_qa_e2ee_verify_notice",
     "not-a-real",
+    "not-a-valid-matrix-recovery-key",
     "placeholder",
     "redacted",
     "sample",
@@ -399,6 +412,20 @@ CSHARP_METHOD_PREFIX_PATTERN = (
     r"(?:where\s+[^{;]+)?\{"
 )
 CSHARP_EVIDENCE_WINDOW = 8192
+SOURCE_CODE_REFERENCE_ROOT_VALUES = {
+    "attemptAuthProfileStore",
+}
+SOURCE_CODE_REFERENCE_ROOT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:"
+    + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_ROOT_VALUES, key=len, reverse=True)
+    )
+    + r")(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|(?:\?\.)?\[(?:[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|[\"']profiles[\"']|[0-9]+)\])+"
+    r"(?![A-Za-z0-9_$])"
+)
 QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
     re.compile(r"^\$env:[A-Za-z_][A-Za-z0-9_]*$", re.IGNORECASE),
@@ -407,7 +434,7 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(
         r"^\$\{(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
         r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+\}$"
@@ -418,7 +445,7 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
+        r"request|response|result|input|runtime|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|[.\[]).*)$"
     ),
@@ -447,6 +474,36 @@ BACKTICK_SECRET_REFERENCE_PATTERNS = (
 BACKTICK_TEMPLATE_INTERPOLATION_PATTERN = re.compile(r"\$\{([^{}\r\n]+)\}")
 BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN = re.compile(
     r"(?i)(?:(?:Bearer|Basic)[ \t]+|[ \t:./,_-]*)"
+)
+BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES = {"matrix-qa-"}
+SOURCE_CODE_REFERENCE_VALUES = {
+    "cliDevice.accessToken",
+    "context.driverAccessToken",
+    "context.driverPassword",
+    "context.observerAccessToken",
+    "context.observerPassword",
+    "context.sutAccessToken",
+    "context.sutPassword",
+    "driverAccount.accessToken",
+    "driverAccount.password",
+    "driverPassword",
+    "recoveryDevice.accessToken",
+    "recoveryDevice.password",
+}
+SOURCE_CODE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])(?:" + "|".join(
+        re.escape(value)
+        for value in sorted(SOURCE_CODE_REFERENCE_VALUES, key=len, reverse=True)
+    ) + r")(?![A-Za-z0-9_$])"
+)
+SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_$?.])"
+    r"(?:(?:cached|current|existing|loaded|previous|resolved|saved|stored|successful)"
+    r"[A-Za-z0-9_$]*"
+    r"(?:ApiKey|Credential|Credentials|Password|Secret|Token)"
+    r"|(?:apiKey|credential|credentials|password|secret|token))(?:Info)?"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*"
+    r"(?![A-Za-z0-9_$])"
 )
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 # Keep this explicit: suffix matching leaks unrelated process credentials such
@@ -909,6 +966,29 @@ def safe_temp_root(repo: Path) -> Path:
             "unset or relocate TMPDIR/TMP/TEMP"
         )
     return root
+
+
+def parallel_test_temp_root(repo: Path) -> Path:
+    root = safe_temp_root(repo)
+    if os.name == "nt" or not env_truthy("OPENCLAW_TESTBOX"):
+        return root
+
+    # Blacksmith stores its SSH control socket below HOME. macOS temp roots can
+    # already consume the Unix-socket path budget before the socket name.
+    try:
+        short_root = Path("/tmp").resolve(strict=True)
+        short_root_stat = short_root.stat()
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve short Testbox temp root: {exc}") from exc
+    if not stat.S_ISDIR(short_root_stat.st_mode):
+        raise SystemExit("short Testbox temp root must be a directory")
+    if is_within(short_root, repo.resolve()):
+        raise SystemExit("short Testbox temp root must be outside the reviewed repository")
+    if short_root_stat.st_mode & stat.S_IWOTH and not (
+        short_root_stat.st_mode & stat.S_ISVTX
+    ):
+        raise SystemExit("world-writable Testbox temp root must have the sticky bit set")
+    return short_root
 
 
 def safe_proxy_url(value: str) -> bool:
@@ -1899,8 +1979,19 @@ def raw_repo_path_has_symlink_component(repo: Path, rel_path: Path) -> bool:
     return False
 
 
-def fallback_expression(text: str) -> str:
-    operator = re.match(r"\s*(?:\|\||&&|\?\?|\+|\?|or\b|and\b|if\b|unless\b)", text)
+def fallback_expression(text: str, *, typescript: bool = False) -> str:
+    operator_keywords = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    operator = re.match(
+        r"\s*(?:\|\||&&|\?\?|[=<>!~:+\-*/%&|^?.,]"
+        r"|and\b|else\b|if\b|in(?![\w$])|instanceof(?![\w$])"
+        r"|is\b|not\b|or\b"
+        r"|unless\b"
+        + operator_keywords
+        + r")",
+        text,
+    )
     cursor = operator.end() if operator is not None else 0
     stack: list[str] = []
     operand_started = False
@@ -1913,9 +2004,16 @@ def fallback_expression(text: str) -> str:
         char = text[cursor]
         next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
         if line_comment:
-            if char == "\n":
+            if char in "\r\n\u2028\u2029":
                 line_comment = False
-                if operand_started and not stack:
+                if (
+                    operand_started
+                    and not stack
+                    and not javascript_continues_after_line_terminator(
+                        text[cursor + 1 :],
+                        typescript=typescript,
+                    )
+                ):
                     break
             cursor += 1
             continue
@@ -1967,12 +2065,52 @@ def fallback_expression(text: str) -> str:
             continue
         if not stack and char in ",;)]}":
             break
-        if char == "\n" and operand_started and not stack:
-            break
-        if not char.isspace():
+        if char in "\r\n\u2028\u2029" and operand_started and not stack:
+            if not javascript_continues_after_line_terminator(
+                text[cursor + 1 :],
+                typescript=typescript,
+            ):
+                break
+        if not stack and (char.isalpha() or char in "_$"):
+            word_end = cursor + 1
+            while word_end < len(text) and (
+                text[word_end].isalnum() or text[word_end] in "_$"
+            ):
+                word_end += 1
+            word = text[cursor:word_end]
+            word_operators = {"in", "instanceof"}
+            if typescript:
+                word_operators.update({"as", "satisfies"})
+            operand_started = word not in word_operators
+            cursor = word_end
+            continue
+        if not stack and char in "=<>!~:+-*/%&|^?.":
+            operand_started = False
+        elif not char.isspace():
             operand_started = True
         cursor += 1
     return text[:cursor]
+
+
+def javascript_continues_after_line_terminator(
+    text: str,
+    *,
+    typescript: bool = False,
+) -> bool:
+    suffix = text.lstrip()
+    if suffix.startswith(("++", "--", "~")) or (
+        suffix.startswith("!") and not suffix.startswith("!=")
+    ):
+        return False
+    type_operators = (
+        r"|as(?![\w$])|satisfies(?![\w$])" if typescript else ""
+    )
+    return re.match(
+        r"(?:[=<>!:+\-*/%&|^?.,([`]|in(?![\w$])|instanceof(?![\w$])"
+        + type_operators
+        + r")",
+        suffix,
+    ) is not None
 
 
 def top_level_fallback_suffix(
@@ -3673,7 +3811,12 @@ def shell_command_prefix(text: str, position: int) -> bool:
     )
 
 
-def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
+def secret_literal_risk(
+    expression: str,
+    minimum_length: int = 12,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if credentialed_uri_risk(expression) or basic_authorization_risk(expression) or any(
         pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS
     ):
@@ -3703,6 +3846,11 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
         if match.group("bare") is not None:
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
                 continue
+            if (
+                javascript_dialect is not None
+                and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+            ):
+                continue
             suffix = expression[match.end() :].lstrip()
             if suffix.startswith("("):
                 continue
@@ -3710,14 +3858,28 @@ def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
     return False
 
 
-def fallback_secret_risk(text: str, minimum_length: int = 8) -> bool:
+def fallback_secret_risk(
+    text: str,
+    minimum_length: int = 8,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     return secret_literal_risk(
-        fallback_expression(text),
+        fallback_expression(
+            text,
+            typescript=javascript_dialect == "typescript",
+        ),
         minimum_length=minimum_length,
+        javascript_dialect=javascript_dialect,
     )
 
 
-def safe_secret_assignment_suffix(text: str, end: int) -> bool:
+def safe_secret_assignment_suffix(
+    text: str,
+    end: int,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     cursor = end
     raw_diff = text.startswith("diff --git ")
     while cursor < len(text):
@@ -3751,7 +3913,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
                 or (suffix.startswith("?") and not suffix.startswith("?."))
                 or re.match(r"(?:or|and)\b", suffix) is not None
             ):
-                return not fallback_secret_risk(suffix)
+                return not fallback_secret_risk(
+                    suffix,
+                    javascript_dialect=javascript_dialect,
+                )
             return True
         if text.startswith("//", cursor) or text.startswith("#", cursor):
             cursor = text.find("\n", cursor)
@@ -3770,7 +3935,10 @@ def safe_secret_assignment_suffix(text: str, end: int) -> bool:
             or (suffix.startswith("?") and not suffix.startswith("?."))
             or re.match(r"(?:or|and|if|unless)\b", suffix) is not None
         ):
-            return not fallback_secret_risk(suffix)
+            return not fallback_secret_risk(
+                suffix,
+                javascript_dialect=javascript_dialect,
+            )
         if text[cursor] in ",;)]}":
             return True
         if text[cursor] in {'"', "'", "`"}:
@@ -4465,7 +4633,12 @@ def public_call_argument_risk(
     return False if generic_credential_prompt_is_safe(value) else None
 
 
-def call_arguments_risk(arguments: str, call_target: str) -> bool:
+def call_arguments_risk(
+    arguments: str,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     for index, argument in enumerate(split_top_level_call_arguments(arguments)):
         public_risk = public_call_argument_risk(call_target, argument, index)
         if public_risk is not None:
@@ -4474,12 +4647,22 @@ def call_arguments_risk(arguments: str, call_target: str) -> bool:
             continue
         if not safe_credential_lookup_argument(
             call_target, argument, index
-        ) and fallback_secret_risk(argument, minimum_length=12):
+        ) and fallback_secret_risk(
+            argument,
+            minimum_length=12,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     return False
 
 
-def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
+def safe_secret_call_suffix(
+    text: str,
+    end: int,
+    call_target: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     if end >= len(text) or text[end] != "(":
         return False
 
@@ -4551,7 +4734,15 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
         if cursor is None:
             return None
         arguments = text[start + 1 : cursor - 1]
-        return None if call_arguments_risk(arguments, target) else cursor
+        return (
+            None
+            if call_arguments_risk(
+                arguments,
+                target,
+                javascript_dialect=javascript_dialect,
+            )
+            else cursor
+        )
 
     cursor = safe_call_end(end, call_target)
     if cursor is None:
@@ -4603,27 +4794,37 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
         return safe_secret_assignment_suffix(text, cursor)
 
 
+def safe_backtick_literal_segment(value: str) -> bool:
+    return bool(
+        BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(value)
+        or value.casefold() in BACKTICK_TEMPLATE_FIXTURE_PREFIX_VALUES
+    )
+
+
+def safe_backtick_interpolation_expression(expression: str) -> bool:
+    quoted_reference = "${" + expression + "}"
+    if any(
+        pattern.fullmatch(quoted_reference)
+        for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
+    ):
+        return True
+    return re.fullmatch(r"(?:crypto\.)?randomUUID\(\)", expression) is not None
+
+
 def safe_backtick_secret_template(value: str) -> bool:
     cursor = 0
     found_interpolation = False
     for match in BACKTICK_TEMPLATE_INTERPOLATION_PATTERN.finditer(value):
         literal = value[cursor : match.start()]
-        if BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is None:
+        if not safe_backtick_literal_segment(literal):
             return False
         expression = match.group(1).strip()
-        quoted_reference = "${" + expression + "}"
-        if not any(
-            pattern.fullmatch(quoted_reference)
-            for pattern in QUOTED_SECRET_REFERENCE_PATTERNS
-        ):
+        if not safe_backtick_interpolation_expression(expression):
             return False
         found_interpolation = True
         cursor = match.end()
     literal = value[cursor:]
-    return (
-        found_interpolation
-        and BACKTICK_TEMPLATE_SAFE_LITERAL_PATTERN.fullmatch(literal) is not None
-    )
+    return found_interpolation and safe_backtick_literal_segment(literal)
 
 
 def javascript_template_literal_end(
@@ -4757,9 +4958,91 @@ def mask_reference_declaration_evidence(text: str) -> str:
     return mask_csharp_evidence_prefix("".join(masked))
 
 
+@functools.lru_cache(maxsize=8)
+def javascript_reference_spans(text: str) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (match.start(), match.end())
+        for pattern in (
+            SOURCE_CODE_REFERENCE_PATTERN,
+            SOURCE_CODE_REFERENCE_ROOT_PATTERN,
+            SOURCE_CODE_LIFECYCLE_REFERENCE_PATTERN,
+        )
+        for match in pattern.finditer(text)
+    )
+
+
+def javascript_source_whitespace(char: str) -> bool:
+    return (
+        char in "\t\v\f \r\n\u2028\u2029\ufeff"
+        or unicodedata.category(char) == "Zs"
+    )
+
+
+def safe_javascript_reference_suffix(
+    text: str,
+    end: int,
+    *,
+    typescript: bool,
+) -> bool:
+    line_terminators = "\r\n\u2028\u2029"
+    cursor = end
+    saw_newline = False
+    while cursor < len(text):
+        while cursor < len(text) and javascript_source_whitespace(text[cursor]):
+            saw_newline = saw_newline or text[cursor] in line_terminators
+            cursor += 1
+        if text.startswith("//", cursor):
+            newline = re.search(r"[\r\n\u2028\u2029]", text[cursor + 2 :])
+            if newline is None:
+                return True
+            cursor += 2 + newline.start()
+            saw_newline = True
+            continue
+        if text.startswith("/*", cursor):
+            comment_end = text.find("*/", cursor + 2)
+            if comment_end < 0:
+                return True
+            comment = text[cursor : comment_end + 2]
+            saw_newline = saw_newline or any(
+                terminator in comment for terminator in line_terminators
+            )
+            cursor = comment_end + 2
+            continue
+        break
+    if cursor >= len(text):
+        return True
+    if text[cursor] in ";}])" or text[cursor] == ",":
+        return True
+    if saw_newline and (
+        text.startswith(("++", "--"), cursor)
+        or text[cursor] == "~"
+        or (text[cursor] == "!" and not text.startswith("!=", cursor))
+    ):
+        return True
+    continuation_keyword = re.match(
+        (
+            r"(?:as|in|instanceof|satisfies)(?![\w$])"
+            if typescript
+            else r"(?:in|instanceof)(?![\w$])"
+        ),
+        text[cursor:],
+    )
+    continuation = (
+        text[cursor] in "=<>!~:+-*/%&|^?.,([`"
+        or continuation_keyword is not None
+    )
+    if continuation:
+        return not fallback_secret_risk(
+            text[cursor:],
+            javascript_dialect="typescript" if typescript else "javascript",
+        )
+    return saw_newline
+
+
 def bare_code_reference(
     text: str,
     start: int,
+    end: int,
     separator: str,
     value: str,
 ) -> bool:
@@ -4789,6 +5072,31 @@ def bare_code_reference(
             re.DOTALL,
         ):
             return True
+        # TS/JS named-function parameter annotations use PascalCase type names.
+        function_prefix = re.search(
+            r"\bfunction\b[^()\r\n]*\((?P<parameters>[^()]*)$",
+            declaration,
+        )
+        annotation_suffix = re.match(
+            r"[ \t\r\n]*(?P<terminator>[,)=])",
+            text[end:],
+        )
+        if (
+            function_prefix is not None
+            and re.fullmatch(
+                r"\s*(?:\.\.\.\s*)?",
+                split_top_level_call_arguments(
+                    function_prefix.group("parameters")
+                )[-1],
+            )
+            and annotation_suffix is not None
+        ):
+            if annotation_suffix.group("terminator") != "=":
+                return True
+            return not fallback_secret_risk(
+                text[end + annotation_suffix.end() :],
+                minimum_length=8,
+            )
     if camel_reference is None and snake_reference is None:
         return False
     return bool(
@@ -4815,7 +5123,11 @@ def basic_authorization_risk(text: str) -> bool:
     return False
 
 
-def secret_text_risk(text: str) -> bool:
+def secret_text_risk(
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> bool:
     uri_authorities = uri_authority_ranges(text)
     if credentialed_uri_risk(text, uri_authorities) or basic_authorization_risk(text) or any(
         pattern.search(text) for pattern in SECRET_VALUE_PATTERNS
@@ -4836,6 +5148,11 @@ def secret_text_risk(text: str) -> bool:
         text,
         {prefix.start() for prefix in assignment_prefixes},
     )
+    source_reference_spans = (
+        javascript_reference_spans(text)
+        if javascript_dialect is not None
+        else frozenset()
+    )
     for prefix in assignment_prefixes:
         fallback = top_level_fallback_suffix(
             text[prefix.end() :],
@@ -4844,7 +5161,10 @@ def secret_text_risk(text: str) -> bool:
                 and prefix.start() in chained_assignment_positions
             ),
         )
-        if fallback is not None and fallback_secret_risk(fallback):
+        if fallback is not None and fallback_secret_risk(
+            fallback,
+            javascript_dialect=javascript_dialect,
+        ):
             return True
     for match in secret_assignment_matches(
         SECRET_ASSIGNMENT_PATTERN,
@@ -4873,7 +5193,11 @@ def secret_text_risk(text: str) -> bool:
         if (
             key.strip("\"'").lower() == "credentials"
             and value.lower() in FETCH_CREDENTIAL_MODE_VALUES
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if (
@@ -4885,11 +5209,19 @@ def secret_text_risk(text: str) -> bool:
                 )
                 or safe_backtick_secret_template(value)
             )
-            and safe_secret_assignment_suffix(text, match.end())
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
         if value.lower() in SECRET_PLACEHOLDER_VALUES:
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
@@ -4897,15 +5229,47 @@ def secret_text_risk(text: str) -> bool:
             and len(value) < 12
             and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value)
         ):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if (
             match.group("bare_value") is not None
-            and bare_code_reference(text, match.start(), separator, value)
-            and safe_secret_assignment_suffix(text, match.end())
+            and bare_code_reference(
+                text,
+                match.start(),
+                match.end(),
+                separator,
+                value,
+            )
+            and safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            )
         ):
             continue
+        if not quoted:
+            source_start = match.end() - len(value)
+            source_end = match.end() - (1 if value.endswith("!") else 0)
+            if (
+                (
+                    (source_start, source_end) in source_reference_spans
+                    or (
+                        javascript_dialect is not None
+                        and SOURCE_CODE_REFERENCE_ROOT_PATTERN.fullmatch(value)
+                    )
+                )
+                and safe_javascript_reference_suffix(
+                    text,
+                    match.end(),
+                    typescript=javascript_dialect == "typescript",
+                )
+            ):
+                continue
         reference_patterns = (
             QUOTED_SECRET_REFERENCE_PATTERNS
             if quoted
@@ -4932,6 +5296,7 @@ def secret_text_risk(text: str) -> bool:
                     text,
                     call_start,
                     call_target.group(0),
+                    javascript_dialect=javascript_dialect,
                 )
             ):
                 continue
@@ -4941,19 +5306,33 @@ def secret_text_risk(text: str) -> bool:
             and call_target
             and text[call_start : call_start + 1] == "("
         ):
-            if safe_secret_call_suffix(text, call_start, value):
+            if safe_secret_call_suffix(
+                text,
+                call_start,
+                value,
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         if any(pattern.fullmatch(value) for pattern in reference_patterns):
-            if safe_secret_assignment_suffix(text, match.end()):
+            if safe_secret_assignment_suffix(
+                text,
+                match.end(),
+                javascript_dialect=javascript_dialect,
+            ):
                 continue
             return True
         return True
     return False
 
 
-def require_no_secret_values(label: str, text: str) -> None:
-    if secret_text_risk(text):
+def require_no_secret_values(
+    label: str,
+    text: str,
+    *,
+    javascript_dialect: str | None = None,
+) -> None:
+    if secret_text_risk(text, javascript_dialect=javascript_dialect):
         raise SystemExit(
             "refusing to include secret-like content in review bundle; "
             f"clean or redact {label} before running autoreview"
@@ -5138,11 +5517,87 @@ def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
     return None
 
 
+def javascript_review_dialect(rel: str) -> str | None:
+    suffix = Path(rel).suffix.lower()
+    if suffix in {".cts", ".mts", ".ts", ".tsx"}:
+        return "typescript"
+    if suffix in {".cjs", ".js", ".jsx", ".mjs"}:
+        return "javascript"
+    return None
+
+
+def git_c_unquote(value: str) -> str | None:
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return None
+    escapes = {
+        "a": 7,
+        "b": 8,
+        "f": 12,
+        "n": 10,
+        "r": 13,
+        "t": 9,
+        "v": 11,
+        "\\": 92,
+        '"': 34,
+    }
+    decoded = bytearray()
+    cursor = 1
+    while cursor < len(value) - 1:
+        char = value[cursor]
+        if char != "\\":
+            decoded.extend(char.encode("utf-8"))
+            cursor += 1
+            continue
+        cursor += 1
+        if cursor >= len(value) - 1:
+            return None
+        escape = value[cursor]
+        if escape in escapes:
+            decoded.append(escapes[escape])
+            cursor += 1
+            continue
+        octal = re.match(r"[0-7]{1,3}", value[cursor:-1])
+        if octal is None:
+            return None
+        decoded.append(int(octal.group(0), 8))
+        cursor += octal.end()
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def diff_marker_path(value: str) -> str | None:
+    if value == "/dev/null":
+        return None
+    if value.startswith('"'):
+        decoded = git_c_unquote(value)
+        if decoded is None:
+            return None
+        value = decoded
+    if not value.startswith(("a/", "b/")):
+        return None
+    return value[2:]
+
+
+def diff_section_paths(section: str) -> tuple[str | None, str | None]:
+    old_path: str | None = None
+    new_path: str | None = None
+    for line in section.splitlines():
+        if line.startswith("@@"):
+            break
+        if line.startswith("--- "):
+            old_path = diff_marker_path(line[4:])
+        elif line.startswith("+++ "):
+            new_path = diff_marker_path(line[4:])
+    return old_path, new_path
+
+
 def validate_review_patch(
     label: str,
     paths: list[str],
     patch: str,
-    limit: int = MAX_BUNDLE_TEXT_BYTES,
+    limit: int | None = None,
 ) -> str:
     blocked = [
         f"{display_escape(rel, 500)} ({risk})"
@@ -5157,14 +5612,39 @@ def validate_review_patch(
             f"{details}{more}"
         )
     patch_bytes = len(patch.encode("utf-8"))
-    if patch_bytes > limit:
+    if limit is not None and patch_bytes > limit:
         raise SystemExit(
             f"{label} is too large to review safely "
             f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
         )
     require_no_secret_values(label, unified_diff_metadata(patch))
-    for content in unified_diff_contents(patch):
-        require_no_secret_values(label, content)
+    sections = [
+        unit
+        for unit in review_bundle_units(patch)
+        if unit.startswith("diff --git ")
+    ]
+    if sections:
+        expected_paths = set(paths)
+        for section in sections:
+            old_path, new_path = diff_section_paths(section)
+            old_content, new_content = unified_diff_contents(section)
+            for rel, content in (
+                (old_path, old_content),
+                (new_path, new_content),
+            ):
+                javascript_dialect = (
+                    javascript_review_dialect(rel)
+                    if rel is not None and rel in expected_paths
+                    else None
+                )
+                require_no_secret_values(
+                    f"{label} {rel or '<unknown>'}",
+                    content,
+                    javascript_dialect=javascript_dialect,
+                )
+    else:
+        for content in unified_diff_contents(patch):
+            require_no_secret_values(label, content)
     return patch
 
 
@@ -5273,7 +5753,10 @@ def file_bundle_snapshot(
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return "", True, "non-UTF-8 file"
-    if secret_text_risk(text):
+    if secret_text_risk(
+        text,
+        javascript_dialect=javascript_review_dialect(rel),
+    ):
         return "", True, "secret-like content"
     return text, False, None
 
@@ -5372,12 +5855,20 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
         unstaged_patch,
     ]
-    input_truncated = len(staged_patch) > 180_000 or len(unstaged_patch) > 180_000
+    input_truncated = False
     if untracked:
         parts.append("# Untracked Files")
         for rel, content, truncated in untracked_snapshots:
             input_truncated = input_truncated or truncated
-            parts.append(f"## {rel}\n{content}")
+            records = literal_lf_lines(content) or [""]
+            parts.append(
+                "# Untracked File\n"
+                f"path: {json.dumps(rel)}\n"
+                + "\n".join(
+                    f"source-line {line_number}: {json.dumps(record)}"
+                    for line_number, record in enumerate(records, start=1)
+                )
+            )
     return "\n\n".join(parts), input_truncated
 
 
@@ -5591,7 +6082,7 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
             ),
             branch_patch,
         ]
-    ), len(branch_patch) > 180_000
+    ), False
 
 
 def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
@@ -5663,7 +6154,7 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
             ),
             commit_patch,
         ]
-    ), len(commit_patch) > 180_000
+    ), False
 
 
 def review_paths(repo: Path, target: str, target_ref: str | None, commit_ref: str) -> set[str]:
@@ -5772,14 +6263,381 @@ def review_scope_policy() -> str:
     ).strip()
 
 
-def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
+def utf8_size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def split_utf8_fragment(
+    text: str,
+    limit: int,
+    first_limit: int | None = None,
+) -> list[str]:
+    current_limit = first_limit or limit
+    if min(limit, current_limit) < 4:
+        raise SystemExit("review chunk byte limit is too small")
+    fragments: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for character in text:
+        character_bytes = utf8_size(character)
+        if current and current_bytes + character_bytes > current_limit:
+            fragments.append("".join(current))
+            current = []
+            current_bytes = 0
+            current_limit = limit
+        current.append(character)
+        current_bytes += character_bytes
+    if current:
+        fragments.append("".join(current))
+    return fragments
+
+
+def review_bundle_units(bundle: str) -> list[str]:
+    section_boundaries = {
+        "# Git Status\n",
+        "# Staged Diff\n",
+        "# Unstaged Diff\n",
+        "# Untracked Files\n",
+        "# Untracked File\n",
+        "# Branch Diff\n",
+        "# Commit Diff\n",
+    }
+    units: list[str] = []
+    current: list[str] = []
+    for line in literal_lf_lines(bundle):
+        boundary = line.startswith("diff --git ") or line in section_boundaries
+        if boundary and current:
+            units.append("".join(current))
+            current = []
+        current.append(line)
+    if current:
+        units.append("".join(current))
+    return units
+
+
+def literal_lf_lines(text: str) -> list[str]:
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def update_review_chunk_context(
+    context: list[str],
+    line: str,
+    next_new_line: int | None,
+    next_old_line: int | None,
+    in_hunk: bool,
+) -> tuple[int | None, int | None, bool]:
+    if line.startswith("diff --git "):
+        context[:] = [line]
+        return None, None, False
+    if line == "# Untracked File\n":
+        context[:] = [line]
+        return None, None, False
+    if context == ["# Untracked File\n"] and line.startswith("path: "):
+        context.append(line)
+        return None, None, False
+    if not context:
+        return next_new_line, next_old_line, in_hunk
+    if context[0] == "# Untracked File\n":
+        match = re.match(r"^source-line (\d+): ", line)
+        if match:
+            return int(match.group(1)) + 1, None, False
+        return next_new_line, None, False
+    if not in_hunk and line.startswith(("--- ", "+++ ")):
+        header_prefix = line[:4]
+        context[:] = [entry for entry in context if not entry.startswith(header_prefix)]
+        context.append(line)
+        return next_new_line, next_old_line, False
+    if line.startswith("@@ "):
+        context[:] = [entry for entry in context if not entry.startswith("@@ ")]
+        context.append(line)
+        match = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+        if not match:
+            return None, None, True
+        return int(match.group(2)), int(match.group(1)), True
+    if in_hunk and line.startswith(" "):
+        return increment_line(next_new_line), increment_line(next_old_line), True
+    if in_hunk and line.startswith("+"):
+        return increment_line(next_new_line), next_old_line, True
+    if in_hunk and line.startswith("-"):
+        return next_new_line, increment_line(next_old_line), True
+    return next_new_line, next_old_line, in_hunk
+
+
+def increment_line(line: int | None) -> int | None:
+    return line + 1 if line is not None else None
+
+
+def compact_review_chunk_context(context: list[str]) -> list[str]:
+    if not context or context[0] == "# Untracked File\n":
+        return list(context)
+    new_header = next((entry for entry in context if entry.startswith("+++ ")), None)
+    old_header = next((entry for entry in context if entry.startswith("--- ")), None)
+    hunk_header = next((entry for entry in context if entry.startswith("@@ ")), None)
+    path_header = new_header if new_header and new_header != "+++ /dev/null\n" else old_header
+    compact = [path_header or context[0]]
+    if hunk_header:
+        compact.append(hunk_header)
+    return compact
+
+
+def review_chunk_context(
+    context: list[str],
+    next_new_line: int | None,
+    next_old_line: int | None,
+    *,
+    continued_line: bool = False,
+    diff_line_marker: str | None = None,
+) -> str:
+    lines = compact_review_chunk_context(context)
+    if context and context[0] == "# Untracked File\n" and next_new_line is not None:
+        lines.append(f"[Continuation begins at untracked source line {next_new_line}.]\n")
+    elif (
+        next_new_line is not None
+        and next_new_line >= 1
+        and next_old_line is not None
+        and next_old_line >= 1
+        and next_new_line != next_old_line
+    ):
+        lines.append(
+            f"[Continuation position: new-file line {next_new_line}; "
+            f"old-file line {next_old_line}.]\n"
+        )
+    elif next_new_line is not None and next_new_line >= 1:
+        lines.append(f"[Continuation begins at new-file line {next_new_line}.]\n")
+    elif next_old_line is not None and next_old_line >= 1:
+        lines.append(
+            f"[Continuation begins at old-file line {next_old_line}; "
+            "use this positive line for deleted content.]\n"
+        )
+    if continued_line:
+        if diff_line_marker:
+            lines.append(
+                "[The change content below continues a unified-diff line whose "
+                f"original marker is `{diff_line_marker}`.]\n"
+            )
+        else:
+            lines.append("[The change content below continues the preceding long line.]\n")
+    text = "".join(lines)
+    if utf8_size(text) > MAX_REVIEW_CHUNK_CONTEXT_BYTES:
+        raise SystemExit(
+            "review continuation context exceeds the bounded prompt allowance; "
+            "shorten the changed path or split the review target"
+        )
+    return text
+
+
+def split_oversized_review_unit(
+    unit: str,
+    limit: int,
+    first_limit: int | None = None,
+) -> list[ReviewChunk]:
+    chunks: list[ReviewChunk] = []
+    current: list[str] = []
+    current_bytes = 0
+    current_context = ""
+    context: list[str] = []
+    next_new_line: int | None = None
+    next_old_line: int | None = None
+    in_hunk = False
+
+    def current_limit() -> int:
+        return first_limit if not chunks and first_limit is not None else limit
+
+    def flush() -> None:
+        nonlocal current, current_bytes, current_context
+        if current:
+            chunks.append(ReviewChunk("".join(current), current_context))
+            current = []
+            current_bytes = 0
+            current_context = ""
+
+    for line in literal_lf_lines(unit):
+        line_bytes = utf8_size(line)
+        diff_line_marker = line[0] if in_hunk and line.startswith(("+", "-", " ")) else None
+        untracked_source_line = None
+        if context and context[0] == "# Untracked File\n":
+            match = re.match(r"^source-line (\d+): ", line)
+            if match:
+                untracked_source_line = int(match.group(1))
+        chunk_limit = current_limit()
+        if current and current_bytes + line_bytes > chunk_limit:
+            if line_bytes <= limit:
+                flush()
+                chunk_limit = current_limit()
+            else:
+                remaining_line_bytes = chunk_limit - current_bytes
+                if remaining_line_bytes < 4:
+                    flush()
+                    chunk_limit = current_limit()
+                else:
+                    fragments = split_utf8_fragment(
+                        line,
+                        limit,
+                        first_limit=remaining_line_bytes,
+                    )
+                    current.append(fragments[0])
+                    flush()
+                    continued_context = review_chunk_context(
+                        context,
+                        untracked_source_line or next_new_line,
+                        next_old_line,
+                        continued_line=True,
+                        diff_line_marker=diff_line_marker,
+                    )
+                    chunks.extend(
+                        ReviewChunk(fragment, continued_context)
+                        for fragment in fragments[1:-1]
+                    )
+                    if len(fragments) > 1:
+                        current = [fragments[-1]]
+                        current_bytes = utf8_size(fragments[-1])
+                        current_context = continued_context
+                    next_new_line, next_old_line, in_hunk = update_review_chunk_context(
+                        context,
+                        line,
+                        next_new_line,
+                        next_old_line,
+                        in_hunk,
+                    )
+                    continue
+        if line_bytes > chunk_limit:
+            flush()
+            fragments = split_utf8_fragment(
+                line,
+                limit,
+                first_limit=chunk_limit,
+            )
+            for index, fragment in enumerate(fragments[:-1]):
+                chunks.append(
+                    ReviewChunk(
+                        fragment,
+                        review_chunk_context(
+                            context,
+                            untracked_source_line or next_new_line,
+                            next_old_line,
+                            continued_line=index > 0,
+                            diff_line_marker=diff_line_marker,
+                        ),
+                    )
+                )
+            current = [fragments[-1]]
+            current_bytes = utf8_size(fragments[-1])
+            current_context = review_chunk_context(
+                context,
+                untracked_source_line or next_new_line,
+                next_old_line,
+                continued_line=len(fragments) > 1,
+                diff_line_marker=diff_line_marker,
+            )
+            next_new_line, next_old_line, in_hunk = update_review_chunk_context(
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+            continue
+        if not current:
+            current_context = review_chunk_context(context, next_new_line, next_old_line)
+        current.append(line)
+        current_bytes += line_bytes
+        next_new_line, next_old_line, in_hunk = update_review_chunk_context(
+            context,
+            line,
+            next_new_line,
+            next_old_line,
+            in_hunk,
+        )
+    flush()
+    return chunks
+
+
+def split_review_bundle(bundle: str, limit: int) -> list[ReviewChunk]:
+    if utf8_size(bundle) <= limit:
+        return [ReviewChunk(bundle)]
+    chunks: list[ReviewChunk] = []
+    pending: ReviewChunk | None = None
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending is not None:
+            chunks.append(pending)
+            pending = None
+
+    for unit in review_bundle_units(bundle):
+        unit_bytes = utf8_size(unit)
+        pending_bytes = utf8_size(pending.content) if pending else 0
+        remaining = limit - pending_bytes
+        if pending and unit_bytes <= remaining:
+            pending = ReviewChunk(pending.content + unit, pending.context)
+            continue
+        if pending and remaining >= 256:
+            first_line = literal_lf_lines(unit)[0]
+            if utf8_size(first_line) > remaining and utf8_size(first_line) <= limit:
+                flush_pending()
+                pieces = split_oversized_review_unit(unit, limit)
+                chunks.extend(pieces[:-1])
+                pending = pieces[-1]
+                continue
+            pieces = split_oversized_review_unit(
+                unit,
+                limit,
+                first_limit=remaining,
+            )
+            first, *rest = pieces
+            pending = ReviewChunk(pending.content + first.content, pending.context)
+            flush_pending()
+            if rest:
+                chunks.extend(rest[:-1])
+                pending = rest[-1]
+            continue
+        flush_pending()
+        if unit_bytes <= limit:
+            pending = ReviewChunk(unit)
+            continue
+        pieces = split_oversized_review_unit(unit, limit)
+        chunks.extend(pieces[:-1])
+        pending = pieces[-1]
+    flush_pending()
+    if "".join(chunk.content for chunk in chunks) != bundle:
+        raise SystemExit("internal error: review bundle chunking omitted or reordered input")
+    return chunks
+
+
+def render_review_prompt(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    chunk: ReviewChunk,
+    extra_prompt: str,
+    datasets: str,
+    chunk_position: tuple[int, int] | None = None,
+) -> str:
     target_line = f"{target} {target_ref}" if target_ref else target
     branch = current_branch(repo)
     require_no_secret_values("current branch", branch)
     if target_ref:
         require_no_secret_values("review target ref", target_ref)
     scope_policy = review_scope_policy()
-    prompt = textwrap.dedent(
+    chunk_policy = ""
+    if chunk_position:
+        index, total = chunk_position
+        chunk_policy = textwrap.dedent(
+            f"""
+            Oversized review bundle chunk: {index}/{total}
+            - The complete validated change is distributed across all {total} chunks.
+            - Original change bytes appear exactly once across the chunk sequence.
+            - Continuation context may repeat file and hunk headers; it is not extra change content.
+            - Report every actionable defect demonstrated by this chunk. Reports from all chunks are merged after every pass finishes.
+            """
+        ).strip()
+        if chunk.context:
+            chunk_policy += "\n\n# Continuation Context\n" + chunk.context
+    instructions = textwrap.dedent(
         f"""
         You are a senior code reviewer. Review the provided git change bundle only.
 
@@ -5790,7 +6648,9 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         - Do not modify files.
         - Do not invoke nested reviewers or review tools.
         - Forbidden nested review commands include: codex review, autoreview, claude review, oracle review.
-        - You may use read-only tools and web search to inspect files, dependency contracts, upstream docs, current behavior, and security implications.
+        - The review sandbox is intentionally empty. The change bundle and explicit prompt or datasets are the only reviewed-repository source. Read-only tools cannot access unchanged repository files.
+        - You may use read-only tools and web search to inspect external dependency contracts, upstream docs, current public behavior, and security implications.
+        - Do not report a missing import, symbol, definition, call site, config entry, or other unchanged context solely because it is absent from the change bundle. Such a finding requires direct proof in the bundle or explicit datasets.
         - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
         - Report only actionable defects introduced or exposed by this change.
         - Prefer high-signal findings over style feedback.
@@ -5803,18 +6663,31 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
 
         Review target: {target_line}
         Current branch: {branch}
-        Repository root: .
+        Review sandbox: . (intentionally contains no reviewed repository files)
 
         {scope_policy}
+
+        {chunk_policy}
 
         {extra_prompt}
 
         {datasets}
 
         # Change Bundle
-        {bundle}
         """
     ).strip()
+    return instructions + "\n" + chunk.content
+
+
+def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
+    prompt = render_review_prompt(
+        repo,
+        target,
+        target_ref,
+        ReviewChunk(bundle),
+        extra_prompt,
+        datasets,
+    )
     prompt_bytes = len(prompt.encode("utf-8"))
     if prompt_bytes > MAX_REVIEW_PROMPT_BYTES:
         raise SystemExit(
@@ -5822,6 +6695,81 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
             "reduce the change, prompt files, or datasets"
         )
     return prompt
+
+
+def build_review_prompts(
+    repo: Path,
+    target: str,
+    target_ref: str | None,
+    bundle: str,
+    extra_prompt: str,
+    datasets: str,
+) -> list[str]:
+    full_prompt = render_review_prompt(
+        repo,
+        target,
+        target_ref,
+        ReviewChunk(bundle),
+        extra_prompt,
+        datasets,
+    )
+    if utf8_size(full_prompt) <= MAX_REVIEW_PROMPT_BYTES:
+        return [full_prompt]
+
+    empty_chunk_prompt = render_review_prompt(
+        repo,
+        target,
+        target_ref,
+        ReviewChunk(""),
+        extra_prompt,
+        datasets,
+        (999_999, 999_999),
+    )
+    content_limit = (
+        MAX_REVIEW_PROMPT_BYTES
+        - utf8_size(empty_chunk_prompt)
+        - MAX_REVIEW_CHUNK_CONTEXT_BYTES
+        - 4_096
+    )
+    if content_limit < 16_000:
+        raise SystemExit(
+            "review prompt files and datasets leave too little room for change chunks; "
+            "reduce the extra review context"
+        )
+    if utf8_size(bundle) > content_limit * MAX_REVIEW_PASSES:
+        raise SystemExit(
+            f"review bundle requires more than {MAX_REVIEW_PASSES} bounded passes; "
+            "reduce or split the change before review"
+        )
+
+    for _attempt in range(4):
+        chunks = split_review_bundle(bundle, content_limit)
+        if len(chunks) > MAX_REVIEW_PASSES:
+            raise SystemExit(
+                f"review bundle requires {len(chunks)} bounded passes; "
+                f"limit {MAX_REVIEW_PASSES}; reduce or split the change before review"
+            )
+        prompts = [
+            render_review_prompt(
+                repo,
+                target,
+                target_ref,
+                chunk,
+                extra_prompt,
+                datasets,
+                (index, len(chunks)),
+            )
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+        largest = max(utf8_size(prompt) for prompt in prompts)
+        if largest <= MAX_REVIEW_PROMPT_BYTES:
+            return prompts
+        content_limit -= largest - MAX_REVIEW_PROMPT_BYTES + 1_024
+        if content_limit < 16_000:
+            break
+    raise SystemExit(
+        "unable to partition the review bundle within the aggregate prompt limit"
+    )
 
 
 def write_json_temp(data: dict[str, Any], temp_root: Path) -> Path:
@@ -8046,7 +8994,10 @@ def start_parallel_tests(
 ) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
     test_home = Path(
-        tempfile.mkdtemp(prefix="autoreview-test-home-", dir=safe_temp_root(repo))
+        tempfile.mkdtemp(
+            prefix="autoreview-test-home-",
+            dir=parallel_test_temp_root(repo),
+        )
     )
     try:
         env = safe_test_env(repo, test_home)
@@ -8468,6 +9419,19 @@ def merge_panel_reports(reports: list[tuple[str, dict[str, Any]]]) -> dict[str, 
     }
 
 
+def merge_chunk_reports(reports: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    report = merge_panel_reports(reports)
+    summary = ", ".join(
+        f"{label}: {len(chunk_report['findings'])} finding(s)"
+        for label, chunk_report in reports
+    )
+    report["overall_explanation"] = bounded_field(
+        f"Chunked review complete. {summary}.",
+        3000,
+    )
+    return report
+
+
 def run_panel(
     args: argparse.Namespace,
     reviewers: list[argparse.Namespace],
@@ -8475,6 +9439,7 @@ def run_panel(
     prompt: str,
     changed_paths: set[str],
     input_truncated: bool,
+    required: list[str] | None = None,
 ) -> dict[str, Any]:
     reports: list[tuple[str, dict[str, Any]]] = []
     failures: list[str] = []
@@ -8508,7 +9473,12 @@ def run_panel(
         raise SystemExit("autoreview panel produced no reports")
     reports.sort(key=lambda item: item[0])
     report = merge_panel_reports(reports)
-    validate_report(report, repo, changed_paths, args.require_finding)
+    validate_report(
+        report,
+        repo,
+        changed_paths,
+        args.require_finding if required is None else required,
+    )
     return report
 
 
@@ -8894,7 +9864,7 @@ def main() -> int:
     extra_prompt, prompt_truncated = load_extra_prompt(args, repo)
     datasets, datasets_truncated = load_datasets(args, repo)
     input_truncated = bundle_truncated or prompt_truncated or datasets_truncated
-    prompt = build_prompt(
+    prompts = build_review_prompts(
         repo,
         target,
         target_ref,
@@ -8903,7 +9873,7 @@ def main() -> int:
         datasets,
     )
     changed_paths = review_paths(repo, target, target_ref, args.commit)
-    print(f"bundle: {len(prompt)} chars")
+    print(f"bundle: {utf8_size(bundle)} bytes; review passes: {len(prompts)}")
     if source_tree_snapshot(repo) != review_source_snapshot:
         raise SystemExit(
             "source changed while the review bundle was being created; "
@@ -8914,19 +9884,42 @@ def main() -> int:
     if args.parallel_tests:
         tests_proc = start_parallel_tests(args.parallel_tests, repo, args.parallel_tests_shell)
     try:
-        if len(reviewers) == 1:
-            report = run_reviewer(
-                reviewers[0],
-                repo,
-                prompt,
-                changed_paths,
-                args.require_finding,
-                input_truncated,
-            )
-            label = "autoreview"
+        chunk_reports: list[tuple[str, dict[str, Any]]] = []
+        for index, prompt in enumerate(prompts, start=1):
+            if len(prompts) > 1:
+                print(
+                    f"review pass: {index}/{len(prompts)} "
+                    f"({utf8_size(prompt)} prompt bytes)"
+                )
+            required = args.require_finding if len(prompts) == 1 else []
+            if len(reviewers) == 1:
+                chunk_report = run_reviewer(
+                    reviewers[0],
+                    repo,
+                    prompt,
+                    changed_paths,
+                    required,
+                    input_truncated,
+                )
+            else:
+                chunk_report = run_panel(
+                    args,
+                    reviewers,
+                    repo,
+                    prompt,
+                    changed_paths,
+                    input_truncated,
+                    required,
+                )
+            chunk_reports.append((f"chunk {index}/{len(prompts)}", chunk_report))
+        if len(chunk_reports) == 1:
+            report = chunk_reports[0][1]
         else:
-            report = run_panel(args, reviewers, repo, prompt, changed_paths, input_truncated)
-            label = "autoreview panel"
+            report = merge_chunk_reports(chunk_reports)
+            validate_report(report, repo, changed_paths, args.require_finding)
+        label = "autoreview panel" if len(reviewers) > 1 else "autoreview"
+        if len(chunk_reports) > 1:
+            label += " chunked"
     finally:
         tests_status = finish_parallel_tests(*tests_proc) if tests_proc else 0
 

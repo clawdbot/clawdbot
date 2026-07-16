@@ -166,7 +166,7 @@ internal fun VoiceNoteRecordingControls(
       )
       Surface(
         onClick = onCancel,
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         contentColor = ClawTheme.colors.text,
@@ -177,7 +177,7 @@ internal fun VoiceNoteRecordingControls(
       }
       Surface(
         onClick = onDone,
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
         color = ClawTheme.colors.primary,
         contentColor = ClawTheme.colors.primaryText,

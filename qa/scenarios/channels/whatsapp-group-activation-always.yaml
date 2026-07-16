@@ -1,0 +1,17 @@
+title: WhatsApp group activation always wakes unmentioned messages
+scenario:
+  id: whatsapp-group-activation-always
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-activation-always }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupActivationAlwaysScenario
+  args: [{ expr: whatsappScenarioContext }]

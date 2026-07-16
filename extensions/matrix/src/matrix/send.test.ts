@@ -1228,3 +1228,4 @@ describe("sendTypingMatrix", () => {
     expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

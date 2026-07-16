@@ -159,7 +159,7 @@ export function resolveTwilioWebhookSignatureUrl(params: {
   return `${signatureBaseUrl}${search}`;
 }
 
-export class TwilioSmsApiError extends Error {
+class TwilioSmsApiError extends Error {
   readonly httpStatus: number;
   readonly responseText: string;
   readonly twilioCode?: number;
@@ -175,7 +175,7 @@ export class TwilioSmsApiError extends Error {
   }
 }
 
-export function parseTwilioFormBody(body: string): Record<string, string> {
+function parseTwilioFormBody(body: string): Record<string, string> {
   const parsed = querystring.parse(body);
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
@@ -184,7 +184,7 @@ export function parseTwilioFormBody(body: string): Record<string, string> {
   return out;
 }
 
-export function computeTwilioSignature(params: {
+function computeTwilioSignature(params: {
   url: string;
   authToken: string;
   form: Record<string, string>;

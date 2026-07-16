@@ -91,7 +91,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## image.bin\n[binary file omitted]", bundle)
+            self.assertIn(
+                '# Untracked File\npath: "image.bin"\n'
+                'source-line 1: "[binary file omitted]"',
+                bundle,
+            )
             self.assertTrue(truncated)
 
     def test_local_bundle_rejects_non_utf8_untracked_text(self) -> None:
@@ -122,7 +126,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## notes.txt\nreview me", bundle)
+            expected_record = json.dumps("review me" + os.linesep)
+            self.assertIn(
+                '# Untracked File\npath: "notes.txt"\n'
+                f"source-line 1: {expected_record}",
+                bundle,
+            )
             self.assertFalse(truncated)
             self.assertEqual(reads, 1)
 
@@ -364,6 +373,338 @@ class AutoreviewHardeningTests(unittest.TestCase):
     def test_review_patch_limit_counts_utf8_bytes(self) -> None:
         with self.assertRaisesRegex(SystemExit, r"12 bytes; limit 10"):
             self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "界" * 4, 10)
+
+    def test_review_patch_accepts_large_content_without_explicit_limit(self) -> None:
+        patch = (
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,100000 @@\n"
+            + "+safe review content\n" * 100_000
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["safe.txt"],
+                patch,
+            ),
+            patch,
+        )
+
+    def test_review_bundle_chunking_preserves_every_byte_and_diff_context(self) -> None:
+        bundle = (
+            "# Commit Diff\n\n"
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,200 @@\n"
+            + "+safe review content\n" * 200
+        )
+
+        chunks = self.helper["split_review_bundle"](bundle, 300)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= 300 for chunk in chunks))
+        self.assertTrue(
+            any(
+                "+++ b/safe.txt" in chunk.context
+                and "@@ -0,0 +1,200 @@" in chunk.context
+                and "Continuation begins at new-file line" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+
+    def test_untracked_markdown_headings_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.md"\n'
+            'source-line 1: "# title\\n"\n'
+            'source-line 2: "## section\\n"\n\n'
+            "# Untracked File\n"
+            'path: "todo.md"\n'
+            'source-line 1: "# next\\n"'
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn(r'source-line 2: "## section\n"', units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_unicode_line_separators_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "before\u2028diff --git a/fake b/fake"\n\n'
+            "diff --git a/real.txt b/real.txt\n"
+            "--- a/real.txt\n"
+            "+++ b/real.txt\n"
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn("\u2028diff --git a/fake b/fake", units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_diff_source_prefixes_do_not_replace_file_context(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        lines = (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,2 +10,3 @@\n",
+            "+++ added source beginning with pluses\n",
+            "--- deleted source beginning with minuses\n",
+            " context\n",
+        )
+
+        for line in lines:
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+
+        self.assertEqual(next_new_line, 12)
+        self.assertEqual(next_old_line, 12)
+        self.assertIn("--- a/safe.txt\n", context)
+        self.assertIn("+++ b/safe.txt\n", context)
+        self.assertNotIn("--- deleted source beginning with minuses\n", context)
+
+    def test_hunk_header_that_fits_fresh_chunk_is_not_split(self) -> None:
+        unit = (
+            "diff --git a/abcdefghijk b/abcdefghijk\n"
+            "--- a/abcdefghijk\n"
+            "+++ b/abcdefghijk\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 85)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(any("@@ -1 +1 @@\n" in chunk.content for chunk in chunks))
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_long_diff_line_continuations_keep_their_original_marker(self) -> None:
+        for marker in ("+", "-", " "):
+            with self.subTest(marker=marker):
+                unit = (
+                    "diff --git a/large.txt b/large.txt\n"
+                    "--- a/large.txt\n"
+                    "+++ b/large.txt\n"
+                    "@@ -1 +1 @@\n"
+                    f"{marker}{'x' * 400}\n"
+                )
+
+                chunks = self.helper["split_oversized_review_unit"](unit, 140)
+
+                self.assertTrue(
+                    any(
+                        f"original marker is `{marker}`" in chunk.context
+                        for chunk in chunks[1:]
+                    )
+                )
+                self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_modified_file_deletion_context_keeps_old_and_new_offsets(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        for line in (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,3 +10,2 @@\n",
+            "-first deleted line\n",
+        ):
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+
+        rendered = self.helper["review_chunk_context"](
+            context,
+            next_new_line,
+            next_old_line,
+        )
+
+        self.assertIn("new-file line 10", rendered)
+        self.assertIn("old-file line 11", rendered)
+
+    def test_multiple_long_line_tails_pack_into_following_chunks(self) -> None:
+        limit = 200
+        unit = (
+            "diff --git a/large.txt b/large.txt\n"
+            "--- a/large.txt\n"
+            "+++ b/large.txt\n"
+            "@@ -1,5 +1,5 @@\n"
+            + ("+" + "x" * 205 + "\n") * 5
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, limit)
+        minimum_chunks = (len(unit.encode("utf-8")) + limit - 1) // limit
+
+        self.assertLessEqual(len(chunks), minimum_chunks + 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_untracked_continuation_context_keeps_source_line(self) -> None:
+        unit = (
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "short\\n"\n'
+            f'source-line 2: "{"x" * 300}"\n'
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 120)
+
+        self.assertGreater(len(chunks), 2)
+        self.assertTrue(
+            any(
+                "Continuation begins at untracked source line 2" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_deleted_file_continuation_uses_positive_old_line(self) -> None:
+        unit = (
+            "diff --git a/removed.txt b/removed.txt\n"
+            "--- a/removed.txt\n"
+            "+++ /dev/null\n"
+            "@@ -40,50 +0,0 @@\n"
+            + "-deleted content\n" * 50
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 180)
+
+        deletion_contexts = [
+            chunk.context for chunk in chunks[1:] if "old-file line" in chunk.context
+        ]
+        self.assertTrue(deletion_contexts)
+        self.assertTrue(all("line 0" not in context for context in deletion_contexts))
+        self.assertTrue(all("--- a/removed.txt" in context for context in deletion_contexts))
+
+    def test_long_complete_context_is_retained_or_rejected(self) -> None:
+        path = "nested/" + "x" * 10_000 + ".txt"
+        context = [
+            f'diff --git "a/{path}" "b/{path}"\n',
+            f'--- "a/{path}"\n',
+            f'+++ "b/{path}"\n',
+            "@@ -1 +1 @@\n",
+        ]
+
+        rendered = self.helper["review_chunk_context"](context, 2, 2)
+
+        self.assertIn(f'+++ "b/{path}"', rendered)
+        self.assertIn("@@ -1 +1 @@", rendered)
+        self.assertIn("Continuation begins at new-file line 2", rendered)
+
+    def test_review_bundle_packs_oversized_unit_tails_globally(self) -> None:
+        limit = 1_000
+        units = []
+        for index in range(5):
+            header = (
+                f"diff --git a/file-{index}.txt b/file-{index}.txt\n"
+                f"--- a/file-{index}.txt\n"
+                f"+++ b/file-{index}.txt\n"
+                "@@ -0,0 +1 @@\n"
+            )
+            body = "+" + "x" * (1_100 - len(header.encode("utf-8")) - 2) + "\n"
+            units.append(header + body)
+        bundle = "".join(units)
+
+        chunks = self.helper["split_review_bundle"](bundle, limit)
+
+        self.assertEqual(len(chunks), 6)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_large_bundle_stays_single_pass_until_prompt_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 18_000,
+                "",
+                "",
+            )
+
+        self.assertEqual(len(prompts), 1)
+
+    def test_bundle_above_prompt_limit_uses_complete_bounded_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 35_000,
+                "",
+                "",
+            )
+
+        self.assertGreater(len(prompts), 1)
+        self.assertTrue(
+            all(
+                len(prompt.encode("utf-8"))
+                <= self.helper["MAX_REVIEW_PROMPT_BYTES"]
+                for prompt in prompts
+            )
+        )
+        self.assertTrue(all("Oversized review bundle chunk:" in prompt for prompt in prompts))
+
+    def test_review_prompt_preserves_bundle_ending_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            bundle = "# Commit Diff\n+Markdown hard break  \n+\n"
+            prompt = self.helper["render_review_prompt"](
+                repo,
+                "commit",
+                "HEAD",
+                self.helper["ReviewChunk"](bundle),
+                "",
+                "",
+            )
+
+        self.assertTrue(prompt.endswith(bundle))
+
+    def test_review_pass_count_is_bounded(self) -> None:
+        builder = self.helper["build_review_prompts"]
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(builder.__globals__, {"MAX_REVIEW_PASSES": 1}):
+                with self.assertRaisesRegex(SystemExit, "more than 1 bounded passes"):
+                    builder(
+                        repo,
+                        "commit",
+                        "HEAD",
+                        "# Commit Diff\n" + "safe review content\n" * 35_000,
+                        "",
+                        "",
+                    )
 
     def test_review_patch_escapes_controls_in_blocked_paths(self) -> None:
         path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
@@ -1421,6 +1762,44 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_secret_detector_allows_typescript_function_parameter_types(self) -> None:
+        signature = (
+            "function formatCredentialLabel("
+            + "credential"
+            + ": ClaudeCliReadableCredential"
+            + "): string {"
+        )
+        access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        secret_assignment = "const api" + 'Key = "' + access_key + '";'
+        literal_value = "actual-production-" + "secret"
+        parameter_name = "api" + "Key"
+        type_name = "Api" + "Credential"
+        typed_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + ' = "'
+            + literal_value
+            + '") {}'
+        )
+        benign_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + " = defaultCredential) {}"
+        )
+
+        self.assertFalse(self.helper["secret_text_risk"](signature))
+        self.assertFalse(self.helper["secret_text_risk"](benign_default))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                signature + "\n  " + secret_assignment + "\n}"
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](typed_default))
+
     def test_secret_detector_handles_punctuation_and_multiline_diff_values(self) -> None:
         value = "Correct-Horse!" + "@Battery$Staple"
         patch = (
@@ -1479,6 +1858,671 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "pass" + "word = process.env.PASSWORD   "
             )
         )
+
+    def test_secret_detector_allows_typescript_object_secret_references(self) -> None:
+        content = (
+            "async function configure(context: RuntimeContext) {\n"
+            "  const cliDevice = await login();\n"
+            "  const driverPassword = readPassword();\n"
+            "  return {\n"
+            "    access"
+            + "Token"
+            + ": cliDevice.access"
+            + "Token,\n"
+            + "    pass"
+            + "word: driverPass"
+            + "word,\n"
+            + "    ...(context.driverPass"
+            + "word ? { pass"
+            + "word: context.driverPass"
+            + "word } : {}),\n"
+            + "  };\n"
+            + "}"
+        )
+        yaml_literal = "pass" + "word: actualProductionSecret,"
+        yaml_reference = "pass" + "word: context.driverPass" + "word"
+        yaml_flow_reference = (
+            "{ pass" + "word: context.driverPass" + "word, enabled: true }"
+        )
+        sut_reference = (
+            "const pass"
+            + "word = context.sutPass"
+            + "word;"
+        )
+        literal_value = "actual-production-" + "secret"
+        source_literal = (
+            "function configure() { return { pass"
+            + 'word: "'
+            + literal_value
+            + '" }; }'
+        )
+        jwt_like = "eyJhbGciOiJIUzI1NiJ9" + ".payload." + "signature"
+        undeclared_member = (
+            "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        jwt_root = jwt_like.split(".", 1)[0]
+        declared_member = (
+            f"const {jwt_root} = {{}};\n"
+            + "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        prefixed_member = (
+            "const session = {};\n"
+            + "const config = { pass"
+            + "word: session."
+            + jwt_like
+            + " };"
+        )
+        declared_identifier = "CorrectHorseBattery" + "Staple123"
+        declared_identifier_value = (
+            f"const {declared_identifier} = 0;\n"
+            + "const config = { pass"
+            + "word: "
+            + declared_identifier
+            + " };"
+        )
+        suffixed_reference = (
+            "const config = { pass"
+            + "word: context.driverPass"
+            + "wordExtra };"
+        )
+        prefixed_reference = (
+            "const config = { pass"
+            + "word: xcontext.driverPass"
+            + "word };"
+        )
+        final_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word }; }"
+        )
+        inline_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word, enabled: true }; }"
+        )
+        asserted_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word! }; }"
+        )
+        cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string }; }"
+        )
+        union_cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string | undefined }; }"
+        )
+        next_statement = (
+            "function configure(context: RuntimeContext) {\n"
+            + "  const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  return consume();\n"
+            + "}"
+        )
+        line_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + "consume();"
+        )
+        block_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word /* supplied by CI */;"
+        )
+        concatenated_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word + "'
+            + literal_value
+            + '" }; }'
+        )
+        continued_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word\n"
+            + '  + "'
+            + literal_value
+            + '" }; }'
+        )
+        fallback_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word ?? "'
+            + literal_value
+            + '" }; }'
+        )
+        assigned_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '  = "'
+            + literal_value
+            + '";'
+        )
+        newline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  as string + \""
+            + literal_value
+            + '";'
+        )
+        commented_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_comment_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI"
+            + chr(0x2028)
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_space_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + chr(0x00A0)
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        multiline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word as string\n"
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        leading_comma_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + ', username = "'
+            + literal_value
+            + '";'
+        )
+        unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        inequality_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!== "'
+            + literal_value
+            + '";'
+        )
+        member_call_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + 'word["concat"]("safe", "'
+            + literal_value
+            + '");'
+        )
+        continued_then_unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        trailing_operator_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix +\n"
+            + '  "'
+            + literal_value
+            + '";'
+        )
+        plain_javascript_as_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as("'
+            + literal_value
+            + '");'
+        )
+        typescript_dollar_identifier = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as$logger("'
+            + literal_value
+            + '");'
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                content,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                sut_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](sut_reference))
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                plain_javascript_as_statement,
+                javascript_dialect="javascript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                typescript_dollar_identifier,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                final_property,
+                javascript_dialect="typescript",
+            )
+        )
+        for source_reference in (
+            inline_property,
+            asserted_property,
+            cast_property,
+            union_cast_property,
+            next_statement,
+            line_comment,
+            block_comment,
+            leading_comma_statement,
+            unary_statement,
+            continued_then_unary_statement,
+        ):
+            with self.subTest(source_reference=source_reference):
+                self.assertFalse(
+                    self.helper["secret_text_risk"](
+                        source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        for unsafe_source_reference in (
+            concatenated_literal,
+            continued_literal,
+            fallback_literal,
+            assigned_literal,
+            newline_cast_literal,
+            commented_continuation,
+            unicode_comment_continuation,
+            unicode_space_continuation,
+            multiline_cast_literal,
+            inequality_literal,
+            member_call_literal,
+            trailing_operator_literal,
+        ):
+            with self.subTest(unsafe_source_reference=unsafe_source_reference):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_literal))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_reference))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_flow_reference))
+        self.assertTrue(self.helper["secret_text_risk"](source_literal))
+        self.assertTrue(self.helper["secret_text_risk"](undeclared_member))
+        self.assertTrue(self.helper["secret_text_risk"](declared_member))
+        self.assertTrue(self.helper["secret_text_risk"](prefixed_member))
+        self.assertTrue(
+            self.helper["secret_text_risk"](declared_identifier_value)
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                suffixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                prefixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_secret_detector_allows_lifecycle_named_typescript_references(self) -> None:
+        key_term = "Api" + "Key"
+        key_field = key_term[0].lower() + key_term[1:]
+        credential_term = "Cred" + "ential"
+        source = (
+            f"const resolvedStream{key_term} = resolveAttemptDispatch{key_term}({{\n"
+            f"  {key_field}Info,\n"
+            "  runtimeAuthState,\n"
+            "});\n"
+            f"const successful{credential_term} = successfulProfileId\n"
+            "  ? attemptAuthProfileStore.profiles[successfulProfileId]\n"
+            "  : undefined;\n"
+            f"const successful{key_term}Info = get{key_term}Info();\n"
+            f"const {key_field} = successful{key_term}Info?.{key_field};\n"
+            f"const resolved{key_term} = resolveSecretSentinel({key_field});\n"
+            "return {\n"
+            f"  resolved{key_term}: resolvedStream{key_term},\n"
+            f"  {credential_term.lower()}: successful{credential_term},\n"
+            f"  {key_field}: resolved{key_term},\n"
+            "};\n"
+        )
+        literal_value = "actual-production-" + "secret"
+        unsafe_sources = (
+            f'const resolved{key_term} = "' + literal_value + '";',
+            "const config = { pass"
+            + "word: resolved"
+            + key_term
+            + ' + "'
+            + literal_value
+            + "\" };",
+            "const config = { pass"
+            + "word: Abcdefghijklmnop.Qrstuvwxyzabcdef };",
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                source,
+                javascript_dialect="typescript",
+            )
+        )
+        for unsafe_source in unsafe_sources:
+            with self.subTest(unsafe_source=unsafe_source):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source,
+                        javascript_dialect="typescript",
+                    )
+                )
+
+        store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore.profiles[successfulProfileId];"
+        )
+        optional_store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore?.[successfulProfileId];"
+        )
+        quoted_store_reference = (
+            "const cred"
+            + 'ential = attemptAuthProfileStore["profiles"][successfulProfileId];'
+        )
+        yaml_store_literal = (
+            "pass"
+            + 'word: attemptAuthProfileStore["'
+            + literal_value
+            + '"]'
+        )
+        quoted_secret_key = "N7xQ2mP9vK4r" + "T8wZ"
+        typescript_store_literal = (
+            "const pass"
+            + 'word = attemptAuthProfileStore["'
+            + quoted_secret_key
+            + '"];'
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                optional_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                quoted_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_store_literal))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                typescript_store_literal,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
+        source = "const value = resolved" + "A" * 100_000 + "X;"
+
+        started = time.monotonic()
+        spans = self.helper["javascript_reference_spans"](source)
+
+        self.assertEqual(spans, frozenset())
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_review_patch_scopes_source_references_to_typescript_files(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        source_patch = (
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            "+function configure(context: RuntimeContext) { return { "
+            + property_name
+            + ": "
+            + reference
+            + " }; }\n"
+        )
+        narrow_source_patch = (
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -40,2 +40,3 @@ function configure(context: RuntimeContext) {\n"
+            "   return {\n"
+            "+    "
+            + property_name
+            + ": "
+            + reference
+            + ",\n"
+            "   };\n"
+        )
+        config_patch = (
+            "diff --git a/config.yml b/config.yml\n"
+            "--- a/config.yml\n"
+            "+++ b/config.yml\n"
+            "@@ -0,0 +1 @@\n"
+            "+"
+            + property_name
+            + ": "
+            + reference
+            + "\n"
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts"],
+                source_patch,
+            ),
+            source_patch,
+        )
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts"],
+                narrow_source_patch,
+            ),
+            narrow_source_patch,
+        )
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["src/runtime.ts", "config.yml"],
+                source_patch + config_patch,
+            )
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["config.yml", "src/runtime.ts"],
+                source_patch + config_patch,
+            )
+
+    def test_review_patch_scans_rename_sides_with_their_own_file_types(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        patch = (
+            "diff --git a/src/runtime.ts b/config.yml\n"
+            "similarity index 80%\n"
+            "rename from src/runtime.ts\n"
+            "rename to config.yml\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/config.yml\n"
+            "@@ -1 +1 @@\n"
+            "-function configure(context: RuntimeContext) { return { "
+            + property_name
+            + ": "
+            + reference
+            + " }; }\n"
+            "+"
+            + property_name
+            + ": "
+            + reference
+            + "\n"
+        )
+
+        with self.assertRaisesRegex(SystemExit, "secret-like content"):
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["src/runtime.ts", "config.yml"],
+                patch,
+            )
+
+    def test_review_patch_decodes_git_quoted_source_paths(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        patch = (
+            'diff --git "a/\\303\\251.ts" "b/\\303\\251.ts"\n'
+            '--- "a/\\303\\251.ts"\n'
+            '+++ "b/\\303\\251.ts"\n'
+            "@@ -40,2 +40,3 @@ function configure(context: RuntimeContext) {\n"
+            "   return {\n"
+            "+    "
+            + property_name
+            + ": "
+            + reference
+            + ",\n"
+            "   };\n"
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["é.ts"],
+                patch,
+            ),
+            patch,
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.mts"),
+            "typescript",
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.cts"),
+            "typescript",
+        )
+
+    def test_secret_detector_allows_generated_fixture_credentials(self) -> None:
+        property_name = "pass" + "word"
+        variable_name = "to" + "ken"
+        access_property = "access" + "Token"
+        generated_fixture = (
+            f"function register() {{ return {{ {property_name}: "
+            + "`matrix-qa-${randomUUID()}` }; }"
+        )
+        generated_marker = (
+            f"const {variable_name} = "
+            + 'buildMatrixQaToken("MATRIX_QA_E2EE_THREAD");'
+        )
+        decoy_fixture = (
+            f"const config = {{ {access_property}: "
+            + 'decoy-'
+            + 'token" };'
+        )
+        invalid_recovery_fixture = (
+            'const recoveryKey = "not-'
+            + 'a-valid-matrix-recovery-key";'
+        )
+        literal_value = "actual-production-" + "secret"
+        fixture_shaped_literal = "PROD_TEST_ACTUAL_" + "SECRET_0123456789"
+        adversarial_label = "TEST_Q7WX9M2NK4PV8R6DH3JC"
+        unsafe_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-${randomUUID()}`;"
+        )
+        unsafe_string_template = (
+            f"const {property_name} = "
+            + "`prod-test-live-secret-${String()}`;"
+        )
+        unsafe_suffix_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-test-${randomUUID()}`;"
+        )
+        unsafe_call = (
+            f"const {variable_name} = "
+            + f'buildToken("{literal_value}");'
+        )
+        unsafe_fixture_label = (
+            f"const {property_name} = "
+            + f'"{fixture_shaped_literal}";'
+        )
+        unsafe_generator_label = (
+            f"const {variable_name} = "
+            + f'buildMatrixQaToken("{fixture_shaped_literal}");'
+        )
+        unsafe_identity_call = (
+            f"const {variable_name} = "
+            + f'buildTestToken("{adversarial_label}");'
+        )
+
+        for content in (
+            generated_fixture,
+            generated_marker,
+            decoy_fixture,
+            invalid_recovery_fixture,
+        ):
+            with self.subTest(content=content):
+                self.assertFalse(self.helper["secret_text_risk"](content))
+        for content in (
+            unsafe_template,
+            unsafe_string_template,
+            unsafe_suffix_template,
+            unsafe_call,
+            unsafe_fixture_label,
+            unsafe_generator_label,
+            unsafe_identity_call,
+        ):
+            with self.subTest(content=content):
+                self.assertTrue(self.helper["secret_text_risk"](content))
 
     def test_fallback_self_test_ignores_ambient_model_overrides(self) -> None:
         with mock.patch.dict(
@@ -2108,7 +3152,15 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             prompt = self.helper["build_prompt"](repo, "local", None, "diff", "", "")
 
-            self.assertIn("Repository root: .", prompt)
+            self.assertIn(
+                "Review sandbox: . (intentionally contains no reviewed repository files)",
+                prompt,
+            )
+            self.assertIn("Read-only tools cannot access unchanged repository files", prompt)
+            self.assertIn(
+                "Do not report a missing import, symbol, definition, call site, config entry",
+                prompt,
+            )
             self.assertNotIn(str(repo), prompt)
             with self.assertRaisesRegex(SystemExit, "aggregate limit"):
                 self.helper["build_prompt"](
@@ -3096,6 +4148,53 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "temporary directory must be outside",
             ):
                 self.helper["safe_temp_root"](repo)
+
+    @unittest.skipIf(os.name == "nt", "POSIX Testbox temp-root behavior")
+    def test_testbox_parallel_test_temp_root_stays_within_socket_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            long_temp = root / ("macos-temp-root-" + "x" * 96)
+            long_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(long_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "1"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, Path("/tmp").resolve())
+            socket_path = (
+                selected
+                / ("autoreview-test-home-" + "x" * 8)
+                / ".blacksmith"
+                / "c"
+                / "6d146d2f25180c1d.sock"
+            )
+            self.assertLess(len(os.fsencode(socket_path)), 104)
+
+    def test_parallel_test_temp_root_keeps_configured_root_without_testbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            configured_temp = root / "configured-temp"
+            configured_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(configured_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "0"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, configured_temp.resolve())
 
     def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
         args = argparse.Namespace(

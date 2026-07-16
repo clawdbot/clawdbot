@@ -207,14 +207,13 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
   await tar.t({
     file: archivePath,
     gzip: true,
-    onentry: (entry) => {
+    onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
         ...(entry.linkpath ? { linkpath: entry.linkpath } : {}),
         ...(Number.isSafeInteger(entry.size) && entry.size >= 0 ? { size: entry.size } : {}),
         ...(entry.type ? { type: entry.type } : {}),
       });
-      entry.resume();
     },
   });
   return entries;
@@ -224,67 +223,32 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  let manifestContentPromise: Promise<{ content?: string; error?: Error }> | undefined;
+  const limitError = new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`);
+  let manifestContentPromise: Promise<Buffer | Error> | undefined;
   await tar.t({
     file: params.archivePath,
     gzip: true,
-    onentry: (entry) => {
-      if (entry.path !== params.manifestEntryPath) {
-        entry.resume();
-        return;
-      }
-
-      manifestContentPromise = new Promise<{ content?: string; error?: Error }>((resolve) => {
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        let exceededLimit = false;
-        let settled = false;
-        const settle = (result: { content?: string; error?: Error }) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          resolve(result);
-        };
-        entry.on("data", (chunk: Buffer | string) => {
-          if (exceededLimit) {
-            return;
-          }
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          totalBytes += buffer.byteLength;
-          if (totalBytes > MAX_MANIFEST_BYTES) {
-            exceededLimit = true;
-            chunks.length = 0;
-            return;
-          }
-          chunks.push(buffer);
-        });
-        entry.on("error", (error) => {
-          settle({
-            error: error instanceof Error ? error : new Error(String(error)),
-          });
-        });
-        entry.on("end", () => {
-          if (exceededLimit) {
-            settle({
-              error: new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`),
-            });
-            return;
-          }
-          settle({ content: Buffer.concat(chunks, totalBytes).toString("utf8") });
-        });
-      });
+    filter: (entryPath) => entryPath === params.manifestEntryPath,
+    onReadEntry: (entry) => {
+      manifestContentPromise =
+        entry.size > MAX_MANIFEST_BYTES
+          ? Promise.resolve(limitError)
+          : entry
+              .concat()
+              .catch((error: unknown) =>
+                error instanceof Error ? error : new Error(String(error)),
+              );
     },
   });
 
   if (!manifestContentPromise) {
     throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
   }
-  const result = await manifestContentPromise;
-  if (result.error) {
-    throw result.error;
+  const content = await manifestContentPromise;
+  if (content instanceof Error) {
+    throw content;
   }
-  return result.content ?? "";
+  return content.toString("utf8");
 }
 
 function isRootManifestEntry(entryPath: string): boolean {
@@ -692,7 +656,6 @@ async function verifySqliteSnapshots(params: {
       cwd: tempDir,
       strict: true,
       preserveOwner: false,
-      noChmod: true,
       filter: (entryPath, archiveEntry) => {
         const expected = sqliteEntriesByRawPath.get(entryPath);
         if (!expected) {
@@ -829,3 +792,4 @@ export async function backupVerifyCommand(
 export const testApi = {
   assertSqliteExtractionBudget,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

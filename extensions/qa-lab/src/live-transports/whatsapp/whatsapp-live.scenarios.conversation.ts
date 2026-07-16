@@ -103,8 +103,8 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
         expectedSutMessageCount: 1,
         input:
           `openclawqa pending history context check ${triggerMarker}. ` +
-          `Reply with only ${okMarker} only if the previous quiet group message containing ` +
-          `${quietMarker} is present in prior group context with its context-only sentinel. ` +
+          `Reply with only ${okMarker} only if the previous quiet group message is present ` +
+          `in prior group context with its context-only sentinel. ` +
           "Do not use current-message text as proof.",
         matchText: okMarker,
         quietInput: `quiet context marker ${quietMarker} ${contextSentinel}`,

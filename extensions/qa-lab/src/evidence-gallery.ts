@@ -892,21 +892,19 @@ export async function buildQaEvidenceGalleryModel(params: {
           repoRoot,
         });
       return {
-        artifacts: await Promise.all(
-          (entry.execution?.artifacts ?? []).map((artifact, artifactIndex) =>
-            limitArtifactView(() =>
-              buildArtifactView({
-                allowedArtifactFiles,
-                artifact,
-                artifactIndex,
-                evidenceDir,
-                entryIndex,
-                extraRoots: [requestedRepoRoot],
-                hrefEvidencePath,
-                repoRoot,
-              }),
-            ),
-          ),
+        artifacts: await limitArtifactView.map(
+          entry.execution?.artifacts ?? [],
+          (artifact, artifactIndex) =>
+            buildArtifactView({
+              allowedArtifactFiles,
+              artifact,
+              artifactIndex,
+              evidenceDir,
+              entryIndex,
+              extraRoots: [requestedRepoRoot],
+              hrefEvidencePath,
+              repoRoot,
+            }),
         ),
         coverage: entry.coverage.map((coverage) => ({
           id: sanitizeEntryText(coverage.id),
@@ -947,3 +945,4 @@ export async function buildQaEvidenceGalleryModel(params: {
     schemaVersion: summary.schemaVersion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

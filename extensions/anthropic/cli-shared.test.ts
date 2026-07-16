@@ -114,7 +114,7 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it("isolates Crestodian from Claude user customizations while preserving exact MCP", () => {
+  it("isolates OpenClaw from Claude user customizations while preserving exact MCP", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
@@ -156,7 +156,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--ide",
           "--strict-mcp-config",
           "--mcp-config",
-          "/tmp/openclaw-crestodian-mcp.json",
+          "/tmp/openclaw-openclaw-mcp.json",
           "--resume",
           "native-session",
           "--tools",
@@ -168,7 +168,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ],
         toolAvailability: {
           native: [],
-          mcp: ["mcp__openclaw__crestodian"],
+          mcp: ["mcp__openclaw__openclaw"],
         },
       }),
     ).toEqual([
@@ -176,7 +176,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "--output-format",
       "stream-json",
       "--mcp-config",
-      "/tmp/openclaw-crestodian-mcp.json",
+      "/tmp/openclaw-openclaw-mcp.json",
       "--resume",
       "native-session",
       "--setting-sources",
@@ -189,11 +189,11 @@ describe("resolveClaudeCliExecutionArgs", () => {
       "--tools",
       "",
       "--allowedTools",
-      "mcp__openclaw__crestodian",
+      "mcp__openclaw__openclaw",
     ]);
   });
 
-  it("leaves non-Crestodian customization args intact under generic tool availability", () => {
+  it("leaves non-OpenClaw customization args intact under generic tool availability", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",

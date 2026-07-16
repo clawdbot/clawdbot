@@ -93,8 +93,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_CRESTODIAN_MCP_TOOL = "mcp__openclaw__crestodian";
-const CLAUDE_CRESTODIAN_SETTINGS =
+const CLAUDE_SYSTEM_AGENT_MCP_TOOL = "mcp__openclaw__openclaw";
+const CLAUDE_SYSTEM_AGENT_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -304,13 +304,13 @@ const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
   "--disallowed-tools",
 ]);
 
-const CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS = new Set([
   ...CLAUDE_TOOL_AVAILABILITY_ARGS,
   "--add-dir",
   "--file",
 ]);
 
-const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
   CLAUDE_SETTING_SOURCES_ARG,
   CLAUDE_SETTINGS_ARG,
@@ -326,7 +326,7 @@ const CLAUDE_CRESTODIAN_VALUE_ARGS = new Set([
   "--append-system-prompt-file",
 ]);
 
-const CLAUDE_CRESTODIAN_BARE_ARGS = new Set([
+const CLAUDE_SYSTEM_AGENT_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
@@ -436,17 +436,17 @@ function resolveClaudeCliToolAvailabilityArgs(
   return normalized;
 }
 
-function isCrestodianToolAvailability(
+function isSystemAgentToolAvailability(
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): boolean {
-  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_CRESTODIAN_MCP_TOOL;
+  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_SYSTEM_AGENT_MCP_TOOL;
 }
 
-function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): string[] {
+function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): string[] {
   const normalized = stripClaudeArgs(baseArgs, {
-    bare: CLAUDE_CRESTODIAN_BARE_ARGS,
-    variadicValue: CLAUDE_CRESTODIAN_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_CRESTODIAN_VALUE_ARGS,
+    bare: CLAUDE_SYSTEM_AGENT_BARE_ARGS,
+    variadicValue: CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS,
+    value: CLAUDE_SYSTEM_AGENT_VALUE_ARGS,
   });
   // Safe mode also suppresses explicit MCP, while bare mode drops OAuth. Empty
   // setting sources plus restrictive flag settings isolate user customizations;
@@ -455,14 +455,14 @@ function resolveClaudeCliCrestodianExecutionArgs(baseArgs: readonly string[]): s
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_CRESTODIAN_SETTINGS,
+    CLAUDE_SYSTEM_AGENT_SETTINGS,
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
     CLAUDE_NO_TOOLS_VALUE,
     CLAUDE_ALLOWED_TOOLS_ARG,
-    CLAUDE_CRESTODIAN_MCP_TOOL,
+    CLAUDE_SYSTEM_AGENT_MCP_TOOL,
   );
   return normalized;
 }
@@ -490,8 +490,8 @@ export function resolveClaudeCliExecutionArgs(
   if (!context.toolAvailability) {
     return executionArgs;
   }
-  return isCrestodianToolAvailability(context.toolAvailability)
-    ? resolveClaudeCliCrestodianExecutionArgs(executionArgs)
+  return isSystemAgentToolAvailability(context.toolAvailability)
+    ? resolveClaudeCliSystemAgentExecutionArgs(executionArgs)
     : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
 }
 

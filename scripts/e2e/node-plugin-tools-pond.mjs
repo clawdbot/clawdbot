@@ -73,7 +73,13 @@ async function availableLoopbackPort() {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => {
+      if (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      resolve();
+    });
   });
   if (!port) {
     throw new Error("failed to allocate pond gateway port");
@@ -304,6 +310,8 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
                     command: process.execPath,
                     args: [mcpServerPath],
                     transport: "stdio",
+                    // Keep the baseline surface singular; the hot-plug scenario owns the slow tool.
+                    toolFilter: { include: [MCP_TOOL_NAME] },
                   },
                 },
               },

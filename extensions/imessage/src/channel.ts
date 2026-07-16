@@ -61,6 +61,7 @@ const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./chann
 
 type IMessageMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
+  conversationReadOrigin?: "delegated" | "direct-operator";
 };
 
 function toIMessageMessageSendResult(
@@ -140,6 +141,8 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
+          .conversationReadOrigin,
       });
       return toIMessageMessageSendResult(result, "text", ctx.replyToId);
     },
@@ -156,6 +159,8 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId ?? undefined,
         deps: (ctx as typeof ctx & IMessageMessageContextExtras).deps,
         replyToId: ctx.replyToId ?? undefined,
+        conversationReadOrigin: (ctx as typeof ctx & IMessageMessageContextExtras)
+          .conversationReadOrigin,
       });
       return toIMessageMessageSendResult(
         result,

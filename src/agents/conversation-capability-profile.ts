@@ -3,9 +3,11 @@
  * hot paths share. Keep this internal: it prepares existing config/state, not a
  * new public access-profile config surface.
  */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
@@ -34,7 +36,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type ConversationCapabilityScope = "direct" | "shared" | "unknown";
 
-type ConversationCapabilityProfileParams = {
+export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Live conversation key when a sandbox/policy key is used for tool filtering. */
@@ -78,6 +80,7 @@ type ConversationCapabilityProfileParams = {
   skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -171,6 +174,7 @@ export type ResolvedConversationCapabilityProfile = {
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
     explicitToolOverrideAllowlist: string[];
     explicitToolDenylist: string[];
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
 };
 
@@ -260,6 +264,13 @@ export function resolveConversationCapabilityProfile(
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
     : undefined;
+  const runtimeToolAlsoAllowlist = uniqueStrings(
+    (params.runtimePluginToolGrant?.toolNames ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  const mergeRuntimeToolAlsoAllowlist = (configured?: string[]) => {
+    const merged = uniqueStrings([...(configured ?? []), ...runtimeToolAlsoAllowlist]);
+    return merged.length > 0 ? merged : undefined;
+  };
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
   const inheritancePolicies = [
     profilePolicy,
@@ -350,8 +361,8 @@ export function resolveConversationCapabilityProfile(
       providerProfile: effective.providerProfile,
       profilePolicy,
       providerProfilePolicy,
-      profileAlsoAllow: effective.profileAlsoAllow,
-      providerProfileAlsoAllow: effective.providerProfileAlsoAllow,
+      profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
+      providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
       globalPolicy: effective.globalPolicy,
       globalProviderPolicy: effective.globalProviderPolicy,
       agentPolicy: effective.agentPolicy,
@@ -365,6 +376,7 @@ export function resolveConversationCapabilityProfile(
       explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
       explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
       explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
     },
   };
 }

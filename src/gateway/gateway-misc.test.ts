@@ -382,6 +382,18 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("exposes current buffered bytes for a targeted connection", () => {
+    const socket = makeRecordingSocket();
+    socket.bufferedAmount = 1234;
+    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
+    const clients = new Set<GatewayWsClient>([client]);
+    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
+
+    expect(getBufferedAmount("c-admin")).toBe(1234);
+    clients.delete(client);
+    expect(getBufferedAmount("c-admin")).toBeUndefined();
+  });
+
   it("keeps workers outside all generic and targeted gateway broadcasts", () => {
     const workerSocket = makeRecordingSocket();
     const worker = makeGatewayWsClient("c-worker", workerSocket, {
@@ -497,6 +509,44 @@ describe("gateway broadcaster", () => {
     const expectedEvents = ["plugin.myplugin.custom", "plugin.otherplugin.state"];
     expectSentEvents(writeSocket, expectedEvents);
     expectSentEvents(adminSocket, expectedEvents);
+  });
+
+  it("honors explicit read scope for plugin lifecycle events", () => {
+    const {
+      pairingSocket,
+      nodeSocket,
+      readSocket,
+      writeSocket,
+      adminSocket,
+      broadcastPluginEvent,
+    } = makeScopedBroadcastContext();
+
+    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(writeSocket, ["plugin.workboard.changed"]);
+    expectSentEvents(adminSocket, ["plugin.workboard.changed"]);
+  });
+
+  it("rejects invalid or reserved plugin event broadcasts", () => {
+    const { broadcastPluginEvent } = makeScopedBroadcastContext();
+    const unsafe = broadcastPluginEvent as unknown as (
+      event: string,
+      payload: unknown,
+      scope: string,
+    ) => void;
+
+    expect(() => unsafe("workboard.changed", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.approval.requested", {}, "operator.read")).toThrow(
+      "invalid plugin gateway event",
+    );
+    expect(() => unsafe("plugin.workboard.changed", {}, "operator.approvals")).toThrow(
+      "invalid plugin gateway event scope",
+    );
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {

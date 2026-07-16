@@ -85,7 +85,20 @@ function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
   }
 }
 
-function readCodexBinding(sessionId, sessionKey) {
+function readCodexBinding(sessionId, sessionKey, entry) {
+  if (sessionStoreContract === "legacy-json") {
+    const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
+    if (!sessionFile) {
+      throw new Error(`missing legacy Codex session file for ${sessionId}`);
+    }
+    const bindingPath = `${sessionFile}.codex-app-server.json`;
+    const binding = readJson(bindingPath);
+    if (![1, 2].includes(binding.schemaVersion) || typeof binding.threadId !== "string") {
+      throw new Error(`invalid legacy Codex app-server binding: ${JSON.stringify(binding)}`);
+    }
+    return binding;
+  }
+
   const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) {
     throw new Error(`missing OpenClaw state database: ${dbPath}`);
@@ -192,7 +205,7 @@ function readSessionEntry(sessionId) {
 }
 
 function configure() {
-  const modelRef = process.argv[3] || "codex/gpt-5.4";
+  const modelRef = process.argv[3] || "openai/gpt-5.4";
   const state = stateDir();
   const cfgPath = configPath();
   const cfg = fs.existsSync(cfgPath) ? readJson(cfgPath) : {};
@@ -524,7 +537,7 @@ function assertAgentTurn() {
     throw new Error(`missing OpenClaw transcript events for ${sessionId}`);
   }
 
-  const binding = readCodexBinding(sessionId, sessionKey);
+  const binding = readCodexBinding(sessionId, sessionKey, entry);
   if (typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }

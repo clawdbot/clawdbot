@@ -22,7 +22,6 @@ const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
-const loadedMonitorModules = new Set<MonitorModule>();
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
 
 type ZaloLifecycleMocks = {
@@ -92,7 +91,6 @@ async function importMonitorModule(params: {
   const module = (await import(
     `${monitorModuleUrl}?t=${params.cacheBust}-${Date.now()}`
   )) as MonitorModule;
-  loadedMonitorModules.add(module);
   return module;
 }
 
@@ -109,18 +107,17 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
-  for (const module of loadedMonitorModules) {
-    module.testing.clearHostedMediaRouteRefsForTest();
-  }
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 
 export function setLifecycleRuntimeCore(
   channel: NonNullable<NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["channel"]>,
+  state?: NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["state"],
 ) {
   getZaloRuntimeMock.mockReturnValue(
     createPluginRuntimeMock({
       channel,
+      ...(state ? { state } : {}),
     }),
   );
 }
@@ -139,7 +136,6 @@ export async function loadCachedLifecycleMonitorModule(cacheKey: string): Promis
     (async () => {
       installLifecycleModuleMocks();
       const module = (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
-      loadedMonitorModules.add(module);
       return module;
     })();
   cachedMonitorModules.set(key, cached);

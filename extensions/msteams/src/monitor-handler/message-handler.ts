@@ -899,7 +899,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           wasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
         },
         commands: {
-          authorized: commandAuthorized,
+          authorized: commandAuthorized === true,
         },
       },
       extra: {
@@ -1115,3 +1115,4 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

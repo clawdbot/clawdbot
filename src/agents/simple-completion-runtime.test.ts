@@ -20,7 +20,6 @@ const hoisted = vi.hoisted(() => ({
   getApiKeyForModelMock: vi.fn(),
   applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
-  resolveCopilotApiTokenMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   prepareModelForSimpleCompletionMock: vi.fn((params: { model: unknown }) => params.model),
   completeMock: vi.fn(),
@@ -54,10 +53,6 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
-}));
-
 vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
 }));
@@ -74,7 +69,6 @@ beforeEach(() => {
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
-  hoisted.resolveCopilotApiTokenMock.mockReset();
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.prepareModelForSimpleCompletionMock.mockReset();
   hoisted.completeMock.mockReset();
@@ -104,13 +98,16 @@ beforeEach(() => {
     source: "env:TEST_API_KEY",
     mode: "api-key",
   });
-  hoisted.resolveCopilotApiTokenMock.mockResolvedValue({
-    token: "copilot-runtime-token",
-    expiresAt: Date.now() + 60_000,
-    source: "cache:/tmp/copilot-token.json",
-    baseUrl: "https://api.individual.githubcopilot.com",
-  });
-  hoisted.prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
+  hoisted.prepareProviderRuntimeAuthMock.mockImplementation(
+    async (params: { provider: string }) => {
+      return params.provider === "github-copilot"
+        ? {
+            apiKey: "copilot-runtime-token",
+            baseUrl: "https://api.individual.githubcopilot.com",
+          }
+        : undefined;
+    },
+  );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
 });
 
@@ -303,9 +300,13 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "gpt-4.1",
     });
 
-    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: "ghu_test",
-      config: undefined,
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      provider: "github-copilot",
+      context: {
+        apiKey: "ghu_test",
+        authMode: "token",
+        modelId: "gpt-4.1",
+      },
     });
     const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
       string,
@@ -374,9 +375,9 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "gpt-4.1",
     });
 
-    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-      githubToken: sourceSecret,
-      config: undefined,
+    expect(callArg(hoisted.prepareProviderRuntimeAuthMock)).toMatchObject({
+      provider: "github-copilot",
+      context: { apiKey: sourceSentinel },
     });
     expectPreparedModelResult(result);
     expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
@@ -399,10 +400,8 @@ describe("prepareSimpleCompletionModel", () => {
       source: "profile:github-copilot:default",
       mode: "token",
     });
-    hoisted.resolveCopilotApiTokenMock.mockResolvedValueOnce({
-      token: "copilot-runtime-token",
-      expiresAt: Date.now() + 60_000,
-      source: "cache:/tmp/copilot-token.json",
+    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+      apiKey: "copilot-runtime-token",
       baseUrl: "https://api.copilot.enterprise.example",
     });
 

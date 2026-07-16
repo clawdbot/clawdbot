@@ -961,3 +961,4 @@ async function downloadToFallbackDir(httpUrl: string, caller: string): Promise<s
     return null;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

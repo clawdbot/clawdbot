@@ -1798,3 +1798,4 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.to).toBe("room-one");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

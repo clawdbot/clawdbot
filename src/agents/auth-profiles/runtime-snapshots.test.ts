@@ -13,8 +13,8 @@ import {
   noteRuntimeAuthProfileStorePersistedMutation,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
-  testing,
 } from "./runtime-snapshots.js";
+import { testing } from "./runtime-snapshots.test-support.js";
 import type { AuthProfileStore } from "./types.js";
 
 function createStore(access: string): AuthProfileStore {

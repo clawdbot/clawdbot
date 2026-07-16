@@ -26,6 +26,7 @@ import {
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -121,22 +122,7 @@ export async function agentsAddCommand(
   const hasFlags = params?.hasFlags === true;
   const nonInteractive = opts.nonInteractive === true || hasFlags;
 
-  if (nonInteractive && !workspaceFlag) {
-    runtime.error(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    runtime.exit(1);
-    return;
-  }
-
   if (nonInteractive) {
-    if (!nameInput) {
-      runtime.error(
-        `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
-      );
-      runtime.exit(1);
-      return;
-    }
     if (!workspaceFlag) {
       runtime.error(
         `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
@@ -144,10 +130,17 @@ export async function agentsAddCommand(
       runtime.exit(1);
       return;
     }
-    const agentId = normalizeAgentId(nameInput);
-    if (agentId === DEFAULT_AGENT_ID) {
+    if (!nameInput) {
       runtime.error(
-        `"${DEFAULT_AGENT_ID}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect the default agent.`,
+        `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+      );
+      runtime.exit(1);
+      return;
+    }
+    const agentId = normalizeAgentId(nameInput);
+    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+      runtime.error(
+        `"${agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
       );
       runtime.exit(1);
       return;
@@ -276,8 +269,8 @@ export async function agentsAddCommand(
             return "Required";
           }
           const normalized = normalizeAgentId(value);
-          if (normalized === DEFAULT_AGENT_ID) {
-            return `"${DEFAULT_AGENT_ID}" is reserved. Choose another name.`;
+          if (normalized === DEFAULT_AGENT_ID || isReservedSystemAgentId(normalized)) {
+            return `"${normalized}" is reserved. Choose another name.`;
           }
           return undefined;
         },
@@ -285,6 +278,10 @@ export async function agentsAddCommand(
 
     const agentName = normalizeOptionalString(name) ?? "";
     const agentId = normalizeAgentId(agentName);
+    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+      await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
+      return;
+    }
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
     }

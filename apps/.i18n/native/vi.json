@@ -589,6 +589,21 @@
       "translated": "Chưa có bản cập nhật canvas. Nhấn để thử lại."
     },
     {
+      "id": "native.android.00a2531a39904d08",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "Kết nối với Gateway để lưu từ đánh thức"
+    },
+    {
+      "id": "native.android.538201c75b85068f",
+      "source": "Wake words saved",
+      "translated": "Đã lưu từ đánh thức"
+    },
+    {
+      "id": "native.android.b367e85de3a7148f",
+      "source": "Could not save wake words",
+      "translated": "Không thể lưu từ đánh thức"
+    },
+    {
       "id": "native.android.4b07456682e725d9",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "translated": "Thất bại: không phát hiện được điểm cuối gateway bảo mật. Hãy bật TLS gateway hoặc Tailscale Serve, hoặc dùng địa chỉ LAN riêng đáng tin cậy với tùy chọn Không mã hóa được chọn."
@@ -4054,9 +4069,89 @@
       "translated": "Lưu hồ sơ"
     },
     {
-      "id": "native.android.19f0834b4dbcc85a",
-      "source": "Configure voice, transport, and playback.",
-      "translated": "Cấu hình giọng nói, truyền tải và phát lại."
+      "id": "native.android.deda55df7ca328fc",
+      "source": "Configure wake words, talk, and playback.",
+      "translated": "Thiết lập từ đánh thức, trò chuyện và phát âm thanh."
+    },
+    {
+      "id": "native.android.2ae2282617282586",
+      "source": "Voice",
+      "translated": "Giọng nói"
+    },
+    {
+      "id": "native.android.3f54d9356234744e",
+      "source": "Voice Wake",
+      "translated": "Đánh thức bằng giọng nói"
+    },
+    {
+      "id": "native.android.34ec8a3bc017cbd5",
+      "source": "Listen for wake words",
+      "translated": "Lắng nghe từ đánh thức"
+    },
+    {
+      "id": "native.android.6e58157abced395f",
+      "source": "Runs on-device while OpenClaw is visible.",
+      "translated": "Chạy trên thiết bị khi OpenClaw đang hiển thị."
+    },
+    {
+      "id": "native.android.6464166ab71fde3f",
+      "source": "On-device speech recognition is unavailable.",
+      "translated": "Tính năng nhận dạng giọng nói trên thiết bị không khả dụng."
+    },
+    {
+      "id": "native.android.35d996c1bc693bb9",
+      "source": "Wake listener",
+      "translated": "Trình nghe từ đánh thức"
+    },
+    {
+      "id": "native.android.12fd2cd4e7d1d778",
+      "source": "Last command: $command",
+      "translated": "Lệnh gần nhất: $command"
+    },
+    {
+      "id": "native.android.a36f052c5f1691d6",
+      "source": "Pauses during other voice activity.",
+      "translated": "Tạm dừng khi có hoạt động giọng nói khác."
+    },
+    {
+      "id": "native.android.a5272caac136694c",
+      "source": "Wake words",
+      "translated": "Từ đánh thức"
+    },
+    {
+      "id": "native.android.37e7e27c16eca7fe",
+      "source": "Add one wake word or phrase per field. Then say one before your command.",
+      "translated": "Thêm một từ hoặc cụm từ đánh thức vào mỗi trường. Sau đó, hãy nói một từ hoặc cụm từ đó trước lệnh của bạn."
+    },
+    {
+      "id": "native.android.95e42f0b4b6d4092",
+      "source": "Wake word or phrase",
+      "translated": "Từ hoặc cụm từ đánh thức"
+    },
+    {
+      "id": "native.android.0b35023a9220d572",
+      "source": "Remove wake phrase",
+      "translated": "Xóa cụm từ đánh thức"
+    },
+    {
+      "id": "native.android.0bff8c1428b32178",
+      "source": "Add wake phrase",
+      "translated": "Thêm cụm từ đánh thức"
+    },
+    {
+      "id": "native.android.dfb84902f6a483d0",
+      "source": "Save wake words",
+      "translated": "Lưu từ đánh thức"
+    },
+    {
+      "id": "native.android.5ab6829fa57f662d",
+      "source": "Saving…",
+      "translated": "Đang lưu…"
+    },
+    {
+      "id": "native.android.672382a4b7900ee6",
+      "source": "Connect to a Gateway to save wake words",
+      "translated": "Kết nối với Gateway để lưu từ đánh thức"
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -4144,14 +4239,14 @@
       "translated": "OpenClaw có thể nhận các cảnh báo đã chọn."
     },
     {
-      "id": "native.android.fef97bfb2cd5d228",
-      "source": "$quietStart to $quietEnd",
-      "translated": "$quietStart đến $quietEnd"
-    },
-    {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
       "translated": "Giờ yên lặng"
+    },
+    {
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart đến $quietEnd"
     },
     {
       "id": "native.android.db3ed951c0462727",
@@ -7882,6 +7977,56 @@
       "id": "native.android.ea5d9621ef0f0482",
       "source": "Speech error ($error)",
       "translated": "Lỗi giọng nói ($error)"
+    },
+    {
+      "id": "native.android.11d70a2e3419e346",
+      "source": "Off",
+      "translated": "Tắt"
+    },
+    {
+      "id": "native.android.b21cacf24f03d772",
+      "source": "On-device speech recognition unavailable",
+      "translated": "Nhận dạng giọng nói trên thiết bị không khả dụng"
+    },
+    {
+      "id": "native.android.c379aa335b932db2",
+      "source": "Paused",
+      "translated": "Đã tạm dừng"
+    },
+    {
+      "id": "native.android.d0c22c4961346923",
+      "source": "Listening",
+      "translated": "Đang nghe"
+    },
+    {
+      "id": "native.android.894062d81447a410",
+      "source": "Microphone permission required",
+      "translated": "Cần quyền truy cập micrô"
+    },
+    {
+      "id": "native.android.d404b3d5f084f5d2",
+      "source": "Device language not supported",
+      "translated": "Ngôn ngữ của thiết bị không được hỗ trợ"
+    },
+    {
+      "id": "native.android.d559a0a3f32701b8",
+      "source": "On-device language model unavailable",
+      "translated": "Mô hình ngôn ngữ trên thiết bị không khả dụng"
+    },
+    {
+      "id": "native.android.269915b38b1486c0",
+      "source": "Triggered",
+      "translated": "Đã kích hoạt"
+    },
+    {
+      "id": "native.android.9a0753f5ae9394ab",
+      "source": "Gateway unavailable",
+      "translated": "Gateway không khả dụng"
+    },
+    {
+      "id": "native.android.eef69ee3eb23cc1b",
+      "source": "Starting…",
+      "translated": "Đang khởi động…"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
@@ -16879,6 +17024,36 @@
       "translated": "Gateway \\(found) không khớp với ứng dụng \\(required). Quá trình thiết lập sẽ cập nhật Gateway."
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "Đang sửa chữa bản cập nhật OpenClaw Gateway…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "Đang cập nhật OpenClaw Gateway lên \\(targetVersion)…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Bản cập nhật Gateway cần được chú ý."
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Cập nhật Gateway không thành công."
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Đã cập nhật Gateway, nhưng không thể xác minh."
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion) đã được cài đặt."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Camera"
@@ -17257,26 +17432,6 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "Một phần: \\(self.summary.totals.missingCostEntries) mục thiếu chi phí"
-    },
-    {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "Trò chuyện"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "Mẹo: thử “status”, “doctor”, “set default model …” hoặc “connect telegram”."
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -18954,6 +19109,11 @@
       "translated": "Nghiêm trọng"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "Phiên mới"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "Cài đặt..."
@@ -18967,6 +19127,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "Tiến tới"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "Bảng lệnh…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -19424,9 +19589,9 @@
       "translated": "Chi tiết được liệt kê ở mỗi tùy chọn phía trên. Bạn có thể sửa đăng nhập rồi thử lại, hoặc kết nối bằng khóa API hoặc token bên dưới."
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "Cần trợ giúp? Trò chuyện với Crestodian"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "Cần trợ giúp? Trò chuyện với OpenClaw"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -19469,11 +19634,6 @@
       "translated": "Kiểm tra lại"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "Kết nối bằng khóa API hoặc token…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Đăng nhập với một nhà cung cấp"
@@ -19487,6 +19647,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "Thêm tùy chọn đăng nhập"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -19594,9 +19759,9 @@
       "translated": "Khóa đó không hoạt động"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — trợ lý thiết lập"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — trợ lý thiết lập"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -19624,39 +19789,39 @@
       "translated": "Sao chép lỗi"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<bí mật đã được ẩn>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian đã bị gián đoạn. Khởi động lại để thử lại."
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw đã bị gián đoạn. Hãy khởi động lại để thử lần nữa."
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Kết nối Gateway đã thay đổi. Khởi động lại Crestodian để kết nối lại."
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Kết nối Gateway đã thay đổi. Hãy khởi động lại OpenClaw để kết nối lại."
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian đang hoạt động…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw đang hoạt động…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
       "translated": "Khởi động lại"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
       "translated": "Nhập bí mật…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Trả lời Crestodian… (yes sẽ thiết lập mọi thứ)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "Trả lời OpenClaw… (chọn có để thiết lập mọi thứ)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -20404,6 +20569,181 @@
       "translated": "Chia sẻ vị trí khi tác nhân yêu cầu"
     },
     {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "Đã cập nhật OpenClaw"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "Đang hoàn tất cập nhật OpenClaw"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Đang kiểm tra ứng dụng Mac và Gateway…"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Khôi phục Gateway không thành công."
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "Không thể cài đặt lại môi trường chạy OpenClaw được quản lý."
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Đang khởi động lại và xác minh Gateway…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Đang xác minh môi trường chạy của nút Mac…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "Đang thông báo cho tác nhân rằng bạn đã quay lại…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "Chào mừng bạn trở lại"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) và Gateway đã sẵn sàng."
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) và môi trường chạy của nút Mac đã sẵn sàng."
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "Chưa thể thông báo cho tác nhân của bạn. OpenClaw sẽ thử lại sau lần khởi chạy ứng dụng tiếp theo."
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw không thể tự động thông báo cho tác nhân của bạn. Quá trình cập nhật ứng dụng và Gateway đã hoàn tất."
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw không thể tự động thông báo cho tác nhân của bạn. Quá trình cập nhật ứng dụng và nút Mac đã hoàn tất."
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw không thể xác nhận thông báo cho tác nhân. OpenClaw sẽ không thử lại để tránh gửi lời chào mừng trùng lặp."
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "Gateway từ xa cũ hơn ứng dụng Mac này, nên OpenClaw đã bỏ qua thông báo cho tác tử."
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway vẫn đang tạm dừng, nên OpenClaw không đánh thức tác tử của bạn."
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Xác minh Gateway không thành công."
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "Môi trường thực thi được quản lý không khớp với ứng dụng Mac đã cập nhật."
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Nút Mac không khởi động lại."
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Nút Mac không chuyển sang trạng thái sẵn sàng."
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "Dịch vụ nút đã khởi động lại nhưng không tiếp tục chạy."
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway không khởi động."
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "Bản cập nhật đã được cài đặt, nhưng trạng thái hoạt động của Gateway chưa chuyển sang sẵn sàng."
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway không thể kết nối lại."
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw đã cài đặt bản cập nhật nhưng không thể xác minh kết nối Gateway."
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Không thể kiểm tra Gateway."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw không thể đọc bản ghi quyền sở hữu dịch vụ Gateway. Hãy thử lại sau khi kiểm tra LaunchAgent của Gateway."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Không thể kiểm tra nút Mac."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw không thể đọc bản ghi quyền sở hữu dịch vụ nút. Hãy thử lại sau khi kiểm tra LaunchAgent của nút."
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Bản cập nhật Gateway cần được hỗ trợ"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "Hướng dẫn cập nhật"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Hỏi Discord"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "Thử lại"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "Tiếp tục"
+    },
+    {
       "id": "native.apple.1eeca02c45d3db5a",
       "source": "This gateway requires an auth token",
       "translated": "Gateway này yêu cầu mã xác thực"
@@ -20714,9 +21054,9 @@
       "translated": "Giọng nói & Trò chuyện"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -21002,6 +21342,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "Được tích hợp sẵn"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "Trợ lý thiết lập ứng dụng AI dành cho bạn. Trợ lý có thể kiểm tra trạng thái, sửa cấu hình, chuyển đổi mô hình và kết nối các kênh."
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "Trò chuyện"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "Mẹo: hãy thử “status”, “doctor”, “set default model …” hoặc “connect telegram”."
     },
     {
       "id": "native.apple.9df0af709d3b38bf",

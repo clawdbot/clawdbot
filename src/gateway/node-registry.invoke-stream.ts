@@ -22,18 +22,101 @@ export type PendingInvoke = {
   onProgress?: (chunk: string) => void;
   nextProgressSeq: number;
   progressChunks: Map<number, string>;
+  nextInputSeq: number;
   removeAbortListener?: () => void;
 };
 
+export type NodeInvokeProgressParams = {
+  invokeId: string;
+  nodeId: string;
+  connId: string | undefined;
+  seq: number;
+  chunk: string;
+};
+
+export type NodeInvokeResultParams = {
+  id: string;
+  nodeId: string;
+  connId: string | undefined;
+  ok: boolean;
+  payload?: unknown;
+  payloadJSON?: string | null;
+  error?: { code?: string; message?: string } | null;
+};
+
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
+const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
 
 export class NodeInvokeStreamController {
   constructor(
     private readonly options: {
       pendingInvokes: Map<string, PendingInvoke>;
       sendCancel: (requestId: string, pending: PendingInvoke) => void;
+      isConnectionActive: (pending: PendingInvoke) => boolean;
+      sendInput: (
+        invokeId: string,
+        pending: PendingInvoke,
+        seq: number,
+        payloadJSON: string,
+      ) => boolean;
+      onFailedResult: (pending: PendingInvoke) => void;
+      // Settles a pending invoke on transport loss. The registry's callback
+      // preserves MCP's structured-failure contract (resolve, not reject) so
+      // MCP callers can degrade instead of seeing an opaque invoke error.
+      disconnectPending: (pending: PendingInvoke) => void;
     },
   ) {}
+
+  sendInput(invokeId: string, payload: unknown): void {
+    const pending = this.options.pendingInvokes.get(invokeId);
+    if (!pending) {
+      throw new Error("node invoke is not pending");
+    }
+    const payloadJSON = JSON.stringify(payload);
+    if (payloadJSON === undefined) {
+      throw new Error("node invoke input is not serializable");
+    }
+    if (Buffer.byteLength(payloadJSON, "utf8") > MAX_INVOKE_INPUT_BYTES) {
+      throw new Error("node invoke input exceeds 16 KiB");
+    }
+    if (!this.options.isConnectionActive(pending)) {
+      throw new Error("node invoke connection is unavailable");
+    }
+    if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
+      throw new Error("failed to send node invoke input");
+    }
+    pending.nextInputSeq += 1;
+  }
+
+  handleDisconnect(connId: string): void {
+    for (const [id, pending] of this.options.pendingInvokes) {
+      if (pending.connId !== connId) {
+        continue;
+      }
+      this.clearTimers(pending);
+      this.options.disconnectPending(pending);
+      this.options.pendingInvokes.delete(id);
+    }
+  }
+
+  handleResult(params: NodeInvokeResultParams): boolean {
+    const pending = this.options.pendingInvokes.get(params.id);
+    if (!pending || pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
+      return false;
+    }
+    this.clearTimers(pending);
+    this.options.pendingInvokes.delete(params.id);
+    if (!params.ok) {
+      this.options.onFailedResult(pending);
+    }
+    pending.resolve({
+      ok: params.ok,
+      payload: params.payload,
+      payloadJSON: params.payloadJSON ?? null,
+      error: params.error ?? null,
+    });
+    return true;
+  }
 
   armPending(params: {
     requestId: string;
@@ -79,13 +162,7 @@ export class NodeInvokeStreamController {
     }
   }
 
-  handleProgress(params: {
-    invokeId: string;
-    nodeId: string;
-    connId: string | undefined;
-    seq: number;
-    chunk: string;
-  }): boolean {
+  handleProgress(params: NodeInvokeProgressParams): boolean {
     const pending = this.options.pendingInvokes.get(params.invokeId);
     if (
       !pending ||

@@ -189,18 +189,3 @@ export function hasPersistedIMessageEcho(params: {
   }
   return false;
 }
-
-export function resetPersistedIMessageEchoCacheForTest(
-  options: { clearPersistent?: boolean } = {},
-): void {
-  mirror = null;
-  persistenceFailureLogged = false;
-  if (options.clearPersistent === false) {
-    return;
-  }
-  try {
-    openPersistedEchoStore().clear();
-  } catch {
-    // best-effort
-  }
-}

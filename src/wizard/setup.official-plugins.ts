@@ -59,11 +59,7 @@ function formatInstallHint(install: PluginPackageInstall): string {
   return "install source";
 }
 
-export const testing = {
-  formatInstallHint,
-};
-
-export function resolveOfficialPluginOnboardingInstallEntries(params: {
+function resolveOfficialPluginOnboardingInstallEntries(params: {
   config: OpenClawConfig;
 }): OfficialPluginOnboardingInstallEntry[] {
   const entries: OfficialPluginOnboardingInstallEntry[] = [];

@@ -283,6 +283,40 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     });
   });
 
+  it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
+    const modelPrefix = "m".repeat(255);
+    const exactBoundary = "b".repeat(256);
+    const events = await collectProviderTimelineEvents(async () => {
+      const cases: Array<{ callId: string; model: string }> = [
+        { callId: "call-timeline-unicode-boundary", model: `${modelPrefix}😀tail` },
+        { callId: "call-timeline-exact-boundary", model: exactBoundary },
+      ];
+      for (const { callId, model } of cases) {
+        const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+          (() => undefined) as unknown as StreamFn,
+          {
+            runId: "run-timeline-unicode-boundary",
+            provider: "openai",
+            model,
+            trace: createDiagnosticTraceContext(),
+            nextCallId: () => callId,
+          },
+        );
+        await wrapped({} as never, {} as never, {} as never);
+      }
+    });
+
+    expect(events).toHaveLength(2);
+    const splitBoundaryModel = readRecordField(events[0]!, "attributes", "attributes").model;
+    expect(splitBoundaryModel).toBe(modelPrefix);
+    expect(splitBoundaryModel).toHaveLength(255);
+    expect(splitBoundaryModel).not.toContain("�");
+    expect(splitBoundaryModel).not.toMatch(/[\uD800-\uDFFF]/u);
+    const exactBoundaryModel = readRecordField(events[1]!, "attributes", "attributes").model;
+    expect(exactBoundaryModel).toBe(exactBoundary);
+    expect(exactBoundaryModel).toHaveLength(256);
+  });
+
   it("emits one failed provider timeline event for a thrown model call", async () => {
     let now = Date.parse("2026-07-09T18:31:00.000Z");
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -1219,3 +1253,4 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

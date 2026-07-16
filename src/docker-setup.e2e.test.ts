@@ -1200,3 +1200,4 @@ describe("scripts/docker/setup.sh", () => {
     expect(argLine).toBe("ARG OPENCLAW_IMAGE_APT_PACKAGES");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

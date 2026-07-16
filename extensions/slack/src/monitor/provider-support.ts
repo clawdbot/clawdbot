@@ -2,6 +2,7 @@
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -186,16 +187,17 @@ export function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-export function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
+export function publishSlackConnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
+) {
   if (!setStatus) {
     return;
   }
-  const now = Date.now();
   setStatus({
     connected: true,
-    lastConnectedAt: now,
-    healthState: "healthy",
-    lastError: null,
+    lastConnectedAt: Date.now(),
+    ...identityHealth,
   });
 }
 

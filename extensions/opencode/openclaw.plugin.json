@@ -2,7 +2,7 @@
   "id": "opencode",
   "icon": "https://cdn.simpleicons.org/opencode",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
@@ -225,6 +225,23 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "sessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "sessionCatalog.enabled": {
+      "label": "OpenCode Session Catalog",
+      "help": "Auto-detect OpenCode sessions on the Gateway and paired nodes, then show them in the sessions sidebar."
+    }
   }
 }

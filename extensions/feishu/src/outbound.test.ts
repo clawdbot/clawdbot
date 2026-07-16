@@ -79,6 +79,7 @@ vi.mock("./comment-reaction.js", () => ({
 
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
+import { buildFeishuPostMessageContent } from "./markdown.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
@@ -325,6 +326,19 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
 
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  });
+
+  it("preserves single newlines in chunker text (card and comment text must not be modified)", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    const text = "line one\nline two\nline three";
+    const chunks = chunker(text, 100);
+    // All chunks joined should equal the original text with single newlines intact
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.join("")).not.toContain("\n\n");
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
@@ -2099,6 +2113,92 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     expect(sendMessageCall()?.replyToMessageId).toBe("om_inline");
     expect(sendMessageCall()?.replyInThread).toBe(false);
   });
+
+  it("materializes post-md prose soft breaks after raw render-mode routing", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "first line\nsecond line",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+  });
+
+  it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      replyToId: "om_reply_target",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [index, [params]] of sendMessageFeishuMock.mock.calls.entries()) {
+      expect(params.text.length).toBeLessThanOrEqual(4_000);
+      expect(params.replyToMessageId).toBe(index === 0 ? "om_reply_target" : undefined);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the selected account limit", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: { textChunkLimit: 10 },
+            },
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 10 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.text.length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("re-chunks expanded post-md text at the serialized byte envelope", async () => {
+    await sendText({
+      cfg: {
+        channels: {
+          feishu: {
+            textChunkLimit: 25_000,
+          },
+        },
+      },
+      to: "chat_1",
+      text: Array.from({ length: 6_150 }, () => "a").join("\n"),
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      const content = buildFeishuPostMessageContent({ messageText: params.text });
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    }
+  });
+
+  it("keeps every expanded post-md subchunk in the requested thread", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: Array.from({ length: 2_200 }, () => "a").join("\n"),
+      threadId: "om_thread_root",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+    for (const [params] of sendMessageFeishuMock.mock.calls) {
+      expect(params.replyToMessageId).toBe("om_thread_root");
+      expect(params.replyInThread).toBe(true);
+    }
+  });
 });
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
@@ -2366,3 +2466,4 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

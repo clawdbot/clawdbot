@@ -1045,6 +1045,7 @@ describe("skills-clawhub", () => {
 
   it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
     const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
@@ -1057,6 +1058,7 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, {
@@ -1069,6 +1071,7 @@ describe("skills-clawhub", () => {
         version: "1.0.0",
         baseUrl: undefined,
       });
+      expect(warn).not.toHaveBeenCalled();
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -1335,6 +1338,7 @@ describe("skills-clawhub", () => {
 
   it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
       await fs.mkdir(params.targetDir, { recursive: true });
@@ -1346,9 +1350,14 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "Skill verification for agentreceipt failed: verification down",
+      );
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -2796,3 +2805,4 @@ describe("ClawHub origin provenance readback", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

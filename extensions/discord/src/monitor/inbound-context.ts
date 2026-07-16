@@ -45,7 +45,7 @@ export function buildDiscordGroupSystemPrompt(
   return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 }
 
-export function buildDiscordUntrustedContext(params: {
+function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
   channelTopic?: string;
 }): MsgContext["UntrustedStructuredContext"] | undefined {

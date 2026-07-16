@@ -7,7 +7,8 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { SessionListRow } from "./sessions-helpers.js";
-import { runSessionsSendA2AFlow, testing } from "./sessions-send-tool.a2a.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { testing } from "./sessions-send-tool.a2a.test-support.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 

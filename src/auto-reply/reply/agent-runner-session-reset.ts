@@ -25,7 +25,7 @@ const deps = {
   error: (message: string) => defaultRuntime.error(message),
 };
 
-export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
+function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
   Object.assign(deps, {
     generateSecureUuid,
     persistSessionResetLifecycle,
@@ -33,6 +33,12 @@ export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof de
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.agentRunnerSessionResetTestApi")
+  ] = { setAgentRunnerSessionResetTestDeps };
 }
 
 export async function resetReplyRunSession(params: {

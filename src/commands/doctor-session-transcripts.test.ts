@@ -25,10 +25,45 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
 import {
   detectSessionTranscriptHealthIssues,
   noteSessionTranscriptHealth,
-  repairBrokenSessionTranscriptFile,
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
+
+async function repairBrokenSessionTranscriptFile(params: {
+  filePath: string;
+  shouldRepair: boolean;
+}) {
+  const [issue] = await detectSessionTranscriptHealthIssues({
+    sessionDirs: [path.dirname(params.filePath)],
+  });
+  if (!issue) {
+    return {
+      filePath: params.filePath,
+      broken: false,
+      repaired: false,
+      originalEntries: 0,
+      activeEntries: 0,
+      legacyOpenAICodexEntries: 0,
+    };
+  }
+  if (!params.shouldRepair) {
+    return issue;
+  }
+
+  await noteSessionTranscriptHealth({
+    sessionDirs: [path.dirname(params.filePath)],
+    shouldRepair: true,
+  });
+  const backupPrefix = `${path.basename(params.filePath)}.pre-doctor-`;
+  const backupName = (await fs.readdir(path.dirname(params.filePath))).find(
+    (entry) => entry.startsWith(backupPrefix) && entry.endsWith(".bak"),
+  );
+  return {
+    ...issue,
+    repaired: true,
+    ...(backupName ? { backupPath: path.join(path.dirname(params.filePath), backupName) } : {}),
+  };
+}
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -122,7 +157,7 @@ describe("doctor session transcript repair", () => {
     expect(result.repaired).toBe(true);
     expect(result.originalEntries).toBe(6);
     expect(result.activeEntries).toBe(3);
-    if (result.backupPath === undefined) {
+    if (!("backupPath" in result) || result.backupPath === undefined) {
       throw new Error("expected transcript backup path");
     }
     await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
@@ -222,8 +257,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -232,6 +269,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "import",
     });
@@ -266,8 +304,10 @@ describe("doctor session transcript repair", () => {
       },
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const cfg = {};
 
     await noteSessionTranscriptHealth({
+      cfg,
       env,
       sessionDirs: [sessionsDir],
       sessionSqlite: true,
@@ -276,6 +316,7 @@ describe("doctor session transcript repair", () => {
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,
+      cfg,
       env,
       mode: "dry-run",
     });

@@ -21,7 +21,7 @@ type QaParityReportStep = {
   details?: string;
 };
 
-export type QaParityReportScenario = {
+type QaParityReportScenario = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
@@ -194,9 +194,7 @@ function scenarioHasRuntimeToolCallEvidence(scenario: QaParityReportScenario): b
   );
 }
 
-export function computeQaAgenticParityMetrics(
-  summary: QaParitySuiteSummary,
-): QaAgenticParityMetrics {
+function computeQaAgenticParityMetrics(summary: QaParitySuiteSummary): QaAgenticParityMetrics {
   const scenarios = summary.scenarios.map((scenario) => ({
     ...scenario,
     status: normalizeScenarioStatus(scenario.status),
@@ -398,7 +396,7 @@ function verifySummaryLabelMatch(params: {
   });
 }
 
-export class QaParityLabelMismatchError extends Error {
+class QaParityLabelMismatchError extends Error {
   readonly role: "candidate" | "baseline";
   readonly label: string;
   readonly runProvider: string;

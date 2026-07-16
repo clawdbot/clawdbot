@@ -229,20 +229,12 @@ async function diagnoseCdpHealthCommand(
       settled = true;
       clearTimeout(timer);
       ws.off("message", onMessage);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
+      ws.close();
       resolve(value);
     };
     const timer = setTimeout(
       () => {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
+        ws.terminate();
         finish({
           ok: false,
           code: opened ? "websocket_health_command_timeout" : "websocket_handshake_failed",

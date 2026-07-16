@@ -3257,3 +3257,4 @@ describe("installPluginFromClawHub", () => {
     await expectClawHubInstallError({ setup, spec, expected });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

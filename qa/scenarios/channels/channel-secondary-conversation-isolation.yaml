@@ -17,7 +17,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     summary: Send sequential turns to primary and secondary channel conversations and assert isolation.

@@ -20,7 +20,6 @@ import {
   handleSessionStateSessionDeleted,
   handleSessionStateSessionReset,
   listSessionStateEventsSince,
-  pruneSessionStateEvents,
   recordSessionCompacted,
   recordSessionGoalChanged,
   recordSessionHumanDirectMessage,
@@ -28,10 +27,11 @@ import {
   recordSubagentSpawned,
   recordSubagentTerminalState,
   registerSessionStateWatch,
-  sessionStateEventStoreLimits,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
 
+const SESSION_STATE_MAX_ROWS = 50_000;
+const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const tempDirs: string[] = [];
 const watcher = "agent:main:main";
 const nestedWatcher = "agent:main:subagent:parent";
@@ -125,9 +125,9 @@ describe("session state events", () => {
     const event = recordSessionStateEvent(eventInput(), { ...database, now });
     expect(getSessionStateVersion(child, "main", database)).toBe(event?.sequence);
 
-    pruneSessionStateEvents({
+    sweepSessionStateWatchNotices({
       ...database,
-      now: now + sessionStateEventStoreLimits.retentionMs + 1,
+      now: now + SESSION_STATE_RETENTION_MS + 1,
     });
 
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).events).toEqual([]);
@@ -243,6 +243,20 @@ describe("session state events", () => {
     expect(peekSystemEventEntries(watcher)).toEqual([]);
   });
 
+  it("notifies watchers when an upstream session disappears", () => {
+    const database = createDatabaseOptions();
+    seedChild(database);
+    resetSystemEventsForTest();
+
+    const event = recordSessionStateEvent(
+      eventInput({ kind: "upstream_missing", actorType: "system" }),
+      database,
+    );
+
+    expect(event).toMatchObject({ kind: "upstream_missing", actorType: "system" });
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+  });
+
   it("returns the existing row for a duplicate dedupe key", () => {
     const database = createDatabaseOptions();
     const input = eventInput({
@@ -288,7 +302,7 @@ describe("session state events", () => {
     const { db } = openOpenClawStateDatabase(database);
     db.exec(`
       WITH RECURSIVE rows(value) AS (
-        SELECT 1 UNION ALL SELECT value + 1 FROM rows WHERE value <= ${sessionStateEventStoreLimits.maxRows}
+        SELECT 1 UNION ALL SELECT value + 1 FROM rows WHERE value <= ${SESSION_STATE_MAX_ROWS}
       )
       INSERT INTO session_state_events (
         session_key, agent_id, kind, actor_type, occurred_at, summary
@@ -299,11 +313,11 @@ describe("session state events", () => {
       .prepare("SELECT max(sequence) AS sequence FROM session_state_events")
       .get() as { sequence: number };
 
-    pruneSessionStateEvents({ ...database, now });
+    sweepSessionStateWatchNotices({ ...database, now });
     const count = db.prepare("SELECT count(*) AS count FROM session_state_events").get() as {
       count: number;
     };
-    expect(count.count).toBe(sessionStateEventStoreLimits.maxRows);
+    expect(count.count).toBe(SESSION_STATE_MAX_ROWS);
 
     const next = recordSessionStateEvent(eventInput(), { ...database, now: now + 1 })!;
     expect(next.sequence).toBeGreaterThan(before.sequence);
@@ -350,12 +364,12 @@ describe("session state events", () => {
     expect(old.sequence).toBeGreaterThan(1);
     expect(listSessionStateEventsSince(child, "main", 0, 200, database).historyGap).toBe(false);
 
-    const later = now + sessionStateEventStoreLimits.retentionMs + 1;
+    const later = now + SESSION_STATE_RETENTION_MS + 1;
     const fresh = recordSessionStateEvent(eventInput({ summary: "fresh" }), {
       ...database,
       now: later,
     })!;
-    pruneSessionStateEvents({ ...database, now: later });
+    sweepSessionStateWatchNotices({ ...database, now: later });
 
     const sincePruned = listSessionStateEventsSince(child, "main", 0, 200, database);
     expect(sincePruned.historyGap).toBe(true);

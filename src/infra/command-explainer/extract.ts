@@ -72,15 +72,10 @@ const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
 
 // Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
-  startIndex: number;
-  startPosition: SourceSpan["startPosition"];
   mapOffset?: (offset: number) => { index: number; position: SourceSpan["startPosition"] };
 };
 
-const ROOT_SPAN_BASE: SpanBase = {
-  startIndex: 0,
-  startPosition: { row: 0, column: 0 },
-};
+const ROOT_SPAN_BASE: SpanBase = {};
 
 type CommandTopologyBucket = {
   context: CommandContext;
@@ -95,60 +90,27 @@ type OperatorSource = {
   spanBase: SpanBase;
 };
 
-// Tree-sitter exposes nullable children; normalize once for the walkers below.
-function children(node: TreeSitterNode): TreeSitterNode[] {
-  return Array.from({ length: node.childCount }, (_, index) => node.child(index)).filter(
-    (child): child is TreeSitterNode => child !== null,
-  );
-}
-
-function namedChildren(node: TreeSitterNode): TreeSitterNode[] {
-  return Array.from({ length: node.namedChildCount }, (_, index) => node.namedChild(index)).filter(
-    (child): child is TreeSitterNode => child !== null,
-  );
-}
-
 function hasDirectChildType(node: TreeSitterNode, type: string): boolean {
-  return children(node).some((child) => child.type === type);
-}
-
-function translatePosition(
-  position: SourceSpan["startPosition"],
-  base: SourceSpan["startPosition"],
-): SourceSpan["startPosition"] {
-  return {
-    row: base.row + position.row,
-    column: position.row === 0 ? base.column + position.column : position.column,
-  };
+  return node.children.some((child) => child.type === type);
 }
 
 function translateSpan(span: SourceSpan, base: SpanBase): SourceSpan {
-  if (base.mapOffset) {
-    const start = base.mapOffset(span.startIndex);
-    const end = base.mapOffset(span.endIndex);
-    return {
-      startIndex: start.index,
-      endIndex: end.index,
-      startPosition: start.position,
-      endPosition: end.position,
-    };
+  if (!base.mapOffset) {
+    return span;
   }
+  const start = base.mapOffset(span.startIndex);
+  const end = base.mapOffset(span.endIndex);
   return {
-    startIndex: base.startIndex + span.startIndex,
-    endIndex: base.startIndex + span.endIndex,
-    startPosition: translatePosition(span.startPosition, base.startPosition),
-    endPosition: translatePosition(span.endPosition, base.startPosition),
+    startIndex: start.index,
+    endIndex: end.index,
+    startPosition: start.position,
+    endPosition: end.position,
   };
 }
 
 function spanFromNode(node: TreeSitterNode, base: SpanBase = ROOT_SPAN_BASE): SourceSpan {
-  const span = {
-    startIndex: node.startIndex,
-    endIndex: node.endIndex,
-    startPosition: { row: node.startPosition.row, column: node.startPosition.column },
-    endPosition: { row: node.endPosition.row, column: node.endPosition.column },
-  };
-  return translateSpan(span, base);
+  const { startIndex, endIndex, startPosition, endPosition } = node;
+  return translateSpan({ startIndex, endIndex, startPosition, endPosition }, base);
 }
 
 function advancePosition(
@@ -178,7 +140,7 @@ function advancePosition(
 }
 
 function positionAtSourceIndex(source: string, index: number): SourceSpan["startPosition"] {
-  return advancePosition(ROOT_SPAN_BASE.startPosition, source.slice(0, index));
+  return advancePosition({ row: 0, column: 0 }, source.slice(0, index));
 }
 
 function spanFromSourceRange(source: string, startIndex: number, endIndex: number): SourceSpan {
@@ -187,111 +149,6 @@ function spanFromSourceRange(source: string, startIndex: number, endIndex: numbe
     endIndex,
     startPosition: positionAtSourceIndex(source, startIndex),
     endPosition: positionAtSourceIndex(source, endIndex),
-  };
-}
-
-function spanFromSourceRangeWithBase(
-  source: string,
-  startIndex: number,
-  endIndex: number,
-  base: SpanBase,
-): SourceSpan {
-  if (base.mapOffset) {
-    const start = base.mapOffset(startIndex);
-    const end = base.mapOffset(endIndex);
-    return {
-      startIndex: start.index,
-      endIndex: end.index,
-      startPosition: start.position,
-      endPosition: end.position,
-    };
-  }
-  return translateSpan(spanFromSourceRange(source, startIndex, endIndex), base);
-}
-
-function utf8ByteLengthForCodePoint(codePoint: number): number {
-  if (codePoint <= 0x7f) {
-    return 1;
-  }
-  if (codePoint <= 0x7ff) {
-    return 2;
-  }
-  if (codePoint <= 0xffff) {
-    return 3;
-  }
-  return 4;
-}
-
-function utf8ByteLength(text: string): number {
-  let length = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const codePoint = text.codePointAt(index);
-    if (codePoint === undefined) {
-      continue;
-    }
-    length += utf8ByteLengthForCodePoint(codePoint);
-    if (codePoint > 0xffff) {
-      index += 1;
-    }
-  }
-  return length;
-}
-
-function utf8ByteOffsetToStringIndex(text: string, byteOffset: number): number {
-  if (byteOffset <= 0) {
-    return 0;
-  }
-  let currentByteOffset = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const codePoint = text.codePointAt(index);
-    if (codePoint === undefined) {
-      return text.length;
-    }
-    const codePointLength = utf8ByteLengthForCodePoint(codePoint);
-    if (currentByteOffset + codePointLength > byteOffset) {
-      return index;
-    }
-    currentByteOffset += codePointLength;
-    if (currentByteOffset === byteOffset) {
-      return codePoint > 0xffff ? index + 2 : index + 1;
-    }
-    if (codePoint > 0xffff) {
-      index += 1;
-    }
-  }
-  return text.length;
-}
-
-function parserOffsetToStringIndex(
-  source: string,
-  rootNode: TreeSitterNode,
-): (offset: number) => number {
-  const utf8Length = utf8ByteLength(source);
-  if (utf8Length !== source.length && rootNode.endIndex === utf8Length) {
-    return (offset) => utf8ByteOffsetToStringIndex(source, offset);
-  }
-  return (offset) => offset;
-}
-
-function spanBaseForParserSource(
-  source: string,
-  rootNode: TreeSitterNode,
-  base: SpanBase,
-): SpanBase {
-  const offsetToStringIndex = parserOffsetToStringIndex(source, rootNode);
-  return {
-    startIndex: base.startIndex,
-    startPosition: base.startPosition,
-    mapOffset(offset) {
-      const sourceIndex = offsetToStringIndex(offset);
-      if (base.mapOffset) {
-        return base.mapOffset(sourceIndex);
-      }
-      return {
-        index: base.startIndex + sourceIndex,
-        position: advancePosition(base.startPosition, source.slice(0, sourceIndex)),
-      };
-    },
   };
 }
 
@@ -580,10 +437,7 @@ function decodeAnsiCString(text: string): string {
 }
 
 function hasDynamicWordPart(node: TreeSitterNode): boolean {
-  return (
-    DYNAMIC_WORD_NODE_TYPES.has(node.type) ||
-    namedChildren(node).some((child) => hasDynamicWordPart(child))
-  );
+  return DYNAMIC_WORD_NODE_TYPES.has(node.type) || node.namedChildren.some(hasDynamicWordPart);
 }
 
 function shellWordValue(node: TreeSitterNode): ShellWordValue {
@@ -593,7 +447,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
   if (
     node.type !== "command_name" &&
     node.type !== "concatenation" &&
-    namedChildren(node).some((child) => hasDynamicWordPart(child))
+    node.namedChildren.some((child) => hasDynamicWordPart(child))
   ) {
     return {
       kind: "dynamic",
@@ -603,7 +457,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
 
   switch (node.type) {
     case "command_name": {
-      const parts = namedChildren(node);
+      const parts = node.namedChildren;
       if (parts.length === 0) {
         return hasUnescapedDynamicPattern(node.text)
           ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
@@ -635,7 +489,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       }
       let value = "";
       let dynamic = false;
-      for (const child of namedChildren(node)) {
+      for (const child of node.namedChildren) {
         const childValue = shellWordValue(child);
         value += childValue.value;
         if (childValue.kind !== "literal") {
@@ -645,18 +499,10 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       return dynamic ? { kind: "dynamic", value } : { kind: "literal", value };
     }
     default:
-      return namedChildren(node).some((child) => shellWordValue(child).kind === "dynamic")
+      return node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
         ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
         : { kind: "literal", value: decodeUnquotedShellText(node.text) };
   }
-}
-
-function commandNameNode(node: TreeSitterNode): TreeSitterNode | null {
-  return (
-    node.childForFieldName("name") ??
-    namedChildren(node).find((child) => child.type === "command_name") ??
-    null
-  );
 }
 
 function argvFromCommand(
@@ -672,17 +518,11 @@ function argvFromCommand(
     return null;
   }
 
-  const skipped = new Set<TreeSitterNode>([nameNode, ...namedChildren(nameNode)]);
   const argv = [executable.value];
   const argumentsList: CommandArgument[] = [];
   const dynamicArguments: DynamicArgument[] = [];
-  for (const child of namedChildren(node)) {
-    if (
-      skipped.has(child) ||
-      child.type === "command_name" ||
-      child.type === "variable_assignment" ||
-      !COMMAND_ARGUMENT_NODE_TYPES.has(child.type)
-    ) {
+  for (const child of node.childrenForFieldName("argument")) {
+    if (!COMMAND_ARGUMENT_NODE_TYPES.has(child.type)) {
       continue;
     }
     const value = shellWordValue(child);
@@ -713,7 +553,7 @@ function argvFromDeclarationCommand(node: TreeSitterNode, state: WalkState): Com
   const argv = [executable];
   const argumentsList: CommandArgument[] = [];
   const dynamicArguments: DynamicArgument[] = [];
-  for (const child of namedChildren(node)) {
+  for (const child of node.namedChildren) {
     if (!COMMAND_ARGUMENT_NODE_TYPES.has(child.type) && child.type !== "variable_assignment") {
       continue;
     }
@@ -755,7 +595,7 @@ function appendTestCommandArguments(
     argv.push(value.value);
     return;
   }
-  for (const child of namedChildren(node)) {
+  for (const child of node.namedChildren) {
     appendTestCommandArguments(child, argv, argumentsList, dynamicArguments, state);
   }
 }
@@ -769,7 +609,7 @@ function argvFromTestCommand(node: TreeSitterNode, state: WalkState): CommandArg
   const argv = [executable];
   const argumentsList: CommandArgument[] = [];
   const dynamicArguments: DynamicArgument[] = [];
-  for (const child of namedChildren(node)) {
+  for (const child of node.namedChildren) {
     appendTestCommandArguments(child, argv, argumentsList, dynamicArguments, state);
   }
   return { argv, arguments: argumentsList, dynamicArguments };
@@ -784,7 +624,7 @@ function isCommandLikeNode(node: TreeSitterNode): boolean {
 function recordShape(node: TreeSitterNode, output: MutableExplanation): void {
   if (
     (node.type === "program" || node.type === "list") &&
-    (hasDirectChildType(node, ";") || namedChildren(node).filter(isCommandLikeNode).length > 1)
+    (hasDirectChildType(node, ";") || node.namedChildren.filter(isCommandLikeNode).length > 1)
   ) {
     output.shapes.add("sequence");
   }
@@ -889,10 +729,7 @@ function payloadBaseFromArgument(argument: CommandArgument, payload: string): Sp
   if (rawPayloadOffset === undefined) {
     return null;
   }
-  const prefix = argument.text.slice(0, rawPayloadOffset);
   return {
-    startIndex: argument.span.startIndex + rawPayloadOffset,
-    startPosition: advancePosition(argument.span.startPosition, prefix),
     mapOffset(offset) {
       const rawOffset = argument.decodedSourceOffsets[payloadOffset + offset];
       const mappedRawOffset = rawOffset ?? rawPayloadOffset + offset;
@@ -1107,7 +944,7 @@ async function walk(
     node.type === "declaration_command" ||
     node.type === "test_command"
   ) {
-    const nameNode = node.type === "command" ? commandNameNode(node) : null;
+    const nameNode = node.type === "command" ? node.childForFieldName("name") : null;
     const parsed =
       node.type === "command"
         ? nameNode
@@ -1150,11 +987,7 @@ async function walk(
         );
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
           const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
-          const wrapperSpanBase = spanBaseForParserSource(
-            wrapperPayload.command,
-            wrapperTree.rootNode,
-            wrapperPayload.spanBase,
-          );
+          const wrapperSpanBase = wrapperPayload.spanBase;
           try {
             output.operatorSources.push({
               context: "wrapper-payload",
@@ -1182,7 +1015,7 @@ async function walk(
       }
     }
   }
-  for (const child of namedChildren(node)) {
+  for (const child of node.namedChildren) {
     await walk(child, output, childContext, state);
   }
 }
@@ -1332,10 +1165,8 @@ function resolveOperators(
       }
       const startIndex = separatorStart + operator.offset;
       const span = separatorBase
-        ? spanFromSourceRangeWithBase(
-            separatorSource,
-            startIndex,
-            startIndex + operator.text.length,
+        ? translateSpan(
+            spanFromSourceRange(separatorSource, startIndex, startIndex + operator.text.length),
             separatorBase,
           )
         : spanFromSourceRange(source, startIndex, startIndex + operator.text.length);
@@ -1361,7 +1192,6 @@ function resolveOperators(
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {
-    const spanBase = spanBaseForParserSource(source, tree.rootNode, ROOT_SPAN_BASE);
     const output: MutableExplanation = {
       shapes: new Set(),
       commands: [],
@@ -1372,7 +1202,7 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     };
     await walk(tree.rootNode, output, "top-level", {
       wrapperPayloadDepth: 0,
-      spanBase,
+      spanBase: ROOT_SPAN_BASE,
     });
     const topLevelCommands = output.commands.filter((command) => command.context === "top-level");
     const operators = resolveOperators(source, output.commands, output.operatorSources);
@@ -1389,3 +1219,4 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     tree.delete();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

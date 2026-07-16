@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements bus queries behavior.
+import { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaBusAttachment,
@@ -9,6 +10,7 @@ import type {
   QaBusPollResult,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
   QaBusToolCall,
@@ -25,34 +27,10 @@ export function normalizeConversationFromTarget(target: string): {
   conversation: QaBusConversation;
   threadId?: string;
 } {
-  const trimmed = target.trim();
-  if (trimmed.startsWith("thread:")) {
-    const rest = trimmed.slice("thread:".length);
-    const slash = rest.indexOf("/");
-    if (slash > 0) {
-      return {
-        conversation: { id: rest.slice(0, slash), kind: "channel" },
-        threadId: rest.slice(slash + 1),
-      };
-    }
-  }
-  if (trimmed.startsWith("channel:")) {
-    return {
-      conversation: { id: trimmed.slice("channel:".length), kind: "channel" },
-    };
-  }
-  if (trimmed.startsWith("group:")) {
-    return {
-      conversation: { id: trimmed.slice("group:".length), kind: "group" },
-    };
-  }
-  if (trimmed.startsWith("dm:")) {
-    return {
-      conversation: { id: trimmed.slice("dm:".length), kind: "direct" },
-    };
-  }
+  const parsed = parseQaTarget(target);
   return {
-    conversation: { id: trimmed, kind: "direct" },
+    conversation: { id: parsed.conversationId, kind: parsed.chatType },
+    ...(parsed.threadId !== undefined ? { threadId: parsed.threadId } : {}),
   };
 }
 
@@ -94,7 +72,7 @@ export function cloneEvent(event: QaBusEvent): QaBusEvent {
 
 export function buildQaBusSnapshot(params: {
   cursor: number;
-  conversations: Map<string, QaBusConversation>;
+  conversations: Map<string, QaBusSnapshotConversation>;
   threads: Map<string, QaBusThread>;
   messages: Map<string, QaBusMessage>;
   events: QaBusEvent[];
@@ -110,14 +88,22 @@ export function buildQaBusSnapshot(params: {
   };
 }
 
+export function requireQaBusMessageForAccount(params: {
+  messages: Map<string, QaBusMessage>;
+  input: Pick<QaBusReadMessageInput, "accountId" | "messageId">;
+}): QaBusMessage {
+  const message = params.messages.get(params.input.messageId);
+  if (!message || message.accountId !== normalizeAccountId(params.input.accountId)) {
+    throw new Error(`qa-bus message not found: ${params.input.messageId}`);
+  }
+  return message;
+}
+
 export function readQaBusMessage(params: {
   messages: Map<string, QaBusMessage>;
   input: QaBusReadMessageInput;
 }) {
-  const message = params.messages.get(params.input.messageId);
-  if (!message) {
-    throw new Error(`qa-bus message not found: ${params.input.messageId}`);
-  }
+  const message = requireQaBusMessageForAccount(params);
   return cloneMessage(message);
 }
 
@@ -131,10 +117,19 @@ export function searchQaBusMessages(params: {
   return Array.from(params.messages.values())
     .filter((message) => message.accountId === accountId)
     .filter((message) =>
-      params.input.conversationId ? message.conversation.id === params.input.conversationId : true,
+      params.input.conversationId !== undefined
+        ? message.conversation.id === params.input.conversationId
+        : true,
     )
     .filter((message) =>
-      params.input.threadId ? message.threadId === params.input.threadId : true,
+      params.input.conversationKind
+        ? message.conversation.kind === params.input.conversationKind
+        : true,
+    )
+    .filter((message) =>
+      params.input.threadId !== undefined
+        ? (message.threadId ?? null) === params.input.threadId
+        : true,
     )
     .filter((message) => {
       if (!query) {

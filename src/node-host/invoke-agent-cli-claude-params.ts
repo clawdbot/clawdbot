@@ -97,6 +97,15 @@ function requireBoundedString(value: unknown, label: string, maxBytes: number): 
   return value;
 }
 
+/** Claude CLI session ids are bounded, non-option argv values. */
+export function validateClaudeSessionId(value: unknown): string {
+  const sessionId = requireBoundedString(value, "threadId", MAX_ARG_BYTES).trim();
+  if (!sessionId || sessionId.startsWith("-")) {
+    throw new Error("INVALID_REQUEST: threadId must be a Claude session id");
+  }
+  return sessionId;
+}
+
 function validateArgs(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ARG_COUNT) {
     throw new Error("INVALID_REQUEST: argv must be a bounded non-empty array");

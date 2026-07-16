@@ -8,7 +8,7 @@ import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
 /**
- * Collect enabled insecure/dangerous config flags for audit warnings and gateway tool previews.
+ * Collect enabled insecure/dangerous config flags for audit and startup warnings.
  * Plugin flags use current metadata when requested, then fall back to resolving manifest contracts.
  */
 export function collectEnabledInsecureOrDangerousFlags(

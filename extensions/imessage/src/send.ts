@@ -1,9 +1,6 @@
 // Imessage plugin module implements send behavior.
-import { constants, accessSync, readFileSync } from "node:fs";
+import { constants, accessSync } from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
-import path from "node:path";
-import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -17,17 +14,24 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
-import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  hasExclusiveIMessageLocalDatabase,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
 import {
   appendIMessageApprovalReactionHintForOutboundMessage,
   extractIMessageApprovalPromptBinding,
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
+import { chatContextFromIMessageTarget } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
+import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import {
   forgetPersistedIMessageEchoKey,
@@ -52,6 +56,7 @@ type IMessageSendOpts = {
   service?: IMessageService;
   region?: string;
   accountId?: string;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
@@ -106,101 +111,6 @@ type IMessageSendResult = {
   echoText?: string;
   receipt: MessageReceipt;
 };
-
-const MAX_REPLY_TO_ID_LENGTH = 256;
-const sshWrapperCliPathCache = new Map<string, boolean>();
-
-function safeHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function expandCliPathForInspection(cliPath: string): string {
-  if (!cliPath.startsWith("~")) {
-    return cliPath;
-  }
-  const home = safeHomeDir();
-  return home ? cliPath.replace(/^~(?=$|[\\/])/, home) : cliPath;
-}
-
-function isSshIMessageCliWrapper(cliPath: string): boolean {
-  if (cliPath === "imsg") {
-    return false;
-  }
-  const cached = sshWrapperCliPathCache.get(cliPath);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let detected;
-  try {
-    const content = readFileSync(expandCliPathForInspection(cliPath), "utf8");
-    detected = /\bssh\b[\s\S]*\bimsg\b/u.test(content);
-  } catch {
-    detected = false;
-  }
-  // cliPath scripts are process-stable channel metadata; cache inspection so
-  // repeated sends do not poll wrapper files on the hot path.
-  sshWrapperCliPathCache.set(cliPath, detected);
-  return detected;
-}
-
-function isLocalIMessageCliPath(params: { cliPath: string; remoteHost?: string }): boolean {
-  const cliPath = params.cliPath.trim();
-  if (params.remoteHost?.trim() || isSshIMessageCliWrapper(cliPath)) {
-    return false;
-  }
-  return cliPath === "imsg" || path.basename(cliPath) === "imsg";
-}
-
-function resolveChatDbLookupPath(params: {
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-}): string | undefined {
-  const configured = params.dbPath?.trim();
-  if (configured) {
-    return configured;
-  }
-  if (!isLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {
-    return undefined;
-  }
-  const home = safeHomeDir();
-  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
-}
-
-function stripUnsafeReplyTagChars(value: string): string {
-  let next = "";
-  for (const ch of value) {
-    const code = ch.charCodeAt(0);
-    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
-      continue;
-    }
-    next += ch;
-  }
-  return next;
-}
-
-function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
-  const trimmed = rawReplyToId?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const sanitized = stripUnsafeReplyTagChars(trimmed).trim();
-  if (!sanitized) {
-    return undefined;
-  }
-  if (sanitized.length > MAX_REPLY_TO_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
-  }
-  return sanitized;
-}
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
   if (!result) {
@@ -585,6 +495,11 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function resultService(value: unknown): IMessageService | undefined {
+  const normalized = stringValue(value)?.toLowerCase();
+  return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
+}
+
 function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
   return Math.max(
     MIN_PENDING_PERSISTED_ECHO_TTL_MS,
@@ -776,7 +691,7 @@ export async function sendMessageIMessage(
     });
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
-  const chatDbLookupPath = resolveChatDbLookupPath({
+  const chatDbLookupPath = resolveIMessageChatDbLookupPath({
     cliPath,
     dbPath,
     remoteHost: account.config.remoteHost,
@@ -787,6 +702,21 @@ export async function sendMessageIMessage(
     resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
   const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
+  const resolvedReplyToId = resolveAuthorizedIMessageReplyReference({
+    account,
+    target,
+    cliPath,
+    dbPath,
+    hasExclusiveLocalDatabase: hasExclusiveIMessageLocalDatabase({
+      cfg,
+      account,
+      cliPath,
+      dbPath,
+    }),
+    service,
+    replyToId: opts.replyToId,
+    conversationReadOrigin: opts.conversationReadOrigin,
+  });
   // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
   // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
   // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
@@ -842,8 +772,6 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const replyActionsEnabled = createActionGate(account.config.actions)("reply");
-  const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
   // The reply id actually delivered. The threaded-reply fallback below clears it
   // so the receipt and approval binding report the unthreaded send it became,
   // not the threaded reply the transport rejected (#99638).
@@ -1038,17 +966,16 @@ export async function sendMessageIMessage(
     // before dispatching. Inbound recording (in monitor/inbound-processing)
     // sets isFromMe=false, so the cache distinguishes own-sent from received.
     if (resolvedId) {
+      const chatContext = chatContextFromIMessageTarget(
+        target,
+        resultService(result.service) ?? service,
+      );
+      const providerChatGuid = stringValue(result.chat_guid) ?? stringValue(result.chatGuid);
       rememberIMessageReplyCache({
         accountId: account.accountId,
         messageId: resolvedId,
-        chatGuid: target.kind === "chat_guid" ? target.chatGuid : undefined,
-        chatIdentifier:
-          target.kind === "chat_identifier"
-            ? target.chatIdentifier
-            : target.kind === "handle"
-              ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
-              : undefined,
-        chatId: target.kind === "chat_id" ? target.chatId : undefined,
+        ...chatContext,
+        ...(providerChatGuid ? { chatGuid: providerChatGuid } : {}),
         timestamp: Date.now(),
         isFromMe: true,
       });
@@ -1089,3 +1016,4 @@ export async function sendMessageIMessage(
     await stopOwnedClient();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -80,7 +80,7 @@ type MatrixThreadBindingsConfig = {
 
 type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
-export type MatrixExecApprovalConfig = {
+type MatrixExecApprovalConfig = {
   /** If true, deliver exec approvals through Matrix-native prompts. */
   enabled?: boolean;
   /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */

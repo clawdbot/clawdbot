@@ -266,27 +266,64 @@ describe("createTeamsReplyStreamController", () => {
   });
 
   it("streams compact Teams progress lines when tool progress is enabled", async () => {
+    vi.useFakeTimers();
     const stream = makeStream();
-    const ctrl = createTeamsReplyStreamController({
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: {
-        streaming: {
-          mode: "progress",
-          progress: {
-            label: "Working",
-            maxLines: 3,
+    try {
+      const ctrl = createTeamsReplyStreamController({
+        conversationType: "personal",
+        context: makeContext(stream),
+        feedbackLoopEnabled: false,
+        log: { debug: vi.fn() } as never,
+        msteamsConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: "Working",
+              maxLines: 3,
+            },
           },
-        },
-      } as never,
-    });
+        } as never,
+      });
 
-    await ctrl.pushProgressLine("tool: search");
-    await ctrl.pushProgressLine("tool: exec");
+      await ctrl.pushProgressLine("tool: search");
+      await ctrl.pushProgressLine("tool: exec");
+      expect(stream.update).not.toHaveBeenCalled();
 
-    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- tool: search\n- tool: exec");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the pending progress gate at finalize so no stale card posts after close", async () => {
+    vi.useFakeTimers();
+    const stream = makeStream();
+    try {
+      const ctrl = createTeamsReplyStreamController({
+        conversationType: "personal",
+        context: makeContext(stream),
+        feedbackLoopEnabled: false,
+        log: { debug: vi.fn() } as never,
+        msteamsConfig: {
+          streaming: { mode: "progress", progress: { label: "Working" } },
+        } as never,
+      });
+
+      // One work event schedules the delayed start; the turn finishes first.
+      await ctrl.pushProgressLine("tool: search");
+      ctrl.preparePayload({ text: "done" });
+      await ctrl.finalize();
+      expect(stream.update).not.toHaveBeenCalled();
+
+      // The gate timer must be dead: firing it against the closed stream
+      // would post a fresh stale "working" card below the final answer.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(stream.update).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("suppresses block delivery when progress final text is emitted to the stream", () => {

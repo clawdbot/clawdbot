@@ -145,6 +145,23 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("finds the active-run follow-up preference by its action", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "steer",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "appearance",
+        label: "Chat",
+        hash: "#settings-appearance-chat",
+      }),
+    ]);
+  });
+
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({

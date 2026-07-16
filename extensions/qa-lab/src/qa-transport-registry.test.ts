@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   createQaTransportAdapter,
-  createQaTransportAdapterFactoryRegistry,
   normalizeQaTransportId,
   type QaTransportAdapterFactory,
   type QaTransportFactoryContext,
@@ -70,10 +69,9 @@ describe("qa transport registry", () => {
       { id: "skipped", matches: () => false, create: skippedCreate },
       { id: "selected", matches: () => true, create: selectedCreate },
     ];
-    const registry = createQaTransportAdapterFactoryRegistry(factories);
-
-    const created = await registry.create(
+    const created = await createQaTransportAdapter(
       createFactoryContext({ channelId: "selected", driver: "live" }),
+      factories,
     );
 
     expect(created.adapter).toMatchObject({
@@ -95,9 +93,9 @@ describe("qa transport registry", () => {
         return definition;
       },
     };
-    const registry = createQaTransportAdapterFactoryRegistry([factory]);
-    const created = await registry.create(
+    const created = await createQaTransportAdapter(
       createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [factory],
     );
 
     await created.cleanup();
@@ -107,22 +105,20 @@ describe("qa transport registry", () => {
 
   it("reports no-match and startup failures with transport context", async () => {
     const context = createFactoryContext({ channelId: "missing", driver: "live" });
-    const emptyRegistry = createQaTransportAdapterFactoryRegistry([]);
-    await expect(emptyRegistry.create(context)).rejects.toThrow(
+    await expect(createQaTransportAdapter(context, [])).rejects.toThrow(
       "no QA transport factory for live:missing",
     );
 
-    const brokenRegistry = createQaTransportAdapterFactoryRegistry([
-      {
-        id: "broken",
-        matches: () => true,
-        async create() {
-          throw new Error("provider boot failed");
+    await expect(
+      createQaTransportAdapter(context, [
+        {
+          id: "broken",
+          matches: () => true,
+          async create() {
+            throw new Error("provider boot failed");
+          },
         },
-      },
-    ]);
-    await expect(brokenRegistry.create(context)).rejects.toThrow(
-      "failed to create QA transport live:missing: provider boot failed",
-    );
+      ]),
+    ).rejects.toThrow("failed to create QA transport live:missing: provider boot failed");
   });
 });

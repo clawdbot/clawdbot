@@ -25,12 +25,16 @@ function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | un
  */
 export function resolveGithubCopilotDomain(params?: {
   env?: NodeJS.ProcessEnv;
+  explicit?: string;
   config?: OpenClawConfig;
 }): string {
   const env = params?.env ?? process.env;
   const fromEnv = env.COPILOT_GITHUB_DOMAIN?.trim();
   if (fromEnv) {
     return normalizeGithubCopilotDomain(fromEnv);
+  }
+  if (params?.explicit) {
+    return normalizeGithubCopilotDomain(params.explicit);
   }
   return normalizeGithubCopilotDomain(readConfiguredGithubCopilotDomain(params?.config));
 }

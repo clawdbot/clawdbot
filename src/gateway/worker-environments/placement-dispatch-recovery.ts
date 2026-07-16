@@ -6,15 +6,18 @@ import {
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
   type WorkerDispatchPlacementStore,
+  type WorkerDrainingDispatchPlacement,
   type WorkerFailedDispatchPlacement,
   type WorkerStartingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function sameActiveEnvironment(
-  placement: WorkerActiveDispatchPlacement,
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
-): environment is NonNullable<typeof environment> {
+): boolean {
   return Boolean(
     environment &&
     environment.state === "attached" &&
@@ -46,8 +49,170 @@ export function createPlacementRecoveryActions(deps: {
   environments: WorkerDispatchEnvironmentService;
   runActivationBarrier: WorkerActivationBarrier;
   failure: PlacementFailureActions;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
+  resolveWorkspacePath: (params: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<string>;
 }) {
   const { environments, failure, placements } = deps;
+
+  const recoverPendingWorkspaceResults = async (): Promise<Set<string>> => {
+    for (const pending of placements.listPendingWorkspaceResults()) {
+      const sameGatewayInstance =
+        pending.gatewayInstanceId === placements.workspaceResultInstanceId();
+      if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
+        continue;
+      }
+      const placement = placements.get(pending.sessionId);
+      try {
+        const claim = placement?.turnClaim;
+        if (
+          (placement?.state !== "active" && placement?.state !== "draining") ||
+          placement.environmentId !== pending.environmentId ||
+          placement.activeOwnerEpoch !== pending.ownerEpoch ||
+          claim?.owner !== "worker" ||
+          claim.claimId !== pending.claimId ||
+          claim.runId !== pending.runId ||
+          claim.generation !== pending.placementGeneration ||
+          claim.ownerEpoch !== pending.ownerEpoch
+        ) {
+          placements.abandonWorkspaceResult(pending);
+          if (placement?.state === "active") {
+            await failure.failActive(
+              placement,
+              new Error(`Pending cloud workspace result has no active claim: ${pending.sessionId}`),
+              { forceClaimFence: true },
+            );
+          } else if (placement?.state === "draining") {
+            await failure.failDraining(
+              placement,
+              new Error(
+                `Pending cloud workspace result has no draining claim: ${pending.sessionId}`,
+              ),
+              { forceClaimFence: true },
+            );
+          }
+          continue;
+        }
+        const turnClaim = {
+          sessionId: placement.sessionId,
+          claimId: claim.claimId,
+          runId: claim.runId,
+          placementGeneration: claim.generation,
+          owner: {
+            kind: "worker" as const,
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+          },
+        };
+        const environment = environments.get(placement.environmentId);
+        if (
+          environment?.state === "attached" &&
+          environment.attachedSessionIds.includes(placement.sessionId) &&
+          environment.attachedSessionIds.length !== 1
+        ) {
+          // This result cannot own teardown while another session remains attached.
+          // Keep the durable claim fenced until environment ownership is unambiguous.
+          continue;
+        }
+        if (!sameActiveEnvironment(placement, environment)) {
+          if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
+            placements.completeWorkspaceResultAndReleaseTurn(turnClaim, { reclaim: true });
+            continue;
+          }
+          placements.abandonWorkspaceResult(pending);
+          if (placement.state === "active") {
+            await failure.failActive(
+              placement,
+              new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
+              { forceClaimFence: true },
+            );
+          } else {
+            await failure.failDraining(
+              placement,
+              new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
+              { forceClaimFence: true },
+            );
+          }
+          continue;
+        }
+        const localPath = await deps.resolveWorkspacePath({
+          sessionId: placement.sessionId,
+          sessionKey: placement.sessionKey,
+          agentId: placement.agentId,
+        });
+        const owner = {
+          sessionId: placement.sessionId,
+          environmentId: placement.environmentId,
+          ownerEpoch: placement.activeOwnerEpoch,
+          placementGeneration: placement.generation,
+        };
+        const tunnel = await environments.startTunnel({
+          environmentId: placement.environmentId,
+          ownerEpoch: placement.activeOwnerEpoch,
+        });
+        await deps.workspaceOperations.run(placement.environmentId, async () => {
+          const owned = placements.get(placement.sessionId);
+          const ownedClaim = owned?.turnClaim;
+          if (
+            (owned?.state !== "active" && owned?.state !== "draining") ||
+            owned.generation !== placement.generation ||
+            owned.environmentId !== placement.environmentId ||
+            owned.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+            ownedClaim?.owner !== "worker" ||
+            ownedClaim.claimId !== claim.claimId ||
+            ownedClaim.runId !== claim.runId
+          ) {
+            throw new Error("Recovered workspace result lost its placement owner");
+          }
+          const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);
+          let quiescenceHandled = false;
+          try {
+            const reconciliation = await tunnel.reconcileWorkspace({
+              localPath,
+              remoteWorkspaceDir: placement.remoteWorkspaceDir,
+              baseManifestRef: placement.workspaceBaseManifestRef,
+              journal: {
+                load: () => placements.loadWorkspaceReconciliation(owner),
+                begin: (journal) => placements.beginWorkspaceReconciliation(owner, journal),
+                commit: (manifestRef) =>
+                  placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef }),
+                abort: () => placements.abortWorkspaceReconciliation(owner),
+              },
+            });
+            await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+            placements.acceptWorkspaceResult(turnClaim);
+            if (sameGatewayInstance) {
+              await quiescence.resume();
+              quiescenceHandled = true;
+              placements.completeWorkspaceResultAndReleaseTurn(turnClaim);
+            } else {
+              await environments.destroy(placement.environmentId);
+              quiescenceHandled = true;
+              const reclaimed = placements.completeWorkspaceResultAndReleaseTurn(turnClaim, {
+                reclaim: true,
+              });
+              if (reclaimed.state !== "reclaimed") {
+                throw new Error("Recovered worker result did not reclaim its stale environment");
+              }
+              await environments
+                .stopTunnel(placement.environmentId, placement.activeOwnerEpoch)
+                .catch(() => undefined);
+            }
+          } finally {
+            if (!quiescenceHandled) {
+              await quiescence.resume();
+            }
+          }
+        });
+      } catch {
+        // Keep the result, claim, and environment fenced. The next sweep retries.
+      }
+    }
+    return new Set(placements.listPendingWorkspaceResults().map((pending) => pending.sessionId));
+  };
 
   const adoptActive = async (placement: WorkerActiveDispatchPlacement): Promise<void> => {
     // Worker turns are one-shot SSH children owned by the previous gateway process. A durable
@@ -56,7 +221,7 @@ export function createPlacementRecoveryActions(deps: {
       const error = new Error(
         "Active worker turn claim cannot be proven live after gateway restart",
       );
-      await failure.failActive(placement, error);
+      await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
     const environment = placement.environmentId
@@ -166,7 +331,14 @@ export function createPlacementRecoveryActions(deps: {
 
   const reconcile = async (): Promise<void> => {
     await environments.reconcileOnce();
+    const pendingResultOwners = await recoverPendingWorkspaceResults();
+    const journalOwners = new Set(
+      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
+    );
     for (const placement of placements.listForReconcile()) {
+      if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
+        continue;
+      }
       if (placement.state === "local" || placement.state === "reclaimed") {
         continue;
       }
@@ -184,7 +356,7 @@ export function createPlacementRecoveryActions(deps: {
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
       if (placement.state === "draining") {
-        await failure.failDraining(placement, error);
+        await failure.failDraining(placement, error, { forceClaimFence: true });
         continue;
       }
       await failure.teardownEnvironment({
@@ -198,9 +370,19 @@ export function createPlacementRecoveryActions(deps: {
 
   // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
   // durable active ownership and retry teardown already fenced by a previous failure.
-  const reconcileActive = async (): Promise<void> => {
+  const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
+    const pendingResultOwners = await recoverPendingWorkspaceResults();
+    const journalOwners = new Set(
+      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
+    );
     for (const placement of placements.listForReconcile()) {
+      if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
+        continue;
+      }
+      if (environmentId !== undefined && placement.environmentId !== environmentId) {
+        continue;
+      }
       if (isFailedPlacement(placement)) {
         await failure.retryFailedTeardown(placement);
         continue;

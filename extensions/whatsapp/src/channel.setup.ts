@@ -1,7 +1,6 @@
 // Whatsapp plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import type { ResolvedWhatsAppAccount } from "./accounts.js";
-import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
 import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -20,7 +19,6 @@ export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     groups: {
       resolveRequireMention: resolveWhatsAppGroupRequireMention,
       resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,

@@ -50,6 +50,8 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
 
 type BuildChannelConfigSchemaOptions = {
   uiHints?: Record<string, ChannelConfigUiHint>;
+  /** Select input mode when transforms must expose accepted config values to editors. */
+  jsonSchemaMode?: "input" | "output";
 };
 
 type BuildJsonChannelConfigSchemaOptions = {
@@ -146,6 +148,7 @@ export function buildChannelConfigSchema(
     return {
       schema: schemaWithJson.toJSONSchema({
         target: "draft-07",
+        ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
         unrepresentable: "any",
       }) as JsonSchemaObject,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),

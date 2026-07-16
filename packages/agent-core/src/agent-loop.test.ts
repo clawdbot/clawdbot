@@ -2217,3 +2217,4 @@ describe("agentLoop thinking state", () => {
     expect(observedReasoning).toEqual(expected);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -94,13 +94,14 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-9)).toEqual([
+    expect(coreMethods.slice(-10)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
       "sessions.search",
       "sessions.dispatch",
+      "sessions.reclaim",
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",

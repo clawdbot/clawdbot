@@ -18,6 +18,11 @@ type CronRetryHint = {
 const SERVER_ERROR_PATTERN =
   /\b(?:https?|status(?:[ _]code)?|response(?:[ _]code)?|http(?:[ _]status)?)\b[\s:=#"']{0,4}5\d{2}\b|\b5\d{2}\b[\s:)\].,-]*(?:internal server error|server error|bad gateway|service unavailable|gateway time-?out)\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\b5xx\b|^\s*5\d{2}\s*$/i;
 
+// Lifecycle claims can lose a race before provider execution. Retry the run;
+// treating the conflict as permanent disables one-shot jobs without running them.
+const SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN =
+  /^(?:(?:CronSessionLifecycleClaimError|Error): )?Session "[^"\n]+" (?:changed|was deleted) while starting work\. Retry\.$/;
+
 const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
   rate_limit:
     /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)/i,
@@ -37,6 +42,9 @@ export function resolveCronExecutionRetryHint(
 ): CronRetryHint {
   if (!error || typeof error !== "string") {
     return { retryable: false };
+  }
+  if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
+    return { retryable: true };
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;

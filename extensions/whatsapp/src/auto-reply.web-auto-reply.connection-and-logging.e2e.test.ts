@@ -1045,6 +1045,11 @@ describe("web auto-reply connection", () => {
 
     expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
     expect(
+      capture
+        .getLastOptions()
+        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
+    ).toBe(false);
+    expect(
       capture.getLastOptions()?.shouldDebounce?.(
         createTestWebInboundMessage({
           payload: {
@@ -1327,3 +1332,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

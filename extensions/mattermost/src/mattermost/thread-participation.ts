@@ -76,7 +76,3 @@ export async function hasMattermostThreadParticipationWithPersistence(params: {
     makeKey(params.accountId, params.channelId, params.threadRootId),
   );
 }
-
-export function clearMattermostThreadParticipationCache(): void {
-  threadParticipation.clearForTest();
-}

@@ -1,10 +1,11 @@
-// Tests info-style commands that report context, status, skills, and trajectory exports.
+// Tests info-style commands that report context, status, skills, and session exports.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import {
+  handleExportSessionCommand,
   handleExportTrajectoryCommand,
   handleSkillCommandUsage,
   handleStatusCommand,
@@ -17,6 +18,9 @@ const buildContextReplyMock = vi.hoisted(() => vi.fn());
 const buildExportTrajectoryCommandReplyMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "exported" })),
 );
+const buildExportSessionReplyMock = vi.hoisted(() =>
+  vi.fn(async () => ({ text: "session exported" })),
+);
 const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
@@ -28,6 +32,10 @@ vi.mock("./commands-context-report.js", () => ({
 
 vi.mock("./commands-export-trajectory.js", () => ({
   buildExportTrajectoryCommandReply: buildExportTrajectoryCommandReplyMock,
+}));
+
+vi.mock("./commands-export-session.js", () => ({
+  buildExportSessionReply: buildExportSessionReplyMock,
 }));
 
 vi.mock("./commands-status.js", () => ({
@@ -115,6 +123,7 @@ function buildInfoParams(
 describe("info command handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    buildExportSessionReplyMock.mockResolvedValue({ text: "session exported" });
     buildExportTrajectoryCommandReplyMock.mockResolvedValue({ text: "exported" });
     buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
       const normalized = params.command.commandBodyNormalized;
@@ -131,6 +140,36 @@ describe("info command handlers", () => {
       currentPage: 1,
       totalPages: 1,
     });
+  });
+
+  it.each([
+    ["unauthorized sender", false, true],
+    ["authorized non-owner", true, false],
+  ])("blocks %s from exporting a session", async (_label, isAuthorizedSender, senderIsOwner) => {
+    const params = buildInfoParams("/export-session", {
+      commands: { text: true },
+    } as OpenClawConfig);
+    params.command.isAuthorizedSender = isAuthorizedSender;
+    params.command.senderIsOwner = senderIsOwner;
+
+    const result = await handleExportSessionCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(buildExportSessionReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("allows the owner to export a session", async () => {
+    const params = buildInfoParams("/export-session", {
+      commands: { text: true },
+    } as OpenClawConfig);
+
+    const result = await handleExportSessionCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "session exported" },
+    });
+    expect(buildExportSessionReplyMock).toHaveBeenCalledWith(params);
   });
 
   it("ignores trajectory export requests from unauthorized senders", async () => {

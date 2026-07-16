@@ -87,9 +87,15 @@
 
       .mount-fallback {
         box-sizing: border-box;
-        min-height: 100vh;
+        /* The app stylesheet clips the root scrollers, so this pre-app error
+           surface must own its scrolling on short windows. dvh keeps the
+           scroll range inside the visible mobile viewport; vh is the fallback. */
+        height: 100vh;
+        height: 100dvh;
+        overflow-y: auto;
         padding: 24px;
         place-items: center;
+        place-items: safe center;
       }
 
       .mount-fallback:not([hidden]) {

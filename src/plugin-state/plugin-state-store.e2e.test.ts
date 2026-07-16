@@ -9,7 +9,7 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import { probePluginStateStore } from "./plugin-state-store.sqlite.js";
+import { probePluginStateStore } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();

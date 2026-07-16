@@ -65,6 +65,7 @@ const androidEnums: EnumSpec[] = [
     ["Calendar", "calendar"],
     ["Motion", "motion"],
     ["CallLog", "callLog"],
+    ["VoiceWake", "voiceWake"],
   ]),
   enumSpec("OpenClawCanvasCommand", "canvas.", [
     ["Present", "present"],

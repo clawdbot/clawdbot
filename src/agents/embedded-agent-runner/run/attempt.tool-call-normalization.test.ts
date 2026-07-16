@@ -1626,3 +1626,4 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     expect(danglingResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

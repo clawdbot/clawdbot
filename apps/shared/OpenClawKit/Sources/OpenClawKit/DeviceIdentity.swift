@@ -196,6 +196,16 @@ public enum DeviceIdentityStore {
         self.loadOrCreate(profile: .primary)
     }
 
+    #if compiler(>=6.4)
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: nonisolated(nonsending) () async throws -> T) async rethrows -> T
+    {
+        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
+            url,
+            operation: operation)
+    }
+    #else
     static func withStateDirectory<T>(
         _ url: URL,
         operation: () async throws -> T,
@@ -206,6 +216,7 @@ public enum DeviceIdentityStore {
             operation: operation,
             isolation: isolation)
     }
+    #endif
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
         self.loadOrCreate(

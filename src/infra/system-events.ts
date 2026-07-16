@@ -78,6 +78,8 @@ type SystemEventOptions = {
    * a malformed traceparent never prevents an enqueue).
    */
   traceparent?: string;
+  /** Replace the pending event for this context and delivery route. Requires contextKey. */
+  replace?: boolean;
 };
 
 function normalizeTraceparent(traceparent?: string): string | undefined {
@@ -154,6 +156,9 @@ export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
+  if (options.replace) {
+    return replaceSystemEventEntry(text, options);
+  }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
   // Untrusted producers (plugin/channel text) are rendered as `System:` lines, so
@@ -217,6 +222,60 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
 }
 
+function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
+  const key = requireSessionKey(options.sessionKey);
+  const entry = getOrCreateSessionQueue(key);
+  const cleaned = (options.trusted === true ? text : sanitizeInboundSystemTags(text)).trim();
+  if (!cleaned) {
+    return null;
+  }
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  if (normalizedContextKey === null) {
+    throw new Error("replaced system events require a contextKey");
+  }
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  const normalizedTraceparent = normalizeTraceparent(options.traceparent);
+  const replacement: SystemEvent = {
+    text: cleaned,
+    ts: Date.now(),
+    contextKey: normalizedContextKey,
+    deliveryContext: normalizedDeliveryContext,
+    ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
+    ...(options.sessionDeliveryAckStateDir
+      ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
+      : {}),
+    ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
+  };
+  const matching = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) === normalizedContextKey &&
+      areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  if (
+    matching.length === 1 &&
+    matching[0]?.text === replacement.text &&
+    matching[0]?.sessionDeliveryAckId === replacement.sessionDeliveryAckId &&
+    matching[0]?.sessionDeliveryAckStateDir === replacement.sessionDeliveryAckStateDir &&
+    matching[0]?.traceparent === replacement.traceparent
+  ) {
+    return null;
+  }
+
+  // One keyed source owns one queue slot. Moving a replacement to the end keeps
+  // event ordering current without allowing repeated updates to evict other sources.
+  entry.queue = entry.queue.filter(
+    (event) =>
+      (event.contextKey ?? null) !== normalizedContextKey ||
+      !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
+  );
+  entry.queue.push(replacement);
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.shift();
+  }
+  entry.lastContextKey = normalizedContextKey;
+  return cloneSystemEvent(replacement);
+}
+
 function isDuplicateSystemEvent(
   existing: SystemEvent,
   incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
@@ -271,7 +330,10 @@ export function consumeSystemEventEntries(
       areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
-    return [];
+    // A keyed replacement may remove one inspected entry while a prompt is in flight.
+    // Consume the unchanged inspected entries so unrelated work is not replayed,
+    // while leaving the replacement and all newly queued entries intact.
+    return consumeSelectedSystemEventEntries(key, consumedEntries);
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
   resetQueueState(key, entry);

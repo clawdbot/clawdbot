@@ -14,6 +14,7 @@ export type ResolveBindingOptions = {
 };
 
 const MAX_FILE_BYTES = 1024 * 1024;
+const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(?:0|[1-9]\d*)$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -59,6 +60,15 @@ function decodePointerSegment(value: string): string {
   return value.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
+function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  // RFC 6901 array tokens are canonical decimal indices; object tokens remain opaque keys.
+  if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
+    return undefined;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) ? index : undefined;
+}
+
 function applyJsonPointer(value: unknown, pointer: string | undefined): unknown {
   if (pointer === undefined || pointer === "") {
     return value;
@@ -70,8 +80,8 @@ function applyJsonPointer(value: unknown, pointer: string | undefined): unknown 
   for (const rawSegment of pointer.slice(1).split("/")) {
     const segment = decodePointerSegment(rawSegment);
     if (Array.isArray(current)) {
-      const index = Number(segment);
-      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+      const index = parseJsonPointerArrayIndex(segment);
+      if (index === undefined || index >= current.length) {
         throw new WorkspaceBindingResolutionError("binding_not_found", "JSON pointer not found");
       }
       current = current[index];

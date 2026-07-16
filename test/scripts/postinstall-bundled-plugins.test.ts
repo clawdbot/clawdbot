@@ -592,7 +592,7 @@ describe("bundled plugin postinstall", () => {
   it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
     const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
-    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "channel-test-helpers.js");
     const nestedTestHelperFile = path.join(
       packageRoot,
       "dist",
@@ -611,7 +611,7 @@ describe("bundled plugin postinstall", () => {
     const inventory = await writePackageDistInventory(packageRoot);
 
     expect(inventory).toContain("dist/plugin-sdk/runtime.js");
-    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/channel-test-helpers.js");
     expect(inventory).not.toContain(
       "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
     );

@@ -1,7 +1,10 @@
 // Qa Lab tests cover profile scorecard evidence math.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { QaEvidenceSummaryJson, QaEvidenceSummaryEntry } from "./evidence-summary.js";
-import { buildQaProfileScorecardEvidence } from "./scorecard-evidence.js";
+import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 
 function evidenceEntry(coverage: QaEvidenceSummaryEntry["coverage"]): QaEvidenceSummaryEntry {
@@ -29,8 +32,28 @@ function evidenceSummary(entries: QaEvidenceSummaryEntry[]): QaEvidenceSummaryJs
   };
 }
 
+async function buildQaProfileScorecardEvidence(params: {
+  evidence: QaEvidenceSummaryJson;
+  filters: { surface?: string; category?: string };
+  categories: readonly QaScorecardCategoryCoverageReport[];
+}) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-scorecard-evidence-"));
+  const evidencePath = path.join(tempRoot, "qa-evidence-summary.json");
+  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence)}\n`, "utf8");
+  try {
+    return await attachQaProfileScorecardEvidenceToFile({
+      evidencePath,
+      profile: "release",
+      filters: params.filters,
+      categories: params.categories,
+    });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 describe("profile scorecard evidence", () => {
-  it("scores partial multi-id feature coverage by covered coverage IDs", () => {
+  it("scores partial multi-id feature coverage by covered coverage IDs", async () => {
     const category: QaScorecardCategoryCoverageReport = {
       id: "surface.category",
       taxonomySurfaceId: "surface",
@@ -46,7 +69,7 @@ describe("profile scorecard evidence", () => {
       missingEvidenceRefs: [],
     };
 
-    const scorecard = buildQaProfileScorecardEvidence({
+    const scorecard = await buildQaProfileScorecardEvidence({
       evidence: evidenceSummary([
         evidenceEntry([
           {
@@ -93,7 +116,7 @@ describe("profile scorecard evidence", () => {
     });
   });
 
-  it("counts each profile coverage ID once in global totals", () => {
+  it("counts each profile coverage ID once in global totals", async () => {
     const firstCategory: QaScorecardCategoryCoverageReport = {
       id: "surface.first",
       taxonomySurfaceId: "surface",
@@ -120,7 +143,7 @@ describe("profile scorecard evidence", () => {
       missingCoverageIds: [],
     };
 
-    const scorecard = buildQaProfileScorecardEvidence({
+    const scorecard = await buildQaProfileScorecardEvidence({
       evidence: evidenceSummary([
         evidenceEntry([
           {

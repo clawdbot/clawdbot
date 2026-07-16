@@ -1,5 +1,7 @@
 import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 // Markdown Core module implements render aware chunking behavior.
+import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
+import { mergeAnnotationSpans, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -26,6 +28,8 @@ export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
   measureRendered: (rendered: TRendered) => number;
   /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
+  /** Re-annotate transcript-role headers promoted by a new message boundary. */
+  assistantTranscriptRoleMessageBoundaries?: boolean;
 };
 
 type RenderResolver<TRendered> = Pick<
@@ -40,6 +44,15 @@ function resolveIntegerOption(value: number, fallback: number, opts: { min: numb
   return Math.max(opts.min, Math.trunc(value));
 }
 
+function prepareChunkForMessageBoundary<TRendered>(
+  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
+  chunk: MarkdownIR,
+): MarkdownIR {
+  return options.assistantTranscriptRoleMessageBoundaries === true
+    ? annotateAssistantTranscriptRoleMessageBoundary(chunk)
+    : chunk;
+}
+
 /** Chunks Markdown IR by rendered size while preserving styles, links, and whitespace. */
 export function renderMarkdownIRChunksWithinLimit<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
@@ -52,10 +65,15 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
   // shattering the text into one chunk per character; emit the whole IR as one chunk.
   if (options.limit === Number.POSITIVE_INFINITY) {
-    return [{ source: options.ir, rendered: options.renderChunk(options.ir) }];
+    const source = prepareChunkForMessageBoundary(options, options.ir);
+    return [{ source, rendered: options.renderChunk(source) }];
   }
 
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
+  const renderResolver: RenderResolver<TRendered> = {
+    measureRendered: options.measureRendered,
+    renderChunk: (chunk) => options.renderChunk(prepareChunkForMessageBoundary(options, chunk)),
+  };
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
@@ -68,13 +86,13 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       continue;
     }
 
-    const rendered = options.renderChunk(chunk);
-    if (options.measureRendered(rendered) <= normalizedLimit || chunk.text.length <= 1) {
+    const rendered = renderResolver.renderChunk(chunk);
+    if (renderResolver.measureRendered(rendered) <= normalizedLimit || chunk.text.length <= 1) {
       finalized.push(chunk);
       continue;
     }
 
-    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, options);
+    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, renderResolver);
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops and keep the original chunk.
       finalized.push(chunk);
@@ -88,11 +106,11 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     }
   }
 
-  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, options).map(
-    (source) => ({
-      source,
-      rendered: options.renderChunk(source),
-    }),
+  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, renderResolver).map(
+    (chunk) => {
+      const source = prepareChunkForMessageBoundary(options, chunk);
+      return { source, rendered: options.renderChunk(source) };
+    },
   );
 }
 
@@ -281,24 +299,36 @@ function mergeAdjacentLinkSpans(links: MarkdownLinkSpan[]): MarkdownLinkSpan[] {
 
 function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR {
   const offset = left.text.length;
+  const shiftedAnnotations: MarkdownAnnotationSpan[] = [];
+  for (const annotation of right.annotations ?? []) {
+    shiftedAnnotations.push({
+      ...annotation,
+      start: annotation.start + offset,
+      end: annotation.end + offset,
+    });
+  }
+  const shiftedStyles: MarkdownStyleSpan[] = [];
+  for (const span of right.styles) {
+    shiftedStyles.push({
+      ...span,
+      start: span.start + offset,
+      end: span.end + offset,
+    });
+  }
+  const shiftedLinks: MarkdownLinkSpan[] = [];
+  for (const link of right.links) {
+    shiftedLinks.push({
+      ...link,
+      start: link.start + offset,
+      end: link.end + offset,
+    });
+  }
+  const annotations = mergeAnnotationSpans([...(left.annotations ?? []), ...shiftedAnnotations]);
   return {
     text: left.text + right.text,
-    styles: mergeAdjacentStyleSpans([
-      ...left.styles,
-      ...right.styles.map((span) => ({
-        ...span,
-        start: span.start + offset,
-        end: span.end + offset,
-      })),
-    ]),
-    links: mergeAdjacentLinkSpans([
-      ...left.links,
-      ...right.links.map((link) => ({
-        ...link,
-        start: link.start + offset,
-        end: link.end + offset,
-      })),
-    ]),
+    styles: mergeAdjacentStyleSpans([...left.styles, ...shiftedStyles]),
+    links: mergeAdjacentLinkSpans([...left.links, ...shiftedLinks]),
+    ...(annotations.length > 0 ? { annotations } : {}),
   };
 }
 

@@ -17,6 +17,12 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
+import {
+  createCrablineProviderDelivery,
+  createCrablineProviderInboundInput,
+  resolveCrablineStateConversation,
+  resolveTelegramQaSenderId,
+} from "./crabline-provider-targets.js";
 import { QaSuiteInfraError } from "./errors.js";
 import {
   QaStateBackedTransportAdapter,
@@ -40,8 +46,6 @@ import type {
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
-const TELEGRAM_QA_DRIVER_ID = "100001";
-const TELEGRAM_QA_OBSERVER_ID = "100002";
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -56,14 +60,6 @@ function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageIn
 }
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
-
-function resolveTelegramQaSenderId(senderId: string) {
-  return senderId === "driver"
-    ? TELEGRAM_QA_DRIVER_ID
-    : senderId === "observer"
-      ? TELEGRAM_QA_OBSERVER_ID
-      : senderId;
-}
 
 function readTelegramLifecycleEvent(params: {
   cursor: number;
@@ -294,19 +290,8 @@ function createCrablineState(params: {
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
-      const providerSenderId =
-        params.adapter.channel === "telegram"
-          ? resolveTelegramQaSenderId(input.senderId)
-          : input.senderId;
       const providerInbound = params.adapter.createInbound({
-        input: {
-          ...input,
-          conversation: {
-            ...input.conversation,
-            kind: input.conversation.kind === "direct" ? "direct" : "group",
-          },
-          senderId: providerSenderId,
-        },
+        input: createCrablineProviderInboundInput(params.adapter, input),
       });
       // Providers may coerce channel conversations to groups; preserve the scenario's logical
       // target so outbound waits and assertions still match the original input.
@@ -317,7 +302,11 @@ function createCrablineState(params: {
       });
       const message = baseState.addInboundMessage({
         ...input,
-        conversation: providerInbound.stateConversation,
+        conversation: resolveCrablineStateConversation({
+          adapter: params.adapter,
+          input,
+          providerInbound,
+        }),
         ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
       });
       if (providerMessageId) {
@@ -429,8 +418,8 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     });
 
   buildAgentDelivery = ({ target }: { target: string }) => {
-    const delivery = this.#adapter.createAgentDelivery({ target });
-    this.#state.rememberProviderTarget(delivery.to ?? delivery.replyTo, target);
+    const { delivery, providerTargetKey } = createCrablineProviderDelivery(this.#adapter, target);
+    this.#state.rememberProviderTarget(providerTargetKey, target);
     return delivery;
   };
 

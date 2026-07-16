@@ -2102,3 +2102,4 @@ export function resolvePluginLoaderModuleConfig(params: {
   pluginLoaderModuleConfigCache.set(configCacheKey, result);
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

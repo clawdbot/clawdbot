@@ -374,7 +374,7 @@ export function resolveAuthProfileOrderWithMetadata(
     for (const profileId of deduped) {
       if (isProfileInCooldown(store, profileId, now, forModel)) {
         const cooldownUntil =
-          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now;
+          resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now;
         inCooldown.push({ profileId, cooldownUntil });
       } else {
         available.push(profileId);
@@ -493,7 +493,8 @@ function orderProfilesByMode(
   const cooldownSorted = inCooldown
     .map((profileId) => ({
       profileId,
-      cooldownUntil: resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
+      cooldownUntil:
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, forModel) ?? now,
     }))
     .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);

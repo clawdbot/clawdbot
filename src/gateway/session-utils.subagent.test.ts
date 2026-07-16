@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -1327,3 +1327,4 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

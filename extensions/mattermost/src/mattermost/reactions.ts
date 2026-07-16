@@ -78,10 +78,6 @@ export async function removeMattermostReaction(params: {
   });
 }
 
-export function resetMattermostReactionBotUserCacheForTests(): void {
-  botUserIdCache.clear();
-}
-
 async function runMattermostReaction(
   params: ReactionParams,
   options: {

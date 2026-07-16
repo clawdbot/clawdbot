@@ -9,6 +9,7 @@ import {
   createHttp1ProxyAgent,
   createPinnedLookup,
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveFetch,
   type PinnedDispatcherPolicy,
@@ -206,44 +207,6 @@ function buildTelegramConnectOptions(params: {
   }
 
   return connect;
-}
-
-function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  const noProxyValue = env.no_proxy ?? env.NO_PROXY ?? "";
-  if (!noProxyValue) {
-    return false;
-  }
-  if (noProxyValue === "*") {
-    return true;
-  }
-  const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
-  const targetPort = 443;
-  const noProxyEntries = noProxyValue.split(/[,\s]/);
-  for (const entry of noProxyEntries) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = entry.match(/^(.+):(\d+)$/);
-    const parsedHostname = parsed?.[1];
-    const parsedPort = parsed?.[2];
-    if (parsed && (parsedHostname === undefined || parsedPort === undefined)) {
-      continue;
-    }
-    const entryHostname = normalizeLowercaseStringOrEmpty(
-      (parsedHostname ?? entry).replace(/^\*?\./, ""),
-    );
-    const entryPort = parsedPort === undefined ? 0 : Number.parseInt(parsedPort, 10);
-    if (entryPort && entryPort !== targetPort) {
-      continue;
-    }
-    if (
-      targetHostname === entryHostname ||
-      targetHostname.slice(-(entryHostname.length + 1)) === `.${entryHostname}`
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -643,7 +606,7 @@ export function resolveTelegramTransport(
     proxyUrl: resolvedExplicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
-  const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const shouldBypassEnvProxy = matchesNoProxy(`https://${TELEGRAM_API_HOSTNAME}`);
   const hasExplicitDnsResultOrder =
     (dnsDecision.source === "config" ||
       dnsDecision.source === `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`) &&
@@ -898,3 +861,4 @@ export function resolveTelegramFetch(
 export function resolveTelegramApiBase(apiRoot?: string): string {
   return normalizeTelegramApiRoot(apiRoot);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

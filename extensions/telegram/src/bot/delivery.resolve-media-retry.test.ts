@@ -1226,3 +1226,4 @@ describe("resolveMedia original filename preservation", () => {
     requireResolvedMedia(result, "custom apiRoot sticker URL");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

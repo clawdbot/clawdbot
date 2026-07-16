@@ -43,7 +43,7 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions, resolveSignalMentionFacts },
-  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
+  { resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
@@ -129,9 +129,8 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     capturedCtx = undefined;
-    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {

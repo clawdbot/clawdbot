@@ -5,6 +5,7 @@ import {
   assertOpenClawAgentDatabaseForMaintenance,
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
+  migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
@@ -13,6 +14,7 @@ import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
+  options: { migrateOlderSchema?: boolean } = {},
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
@@ -37,6 +39,12 @@ export function compactDoctorSessionSqliteTarget(
     throw new Error(
       `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
     );
+  }
+  if (options.migrateOlderSchema) {
+    migrateOpenClawAgentDatabaseForMaintenance({
+      agentId: target.agentId,
+      pathname: sqlitePath,
+    });
   }
 
   const compact = compactDoctorSqliteFile({

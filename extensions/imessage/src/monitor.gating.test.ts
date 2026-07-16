@@ -1,18 +1,18 @@
 // Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { resetIMessageShortIdState } from "./monitor-reply-cache.js";
-import {
-  buildIMessageInboundContext,
-  resolveIMessageInboundDecision,
-} from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
-import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
-beforeEach(() => {
-  installIMessageStateRuntimeForTest();
-  resetIMessageShortIdState();
+type InboundProcessingModule = typeof import("./monitor/inbound-processing.js");
+let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
+let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
+
+beforeEach(async () => {
+  await loadFreshIMessageReplyCacheForTest();
+  ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
+    await import("./monitor/inbound-processing.js"));
 });
 
 function baseCfg(): OpenClawConfig {
@@ -59,7 +59,9 @@ async function resolve(params: {
 async function resolveDispatchDecision(params: {
   cfg: OpenClawConfig;
   message: IMessagePayload;
-  groupHistories?: Parameters<typeof resolveIMessageInboundDecision>[0]["groupHistories"];
+  groupHistories?: Parameters<
+    InboundProcessingModule["resolveIMessageInboundDecision"]
+  >[0]["groupHistories"];
   allowFrom?: string[];
   groupAllowFrom?: string[];
   allowLegacyConversationAllowFromForGroup?: boolean;

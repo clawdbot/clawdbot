@@ -11,7 +11,7 @@ export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 /** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
 /** Direct tools whose structured results cannot cross the JSON-only guest bridge. */
-const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer"]);
+const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer", "image"]);
 /** Hook metadata kind for Code Mode exec tools. */
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 

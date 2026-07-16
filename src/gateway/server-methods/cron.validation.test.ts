@@ -1630,6 +1630,33 @@ describe("cron method validation", () => {
     });
   });
 
+  it.each([
+    ["delivery.channel", { mode: "announce", channel: 123, to: "telegram:123" }],
+    ["delivery.to", { mode: "announce", channel: "telegram", to: {} }],
+    [
+      "delivery.failureDestination.channel",
+      { mode: "announce", failureDestination: { channel: true, to: "telegram:123" } },
+    ],
+    [
+      "delivery.failureDestination.to",
+      { mode: "announce", failureDestination: { channel: "telegram", to: [] } },
+    ],
+    [
+      "delivery.completionDestination.to",
+      { mode: "announce", completionDestination: { mode: "webhook", to: 456 } },
+    ],
+  ])("rejects non-string cron.add %s before normalization", async (field, delivery) => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ name: "non-string delivery target", delivery }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `${field} must be a non-empty string`,
+    });
+  });
+
   it("rejects announce targets prefixed for a different explicit delivery channel", async () => {
     setRuntimeConfig(telegramSlackConfig());
 
@@ -1797,6 +1824,22 @@ describe("cron method validation", () => {
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "delivery.completionDestination.to must be a non-empty string",
+    });
+  });
+
+  it.each([
+    ["delivery.channel", { channel: false }],
+    ["delivery.to", { to: 123 }],
+    ["delivery.failureDestination.channel", { failureDestination: { channel: {} } }],
+    ["delivery.failureDestination.to", { failureDestination: { to: true } }],
+    ["delivery.completionDestination.to", { completionDestination: { mode: "webhook", to: [] } }],
+  ])("rejects non-string cron.update %s before normalization", async (field, delivery) => {
+    const { context, respond } = await invokeCronUpdateDelivery(delivery);
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: `${field} must be a non-empty string`,
     });
   });
 
@@ -2412,3 +2455,4 @@ describe("cron method validation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,7 +2,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import pMap from "p-map";
+import pMap, { pMapSkip } from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
@@ -626,7 +626,7 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await pMap(
+  return await pMap(
     entriesResult,
     async (entry) => {
       const login = entry.login ?? entry.key;
@@ -635,13 +635,12 @@ async function filterVisibleEntries(
       }
       const normalized = normalizeLogin(login)?.toLowerCase();
       if (normalized && hiddenLogins.has(normalized)) {
-        return null;
+        return pMapSkip;
       }
-      return (await isDefaultGitHubAvatar(login)) ? null : entry;
+      return (await isDefaultGitHubAvatar(login)) ? pMapSkip : entry;
     },
     { concurrency: 8, stopOnError: true },
   );
-  return results.filter((entry): entry is Entry => entry !== null);
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {

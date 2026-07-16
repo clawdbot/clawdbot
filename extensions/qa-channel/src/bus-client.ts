@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseQaTarget, type QaTargetParts } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
@@ -13,6 +14,8 @@ import type {
   QaBusThread,
   QaBusToolCall,
 } from "./protocol.js";
+
+export { parseQaTarget };
 
 export type {
   QaBusAttachment,
@@ -38,6 +41,8 @@ export type {
 
 type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+/** Total deadline for local qa-bus state requests. */
+const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -138,48 +143,19 @@ export function normalizeQaTarget(raw: string): string | undefined {
   return trimmed;
 }
 
-export function parseQaTarget(raw: string): {
-  chatType: "direct" | "channel" | "group";
-  conversationId: string;
-  threadId?: string;
-} {
-  const normalized = normalizeQaTarget(raw);
-  if (!normalized) {
-    throw new Error("qa-channel target is required");
+export function resolveQaTargetThread(params: {
+  target: string;
+  threadId?: string | number | null;
+}): { target: QaTargetParts; threadId?: string } {
+  const target = parseQaTarget(params.target);
+  const explicitThreadId = params.threadId == null ? "" : String(params.threadId).trim();
+  if (target.threadId && explicitThreadId && target.threadId !== explicitThreadId) {
+    throw new Error("qa-channel target conflicts with the explicit threadId");
   }
-  if (normalized.startsWith("thread:")) {
-    const rest = normalized.slice("thread:".length);
-    const slashIndex = rest.indexOf("/");
-    if (slashIndex <= 0 || slashIndex === rest.length - 1) {
-      throw new Error(`invalid qa-channel thread target: ${normalized}`);
-    }
-    return {
-      chatType: "channel",
-      conversationId: rest.slice(0, slashIndex),
-      threadId: rest.slice(slashIndex + 1),
-    };
-  }
-  if (normalized.startsWith("channel:")) {
-    return {
-      chatType: "channel",
-      conversationId: normalized.slice("channel:".length),
-    };
-  }
-  if (normalized.startsWith("group:")) {
-    return {
-      chatType: "group",
-      conversationId: normalized.slice("group:".length),
-    };
-  }
-  if (normalized.startsWith("dm:")) {
-    return {
-      chatType: "direct",
-      conversationId: normalized.slice("dm:".length),
-    };
-  }
+  const threadId = explicitThreadId || target.threadId;
   return {
-    chatType: "direct",
-    conversationId: normalized,
+    target,
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -304,6 +280,7 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
     url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
     policy: { allowPrivateNetwork: true },
     auditContext: "qa-channel.bus-state",
+    timeoutMs: QA_BUS_STATE_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

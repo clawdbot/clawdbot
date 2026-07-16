@@ -14,12 +14,9 @@ import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload,
-  ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
-import type {
-  PluginApprovalRequestPayload,
-  PluginApprovalResolved,
-} from "../../infra/plugin-approvals.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
@@ -34,7 +31,10 @@ import {
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
 } from "../operator-approval-store.js";
-import { resolveApprovalRequestRecipientConnIds } from "./approval-shared.js";
+import {
+  publishAppliedApprovalResolution,
+  type ExecApprovalIosPushDelivery,
+} from "./approval-publication.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -42,15 +42,10 @@ import type {
   RespondFn,
 } from "./types.js";
 
-type ApprovalRequest = ExecApprovalRequestPayload | PluginApprovalRequestPayload;
-
-type ExecApprovalIosPushDelivery = {
-  handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
-};
-
 type CreateApprovalHandlersParams = {
   execApprovalManager: ExecApprovalManager;
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
+  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwarder?: ExecApprovalForwarder;
   iosPushDelivery?: ExecApprovalIosPushDelivery;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -153,6 +148,7 @@ function loadVisibleApproval(params: {
   allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
+  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): OperatorApprovalRecord | null {
   // Reconciliation can settle a live waiter, so authorization must precede
@@ -165,7 +161,8 @@ function loadVisibleApproval(params: {
   }
   const liveRecord =
     params.execApprovalManager.getLiveSnapshot(params.id) ??
-    params.pluginApprovalManager.getLiveSnapshot(params.id);
+    params.pluginApprovalManager.getLiveSnapshot(params.id) ??
+    params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
   if (
     liveRecord &&
     !canAccessOperatorApproval({
@@ -191,6 +188,7 @@ function loadVisibleApproval(params: {
     const corrupt = { outcome: "corrupt", id: params.id } as const;
     params.execApprovalManager.reconcileDurableLookup(corrupt);
     params.pluginApprovalManager.reconcileDurableLookup(corrupt);
+    params.systemAgentApprovalManager?.reconcileDurableLookup(corrupt);
     throw error;
   }
   if (lookup.outcome === "found") {
@@ -204,10 +202,14 @@ function loadVisibleApproval(params: {
       return null;
     }
     const manager =
-      lookup.record.kind === "exec" ? params.execApprovalManager : params.pluginApprovalManager;
+      lookup.record.kind === "exec"
+        ? params.execApprovalManager
+        : lookup.record.kind === "plugin"
+          ? params.pluginApprovalManager
+          : params.systemAgentApprovalManager;
     // Durable truth can advance outside this manager. Settle only an existing
     // same-kind waiter; reconcileDurableLookup never recreates executable state.
-    return manager.reconcileDurableLookup(lookup);
+    return manager?.reconcileDurableLookup(lookup) ?? null;
   }
   const missing = {
     outcome: lookup.outcome === "corrupt" ? "corrupt" : "missing",
@@ -215,131 +217,8 @@ function loadVisibleApproval(params: {
   } as const;
   params.execApprovalManager.reconcileDurableLookup(missing);
   params.pluginApprovalManager.reconcileDurableLookup(missing);
+  params.systemAgentApprovalManager?.reconcileDurableLookup(missing);
   return null;
-}
-
-function broadcastResolvedEvent(params: {
-  context: GatewayRequestContext;
-  eventName: "exec.approval.resolved" | "plugin.approval.resolved";
-  event: ExecApprovalResolved | PluginApprovalResolved;
-  liveRecord: ExecApprovalRecord<ApprovalRequest>;
-}): void {
-  // Legacy resolution events contain the full runtime request. Keep their existing
-  // visibility filter; broad multi-surface fanout requires the sanitized PR3 event.
-  const recipientConnIds = resolveApprovalRequestRecipientConnIds({
-    context: params.context,
-    record: {
-      id: params.liveRecord.id,
-      request: params.liveRecord.request,
-      createdAtMs: params.liveRecord.createdAtMs,
-      expiresAtMs: params.liveRecord.expiresAtMs,
-      requestedByConnId: params.liveRecord.requestedByConnId,
-      requestedByDeviceId: params.liveRecord.requestedByDeviceId,
-      requestedByClientId: params.liveRecord.requestedByClientId,
-      requestedByDeviceTokenAuth: params.liveRecord.requestedByDeviceTokenAuth,
-      approvalReviewerDeviceIds: params.liveRecord.approvalReviewerDeviceIds,
-    },
-  });
-  if (recipientConnIds) {
-    params.context.broadcastToConnIds(params.eventName, params.event, recipientConnIds, {
-      dropIfSlow: true,
-    });
-    return;
-  }
-  params.context.broadcast(params.eventName, params.event, { dropIfSlow: true });
-}
-
-async function runResolutionSideEffect(params: {
-  context: GatewayRequestContext;
-  approvalKind: "exec" | "plugin";
-  effect: "broadcast" | "forwarder" | "ios-push";
-  run: () => void | Promise<void>;
-}): Promise<void> {
-  try {
-    await params.run();
-  } catch (error) {
-    params.context.logGateway?.error?.(
-      `${params.approvalKind} approvals: unified resolve ${params.effect} failed: ${String(error)}`,
-    );
-  }
-}
-
-async function publishAppliedResolution(params: {
-  record: OperatorApprovalRecord;
-  liveRecord: ExecApprovalRecord<ApprovalRequest>;
-  context: GatewayRequestContext;
-  forwarder?: ExecApprovalForwarder;
-  iosPushDelivery?: ExecApprovalIosPushDelivery;
-}): Promise<void> {
-  const decision = params.record.decision ?? "deny";
-  const resolvedBy = params.liveRecord.resolvedBy ?? null;
-  const ts = params.record.resolvedAtMs ?? Date.now();
-  if (params.record.kind === "exec") {
-    const event: ExecApprovalResolved = {
-      id: params.record.id,
-      decision,
-      resolvedBy,
-      ts,
-      request: params.liveRecord.request as ExecApprovalRequestPayload,
-    };
-    await runResolutionSideEffect({
-      context: params.context,
-      approvalKind: "exec",
-      effect: "broadcast",
-      run: () =>
-        broadcastResolvedEvent({
-          context: params.context,
-          eventName: "exec.approval.resolved",
-          event,
-          liveRecord: params.liveRecord,
-        }),
-    });
-    if (params.forwarder) {
-      await runResolutionSideEffect({
-        context: params.context,
-        approvalKind: "exec",
-        effect: "forwarder",
-        run: () => params.forwarder!.handleResolved(event),
-      });
-    }
-    if (params.iosPushDelivery?.handleResolved) {
-      await runResolutionSideEffect({
-        context: params.context,
-        approvalKind: "exec",
-        effect: "ios-push",
-        run: () => params.iosPushDelivery!.handleResolved!(event),
-      });
-    }
-    return;
-  }
-
-  const event: PluginApprovalResolved = {
-    id: params.record.id,
-    decision,
-    resolvedBy,
-    ts,
-    request: params.liveRecord.request as PluginApprovalRequestPayload,
-  };
-  await runResolutionSideEffect({
-    context: params.context,
-    approvalKind: "plugin",
-    effect: "broadcast",
-    run: () =>
-      broadcastResolvedEvent({
-        context: params.context,
-        eventName: "plugin.approval.resolved",
-        event,
-        liveRecord: params.liveRecord,
-      }),
-  });
-  if (params.forwarder?.handlePluginApprovalResolved) {
-    await runResolutionSideEffect({
-      context: params.context,
-      approvalKind: "plugin",
-      effect: "forwarder",
-      run: () => params.forwarder!.handlePluginApprovalResolved!(event),
-    });
-  }
 }
 
 type ApplyApprovalDecisionResult<TPayload> =
@@ -472,6 +351,7 @@ export function createApprovalHandlers(
               client,
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
+              systemAgentApprovalManager: params.systemAgentApprovalManager,
               databaseOptions: params.databaseOptions,
             })
           : null;
@@ -502,6 +382,7 @@ export function createApprovalHandlers(
               allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
+              systemAgentApprovalManager: params.systemAgentApprovalManager,
               databaseOptions: params.databaseOptions,
             })
           : null;
@@ -535,12 +416,15 @@ export function createApprovalHandlers(
       const decisionAllowed =
         requestedDecision === "deny" ||
         (requestedDecision !== null &&
-          record.presentation.allowedDecisions.includes(requestedDecision));
+          (record.presentation.allowedDecisions as readonly ApprovalDecision[]).includes(
+            requestedDecision,
+          ));
       const kindMatches = resolveParams?.kind === record.presentation.kind;
       const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       let resolution:
         | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>;
+        | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>
+        | ApplyApprovalDecisionResult<SystemAgentApprovalRequestPayload>;
       try {
         resolution =
           record.kind === "exec"
@@ -552,14 +436,23 @@ export function createApprovalHandlers(
                 resolver,
                 localResolvedBy,
               })
-            : applyApprovalDecision({
-                manager: params.pluginApprovalManager,
-                id: record.id,
-                decision: requestedDecision,
-                forceMalformedDeny,
-                resolver,
-                localResolvedBy,
-              });
+            : record.kind === "plugin"
+              ? applyApprovalDecision({
+                  manager: params.pluginApprovalManager,
+                  id: record.id,
+                  decision: requestedDecision,
+                  forceMalformedDeny,
+                  resolver,
+                  localResolvedBy,
+                })
+              : applyApprovalDecision({
+                  manager: params.systemAgentApprovalManager!,
+                  id: record.id,
+                  decision: requestedDecision,
+                  forceMalformedDeny,
+                  resolver,
+                  localResolvedBy,
+                });
       } catch (error) {
         respondApprovalUnavailable({ context, respond, operation: "resolve", error });
         return;
@@ -585,7 +478,7 @@ export function createApprovalHandlers(
       if (resolution.applied && resolution.liveRecord) {
         // SQLite CAS is canonical. Never make the winning surface wait for
         // best-effort channel, push, or legacy-event reconciliation.
-        void publishAppliedResolution({
+        void publishAppliedApprovalResolution({
           record: terminalRecord,
           liveRecord: resolution.liveRecord,
           context,

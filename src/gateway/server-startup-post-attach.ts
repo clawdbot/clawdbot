@@ -1,5 +1,3 @@
-// Gateway post-attach startup sidecars.
-// Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import pMap from "p-map";
@@ -35,7 +33,6 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
-
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
@@ -48,7 +45,6 @@ const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 type Awaitable<T> = T | Promise<T>;
-
 type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
   mark: (name: string) => void;
@@ -695,6 +691,7 @@ export async function startGatewaySidecars(params: {
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
   shouldStartPluginServices?: () => boolean;
+  broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -795,6 +792,7 @@ export async function startGatewaySidecars(params: {
               config: params.cfg,
               workspaceDir: params.defaultWorkspaceDir,
               startupTrace: params.startupTrace,
+              broadcastPluginEvent: params.broadcastPluginEvent,
             });
           } catch (err) {
             params.log.warn(`plugin services failed to start: ${String(err)}`);
@@ -1109,6 +1107,7 @@ export async function startGatewayPostAttachRuntime(
     isNixMode: boolean;
     startupStartedAt?: number;
     broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+    broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
     serviceName?: string;
@@ -1294,6 +1293,7 @@ export async function startGatewayPostAttachRuntime(
                 onChannelsStarted: params.onChannelsStarted,
                 onPluginServices: reportPluginServices,
                 shouldStartPluginServices: () => params.isClosing?.() !== true,
+                broadcastPluginEvent: params.broadcastPluginEvent,
                 startupOutcomes,
               }),
             );
@@ -1473,3 +1473,4 @@ export const testing = {
   stopPostReadySidecarsAfterCloseStarted,
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

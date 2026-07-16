@@ -36,8 +36,6 @@ import {
   resolveKilledSubagentTaskEndedAt,
 } from "./subagent-registry-completion.js";
 import {
-  getSubagentSessionRuntimeMs,
-  getSubagentSessionStartedAt,
   persistSubagentSessionTiming,
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
@@ -48,6 +46,10 @@ import {
   nextSubagentRunGeneration,
 } from "./subagent-run-generation.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
+import {
+  getSubagentSessionRuntimeMs,
+  getSubagentSessionStartedAt,
+} from "./subagent-session-metrics.js";
 import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -1061,3 +1063,4 @@ export function createSubagentRunManager(params: {
     waitForSubagentCompletion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

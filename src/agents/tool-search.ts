@@ -143,7 +143,7 @@ type ToolSearchDirectoryIntent = {
 
 type ToolDirectoryFamily = "memory" | "web";
 
-export type ToolSearchCatalogSession = {
+type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
   searchCount: number;
   describeCount: number;
@@ -2393,7 +2393,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
   ];
 }
 
-export const testing = {
+const testing = {
   sessionCatalogs,
   reusableCatalogSnapshots,
   maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
@@ -2413,3 +2413,8 @@ export const testing = {
   appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolSearchTestApi")] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

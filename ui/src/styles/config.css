@@ -8,112 +8,6 @@
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
 
-/* Layout Container */
-.config-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
-  margin: 12px 0 0;
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--border);
-  background: var(--panel);
-  overflow: hidden;
-  overflow: clip;
-}
-
-@media (max-width: 600px) {
-  .config-layout {
-    margin: 8px 0 0;
-  }
-}
-
-@media (max-width: 400px) {
-  .config-layout {
-    margin: 8px 0 0;
-  }
-}
-
-/* Search */
-.config-search {
-  display: grid;
-  gap: 5px;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.config-search__input-row {
-  position: relative;
-}
-
-.config-search__icon {
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.config-search__input {
-  width: 100%;
-  padding: 8px 34px 8px 38px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  font-size: 12.5px;
-  outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.config-search__input::placeholder {
-  color: var(--muted);
-}
-
-.config-search__input:focus-visible {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-  background: var(--bg-hover);
-}
-
-:root[data-theme-mode="light"] .config-search__input {
-  background: white;
-}
-
-:root[data-theme-mode="light"] .config-search__input:focus-visible {
-  background: white;
-}
-
-.config-search__clear {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: var(--bg-hover);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.config-search__clear:hover {
-  background: var(--border-strong);
-  color: var(--text);
-}
-
 /* Mode Toggle */
 .config-mode-toggle {
   display: flex;
@@ -155,79 +49,65 @@
 }
 
 /* ===========================================
-   Main Content
+   Lead column (toolbar / banner / nav above the form)
    =========================================== */
 
-.config-main {
+/* Mirrors the .settings-page column so config chrome lines up with it. */
+.config-lead {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4) 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  background: var(--panel);
-  overflow: hidden;
-  /* fallback for older browsers */
-  overflow: clip;
+  gap: var(--space-3);
 }
 
-/* Actions Bar */
-.config-actions {
+/* Toolbar: mode toggle / section tabs left, inline autosave status right */
+.config-toolbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px 18px;
-  padding: 14px 24px;
-  background: var(--bg-accent);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  position: relative;
-  z-index: 2;
+  gap: var(--space-2) var(--space-3);
 }
 
-:root[data-theme-mode="light"] .config-actions {
-  background: var(--bg-hover);
-}
-
-.config-actions__left,
-.config-actions__right {
+.config-toolbar__status {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.config-actions__left {
-  flex: 1 1 280px;
-  flex-wrap: wrap;
-}
-
-.config-actions__right {
-  flex: 999 1 420px;
-  align-items: flex-start;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
-.config-actions__notice {
-  flex: 0 1 24rem;
-  max-width: 24rem;
-  line-height: 1.35;
-  text-align: right;
-}
-
-.config-actions__buttons {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
+  gap: var(--space-2);
   margin-left: auto;
+  min-height: 28px;
 }
 
-.config-actions__buttons .btn {
-  flex: 0 0 auto;
+/* Restart affordance shown after a successful save until apply */
+.config-apply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.config-apply-banner__text {
+  min-width: 0;
+  line-height: 1.4;
+}
+
+/* Raw mode file operations (open / discard / save) */
+.config-raw-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .config-action-spinner {
@@ -248,94 +128,6 @@
   .config-action-spinner svg {
     animation: none;
   }
-}
-
-.config-changes-badge {
-  padding: 4px 10px;
-  border-radius: var(--radius-full);
-  background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  color: var(--accent);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-}
-
-.config-status {
-  font-size: 12.5px;
-  color: var(--muted);
-  line-height: 1.35;
-}
-
-.config-top-tabs {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 24px 12px;
-  background: var(--bg-accent);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-:root[data-theme-mode="light"] .config-top-tabs {
-  background: var(--bg-hover);
-}
-
-.config-search--top {
-  padding: 0;
-  border-bottom: none;
-  min-width: 200px;
-  max-width: 320px;
-  flex: 0 1 320px;
-}
-
-.config-top-tabs__scroller {
-  display: block;
-  min-width: 0;
-  flex: 1 1 auto;
-  --track-width: 0;
-}
-
-.config-top-tabs__scroller::part(tabs) {
-  gap: 8px;
-  border: 0;
-}
-
-.config-top-tabs__tab {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-top-tabs__tab::part(base) {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  min-height: 36px;
-  padding: 8px 14px;
-  background: var(--bg-elevated);
-  color: inherit;
-}
-
-:root[data-theme-mode="light"] .config-top-tabs__tab::part(base) {
-  background: white;
-}
-
-.config-top-tabs__tab:hover::part(base) {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-}
-
-.config-top-tabs__tab[active]::part(base) {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  background: var(--accent-subtle);
 }
 
 /* Diff Panel */
@@ -796,7 +588,6 @@
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .config-search__input,
   .settings-theme-import__input,
   .config-raw-field textarea {
     font-size: 16px;
@@ -845,72 +636,7 @@
    =========================================== */
 
 @media (max-width: 768px) {
-  .config-layout {
-    margin: 8px 0 0;
-    border-radius: var(--radius-md);
-  }
-
-  .config-actions {
-    flex-wrap: wrap;
-    padding: 14px 16px;
-  }
-
-  .config-actions__left,
-  .config-actions__right {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .config-top-tabs {
-    flex-wrap: wrap;
-    padding: 12px 16px;
-  }
-
-  .config-search--top {
-    flex: 1 1 100%;
-    max-width: none;
-  }
-
-  .config-top-tabs__scroller {
-    flex: 1 1 auto;
-  }
-
-  .config-actions__left .config-mode-toggle__btn {
-    flex: 1 1 50%;
-  }
-
-  .config-content {
-    padding: 16px;
-  }
-
   .settings-theme-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 900px) {
-  .config-actions {
-    padding: 12px 16px;
-  }
-
-  .config-actions__left,
-  .config-actions__right {
-    flex-basis: 100%;
-  }
-
-  .config-actions__right {
-    justify-content: flex-start;
-  }
-
-  .config-actions__notice {
-    flex-basis: 100%;
-    max-width: none;
-    text-align: left;
-  }
-
-  .config-actions__buttons {
-    width: 100%;
-    justify-content: flex-start;
-    margin-left: 0;
   }
 }

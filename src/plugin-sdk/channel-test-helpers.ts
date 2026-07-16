@@ -19,8 +19,6 @@ export {
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
-/** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
-export { deliverOutboundPayloads } from "./test-helpers/outbound-delivery.js";
 export {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,

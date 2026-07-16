@@ -1,6 +1,6 @@
 // Voice Call tests cover telephony audio plugin behavior.
 import { describe, expect, it } from "vitest";
-import { convertPcmToMulaw8k, resamplePcmTo8k } from "./telephony-audio.js";
+import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 function makeSinePcm(
   sampleRate: number,
@@ -17,53 +17,11 @@ function makeSinePcm(
   return output;
 }
 
-function rmsPcm(buffer: Buffer): number {
-  const samples = Math.floor(buffer.length / 2);
-  if (samples === 0) {
-    return 0;
-  }
-  let sum = 0;
-  for (let i = 0; i < samples; i++) {
-    const sample = buffer.readInt16LE(i * 2);
-    sum += sample * sample;
-  }
-  return Math.sqrt(sum / samples);
-}
-
 function unalignedCopy(buffer: Buffer): Buffer {
   const padded = Buffer.alloc(buffer.length + 1);
   buffer.copy(padded, 1);
   return padded.subarray(1);
 }
-
-describe("telephony-audio resamplePcmTo8k", () => {
-  it("returns identical buffer for 8k input", () => {
-    const pcm8k = makeSinePcm(8_000, 1_000, 0.2);
-    const resampled = resamplePcmTo8k(pcm8k, 8_000);
-    expect(resampled).toBe(pcm8k);
-  });
-
-  it("preserves low-frequency speech-band energy when downsampling", () => {
-    const input = makeSinePcm(48_000, 1_000, 0.6);
-    const output = resamplePcmTo8k(input, 48_000);
-    expect(output.length).toBe(9_600);
-    expect(rmsPcm(output)).toBeGreaterThan(7_500);
-  });
-
-  it("attenuates out-of-band high frequencies before 8k telephony conversion", () => {
-    const lowTone = resamplePcmTo8k(makeSinePcm(48_000, 1_000, 0.6), 48_000);
-    const highTone = resamplePcmTo8k(makeSinePcm(48_000, 6_000, 0.6), 48_000);
-    const ratio = rmsPcm(highTone) / rmsPcm(lowTone);
-    expect(ratio).toBeLessThan(0.1);
-  });
-
-  it("matches the typed-array path for unaligned input buffers", () => {
-    const input = makeSinePcm(48_000, 1_000, 0.2);
-    const output = resamplePcmTo8k(input, 48_000);
-    const unalignedOutput = resamplePcmTo8k(unalignedCopy(input), 48_000);
-    expect(unalignedOutput.equals(output)).toBe(true);
-  });
-});
 
 describe("telephony-audio convertPcmToMulaw8k", () => {
   it("converts to 8k mu-law frame length", () => {

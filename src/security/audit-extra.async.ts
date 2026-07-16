@@ -930,3 +930,4 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

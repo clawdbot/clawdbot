@@ -157,6 +157,29 @@ describe("Codex runtime plugin install repair", () => {
     });
   });
 
+  it("allows source checkouts to use the matching bundled Codex plugin", async () => {
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("./codex-runtime-plugin-install.js");
+
+    await ensureCodexRuntimePluginForModelSelection({
+      cfg: {},
+      model: "openai/gpt-5.5",
+      prompter: {} as never,
+      runtime: {} as never,
+    });
+
+    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: {
+          pluginId: "codex",
+          label: "Codex",
+          install: { npmSpec: "@openclaw/codex", defaultChoice: "npm" },
+          trustedSourceLinkedOfficialInstall: true,
+        },
+      }),
+    );
+  });
+
   it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
       codex: { source: "npm", installPath: process.cwd() },

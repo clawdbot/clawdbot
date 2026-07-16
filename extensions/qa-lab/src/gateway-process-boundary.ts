@@ -10,8 +10,8 @@ const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
 const PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS = 10_000;
 const PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS = 45_000;
 const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
-export const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
-export const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
+const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
+const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 
 type QaGatewayLinuxProcessBoundary = {
   kind: "linux-proc-v1";
@@ -114,12 +114,6 @@ type QaGatewayProcessBoundaryEvidenceLaunch = {
   exitedAt?: string;
   quiescedAt?: string;
   terminalState?: "failed-before-ready" | "ready-exited";
-};
-
-type QaGatewayProcStat = {
-  pgrp: number;
-  startTicks: string;
-  state: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -238,35 +232,6 @@ function parseQaGatewayProcessRuntimeProof(value: unknown): QaGatewayProcessRunt
     cwd: parseNonEmptyString(value.cwd, "runtime cwd"),
     executablePath: parseNonEmptyString(value.executablePath, "runtime executable path"),
     cmdlineSha256: parseSha256(value.cmdlineSha256, "runtime command line digest"),
-  };
-}
-
-export function parseQaGatewayProcStat(raw: string): QaGatewayProcStat {
-  const closeParen = raw.lastIndexOf(")");
-  if (closeParen < 0) {
-    throw new Error("invalid /proc stat command name");
-  }
-  const fields = raw
-    .slice(closeParen + 1)
-    .trim()
-    .split(/\s+/u);
-  if (fields.length < 20) {
-    throw new Error("invalid /proc stat field count");
-  }
-  const state = fields[0];
-  const pgrpText = fields[2];
-  const startTicks = fields[19];
-  if (!state || !pgrpText || !startTicks) {
-    throw new Error("invalid /proc stat process identity");
-  }
-  const pgrp = Number(pgrpText);
-  if (!Number.isSafeInteger(pgrp) || pgrp <= 1 || !/^[0-9]+$/.test(startTicks)) {
-    throw new Error("invalid /proc stat process identity");
-  }
-  return {
-    state,
-    pgrp,
-    startTicks,
   };
 }
 
@@ -882,13 +847,4 @@ export async function shouldRetainQaGatewayCredentialLease(env: NodeJS.ProcessEn
   }
 }
 
-const testing = {
-  commandLineBytes,
-  normalizeEnvKeys,
-  parseQaGatewayProcessHandoff,
-  parseQaGatewayProcessRuntimeProof,
-  parseQaGatewayProcessSandboxProof,
-  parseQaGatewayProcStat,
-};
-
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

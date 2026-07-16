@@ -16,7 +16,7 @@ Adds Moonshot model provider support to OpenClaw.
 
 ## Surface
 
-providers: moonshot; contracts: mediaUnderstandingProviders, webSearchProviders
+providers: `moonshot`; contracts: `mediaUnderstandingProviders`, `webSearchProviders`
 
 ## Related docs
 

@@ -24,6 +24,25 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((value, ctx) => {
+  try {
+    const ms = parseDurationMs(normalizeStringifiedOptionalString(value) ?? "", {
+      defaultUnit: "d",
+    });
+    if (ms <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "duration must be positive (use ms, s, m, h, d), e.g. 30d",
+      });
+    }
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "invalid duration (use ms, s, m, h, d)",
+    });
+  }
+});
+
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
@@ -84,43 +103,17 @@ export const SessionSchema = z
     maintenance: z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
-        pruneAfter: z.union([z.string(), z.number()]).optional(),
+        pruneAfter: PositiveDurationSchema.optional(),
         /** @deprecated Use pruneAfter instead. */
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
-        resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
-        maxDiskBytes: z.union([z.string(), z.number()]).optional(),
+        resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
+        maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
-        if (val.pruneAfter !== undefined) {
-          try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.pruneAfter) ?? "", {
-              defaultUnit: "d",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["pruneAfter"],
-              message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
-          try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.resetArchiveRetention) ?? "", {
-              defaultUnit: "d",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["resetArchiveRetention"],
-              message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.maxDiskBytes !== undefined) {
+        if (val.maxDiskBytes !== undefined && val.maxDiskBytes !== false) {
           try {
             parseByteSize(normalizeStringifiedOptionalString(val.maxDiskBytes) ?? "", {
               defaultUnit: "b",

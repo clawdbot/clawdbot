@@ -156,7 +156,7 @@ function splitLongLine(
  * Chunks outbound Discord text by both character count and (soft) line count,
  * while keeping fenced code blocks balanced across chunks.
  */
-export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
+function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const maxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
   const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
 

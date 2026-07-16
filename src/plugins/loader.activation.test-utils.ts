@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { listContextEngineIds } from "../context-engine/registry.js";
+import { getContextEngineRegistration } from "../context-engine/registry.js";
 import { withEnv } from "../test-utils/env.js";
 import { getCompactionProvider } from "./compaction-provider.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -572,7 +572,7 @@ describe("loadOpenClawPlugins", () => {
             pluginId: "context-engine-malformed",
             message: "context engine registration missing id",
           });
-          expect(listContextEngineIds()).not.toContain("broken-context");
+          expect(getContextEngineRegistration("broken-context")).toBeUndefined();
         },
       },
       {
@@ -1636,3 +1636,4 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -39,8 +39,6 @@ import {
 } from "./plugin-model-catalog.js";
 import { stableStringify } from "./stable-stringify.js";
 
-export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
-
 type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   fingerprint: string;
   workspaceDir?: string;
@@ -141,18 +139,25 @@ async function readExistingModelsFile(pathname: string): Promise<{
 }
 
 /** Best-effort chmod for generated models.json and plugin catalog files. */
-export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
+async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
 }
 
 /** Atomic private-file-store write used by models.json generation. */
-export async function writeModelsFileAtomicForModelsJson(
+async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
 ): Promise<void> {
   await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigTestApi")] = {
+    ensureModelsFileModeForModelsJson,
+    writeModelsFileAtomicForModelsJson,
+  };
 }
 
 async function isGeneratedPluginCatalogFile(targetPath: string): Promise<boolean> {

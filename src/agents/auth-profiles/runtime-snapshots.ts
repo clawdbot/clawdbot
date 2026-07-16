@@ -299,15 +299,6 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
   }
 }
 
-/** Persisted mutation token for one store or profile credential. */
-export function getRuntimeAuthProfileStoreCredentialMutationRevision(
-  agentDir?: string,
-  profileId?: string,
-  options?: { includeMain?: boolean },
-): number {
-  return getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, profileId, options).revision;
-}
-
 export type RuntimeAuthProfileStoreMutationToken = {
   revision: number;
   known: boolean;
@@ -386,10 +377,6 @@ export function getRuntimeAuthProfileStoreStateMutationToken(
   );
 }
 
-export function getRuntimeAuthProfileStoreStateMutationRevision(agentDir?: string): number {
-  return getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
-}
-
 /** Stable token for credential ownership without coupling to usage bookkeeping. */
 export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
   return runtimeAuthStoreCredentialsRevision;
@@ -403,7 +390,7 @@ export function getRuntimeAuthProfileStoreSnapshotRevision(agentDir?: string): n
   );
 }
 
-export const testing = {
+const testing = {
   MAX_PERSISTED_MUTATION_OWNERS,
   MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER,
   getPersistedMutationRecordCounts(): { owners: number; profiles: number } {
@@ -421,3 +408,7 @@ export const testing = {
     evictedOwnerMutationFloor = 0;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.runtimeAuthSnapshotsTestApi")] =
+    testing;
+}

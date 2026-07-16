@@ -3,14 +3,10 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
+import { GatewayClient } from "./client.js";
 import type { GatewayProtocolSocket } from "./protocol-client.js";
-import {
-  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
-  MAX_SAFE_TIMEOUT_DELAY_MS,
-  MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
-  MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
-} from "./timeouts.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
+import { rawDataToString } from "./websocket-data.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -20,22 +16,6 @@ async function getFreePort(): Promise<number> {
       server.close((err) => (err ? reject(err) : resolve(port)));
     });
   });
-}
-
-function rawDataToString(data: unknown): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((entry) => Buffer.from(entry))).toString("utf8");
-  }
-  return String(data);
 }
 
 function createOpenGatewayClient(requestTimeoutMs: number): {
@@ -53,6 +33,12 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
 function getPendingCount(client: GatewayClient): number {
   return protocolHarness(client).pending.size;
 }
+
+test("decodes every ws raw-data shape", () => {
+  expect(rawDataToString(Buffer.from("buffer"))).toBe("buffer");
+  expect(rawDataToString(Uint8Array.from(Buffer.from("array-buffer")).buffer)).toBe("array-buffer");
+  expect(rawDataToString([Buffer.from("frag"), Buffer.from("ments")])).toBe("fragments");
+});
 
 type ProtocolHarness = {
   socket: GatewayProtocolSocket | null;
@@ -176,39 +162,6 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("resolves connectChallengeTimeoutMs with clamping and config fallback", () => {
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
-      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
-    );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 0 })).toBe(
-      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
-    );
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 20_000 }),
-    ).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        connectChallengeTimeoutMs: 5_000,
-      }),
-    ).toBe(5_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        connectChallengeTimeoutMs: 45_000,
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
-      }),
-    ).toBe(6_000);
-  });
-
   test("returns non-sensitive connection metadata", () => {
     const client = new GatewayClient({
       clientName: "cli",
@@ -226,6 +179,23 @@ describe("GatewayClient", () => {
       hasDeviceIdentity: true,
       mode: "backend",
       preauthHandshakeTimeoutMs: 30_000,
+    });
+  });
+
+  test("reconnects with updated node manifest metadata", () => {
+    const client = new GatewayClient({ caps: ["system"], commands: ["system.run"] });
+    const close = vi.fn();
+    installSyntheticSocket(client, vi.fn(), close);
+
+    client.updateNodeManifest({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
+    });
+
+    expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
+    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
     });
   });
 

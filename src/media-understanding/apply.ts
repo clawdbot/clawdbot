@@ -93,7 +93,7 @@ const MIME_TYPE_WITH_OPTIONAL_PARAMS = new RegExp(
   "i",
 );
 
-export function sanitizeMimeType(value?: string): string | undefined {
+function sanitizeMimeType(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;

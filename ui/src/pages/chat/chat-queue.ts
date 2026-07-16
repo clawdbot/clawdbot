@@ -35,7 +35,7 @@ type ChatQueueSessionHost = ChatQueueStoreHost &
     sessionKey: string;
   };
 
-type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
+export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 const chatOutboxProjectionHosts = new Set<ChatQueueScopedSessionHost>();
 // Durable rows use crash-safe states. Overlay live work process-wide so panes
@@ -48,7 +48,7 @@ const localRecoveryItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>
 // quota fallback may bypass durable admission on an explicit retry.
 const volatileQueueItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>>();
 
-function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
+export function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
   const ids = localRecoveryItemIds.get(host) ?? new Set<string>();
   ids.add(id);
   localRecoveryItemIds.set(host, ids);
@@ -66,7 +66,7 @@ export function isVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: st
   return volatileQueueItemIds.get(host)?.has(id) === true;
 }
 
-function markVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
+export function markVolatileQueuedMessage(host: ChatQueueScopedSessionHost, id: string): void {
   const ids = volatileQueueItemIds.get(host) ?? new Set<string>();
   ids.add(id);
   volatileQueueItemIds.set(host, ids);
@@ -384,7 +384,7 @@ export function replacePendingQueuedMessageProjection(
   return true;
 }
 
-function writeChatQueueForScope(
+export function writeChatQueueForScope(
   host: ChatQueueScopedSessionHost,
   sessionKey: string,
   queue: ChatQueueItem[],

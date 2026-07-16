@@ -302,6 +302,7 @@ extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
 extensions/diffs/assets/viewer-runtime.js
 extensions/diffs-language-pack/assets/viewer-runtime.js
+extensions/discord/assets/embedded-app-sdk.mjs
 
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/

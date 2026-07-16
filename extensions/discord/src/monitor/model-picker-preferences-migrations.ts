@@ -7,6 +7,10 @@ import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+  DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+} from "../command-deploy-store.js";
+import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
   THREAD_BINDINGS_NAMESPACE,
@@ -167,6 +171,23 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
   stateDir,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const commandDeployCacheSourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+  if (fileExists(commandDeployCacheSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deployment cache",
+      sourcePath: commandDeployCacheSourcePath,
+      targetPath: `plugin state:${DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+      maxEntries: DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+      // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
+      readEntries: () => [],
+    });
+  }
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
   if (fileExists(modelPickerSourcePath)) {
     plans.push({

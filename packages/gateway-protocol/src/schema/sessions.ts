@@ -5,6 +5,9 @@ import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionsCreateParamsSchema } from "./sessions-create.js";
+
+export { SessionsCreateParamsSchema };
 
 /**
  * Session protocol schemas.
@@ -197,19 +200,16 @@ export const SessionsDiffResultSchema = closedObject({
 
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = closedObject({
-  /**
-   * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-   * to keep large session stores from monopolizing the event loop.
-   */
+  /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
+  requireLastInteraction: Type.Optional(Type.Boolean()),
+  sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
-  /**
-   * Limit returned agent-scoped rows to agents currently present in config.
-   * Broad disk discovery remains the default for recovery/ACP consumers.
-   */
+  /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
    * Read first 8KB of each session transcript to derive title from first user message.
@@ -290,49 +290,6 @@ export const SessionsResolveParamsSchema = closedObject({
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Return a successful `{ ok: false }` response when the selector does not match a session. */
   allowMissing: Type.Optional(Type.Boolean()),
-});
-
-/** Creates or adopts a session with optional model, label, and parent linkage. */
-export const SessionsCreateParamsSchema = closedObject({
-  key: Type.Optional(NonEmptyString),
-  agentId: Type.Optional(NonEmptyString),
-  label: Type.Optional(SessionLabelString),
-  model: Type.Optional(NonEmptyString),
-  catalogId: Type.Optional(NonEmptyString),
-  parentSessionKey: Type.Optional(NonEmptyString),
-  fork: Type.Optional(
-    Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
-  ),
-  emitCommandHooks: Type.Optional(Type.Boolean()),
-  task: Type.Optional(Type.String()),
-  message: Type.Optional(Type.String()),
-  worktree: Type.Optional(Type.Boolean()),
-  worktreeBaseRef: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Base ref for the new managed worktree branch. Requires worktree=true.",
-    }),
-  ),
-  worktreeName: Type.Optional(
-    Type.String({
-      pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
-      description: "Managed worktree name; becomes branch openclaw/<name>. Requires worktree=true.",
-    }),
-  ),
-  execNode: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Bind session exec to host=node with this node id/name. Requires operator.admin.",
-    }),
-  ),
-  cwd: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
-    }),
-  ),
 });
 
 export const SessionWorktreeInfoSchema = closedObject({

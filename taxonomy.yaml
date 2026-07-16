@@ -835,7 +835,7 @@ surfaces:
             coverageIds: [cli.service-install-and-control]
             description: The CLI documents install, status, start, stop, restart, and run flows for managed gateway services.
           - name: Service auth wiring
-            coverageIds: [agents.create, channels.discord-config, config.crestodian-setup]
+            coverageIds: [agents.create, channels.discord-config, config.system-agent-setup]
             description: Gateway service installation documents how auth tokens and other sensitive values are handled.
           - name: Drift and reinstall recovery
             coverageIds: [cli.drift-and-reinstall-recovery]
@@ -1356,7 +1356,7 @@ surfaces:
                 agents.create,
                 agents.instructions,
                 channels.discord-config,
-                config.crestodian-setup,
+                config.system-agent-setup,
                 runtime.first-action,
                 runtime.multi-turn-continuity,
                 runtime.long-context,
@@ -2017,7 +2017,7 @@ surfaces:
             coverageIds: [channels.status-taxonomy-in-channels-list]
             description: Channel status taxonomy in channels list, channels status, and setup status output
           - name: Setup/onboarding flows
-            coverageIds: [agents.create, channels.discord-config, config.crestodian-setup]
+            coverageIds: [agents.create, channels.discord-config, config.system-agent-setup]
             description: Setup/onboarding flows, including first-run channel selection and channel account setup
           - name: Install-on-demand
             coverageIds: [channels.install-on-demand]

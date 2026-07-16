@@ -33,7 +33,7 @@ jobs:
       contents: read
     name: "check"
     # Pull requests only validate the hydration steps; real Testbox leases arrive via dispatch.
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
     steps:
       # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate our setup steps only.

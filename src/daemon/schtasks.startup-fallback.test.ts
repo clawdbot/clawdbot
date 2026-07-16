@@ -1986,3 +1986,4 @@ describe("Windows startup fallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

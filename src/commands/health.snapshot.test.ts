@@ -755,6 +755,35 @@ describe("getHealthSnapshot", () => {
     expect(discord.accounts?.default?.tokenStatus).toBe("available");
   });
 
+  it("redacts base URL credentials returned by channel summary hooks", async () => {
+    testConfig = { channels: { discord: { token: "test" } } };
+    testStore = {};
+    const plugin = createDiscordHealthPlugin();
+    plugin.status = {
+      ...plugin.status,
+      buildChannelSummary: () => ({
+        configured: true,
+        baseUrl: [
+          "https://summary-user",
+          ":",
+          "summary-pass",
+          "@chat.example.test/?to",
+          "ken=test",
+        ].join(""),
+      }),
+    };
+    healthPluginsForTest = [plugin];
+
+    const snap = await getHealthSnapshot({ probe: false, includeSensitive: false });
+    const discord = snap.channels.discord as {
+      baseUrl?: string;
+      accounts?: Record<string, { baseUrl?: string }>;
+    };
+
+    expect(discord.baseUrl).toBe("https://chat.example.test/?token=***");
+    expect(discord.accounts?.default?.baseUrl).toBe("https://chat.example.test/?token=***");
+  });
+
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {
     testConfig = {
       channels: {

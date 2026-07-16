@@ -29,7 +29,7 @@ interface DownloadedMedia {
  * Extract image blocks from Tlon message content.
  * Returns array of image URLs found in the message.
  */
-export function extractImageBlocks(content: unknown): ExtractedImage[] {
+function extractImageBlocks(content: unknown): ExtractedImage[] {
   if (!content || !Array.isArray(content)) {
     return [];
   }
@@ -55,10 +55,7 @@ export function extractImageBlocks(content: unknown): ExtractedImage[] {
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-export async function downloadMedia(
-  url: string,
-  mediaDir?: string,
-): Promise<DownloadedMedia | null> {
+async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);

@@ -828,3 +828,4 @@ export function buildManagedServiceHandoffUnavailableMessage(command: string): s
     `Run \`${command}\` from a shell outside the gateway service, or restart/update from the host UI.`,
   ].join("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

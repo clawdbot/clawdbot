@@ -69,7 +69,7 @@ All options live under `messages.tts.providers["azure-speech"]`.
 | ----------------------- | ----------------------------------------------------------------------------------------------------- |
 | `apiKey`                | Azure Speech resource key. Falls back to `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`. |
 | `region`                | Azure Speech resource region. Falls back to `AZURE_SPEECH_REGION` or `SPEECH_REGION`.                 |
-| `endpoint`              | Optional Azure Speech endpoint override. Falls back to `AZURE_SPEECH_ENDPOINT`.                       |
+| `endpoint`              | Optional Azure Speech endpoint override. Falls back to trusted `AZURE_SPEECH_ENDPOINT`.               |
 | `baseUrl`               | Optional Azure Speech base URL override.                                                              |
 | `voice`                 | Azure voice ShortName (default `en-US-JennyNeural`). Legacy alias: `voiceId`.                         |
 | `lang`                  | SSML language code (default `en-US`).                                                                 |
@@ -79,7 +79,9 @@ All options live under `messages.tts.providers["azure-speech"]`.
 
 The provider is considered configured once `apiKey` is set plus one of
 `region`, `endpoint`, or `baseUrl`. Env vars are only checked as a fallback
-for config keys left unset.
+for config keys left unset. Workspace `.env` files cannot set
+`AZURE_SPEECH_ENDPOINT`; use the process environment, global runtime dotenv,
+or explicit config for endpoint routing.
 
 ## Notes
 

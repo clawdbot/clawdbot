@@ -19,7 +19,7 @@ vi.mock("./sessions/index.js", async () => {
 });
 
 let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummary;
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -46,7 +46,8 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 
 describe("compaction toolResult details stripping", () => {
   beforeAll(async () => {
-    ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
+    ({ isOversizedForSummary } = await import("./compaction.js"));
+    ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
   });
 
   beforeEach(() => {

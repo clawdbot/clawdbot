@@ -1116,8 +1116,40 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
-  it("does not reuse a stale assistant reply when no new reply appears", async () => {
+  it("rejects a synchronous target that resolves to the calling session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: MAIN_AGENT_SESSION_KEY });
     const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-self-send", {
+      sessionKey: "current",
+      message: "use this as my reply",
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: "sessions_send cannot target the calling session; use your own reply instead",
+      sessionKey: "current",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock.mock.calls).not.toContainEqual([
+      expect.objectContaining({ method: "agent" }),
+    ]);
+  });
+
+  it("keeps synchronous distinct-target sends unchanged", async () => {
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     let historyCalls = 0;
     const staleAssistantMessage = {
       role: "assistant",
@@ -1130,7 +1162,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1147,7 +1179,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-stale-send", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: 1,
     });
@@ -1156,7 +1188,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+    expect(details.sessionKey).toBe(targetSessionKey);
   });
 
   it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
@@ -1312,7 +1344,18 @@ describe("sessions_send gating", () => {
   );
 
   it("caps oversized timeoutSeconds before waiting for the target run", async () => {
-    const tool = createMainSessionsSendTool();
+    const targetSessionKey = "agent:main:other";
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      agentChannel: MAIN_AGENT_CHANNEL,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      } as never,
+    });
     const waitTimeouts: unknown[] = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1320,7 +1363,7 @@ describe("sessions_send gating", () => {
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
         };
       }
       if (request.method === "agent") {
@@ -1337,7 +1380,7 @@ describe("sessions_send gating", () => {
     });
 
     const result = await tool.execute("call-huge-timeout", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
+      sessionKey: targetSessionKey,
       message: "ping",
       timeoutSeconds: Number.MAX_SAFE_INTEGER,
     });
@@ -1346,3 +1389,4 @@ describe("sessions_send gating", () => {
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

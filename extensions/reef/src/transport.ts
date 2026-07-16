@@ -65,8 +65,14 @@ export class ReefTransportClient {
   requestFriend(to: string, code?: string): Promise<{ status: string }> {
     return this.signed("POST", "/v1/friends/request", code ? { to, code } : { to });
   }
-  respondFriend(peer: string, accept: boolean): Promise<{ peer: string; status: string }> {
-    return this.signed("POST", "/v1/friends/respond", { peer, accept });
+  respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
+    return this.signed("POST", "/v1/friends/respond", {
+      peer: friend.peer,
+      accept,
+      expected_key_epoch: friend.key_epoch,
+      expected_ed25519_pub: friend.ed25519_pub,
+      expected_x25519_pub: friend.x25519_pub,
+    });
   }
   listFriends(): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends");

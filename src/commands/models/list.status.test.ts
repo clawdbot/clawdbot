@@ -1495,3 +1495,4 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

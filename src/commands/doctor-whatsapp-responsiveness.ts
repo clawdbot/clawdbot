@@ -56,7 +56,7 @@ function parsePsPidLine(line: string): LocalTuiProcess | null {
 }
 
 /** Lists local OpenClaw TUI processes that can contend with gateway responsiveness. */
-export function listLocalTuiProcesses(): LocalTuiProcess[] {
+function listLocalTuiProcesses(): LocalTuiProcess[] {
   if (process.platform === "win32") {
     return [];
   }
@@ -143,7 +143,7 @@ function isProcessAlive(controller: ProcessController, pid: number): boolean {
 }
 
 /** Terminates local TUI processes with SIGTERM, then SIGKILL for remaining pids. */
-export async function terminateLocalTuiProcesses(params: {
+async function terminateLocalTuiProcesses(params: {
   processes: LocalTuiProcess[];
   controller?: ProcessController;
   graceMs?: number;
@@ -180,6 +180,15 @@ export async function terminateLocalTuiProcesses(params: {
     }
   }
   return { stopped, failed };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorWhatsappResponsivenessTestApi")
+  ] = {
+    listLocalTuiProcesses,
+    terminateLocalTuiProcesses,
+  };
 }
 
 /** Emits WhatsApp responsiveness warnings and optionally stops contending local TUI clients. */

@@ -1199,3 +1199,4 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentControlScope: "children",
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

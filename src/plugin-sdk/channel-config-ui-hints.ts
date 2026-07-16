@@ -97,7 +97,7 @@ function createChannelProgressUiHints(params: {
     },
     "streaming.progress.labels": {
       label: `${channelLabel} Progress Label Pool`,
-      help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+      help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use the built-in "Working" label.',
     },
     "streaming.progress.maxLines": {
       label: `${channelLabel} Progress Max Lines`,

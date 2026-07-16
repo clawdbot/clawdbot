@@ -61,6 +61,10 @@ async function installTalkBrowserFixtures(page: Page) {
         return { connect() {}, disconnect() {} };
       }
 
+      createGain() {
+        return { connect() {}, disconnect() {}, gain: { value: 1 } };
+      }
+
       createScriptProcessor() {
         const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
         state.inputProcessor = processor;
@@ -178,7 +182,16 @@ describeControlUiE2e("Control UI browser Talk", () => {
               ).openclawTalkE2eState?.constraints,
           ),
         )
-        .toEqual([{ audio: { deviceId: { exact: "usb" } } }]);
+        .toEqual([
+          {
+            audio: {
+              autoGainControl: true,
+              deviceId: { exact: "usb" },
+              echoCancellation: true,
+              noiseSuppression: true,
+            },
+          },
+        ]);
       await expect
         .poll(async () =>
           (await gateway.getSocketUrls()).filter((url) => url.includes("BidiGenerateContent")),
@@ -446,7 +459,24 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
+      // The request is recorded before its mock response is delivered. Wait for
+      // microphone setup before probing relay readiness below.
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                window as Window & {
+                  openclawTalkE2eState?: { constraints: unknown[] };
+                }
+              ).openclawTalkE2eState?.constraints.length,
+          ),
+        )
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
       await gateway.emitGatewayEvent("talk.event", {
         relaySessionId,
         type: "transcript",
@@ -454,6 +484,11 @@ describeControlUiE2e("Control UI browser Talk", () => {
         text: "Hey, what model are you using?",
         final: true,
       });
+      await expect
+        .poll(() =>
+          page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
+        )
+        .toBe("Hey, what model are you using?");
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.

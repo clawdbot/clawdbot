@@ -45,8 +45,9 @@ describe("session suspension", () => {
       vi.clearAllTimers();
     }
     vi.useRealTimers();
-    const { testing } = await import("./session-suspension.js");
-    testing.resetSessionSuspensionStateForTest();
+    const { resetSessionSuspensionStateForTest } =
+      await import("./session-suspension.test-support.js");
+    resetSessionSuspensionStateForTest();
     sessionAccessorMocks.patchSessionEntry.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
   });
@@ -234,11 +235,12 @@ describe("session suspension", () => {
   it("clamps rescheduled cleanup timers after wall-clock rollback", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const { enableSessionSuspensionTimersForGatewayStart, testing } =
+    const { enableSessionSuspensionTimersForGatewayStart } =
       await import("./session-suspension.js");
+    const { seedClearedLaneResumeForTest } = await import("./session-suspension.test-support.js");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const customLaneId = "plugin:voice:room-3";
-    testing.seedClearedLaneResumeForTest(customLaneId, {
+    seedClearedLaneResumeForTest(customLaneId, {
       resumeConcurrency: 1,
       resumeAtMs: 1_000 + MAX_TIMER_TIMEOUT_MS + 1_000,
     });
@@ -386,12 +388,12 @@ describe("session suspension", () => {
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {
-    const { testing } = await import("./session-suspension.js");
+    const { resolveSessionSuspensionReason } = await import("./session-suspension.js");
 
-    expect(testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
-    expect(testing.resolveSessionSuspensionReason("billing")).toBe("manual");
-    expect(testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
-    expect(testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
-    expect(testing.resolveSessionSuspensionReason("auth")).toBe("circuit_open");
+    expect(resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
+    expect(resolveSessionSuspensionReason("billing")).toBe("manual");
+    expect(resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
+    expect(resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
+    expect(resolveSessionSuspensionReason("auth")).toBe("circuit_open");
   });
 });

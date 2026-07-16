@@ -1,20 +1,9 @@
 // Mattermost plugin module implements monitor behavior.
 import {
-  defineFinalizableLivePreviewAdapter,
-  deliverWithFinalizableLivePreviewAdapter,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
-  resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-import {
-  buildTtsSupplementMediaPayload,
-  getReplyPayloadTtsSupplement,
-  isReasoningReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -26,17 +15,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import {
-  resolveMattermostAccount,
-  resolveMattermostReplyToMode,
-  type ResolvedMattermostAccount,
-} from "./accounts.js";
+import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
-  updateMattermostPost,
-  type MattermostClient,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -66,6 +49,20 @@ import {
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
 import {
+  buildMattermostModelPickerSelectMessageSid,
+  formatMattermostFinalDeliveryOutcomeLog,
+  resolveMattermostPendingHistoryKey,
+  resolveMattermostReactionChannelId,
+  resolveMattermostReplyRootId,
+  resolveMattermostThreadSessionContext,
+  shouldSuppressMattermostDefaultToolProgressMessages,
+  shouldUpdateMattermostDraftToolProgress,
+} from "./monitor-context.js";
+import {
+  deliverMattermostReplyWithDraftPreview,
+  type MattermostDraftPreviewState,
+} from "./monitor-draft-delivery.js";
+import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
   resolveMattermostTrustedChatKind,
@@ -73,10 +70,10 @@ import {
 import {
   formatInboundFromLabel,
   normalizeMention,
-  resolveThreadSessionKeys,
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
+import { processMattermostReplayGuardedPost } from "./monitor-replay.js";
 import {
   createMattermostMonitorResources,
   formatMattermostInboundMediaText,
@@ -88,15 +85,10 @@ import {
   type MattermostEventPayload,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
-import {
-  evaluateMattermostNoVisibleReply,
-  formatMattermostNoVisibleReplyLog,
-} from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
-  type MattermostReplyDeliveryOutcome,
 } from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
@@ -140,20 +132,6 @@ type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
-export function shouldUpdateMattermostDraftToolProgress(
-  account: Pick<ResolvedMattermostAccount, "config" | "streamingMode">,
-): boolean {
-  return (
-    account.streamingMode !== "off" && resolveChannelStreamingPreviewToolProgress(account.config)
-  );
-}
-
-export function shouldSuppressMattermostDefaultToolProgressMessages(
-  account: Pick<ResolvedMattermostAccount, "streamingMode">,
-): boolean {
-  return account.streamingMode !== "off";
-}
-
 type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 type MattermostReaction = {
@@ -162,83 +140,8 @@ type MattermostReaction = {
   emoji_name?: string;
   create_at?: number;
 };
-const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
-const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
-
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return normalizeTrimmedStringList(values);
-}
-
-const recentInboundMessages = createClaimableDedupe({
-  ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
-  memoryMaxSize: RECENT_MATTERMOST_MESSAGE_MAX,
-});
-
-export class MattermostRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "MattermostRetryableInboundError";
-  }
-}
-
-export function buildMattermostModelPickerSelectMessageSid(params: {
-  postId: string;
-  provider: string;
-  model: string;
-}): string {
-  const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const model = normalizeLowercaseStringOrEmpty(params.model);
-  return `interaction:${params.postId}:select:${provider}/${model}`;
-}
-
-function buildMattermostInboundReplayKeys(params: {
-  accountId: string;
-  messageIds: string[];
-}): string[] {
-  return uniqueStrings(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`)).filter(
-    (key) => !key.endsWith(":"),
-  );
-}
-
-export async function processMattermostReplayGuardedPost(params: {
-  accountId: string;
-  messageIds: string[];
-  handlePost: () => Promise<void>;
-  replayGuard?: ClaimableDedupe;
-}): Promise<"processed" | "duplicate"> {
-  const replayGuard = params.replayGuard ?? recentInboundMessages;
-  const replayKeys = buildMattermostInboundReplayKeys({
-    accountId: params.accountId,
-    messageIds: params.messageIds,
-  });
-  if (replayKeys.length === 0) {
-    await params.handlePost();
-    return "processed";
-  }
-
-  const claimedKeys: string[] = [];
-  for (const replayKey of replayKeys) {
-    const claim = await replayGuard.claim(replayKey);
-    if (claim.kind === "claimed") {
-      claimedKeys.push(replayKey);
-    }
-  }
-  if (claimedKeys.length === 0) {
-    return "duplicate";
-  }
-
-  try {
-    await params.handlePost();
-    await Promise.all(claimedKeys.map((replayKey) => replayGuard.commit(replayKey)));
-    return "processed";
-  } catch (error) {
-    if (error instanceof MattermostRetryableInboundError) {
-      claimedKeys.forEach((replayKey) => replayGuard.release(replayKey, { error }));
-    } else {
-      await Promise.all(claimedKeys.map((replayKey) => replayGuard.commit(replayKey)));
-    }
-    throw error;
-  }
 }
 
 function resolveRuntime(opts: MonitorMattermostOpts): RuntimeEnv {
@@ -267,42 +170,6 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
   return "channel";
 }
 
-export function resolveMattermostReplyRootId(params: {
-  kind: ChatType;
-  threadRootId?: string;
-  replyToId?: string;
-}): string | undefined {
-  const threadRootId = normalizeOptionalString(params.threadRootId);
-  // Flat DMs (no thread context) get no reply root. A DM carries a threadRootId
-  // only when its effective per-chat-type mode enables threading.
-  if (params.kind === "direct" && !threadRootId) {
-    return undefined;
-  }
-  if (threadRootId) {
-    return threadRootId;
-  }
-  return normalizeOptionalString(params.replyToId);
-}
-
-export function canFinalizeMattermostPreviewInPlace(params: {
-  kind: ChatType;
-  previewRootId?: string;
-  threadRootId?: string;
-  replyToId?: string;
-}): boolean {
-  return (
-    resolveMattermostReplyRootId({
-      kind: params.kind,
-      threadRootId: params.threadRootId,
-      replyToId: params.replyToId,
-    }) === params.previewRootId?.trim()
-  );
-}
-
-type MattermostDraftPreviewState = {
-  finalizedViaPreviewPost: boolean;
-};
-
 function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermostDraftStream> {
   const noopAsync = async () => {};
   return {
@@ -318,193 +185,6 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     settleBoundaries: noopAsync,
     resolveFinalText: (text) => ({ kind: "full", text }),
   };
-}
-
-type MattermostDraftPreviewDeliverParams = {
-  payload: ReplyPayload;
-  info: { kind: "tool" | "block" | "final" };
-  kind: ChatType;
-  client: MattermostClient;
-  draftStream: Pick<
-    ReturnType<typeof createMattermostDraftStream>,
-    "flush" | "postId" | "clear" | "discardPending" | "seal"
-  >;
-  effectiveReplyToId?: string;
-  resolvePreviewFinalText: (text?: string) => string | undefined;
-  previewState: MattermostDraftPreviewState;
-  logVerboseMessage: (message: string) => void;
-  deliverPayload: (payload: ReplyPayload) => Promise<void>;
-  // Visible same-thread finals can be delivered by editing the draft preview in
-  // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
-  // caller record thread participation on that path too.
-  recordThreadParticipation?: () => void;
-};
-
-export async function deliverMattermostReplyWithDraftPreview(
-  params: MattermostDraftPreviewDeliverParams,
-): Promise<void> {
-  if (isReasoningReplyPayload(params.payload)) {
-    return;
-  }
-
-  await deliverWithFinalizableLivePreviewAdapter({
-    kind: params.info.kind,
-    payload: params.payload,
-    adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
-      draft: {
-        flush: params.draftStream.flush,
-        clear: params.draftStream.clear,
-        discardPending: params.draftStream.discardPending,
-        seal: params.draftStream.seal,
-        id: params.draftStream.postId,
-      },
-      buildFinalEdit: (payload) => {
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-        const previewFinalText = params.resolvePreviewFinalText(
-          payload.text ?? ttsSupplement?.spokenText,
-        );
-
-        if (
-          (hasMedia && !ttsSupplement) ||
-          typeof previewFinalText !== "string" ||
-          payload.isError ||
-          !canFinalizeMattermostPreviewInPlace({
-            kind: params.kind,
-            previewRootId: params.effectiveReplyToId,
-            threadRootId: params.effectiveReplyToId,
-            replyToId: payload.replyToId,
-          })
-        ) {
-          return undefined;
-        }
-        return { message: previewFinalText };
-      },
-      editFinal: async (previewPostId, edit) => {
-        await updateMattermostPost(params.client, previewPostId, edit);
-      },
-      onPreviewFinalized: () => {
-        params.previewState.finalizedViaPreviewPost = true;
-        // The visible final reply landed by editing the preview post, so the normal
-        // deliverPayload record path is skipped; record participation explicitly here.
-        params.recordThreadParticipation?.();
-      },
-      buildSupplementalPayload: (payload) =>
-        getReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : undefined,
-      deliverSupplemental: async (payload) => {
-        await params.deliverPayload(payload);
-      },
-      logPreviewEditFailure: (err) => {
-        params.logVerboseMessage(
-          `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
-        );
-      },
-    }),
-    deliverNormally: async (payload) => {
-      const supplement = getReplyPayloadTtsSupplement(payload);
-      await params.deliverPayload(
-        supplement && !payload.text?.trim() && supplement.visibleTextAlreadyDelivered !== true
-          ? { ...payload, text: supplement.spokenText }
-          : payload,
-      );
-    },
-  });
-}
-
-export function formatMattermostFinalDeliveryOutcomeLog(params: {
-  outcome: MattermostReplyDeliveryOutcome;
-  payload: ReplyPayload;
-  to: string;
-  accountId: string;
-  agentId: string | undefined;
-}): string | undefined {
-  const violation = evaluateMattermostNoVisibleReply({
-    outcome: params.outcome,
-    payload: params.payload,
-  });
-  if (violation) {
-    return formatMattermostNoVisibleReplyLog({
-      violation,
-      to: params.to,
-      accountId: params.accountId,
-      agentId: params.agentId,
-    });
-  }
-  if (params.outcome === "text" || params.outcome === "media") {
-    return `delivered reply to ${params.to}`;
-  }
-  return undefined;
-}
-
-export function resolveMattermostEffectiveReplyToId(params: {
-  kind: ChatType;
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): string | undefined {
-  // Flat DMs never thread. Opted-in DMs use the same thread-root logic as rooms;
-  // replyToMode already reflects the effective per-chat-type mode.
-  if (params.kind === "direct" && params.replyToMode === "off") {
-    return undefined;
-  }
-  const threadRootId = normalizeOptionalString(params.threadRootId);
-  if (threadRootId) {
-    return threadRootId;
-  }
-  const postId = normalizeOptionalString(params.postId);
-  if (!postId) {
-    return undefined;
-  }
-  return params.replyToMode === "all" ||
-    params.replyToMode === "first" ||
-    params.replyToMode === "batched"
-    ? postId
-    : undefined;
-}
-
-export function resolveMattermostThreadSessionContext(params: {
-  baseSessionKey: string;
-  kind: ChatType;
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
-  const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
-    kind: params.kind,
-    postId: params.postId,
-    replyToMode: params.replyToMode,
-    threadRootId: params.threadRootId,
-  });
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: params.baseSessionKey,
-    threadId: effectiveReplyToId,
-    // DM threads start fresh; room threads inherit their base session.
-    parentSessionKey:
-      effectiveReplyToId && params.kind !== "direct" ? params.baseSessionKey : undefined,
-  });
-  return {
-    effectiveReplyToId,
-    sessionKey: threadKeys.sessionKey,
-    parentSessionKey: threadKeys.parentSessionKey,
-  };
-}
-
-export function resolveMattermostPendingHistoryKey(params: {
-  kind: ChatType;
-  sessionKey: string;
-}): string | null {
-  // DMs always dispatch immediately, so they do not need the pending-room
-  // history window. Keeping them out also avoids one empty bucket per DM thread.
-  return params.kind === "direct" ? null : params.sessionKey;
-}
-
-export function resolveMattermostReactionChannelId(
-  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
-): string | undefined {
-  return (
-    normalizeOptionalString(payload.broadcast?.channel_id) ??
-    normalizeOptionalString(payload.data?.channel_id)
-  );
 }
 
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
@@ -2464,3 +2144,4 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     await Promise.resolve(slashShutdownCleanupPromise);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

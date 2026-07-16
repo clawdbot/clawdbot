@@ -9,8 +9,23 @@ import {
   checkTokenDrift,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
-import { buildMinimalServicePath } from "./service-env.js";
+import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+
+function buildMinimalServicePath(options: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+}): string {
+  const servicePath = buildServiceEnvironment({
+    env: options.env,
+    platform: options.platform,
+    port: 18789,
+  }).PATH;
+  if (!servicePath) {
+    throw new Error("expected managed service PATH");
+  }
+  return servicePath;
+}
 
 function hasIssue(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,

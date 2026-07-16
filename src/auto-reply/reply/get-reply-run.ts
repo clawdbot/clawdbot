@@ -118,7 +118,10 @@ import {
 } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import {
+  isSlackDirectRoutedThreadTurn,
+  resolveRoutedDeliveryThreadId,
+} from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -228,20 +231,7 @@ async function updateRoomEventAmbientTranscriptWatermark(params: {
   });
 }
 
-function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
-  if (normalizeChatType(ctx.ChatType) !== "direct") {
-    return false;
-  }
-  if (ctx.MessageThreadId == null && ctx.TransportThreadId == null) {
-    return false;
-  }
-  return [ctx.Provider, ctx.Surface, ctx.OriginatingChannel].some(
-    (value) => normalizeOptionalString(value)?.toLowerCase() === "slack",
-  );
-}
-
-/** Resolves silent-reply conversation type for prompt instructions. */
-export function resolvePromptSilentReplyConversationType(params: {
+function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
     MsgContext,
     "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
@@ -263,8 +253,7 @@ export function resolvePromptSilentReplyConversationType(params: {
   return undefined;
 }
 
-/** Rewrites system-event prompt context to the persisted session channel when available. */
-export function resolvePromptSessionContextForSystemEvent(params: {
+function resolvePromptSessionContextForSystemEvent(params: {
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   ctx?: Pick<MsgContext, "Provider">;
@@ -349,8 +338,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   return changed ? next : sessionCtx;
 }
 
-/** Builds the prompt hint that explains one-shot exec override settings. */
-export function buildExecOverridePromptHint(params: {
+function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
@@ -550,11 +538,12 @@ export async function runPreparedReply(
   const isHeartbeat = opts?.isHeartbeat === true;
   const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
+  const effectiveQueueMode = opts?.queueModeOverride ?? perMessageQueueMode;
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
     isHeartbeat,
-    queueMode: perMessageQueueMode ?? "configured",
+    queueMode: effectiveQueueMode ?? "configured",
   };
   const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -676,7 +665,10 @@ export async function runPreparedReply(
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
-    { includeFormattingHints: !useFastReplyRuntime },
+    cfg,
+    // promptSessionCtx restores the persisted channel/account for system-event
+    // turns, so reply formatting hints resolve against the delivery channel.
+    { includeFormattingHints: !useFastReplyRuntime, formattingHintsCtx: promptSessionCtx },
   );
   const execOverridePromptHint = buildExecOverridePromptHint({
     execOverrides,
@@ -1159,7 +1151,7 @@ export async function runPreparedReply(
         cfg,
         channel: sessionCtx.Provider,
         sessionEntry,
-        inlineMode: perMessageQueueMode,
+        inlineMode: effectiveQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
   const embeddedAgentRuntime = useFastReplyRuntime
@@ -1529,7 +1521,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
-    onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1708,3 +1700,4 @@ export async function runPreparedReply(
     replyOperation: providedReplyOperation,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

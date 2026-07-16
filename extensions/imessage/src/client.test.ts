@@ -112,4 +112,89 @@ describe("IMessageRpcClient child stream error handling", () => {
       await client.stop();
     }
   });
+
+  it("promotes a complete Full Disk Access diagnostic", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    const pending = client.request("ping", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stderr.emit("data", Buffer.from("notice Full Disk Access denied for chat.db\n"));
+    child.emit("close", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+    expect(runtimeError).toHaveBeenCalledOnce();
+    expect(runtimeError.mock.calls[0]?.[0]).not.toContain("�");
+  });
+
+  it("preserves a split UTF-8 Full Disk Access diagnostic from a real child", async () => {
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const script = `
+      const prefix = Buffer.from("notice 猫 Full Disk Acc", "utf8");
+      setTimeout(() => {
+        process.stderr.write(prefix.subarray(0, 8));
+        setTimeout(() => {
+          process.stderr.write(prefix.subarray(8));
+          setTimeout(() => {
+            process.stderr.write("ess denied for chat.db");
+            setTimeout(() => process.exit(1), 10);
+          }, 10);
+        }, 10);
+      }, 50);
+    `;
+    const realChild = childProcess.spawn(process.execPath, ["-e", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    spawnMock.mockReturnValueOnce(realChild);
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    try {
+      const pending = client.request("ping", {}, { timeoutMs: 0 });
+      pending.catch(() => {});
+
+      await expect(pending).rejects.toThrow(
+        "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+      );
+      expect(runtimeError).toHaveBeenCalledWith(
+        "imsg rpc: notice 猫 Full Disk Access denied for chat.db",
+      );
+    } finally {
+      if (!realChild.killed) {
+        realChild.kill("SIGTERM");
+      }
+      await client.stop();
+    }
+  });
+
+  it("keeps unrelated unterminated stderr on the generic close error path", async () => {
+    const { IMessageRpcClient } = await import("./client.js");
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    const pending = client.request("ping", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stderr.emit("data", Buffer.from("unrelated warning"));
+    child.emit("close", 1, null);
+
+    await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");
+    expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
+  });
 });

@@ -1375,3 +1375,4 @@ describe("stripToolResultDetails", () => {
     expect(out).toBe(input);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

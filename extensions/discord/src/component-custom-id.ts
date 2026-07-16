@@ -8,7 +8,32 @@ import { parseCustomId, type ComponentParserResult } from "./internal/discord.js
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
+const DISCORD_ACTIVITY_CUSTOM_ID_KEY = "ocactivity";
 const ENCODED_CUSTOM_ID_VERSION = "1";
+
+export function buildDiscordActivityCustomId(widgetId: string): string {
+  return `${DISCORD_ACTIVITY_CUSTOM_ID_KEY}:v=${ENCODED_CUSTOM_ID_VERSION};wid=${widgetId}`;
+}
+
+export function parseDiscordActivityCustomId(id: string): { widgetId: string } | null {
+  const parsed = parseCustomId(id);
+  if (
+    parsed.key !== DISCORD_ACTIVITY_CUSTOM_ID_KEY ||
+    parsed.data.v !== ENCODED_CUSTOM_ID_VERSION ||
+    typeof parsed.data.wid !== "string" ||
+    !/^[A-Za-z0-9_-]{22}$/.test(parsed.data.wid)
+  ) {
+    return null;
+  }
+  return { widgetId: parsed.data.wid };
+}
+
+export function parseDiscordActivityCustomIdForInteraction(id: string): ComponentParserResult {
+  const parsed = parseDiscordActivityCustomId(id);
+  return parsed
+    ? { key: DISCORD_ACTIVITY_CUSTOM_ID_KEY, data: { widgetId: parsed.widgetId } }
+    : parseCustomId(id);
+}
 
 function decodeParsedCustomIdData(
   data: ComponentParserResult["data"],

@@ -12,7 +12,7 @@ const WSL_CUDA_MARKERS = [
   "/usr/local/cuda",
 ];
 
-export function parseSystemctlShowProperties(stdout: string): Map<string, string> {
+function parseSystemctlShowProperties(stdout: string): Map<string, string> {
   const properties = new Map<string, string>();
   for (const line of stdout.split(/\r?\n/u)) {
     const separator = line.indexOf("=");
@@ -24,7 +24,7 @@ export function parseSystemctlShowProperties(stdout: string): Map<string, string
   return properties;
 }
 
-export async function isOllamaEnabledWithRestartAlways(): Promise<boolean> {
+async function isOllamaEnabledWithRestartAlways(): Promise<boolean> {
   try {
     const { stdout } = await runExec(
       "systemctl",
@@ -38,7 +38,7 @@ export async function isOllamaEnabledWithRestartAlways(): Promise<boolean> {
   }
 }
 
-export async function hasWslCuda(): Promise<boolean> {
+async function hasWslCuda(): Promise<boolean> {
   for (const marker of WSL_CUDA_MARKERS) {
     try {
       await access(marker);

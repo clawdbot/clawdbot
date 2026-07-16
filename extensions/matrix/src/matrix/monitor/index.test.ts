@@ -187,32 +187,6 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
-    resolveChannelEntryMatch: ({
-      entries,
-      keys,
-      wildcardKey,
-    }: {
-      entries: Record<string, unknown>;
-      keys: string[];
-      wildcardKey: string;
-    }) => {
-      for (const key of keys) {
-        if (Object.hasOwn(entries, key)) {
-          return {
-            entry: entries[key],
-            key,
-            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-          };
-        }
-      }
-      return {
-        entry: undefined,
-        key: undefined,
-        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-      };
-    },
     resolveDefaultGroupPolicy: () => "allowlist",
     resolveOutboundSendDep: () => null,
     resolveThreadBindingFarewellText: () => null,
@@ -385,12 +359,11 @@ vi.mock("./startup.js", () => ({
   runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
 }));
 
-let matrixMonitorTesting: typeof import("./index.js").testing;
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
   beforeAll(async () => {
-    ({ testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
+    ({ monitorMatrixProvider } = await import("./index.js"));
   });
 
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -461,6 +434,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
+    delete (hoisted.accountConfig as { streaming?: unknown }).streaming;
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
@@ -538,11 +512,17 @@ describe("monitorMatrixProvider", () => {
     [MatrixConfig["streaming"] | MatrixStreamingMode | boolean, MatrixStreamingMode, boolean]
   >)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
-    (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
-      expect(matrixMonitorTesting.resolveMatrixStreamingMode(streaming)).toBe(expectedMode);
-      expect(matrixMonitorTesting.resolveMatrixPreviewToolProgressEnabled(streaming)).toBe(
-        expectedPreviewToolProgressEnabled,
-      );
+    async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
+      (hoisted.accountConfig as { streaming?: unknown }).streaming = streaming;
+
+      await startMonitorAndAbortAfterStartup();
+
+      const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+        streaming?: MatrixStreamingMode;
+        previewToolProgressEnabled?: boolean;
+      };
+      expect(handlerParams.streaming).toBe(expectedMode);
+      expect(handlerParams.previewToolProgressEnabled).toBe(expectedPreviewToolProgressEnabled);
     },
   );
 

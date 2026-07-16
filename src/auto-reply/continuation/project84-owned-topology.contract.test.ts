@@ -7,6 +7,18 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const MONITORED_MODULES = [
+  "src/agents/openclaw-tools.ts",
+  "src/agents/openclaw-tools.continuation.ts",
+  "src/agents/subagent-announce.ts",
+  "src/agents/subagent-announce.continuation.runtime.ts",
+  "src/agents/subagent-announce.continuation.accounting.ts",
+  "src/agents/subagent-announce.continuation-return.ts",
+  "src/process/command-queue.ts",
+  "src/process/command-queue-waiters.ts",
+  "src/auto-reply/reply/agent-runner-embedded-candidate.ts",
+  "src/auto-reply/reply/agent-runner-post-compaction-release.ts",
+  "src/gateway/server-methods/sessions.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
   "src/auto-reply/continuation/work-store.ts",
   "src/auto-reply/continuation/work-flow-state.ts",
   "src/auto-reply/continuation/delegate-store.ts",
@@ -318,6 +330,54 @@ describe("Project 84 owned topology contract", () => {
     expectNoEdge(
       "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
       "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
+    );
+  });
+
+  it("keeps continuation registration and lane waiters below their assemblers", () => {
+    expectEdge("src/agents/openclaw-tools.ts", "src/agents/openclaw-tools.continuation.ts");
+    expectNoEdge("src/agents/openclaw-tools.continuation.ts", "src/agents/openclaw-tools.ts");
+    expectEdge("src/process/command-queue.ts", "src/process/command-queue-waiters.ts");
+    expectNoEdge("src/process/command-queue-waiters.ts", "src/process/command-queue.ts");
+  });
+
+  it("keeps subagent continuation behavior behind the runtime coordinator", () => {
+    expectEdge(
+      "src/agents/subagent-announce.ts",
+      "src/agents/subagent-announce.continuation.runtime.ts",
+      "dynamic-import",
+    );
+    expectEdge(
+      "src/agents/subagent-announce.continuation.runtime.ts",
+      "src/agents/subagent-announce.continuation.accounting.ts",
+    );
+    expectEdge(
+      "src/agents/subagent-announce.continuation.runtime.ts",
+      "src/agents/subagent-announce.continuation-return.ts",
+      "static-export",
+    );
+    expectNoEdge(
+      "src/agents/subagent-announce.ts",
+      "src/agents/subagent-announce.continuation.accounting.ts",
+    );
+    expectNoEdge(
+      "src/agents/subagent-announce.ts",
+      "src/agents/subagent-announce.continuation-return.ts",
+    );
+  });
+
+  it("keeps reply and gateway compaction release on the shared focused owner", () => {
+    expectEdge(
+      "src/auto-reply/reply/agent-runner-embedded-candidate.ts",
+      "src/auto-reply/reply/agent-runner-post-compaction-release.ts",
+    );
+    expectEdge(
+      "src/gateway/server-methods/sessions.ts",
+      "src/gateway/server-methods/sessions-compact.ts",
+    );
+    expectEdge(
+      "src/gateway/server-methods/sessions-compact.ts",
+      "src/auto-reply/reply/agent-runner-post-compaction-release.ts",
+      "dynamic-import",
     );
   });
 });

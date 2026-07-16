@@ -20,6 +20,5 @@
   "test-env",
   "test-fixtures",
   "test-node-mocks",
-  "test-utils",
-  "testing"
+  "test-utils"
 ]

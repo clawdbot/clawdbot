@@ -7,7 +7,6 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
-  resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -17,22 +16,6 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type Maybe<T> = T | undefined;
-
-/**
- * Resolve the informative status text shown above the streaming card while the
- * agent is working. Pulls custom labels from `msteams.streaming.progressDraft`
- * config when set, falls back to the plugin-sdk's default rotation otherwise.
- */
-export function pickInformativeStatusText(
-  params: { config?: MSTeamsConfig; seed?: string; random?: () => number } | (() => number) = {},
-): string | undefined {
-  const options = typeof params === "function" ? { random: params } : params;
-  return resolveChannelProgressDraftLabel({
-    entry: options.config,
-    seed: options.seed,
-    random: options.random,
-  });
-}
 
 // The SDK throws StreamCancelledError synchronously from stream.emit/update
 // when the user pressed Stop in Teams (Teams replies 403 to the next chunk
@@ -115,7 +98,10 @@ export function createTeamsReplyStreamController(params: {
    * default) and prepends collected tool-progress lines when configured.
    */
   const renderInformativeUpdate = (): void => {
-    if (!stream || wasCanceled()) {
+    // A late gate timer must not touch the stream once the final text is
+    // queued: the SDK resets its stream id on close, so an update after that
+    // would post a fresh stale "working" card below the final answer.
+    if (!stream || wasCanceled() || streamFinalizationPending) {
       return;
     }
     const informativeText = formatChannelProgressDraftText({
@@ -143,8 +129,8 @@ export function createTeamsReplyStreamController(params: {
 
   // Gate informative updates so they only start firing once meaningful work
   // has begun (avoids flickering "Thinking..." before the first real tool
-  // call). The gate is shape-agnostic — it just calls `onStart` once when the
-  // first noteWork() arrives.
+  // call). The gate is shape-agnostic — it calls `onStart` once the initial
+  // work delay elapses.
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: renderInformativeUpdate,
   });
@@ -329,6 +315,9 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<Maybe<ReplyPayload>> {
+      // The delay gate may still hold a pending start timer for fast turns;
+      // stop it before closing so it cannot fire against the closed stream.
+      progressDraftGate.cancel();
       if (!stream || !streamFinalizationPending || wasCanceled()) {
         return undefined;
       }

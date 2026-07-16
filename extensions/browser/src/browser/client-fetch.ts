@@ -283,6 +283,10 @@ async function fetchHttpJson<T>(
     const guarded = await fetchWithSsrFGuard({
       url,
       init,
+      // AbortController timer alone does not set Undici connect/headers floors;
+      // forward the resolved budget so a hung control peer fails closed via the
+      // guarded dispatcher instead of waiting on OS timeouts.
+      timeoutMs,
       signal: ctrl.signal,
       policy: { allowPrivateNetwork: true },
       auditContext: "browser-control-client",

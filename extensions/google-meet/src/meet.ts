@@ -176,7 +176,7 @@ type GoogleMeetSmartNotesListResult = {
   smartNotesError?: string;
 };
 
-export function normalizeGoogleMeetSpaceName(input: string): string {
+function normalizeGoogleMeetSpaceName(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     throw new Error("Meeting input is required");
@@ -1025,3 +1025,4 @@ export function buildGoogleMeetPreflightReport(params: {
     blockers,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -24,6 +24,8 @@ import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
@@ -76,14 +78,20 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
+import ai.openclaw.app.voice.PreviewVoiceWakeRecognizer
 import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.TalkPttOnceStart
 import ai.openclaw.app.voice.TalkPttStopPayload
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
+import ai.openclaw.app.voice.VoiceWakeManager
+import ai.openclaw.app.voice.VoiceWakeMatch
+import ai.openclaw.app.voice.VoiceWakePreferences
+import ai.openclaw.app.voice.VoiceWakeSuppressionReason
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -126,6 +134,7 @@ import kotlinx.serialization.json.contentOrNull
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -569,6 +578,33 @@ class NodeRuntime private constructor(
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
+  private val voiceWakeManager =
+    VoiceWakeManager(
+      context = appContext,
+      scope = scope,
+      recognizer =
+        when (mode) {
+          NodeRuntimeMode.Live -> AndroidOnDeviceVoiceWakeRecognizer(appContext)
+          NodeRuntimeMode.ScreenshotFixture -> PreviewVoiceWakeRecognizer()
+        },
+      initialTriggerWords = VoiceWakePreferences.defaultTriggerWords,
+      onCommand = ::sendVoiceWakeCommand,
+    )
+  val voiceWakeAvailable: StateFlow<Boolean> = MutableStateFlow(voiceWakeManager.isAvailable).asStateFlow()
+  val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
+  val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
+  val voiceWakeIsListening: StateFlow<Boolean> = voiceWakeManager.isListening
+  val voiceWakeStatusText: StateFlow<String> = voiceWakeManager.statusText
+  val voiceWakeLastTriggeredCommand: StateFlow<String?> = voiceWakeManager.lastTriggeredCommand
+  private val voiceWakeWordsSaveSeq = AtomicLong(0)
+  private val voiceWakeWordsLock = Any()
+  private var voiceWakeWordsRevision = 0L
+  private var voiceWakeWordsGatewayStableId: String? = null
+  private val _voiceWakeWordsSaving = MutableStateFlow(false)
+  val voiceWakeWordsSaving: StateFlow<Boolean> = _voiceWakeWordsSaving.asStateFlow()
+  private val _voiceWakeWordsNoticeText = MutableStateFlow<NativeText?>(null)
+  val voiceWakeWordsNoticeText: StateFlow<String?> = _voiceWakeWordsNoticeText.resolveOptionalNativeText()
+
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
@@ -585,7 +621,7 @@ class NodeRuntime private constructor(
     CameraHandler(
       appContext = appContext,
       camera = camera,
-      externalAudioCaptureActive = externalAudioCaptureActive,
+      setCameraAudioCaptureActive = ::setCameraAudioCaptureActive,
       showCameraHud = ::showCameraHud,
       invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
     )
@@ -673,12 +709,18 @@ class NodeRuntime private constructor(
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
+      voiceWakeAvailable = {
+        voiceWakeManager.isAvailable &&
+          hasRecordAudioPermission() &&
+          isVoiceWakeWordsReadyForCurrentGateway()
+      },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
           ?.tls ?: manualTls.value
       },
     )
+  private var lastVoiceWakeCapabilityEnabled = isVoiceWakeCapabilityEnabled()
 
   private val invokeDispatcher: InvokeDispatcher =
     InvokeDispatcher(
@@ -959,6 +1001,12 @@ class NodeRuntime private constructor(
     val epoch: Long,
   )
 
+  private data class VoiceWakeSuppressionUpdate(
+    val reason: VoiceWakeSuppressionReason,
+    val suppressed: Boolean,
+    val revision: Long,
+  )
+
   private val voiceLifecycleEpoch = AtomicLong()
   private val voiceCaptureOwnershipEpoch = AtomicLong()
   private val talkPttCommandEpoch = AtomicLong()
@@ -967,7 +1015,10 @@ class NodeRuntime private constructor(
   // Keep ownership epochs and their service/capture state transitions atomic.
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
+  private var voiceWakeSuppressionRevision = 0L
   private var voiceNoteOwnsMic = false
+  private var cameraAudioOwnsMic = false
+  private val voiceReplySpeechDepth = AtomicInteger(0)
   private val voiceCapturePreparationMutex = Mutex()
 
   private var didAutoRequestCanvasRehydrate = false
@@ -1009,6 +1060,7 @@ class NodeRuntime private constructor(
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshWakeWordsFromGateway()
           refreshExecApprovalsFromGateway()
           refreshHomeCanvasOverviewIfConnected()
           if (voiceReplySpeakerLazy.isInitialized()) {
@@ -1059,6 +1111,9 @@ class NodeRuntime private constructor(
     _modelCatalogRefreshing.value = false
     _modelCatalogErrorText.value = null
     _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+    voiceWakeWordsSaveSeq.incrementAndGet()
+    _voiceWakeWordsSaving.value = false
+    _voiceWakeWordsNoticeText.value = null
     cronRefreshGuard.invalidate()
     _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
     _cronJobs.value = emptyList()
@@ -1171,7 +1226,7 @@ class NodeRuntime private constructor(
           scope.launch { refreshNodesDevicesFromGateway() }
         }
       },
-      onEvent = { _, _ -> },
+      onEvent = ::handleNodeGatewayEvent,
       onInvoke = { req ->
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
       },
@@ -1281,7 +1336,13 @@ class NodeRuntime private constructor(
         synthesizer = MessageSpeechClient(session = operatorSession, json = json),
         player = TalkAudioPlayer(appContext),
         localSpeech = SystemSpeechSpeaker(appContext),
-      )
+      ).also { controller ->
+        scope.launch {
+          controller.state.collect { state ->
+            voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.MessageSpeech, state != null)
+          }
+        }
+      }
     }
   private val messageSpeechController: MessageSpeechController
     get() = messageSpeechControllerLazy.value
@@ -1312,8 +1373,17 @@ class NodeRuntime private constructor(
         session = operatorSession,
         isConnected = { gatewayConnectionDisplay.value.isConnected },
         gatewayStableId = { connectedEndpoint?.stableId },
-        onBeforeSpeak = { micCapture.pauseForTts() },
-        onAfterSpeak = { micCapture.resumeAfterTts() },
+        onBeforeSpeak = {
+          acquireVoiceReplySpeechSuppression()
+          micCapture.pauseForTts()
+        },
+        onAfterSpeak = {
+          try {
+            micCapture.resumeAfterTts()
+          } finally {
+            releaseVoiceReplySpeechSuppression()
+          }
+        },
       ).also { speaker ->
         speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
       }
@@ -2253,6 +2323,20 @@ class NodeRuntime private constructor(
       applyScreenshotFixture()
     }
 
+    if (mode == NodeRuntimeMode.Live) {
+      invalidateVoiceWakeWordsForGateway()
+    }
+    reconcileVoiceWakeCaptureSuppression()
+    voiceWakeManager.setForeground(initialForeground)
+    voiceWakeManager.setEnabled(prefs.voiceWakeEnabled.value)
+    scope.launch {
+      micCapture.micCooldown.collect {
+        // Manual capture drains partial audio for two seconds after its toggle
+        // turns off. Resume Voice Wake only after that capture owner releases.
+        reconcileVoiceWakeCaptureSuppression()
+      }
+    }
+
     scope.launch {
       combine(
         canvasDebugStatusEnabled,
@@ -2281,11 +2365,13 @@ class NodeRuntime private constructor(
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    voiceWakeManager.setForeground(value)
     if (mode == NodeRuntimeMode.ScreenshotFixture) return
     if (!value) {
       voiceLifecycleEpoch.incrementAndGet()
     }
     if (value) {
+      refreshVoiceWakeCapabilitySurfaceIfChanged()
       reconnectPreferredGatewayOnForeground()
       scope.launch {
         refreshExecApprovalsFromGateway()
@@ -2590,17 +2676,24 @@ class NodeRuntime private constructor(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
 
-  internal fun tryAcquireVoiceNoteMic(): Boolean =
-    synchronized(voiceCaptureOwnershipLock) {
-      if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return@synchronized false
-      voiceNoteOwnsMic = true
-      true
-    }
+  internal fun tryAcquireVoiceNoteMic(): Boolean {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
+        voiceNoteOwnsMic = true
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+    return true
+  }
 
   internal fun releaseVoiceNoteMic() {
-    synchronized(voiceCaptureOwnershipLock) {
-      voiceNoteOwnsMic = false
-    }
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        voiceNoteOwnsMic = false
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
   }
 
   fun cancelMicCapture() {
@@ -2752,7 +2845,7 @@ class NodeRuntime private constructor(
   ): Long {
     // Publish preparation on Main with lifecycle shutdown. After this block
     // yields, preparation must not write capture state that backgrounding cleared.
-    val ownershipEpoch =
+    val (ownershipEpoch, suppressionUpdate) =
       withContext(Dispatchers.Main) {
         synchronized(voiceCaptureOwnershipLock) {
           if (
@@ -2765,19 +2858,23 @@ class NodeRuntime private constructor(
           if (voiceNoteOwnsMic) {
             throw IllegalStateException("MIC_BUSY: voice note recording is active")
           }
+          if (cameraAudioOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: camera audio recording is active")
+          }
           if (!hasRecordAudioPermission()) {
             throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
           }
           val epoch = voiceCaptureOwnershipEpoch.incrementAndGet()
+          val update = setExternalAudioCaptureActiveLocked(true)
           micCapture.setMicEnabled(false)
           stopVoicePlayback()
           NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
           talkMode.ttsOnAllResponses = true
           talkMode.setPlaybackEnabled(speakerEnabled.value)
-          externalAudioCaptureActive.value = true
-          epoch
+          epoch to update
         }
       }
+    applyVoiceWakeSuppression(suppressionUpdate)
     try {
       talkMode.refreshConfig()
       return ownershipEpoch
@@ -2788,19 +2885,21 @@ class NodeRuntime private constructor(
   }
 
   private fun cleanupFailedTalkCapture(ownershipEpoch: Long) {
-    synchronized(voiceCaptureOwnershipLock) {
-      // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
-      // tear down a newer capture after a background/foreground transition.
-      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
-        talkMode.activePushToTalkCaptureId?.let { captureId ->
-          // An idempotent retry can fail while the original capture remains live.
-          // Transfer preparation ownership so its eventual stop still cleans up.
-          talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
-          return
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
+        // tear down a newer capture after a background/foreground transition.
+        if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+          talkMode.activePushToTalkCaptureId?.let { captureId ->
+            // An idempotent retry can fail while the original capture remains live.
+            // Transfer preparation ownership so its eventual stop still cleans up.
+            talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+            return
+          }
         }
+        finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
       }
-      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
-    }
+    applyVoiceWakeSuppression(suppressionUpdate)
   }
 
   private fun recordTalkPttOwnership(
@@ -2838,32 +2937,37 @@ class NodeRuntime private constructor(
   }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
-    synchronized(voiceCaptureOwnershipLock) {
-      val ownership = talkPttOwnership.get()
-      if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
-      finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
-    }
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        val ownership = talkPttOwnership.get()
+        if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
+        finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
   }
 
-  private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long) {
-    if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return
+  private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long): VoiceWakeSuppressionUpdate? {
+    if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return null
     if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
       talkMode.ttsOnAllResponses = false
       NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-      externalAudioCaptureActive.value = false
+      return setExternalAudioCaptureActiveLocked(false)
     }
+    return null
   }
 
   private fun finishTalkModeAfterRelayClose() {
-    synchronized(voiceCaptureOwnershipLock) {
-      if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
-      talkPttCommandEpoch.incrementAndGet()
-      voiceCaptureOwnershipEpoch.incrementAndGet()
-      _voiceCaptureMode.value = VoiceCaptureMode.Off
-      talkMode.ttsOnAllResponses = false
-      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-      externalAudioCaptureActive.value = false
-    }
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+        talkPttCommandEpoch.incrementAndGet()
+        voiceCaptureOwnershipEpoch.incrementAndGet()
+        _voiceCaptureMode.value = VoiceCaptureMode.Off
+        talkMode.ttsOnAllResponses = false
+        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+        setExternalAudioCaptureActiveLocked(false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -2876,6 +2980,94 @@ class NodeRuntime private constructor(
     }
     // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
+  }
+
+  fun setVoiceWakeEnabled(value: Boolean) {
+    if (value && !voiceWakeManager.isAvailable) return
+    if (prefs.voiceWakeEnabled.value == value) return
+    prefs.setVoiceWakeEnabled(value)
+    voiceWakeManager.setEnabled(value)
+    refreshVoiceWakeCapabilitySurfaceIfChanged()
+  }
+
+  fun setVoiceWakeWords(words: List<String>) {
+    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
+    if (mode == NodeRuntimeMode.ScreenshotFixture) {
+      prefs.setVoiceWakeWords(sanitized)
+      voiceWakeManager.updateTriggerWords(sanitized)
+      _voiceWakeWordsNoticeText.value = nativeText("Wake words saved")
+      return
+    }
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null) {
+      _voiceWakeWordsNoticeText.value = nativeText("Connect to a Gateway to save wake words")
+      return
+    }
+    if (!isVoiceWakeWordsReadyFor(gatewayScope.stableId)) {
+      _voiceWakeWordsNoticeText.value = nativeText("Connect to a Gateway to save wake words")
+      return
+    }
+    val saveSeq = voiceWakeWordsSaveSeq.incrementAndGet()
+    val requestRevision = currentVoiceWakeWordsRevision()
+    _voiceWakeWordsSaving.value = true
+    _voiceWakeWordsNoticeText.value = null
+    scope.launch {
+      var published = false
+      try {
+        val response =
+          requestGatewayData(
+            gatewayScope,
+            GatewayMethod.VoicewakeSet.rawValue,
+            buildJsonObject {
+              put("triggers", JsonArray(sanitized.map(::JsonPrimitive)))
+            }.toString(),
+          )
+        val canonical = parseVoiceWakeWords(response) ?: error("voicewake.set returned invalid triggers")
+        published =
+          publishGatewayData(gatewayScope) {
+            if (saveSeq == voiceWakeWordsSaveSeq.get()) {
+              applyAuthoritativeVoiceWakeWords(
+                words = canonical,
+                gatewayStableId = gatewayScope.stableId,
+                expectedRevision = requestRevision,
+              )
+              _voiceWakeWordsSaving.value = false
+              _voiceWakeWordsNoticeText.value = nativeText("Wake words saved")
+            }
+          }
+      } catch (_: CancellationException) {
+        // Gateway-scope retirement owns state reset; never publish the old response.
+      } catch (err: Throwable) {
+        Log.d("OpenClawRuntime", "voicewake.set failed: ${err.message ?: err::class.java.simpleName}")
+        if (saveSeq == voiceWakeWordsSaveSeq.get() && isGatewayDataScopeCurrent(gatewayScope)) {
+          _voiceWakeWordsSaving.value = false
+          _voiceWakeWordsNoticeText.value = nativeText("Could not save wake words")
+        }
+      } finally {
+        if (!published && saveSeq == voiceWakeWordsSaveSeq.get() && !isGatewayDataScopeCurrent(gatewayScope)) {
+          _voiceWakeWordsSaving.value = false
+          _voiceWakeWordsNoticeText.value = null
+        }
+      }
+    }
+  }
+
+  fun refreshVoiceWakePermission() {
+    voiceWakeManager.refreshPermission()
+    refreshVoiceWakeCapabilitySurfaceIfChanged()
+  }
+
+  private fun isVoiceWakeCapabilityEnabled(): Boolean =
+    prefs.voiceWakeEnabled.value &&
+      voiceWakeManager.isAvailable &&
+      hasRecordAudioPermission() &&
+      isVoiceWakeWordsReadyForCurrentGateway()
+
+  private fun refreshVoiceWakeCapabilitySurfaceIfChanged() {
+    val enabled = isVoiceWakeCapabilityEnabled()
+    if (enabled == lastVoiceWakeCapabilityEnabled) return
+    lastVoiceWakeCapabilityEnabled = enabled
+    refreshNodeSurfaceAfterSettingsChange()
   }
 
   suspend fun runVoiceE2e(
@@ -2991,56 +3183,77 @@ class NodeRuntime private constructor(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
   ) {
+    var startAfterSuppression: VoiceCaptureMode? = null
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
+        if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
+        talkPttCommandEpoch.incrementAndGet()
+        voiceCaptureOwnershipEpoch.incrementAndGet()
+        val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
+        val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
+        if (permissionDenied) prefs.setVoiceMicEnabled(false)
+        if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
+        talkPttOwnership.set(null)
+        _voiceCaptureMode.value = captureMode
+        when (captureMode) {
+          VoiceCaptureMode.Off -> {
+            talkMode.ttsOnAllResponses = false
+            talkMode.stopAllCapture()
+            stopVoicePlayback()
+            micCapture.setMicEnabled(false)
+            if (persistManualMic) {
+              prefs.setVoiceMicEnabled(false)
+            }
+            NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+            setExternalAudioCaptureActiveLocked(false)
+          }
+
+          VoiceCaptureMode.ManualMic -> {
+            talkMode.ttsOnAllResponses = false
+            talkMode.stopAllCapture()
+            NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
+            if (persistManualMic) {
+              prefs.setVoiceMicEnabled(true)
+            }
+            // Tapping mic on interrupts any active TTS (barge-in).
+            stopVoicePlayback()
+            scope.launch { talkMode.refreshConfig() }
+            startAfterSuppression = VoiceCaptureMode.ManualMic
+            setExternalAudioCaptureActiveLocked(true)
+          }
+
+          VoiceCaptureMode.TalkMode -> {
+            if (persistManualMic) {
+              prefs.setVoiceMicEnabled(false)
+            }
+            micCapture.setMicEnabled(false)
+            NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+            talkMode.ttsOnAllResponses = true
+            talkMode.setPlaybackEnabled(speakerEnabled.value)
+            scope.launch { talkMode.refreshConfig() }
+            talkMode.stopAllCapture()
+            startAfterSuppression = VoiceCaptureMode.TalkMode
+            setExternalAudioCaptureActiveLocked(true)
+          }
+        }
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
     synchronized(voiceCaptureOwnershipLock) {
-      if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
-      talkPttCommandEpoch.incrementAndGet()
-      voiceCaptureOwnershipEpoch.incrementAndGet()
-      val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
-      val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
-      if (permissionDenied) prefs.setVoiceMicEnabled(false)
-      if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
-      talkPttOwnership.set(null)
-      _voiceCaptureMode.value = captureMode
-      when (captureMode) {
-        VoiceCaptureMode.Off -> {
-          talkMode.ttsOnAllResponses = false
-          talkMode.stopAllCapture()
-          stopVoicePlayback()
-          micCapture.setMicEnabled(false)
-          if (persistManualMic) {
-            prefs.setVoiceMicEnabled(false)
-          }
-          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-          externalAudioCaptureActive.value = false
-        }
-
+      when (startAfterSuppression) {
         VoiceCaptureMode.ManualMic -> {
-          talkMode.ttsOnAllResponses = false
-          talkMode.stopAllCapture()
-          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
-          if (persistManualMic) {
-            prefs.setVoiceMicEnabled(true)
+          if (_voiceCaptureMode.value == VoiceCaptureMode.ManualMic && externalAudioCaptureActive.value) {
+            micCapture.setMicEnabled(true)
           }
-          // Tapping mic on interrupts any active TTS (barge-in).
-          stopVoicePlayback()
-          scope.launch { talkMode.refreshConfig() }
-          micCapture.setMicEnabled(true)
-          externalAudioCaptureActive.value = true
         }
-
         VoiceCaptureMode.TalkMode -> {
-          if (persistManualMic) {
-            prefs.setVoiceMicEnabled(false)
+          if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode && externalAudioCaptureActive.value) {
+            talkMode.setEnabled(true)
           }
-          micCapture.setMicEnabled(false)
-          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-          talkMode.ttsOnAllResponses = true
-          talkMode.setPlaybackEnabled(speakerEnabled.value)
-          scope.launch { talkMode.refreshConfig() }
-          talkMode.stopAllCapture()
-          talkMode.setEnabled(true)
-          externalAudioCaptureActive.value = true
         }
+        VoiceCaptureMode.Off,
+        null,
+        -> Unit
       }
     }
   }
@@ -3051,19 +3264,98 @@ class NodeRuntime private constructor(
   }
 
   private fun stopActiveVoiceSession() {
-    synchronized(voiceCaptureOwnershipLock) {
-      talkPttCommandEpoch.incrementAndGet()
-      voiceCaptureOwnershipEpoch.incrementAndGet()
-      talkPttOwnership.set(null)
-      talkMode.ttsOnAllResponses = false
-      talkMode.stopAllCapture()
-      stopVoicePlayback()
-      micCapture.setMicEnabled(false)
-      prefs.setVoiceMicEnabled(false)
-      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-      _voiceCaptureMode.value = VoiceCaptureMode.Off
-      externalAudioCaptureActive.value = false
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        talkPttCommandEpoch.incrementAndGet()
+        voiceCaptureOwnershipEpoch.incrementAndGet()
+        talkPttOwnership.set(null)
+        talkMode.ttsOnAllResponses = false
+        talkMode.stopAllCapture()
+        stopVoicePlayback()
+        micCapture.setMicEnabled(false)
+        prefs.setVoiceMicEnabled(false)
+        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+        _voiceCaptureMode.value = VoiceCaptureMode.Off
+        setExternalAudioCaptureActiveLocked(false)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+  }
+
+  private fun setExternalAudioCaptureActiveLocked(active: Boolean): VoiceWakeSuppressionUpdate {
+    externalAudioCaptureActive.value = active
+    return createVoiceCaptureSuppressionUpdateLocked()
+  }
+
+  internal fun setCameraAudioCaptureActive(active: Boolean): Boolean {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        if (active) {
+          if (cameraAudioOwnsMic || voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) {
+            return false
+          }
+          cameraAudioOwnsMic = true
+        } else {
+          cameraAudioOwnsMic = false
+        }
+        createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.Camera, active)
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+    return true
+  }
+
+  private fun acquireVoiceReplySpeechSuppression() {
+    if (voiceReplySpeechDepth.incrementAndGet() == 1) {
+      voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.VoiceReplySpeech, true)
     }
+  }
+
+  private fun releaseVoiceReplySpeechSuppression() {
+    while (true) {
+      val depth = voiceReplySpeechDepth.get()
+      if (depth == 0) return
+      if (!voiceReplySpeechDepth.compareAndSet(depth, depth - 1)) continue
+      if (depth == 1) {
+        voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.VoiceReplySpeech, false)
+      }
+      return
+    }
+  }
+
+  private fun reconcileVoiceWakeCaptureSuppression() {
+    val suppressionUpdate =
+      synchronized(voiceCaptureOwnershipLock) {
+        createVoiceCaptureSuppressionUpdateLocked()
+      }
+    applyVoiceWakeSuppression(suppressionUpdate)
+  }
+
+  private fun createVoiceCaptureSuppressionUpdateLocked(): VoiceWakeSuppressionUpdate =
+    createVoiceWakeSuppressionUpdateLocked(
+      reason = VoiceWakeSuppressionReason.VoiceCapture,
+      suppressed = externalAudioCaptureActive.value || micCapture.micCooldown.value,
+    )
+
+  private fun createVoiceWakeSuppressionUpdateLocked(
+    reason: VoiceWakeSuppressionReason,
+    suppressed: Boolean,
+  ): VoiceWakeSuppressionUpdate {
+    voiceWakeSuppressionRevision += 1
+    return VoiceWakeSuppressionUpdate(
+      reason = reason,
+      suppressed = suppressed,
+      revision = voiceWakeSuppressionRevision,
+    )
+  }
+
+  private fun applyVoiceWakeSuppression(update: VoiceWakeSuppressionUpdate?) {
+    if (update == null) return
+    // Versioned application happens after ownership unlock. This avoids a main
+    // looper lock inversion while preventing an older release from winning.
+    voiceWakeManager.setSuppressed(
+      reason = update.reason,
+      suppressed = update.suppressed,
+      revision = update.revision,
+    )
   }
 
   private fun stopVoicePlayback() {
@@ -3079,8 +3371,10 @@ class NodeRuntime private constructor(
   private fun isVoiceCaptureModeActive(mode: VoiceCaptureMode): Boolean =
     when (mode) {
       VoiceCaptureMode.Off ->
-        !externalAudioCaptureActive.value &&
+        !cameraAudioOwnsMic &&
+          !externalAudioCaptureActive.value &&
           !micCapture.micEnabled.value &&
+          !micCapture.micCooldown.value &&
           !talkMode.isEnabled.value &&
           talkMode.activePushToTalkCaptureId == null
       VoiceCaptureMode.ManualMic ->
@@ -3642,6 +3936,7 @@ class NodeRuntime private constructor(
       gatewayDataGeneration += 1
       clearOperatorGatewayState(retirePendingCronRuns = true)
     }
+    invalidateVoiceWakeWordsForGateway()
     chat.onGatewayScopeChanging(retireRunState)
     stopMessageSpeech()
     micCapture.onGatewayScopeChanging()
@@ -3888,10 +4183,137 @@ class NodeRuntime private constructor(
     if (event == "update.available") {
       _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
     }
+    if (event == GatewayEvent.VoicewakeChanged.rawValue) {
+      applyVoiceWakeWords(payloadJson)
+    }
     handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun handleNodeGatewayEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
+    if (event != GatewayEvent.VoicewakeChanged.rawValue) return
+    val endpointStableId = nodeSession.currentEndpointStableId() ?: return
+    applyNodeVoiceWakeWords(endpointStableId, payloadJson) {
+      nodeSession.currentEndpointStableId() == endpointStableId
+    }
+  }
+
+  internal fun applyNodeVoiceWakeWords(
+    endpointStableId: String,
+    payloadJson: String?,
+    isCurrentConnection: () -> Boolean,
+  ) {
+    val gatewayScope = captureGatewayDataScope()?.takeIf { it.stableId == endpointStableId } ?: return
+    val words = parseVoiceWakeWords(payloadJson) ?: return
+    var applied = false
+    publishGatewayData(gatewayScope) {
+      if (isCurrentConnection()) {
+        applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+      }
+    }
+    if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
+  }
+
+  private suspend fun refreshWakeWordsFromGateway() {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val requestRevision = currentVoiceWakeWordsRevision()
+    try {
+      val words = parseVoiceWakeWords(requestGatewayData(gatewayScope, GatewayMethod.VoicewakeGet.rawValue, "{}")) ?: return
+      var applied = false
+      publishGatewayData(gatewayScope) {
+        applied =
+          applyAuthoritativeVoiceWakeWords(
+            words = words,
+            gatewayStableId = gatewayScope.stableId,
+            expectedRevision = requestRevision,
+          )
+      }
+      if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
+    } catch (_: CancellationException) {
+      // A replacement Gateway owns the next refresh.
+    } catch (err: Throwable) {
+      Log.d("OpenClawRuntime", "voicewake.get failed: ${err.message ?: err::class.java.simpleName}")
+    }
+  }
+
+  private fun applyVoiceWakeWords(payloadJson: String?) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val words = parseVoiceWakeWords(payloadJson) ?: return
+    var applied = false
+    publishGatewayData(gatewayScope) {
+      applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+    }
+    if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
+  }
+
+  private fun currentVoiceWakeWordsRevision(): Long = synchronized(voiceWakeWordsLock) { voiceWakeWordsRevision }
+
+  private fun applyAuthoritativeVoiceWakeWords(
+    words: List<String>,
+    gatewayStableId: String,
+    expectedRevision: Long? = null,
+  ): Boolean =
+    synchronized(voiceWakeWordsLock) {
+      if (expectedRevision != null && expectedRevision != voiceWakeWordsRevision) return@synchronized false
+      voiceWakeWordsRevision += 1
+      voiceWakeWordsGatewayStableId = gatewayStableId
+      prefs.setVoiceWakeWords(words)
+      voiceWakeManager.updateTriggerWords(words)
+      true
+    }
+
+  private fun invalidateVoiceWakeWordsForGateway() {
+    synchronized(voiceWakeWordsLock) {
+      voiceWakeWordsRevision += 1
+      voiceWakeWordsGatewayStableId = null
+      prefs.setVoiceWakeWords(VoiceWakePreferences.defaultTriggerWords)
+      voiceWakeManager.updateTriggerWords(VoiceWakePreferences.defaultTriggerWords)
+    }
+    voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.GatewaySync, true)
+    refreshVoiceWakeCapabilitySurfaceIfChanged()
+  }
+
+  private fun resumeVoiceWakeAfterGatewayWords(gatewayScope: GatewayDataScope) {
+    if (!isGatewayDataScopeCurrent(gatewayScope) || !isVoiceWakeWordsReadyFor(gatewayScope.stableId)) return
+    voiceWakeManager.setSuppressed(VoiceWakeSuppressionReason.GatewaySync, false)
+    refreshVoiceWakeCapabilitySurfaceIfChanged()
+  }
+
+  private fun isVoiceWakeWordsReadyForCurrentGateway(): Boolean = connectedEndpoint?.stableId?.let(::isVoiceWakeWordsReadyFor) == true
+
+  private fun isVoiceWakeWordsReadyFor(gatewayStableId: String): Boolean = synchronized(voiceWakeWordsLock) { voiceWakeWordsGatewayStableId == gatewayStableId }
+
+  private fun parseVoiceWakeWords(payloadJson: String?): List<String>? =
+    runCatching {
+      payloadJson
+        ?.let(json::parseToJsonElement)
+        ?.asObjectOrNull()
+        ?.get("triggers")
+        ?.let { it as? JsonArray }
+        ?.mapNotNull { it.asStringOrNull() }
+        ?.let(VoiceWakePreferences::sanitizeTriggerWords)
+    }.getOrNull()
+
+  private suspend fun sendVoiceWakeCommand(match: VoiceWakeMatch): Boolean {
+    val gatewayId = connectedEndpoint?.stableId ?: return false
+    if (!isVoiceWakeWordsReadyFor(gatewayId)) return false
+    if (!_nodeConnected.value) return false
+    val payload =
+      buildJsonObject {
+        put("eventId", JsonPrimitive(UUID.randomUUID().toString()))
+        put("text", JsonPrimitive(match.command))
+        put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
+      }
+    return nodeSession.sendNodeEventForEndpoint(
+      expectedEndpointStableId = gatewayId,
+      event = "voice.transcript",
+      payloadJson = payload.toString(),
+    )
   }
 
   private fun handleExecApprovalGatewayEvent(

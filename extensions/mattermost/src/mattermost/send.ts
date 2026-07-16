@@ -34,7 +34,11 @@ import {
   setInteractionSecret,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
-import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
+import {
+  parseMattermostTarget,
+  resolveMattermostOpaqueTarget,
+  type MattermostTarget,
+} from "./target-resolution.js";
 
 type MattermostSendOpts = {
   cfg: OpenClawConfig;
@@ -62,11 +66,6 @@ type MattermostSendResult = {
   channelId: string;
   receipt: MessageReceipt;
 };
-
-type MattermostTarget =
-  | { kind: "channel"; id: string }
-  | { kind: "channel-name"; name: string }
-  | { kind: "user"; id?: string; username?: string };
 
 const MATTERMOST_BOT_USER_CACHE_MAX_ENTRIES = 64;
 const MATTERMOST_TARGET_CACHE_MAX_ENTRIES = 1024;
@@ -145,63 +144,6 @@ function normalizeMessage(text: string, mediaUrl?: string): string {
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
-export function parseMattermostTarget(raw: string): MattermostTarget {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error("Recipient is required for Mattermost sends");
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
-    if (!id) {
-      throw new Error("Channel id is required for Mattermost sends");
-    }
-    if (id.startsWith("#")) {
-      const name = id.slice(1).trim();
-      if (!name) {
-        throw new Error("Channel name is required for Mattermost sends");
-      }
-      return { kind: "channel-name", name };
-    }
-    if (!isMattermostId(id)) {
-      return { kind: "channel-name", name: id };
-    }
-    return { kind: "channel", id };
-  }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
-    if (!id) {
-      throw new Error("User id is required for Mattermost sends");
-    }
-    return { kind: "user", id };
-  }
-  if (lower.startsWith("mattermost:")) {
-    const id = trimmed.slice("mattermost:".length).trim();
-    if (!id) {
-      throw new Error("User id is required for Mattermost sends");
-    }
-    return { kind: "user", id };
-  }
-  if (trimmed.startsWith("@")) {
-    const username = trimmed.slice(1).trim();
-    if (!username) {
-      throw new Error("Username is required for Mattermost sends");
-    }
-    return { kind: "user", username };
-  }
-  if (trimmed.startsWith("#")) {
-    const name = trimmed.slice(1).trim();
-    if (!name) {
-      throw new Error("Channel name is required for Mattermost sends");
-    }
-    return { kind: "channel-name", name };
-  }
-  if (!isMattermostId(trimmed)) {
-    return { kind: "channel-name", name: trimmed };
-  }
-  return { kind: "channel", id: trimmed };
-}
-
 async function resolveBotUser(
   baseUrl: string,
   token: string,

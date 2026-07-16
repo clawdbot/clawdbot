@@ -2,11 +2,8 @@
 // reconciliation, commit hooks, and retry budget deferral.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   OutboundDeliveryError,
@@ -66,7 +63,6 @@ describe("delivery-queue recovery", () => {
   const baseCfg = {};
 
   beforeEach(() => {
-    resetMessageAuditEventsForTest();
     resolveOutboundChannelMessageAdapterMock.mockReset();
   });
 
@@ -1632,3 +1628,4 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardNotification,
+  WorkboardWorkerLog,
+} from "@openclaw/workboard-contract";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
 import {
   assertCanMutateClaimedCard,
@@ -30,12 +36,6 @@ import {
   normalizeBoundedString,
   normalizeProofInput,
 } from "./store-normalizers.js";
-import type {
-  WorkboardAttachment,
-  WorkboardCard,
-  WorkboardNotification,
-  WorkboardWorkerLog,
-} from "./types.js";
 
 export class WorkboardEnrichmentStore extends WorkboardCoreStore {
   async addProof(

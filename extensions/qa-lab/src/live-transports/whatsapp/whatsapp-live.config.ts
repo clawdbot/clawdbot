@@ -3,10 +3,8 @@ import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { isTruthyOptIn } from "../../mantis-options.runtime.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
-const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
   "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
@@ -27,11 +25,6 @@ function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KE
     throw new Error(`Missing ${key}.`);
   }
   return value;
-}
-
-export function resolveWhatsAppMetadataRedaction(env: NodeJS.ProcessEnv = process.env) {
-  const raw = env[QA_REDACT_PUBLIC_METADATA_ENV];
-  return raw === undefined ? true : isTruthyOptIn(raw);
 }
 
 function normalizePhone(value: string, label: string) {

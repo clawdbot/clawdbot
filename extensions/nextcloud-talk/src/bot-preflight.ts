@@ -20,7 +20,7 @@ type NextcloudTalkBotAdminEntry = {
   features?: number | string;
 };
 
-export type NextcloudTalkBotResponseFeatureProbe = {
+type NextcloudTalkBotResponseFeatureProbe = {
   ok: boolean;
   skipped?: boolean;
   code:

@@ -5,7 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
-import { getRuntimeAuthProfileStoreCredentialMutationRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
@@ -17,8 +17,8 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
-  testing as storeTesting,
 } from "../agents/auth-profiles/store.js";
+import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -698,7 +698,7 @@ describe("secrets apply", () => {
       { agentDir: firstAgentDir, store: { profiles: {}, ...firstState } },
     ]);
     const firstMutationRevision =
-      getRuntimeAuthProfileStoreCredentialMutationRevision(firstAgentDir);
+      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision;
     const secondDatabase = openOpenClawAgentDatabase({
       agentId: "second",
       path: secondStorePath,
@@ -738,9 +738,9 @@ describe("secrets apply", () => {
       profiles: {},
       order: firstState.order,
     });
-    expect(getRuntimeAuthProfileStoreCredentialMutationRevision(firstAgentDir)).toBeGreaterThan(
-      firstMutationRevision,
-    );
+    expect(
+      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision,
+    ).toBeGreaterThan(firstMutationRevision);
   });
 
   it.each(["credentials", "state"] as const)(
@@ -1609,3 +1609,4 @@ describe("secrets apply", () => {
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

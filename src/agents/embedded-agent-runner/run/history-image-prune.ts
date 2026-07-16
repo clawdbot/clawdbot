@@ -4,10 +4,10 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
-export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 
 /** Replacement text for old textual media references that would otherwise be reloaded. */
-export const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
+const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
 
 const MEDIA_ATTACHED_HISTORY_REF_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*[^\]]+\]/gi;

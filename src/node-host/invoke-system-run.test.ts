@@ -32,7 +32,8 @@ import type { ExecHostResponse } from "../infra/exec-host.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
-import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
+
+type HandleSystemRunInvokeOptions = Parameters<typeof handleSystemRunInvoke>[0];
 
 vi.mock("../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logger.js")>()),
@@ -3626,3 +3627,4 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

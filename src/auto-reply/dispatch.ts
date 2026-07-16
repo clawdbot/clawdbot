@@ -660,9 +660,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
-        onFollowupAdmissionWaitChange: (waiting) => {
-          // An admission wait depends on the older owner finishing delivery.
-          // Suspending only that generation breaks the cycle without weakening newer-turn fencing.
+        onReplyAdmissionWaitChange: (waiting) => {
+          // A turn waiting to own the lane cannot make the current owner's reply stale.
+          // Suspend only that generation so independent newer turns still fence old replies.
           setForegroundReplyFenceAdmissionWaiting(foregroundReplyFence, waiting);
         },
       },

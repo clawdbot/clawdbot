@@ -1,0 +1,17 @@
+title: WhatsApp DM canary
+scenario:
+  id: whatsapp-canary
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-canary }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppCanaryScenario
+  args: [{ expr: whatsappScenarioContext }]

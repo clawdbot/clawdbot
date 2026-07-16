@@ -2,7 +2,7 @@
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  fetchDiscordGatewayInfo,
+  fetchDiscordGatewayInfoWithTimeout,
   fetchDiscordGatewayMetadataGuarded,
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
@@ -71,13 +71,14 @@ describe("Discord gateway metadata", () => {
   });
 
   it("falls back on Cloudflare HTML rate limits without logging raw HTML", async () => {
-    const error = await fetchDiscordGatewayInfo({
+    const error = await fetchDiscordGatewayInfoWithTimeout({
       token: "test",
       fetchImpl: async () =>
         new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
           status: 429,
           headers: { "content-type": "text/html" },
         }),
+      timeoutMs: 1_000,
     }).catch((err: unknown) => err);
     const runtime = {
       log: vi.fn(),

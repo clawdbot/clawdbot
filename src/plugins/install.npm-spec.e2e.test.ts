@@ -1311,3 +1311,4 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(installedLockEntry?.version).toBe("1.0.0");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

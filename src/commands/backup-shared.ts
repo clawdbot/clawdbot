@@ -59,7 +59,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
 }
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
-export function formatBackupArchiveTimestamp(
+function formatBackupArchiveTimestamp(
   nowMs = Date.now(),
   offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
 ): string {
@@ -90,7 +90,7 @@ export function buildBackupArchiveBasename(nowMs = Date.now()): string {
 }
 
 /** Encode an absolute or relative source path into a traversal-safe archive payload path. */
-export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
+function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   const normalized = sourcePath.replaceAll("\\", "/");
   const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
   if (windowsMatch) {
@@ -110,7 +110,7 @@ export function buildBackupArchivePath(archiveRoot: string, sourcePath: string):
 }
 
 /** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */
-export async function resolveBackupPlanFromPaths(params: {
+async function resolveBackupPlanFromPaths(params: {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -247,6 +247,12 @@ export async function resolveBackupPlanFromPaths(params: {
     workspaceDirs: workspaceDirs.map((entry) => path.resolve(entry)),
     included,
     skipped,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.backupPlanTestApi")] = {
+    resolveBackupPlanFromPaths,
   };
 }
 

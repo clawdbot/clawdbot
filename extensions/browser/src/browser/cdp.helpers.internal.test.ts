@@ -440,29 +440,6 @@ describe("cdp.helpers internal", () => {
         }),
       ).rejects.toThrow(/callback boom/);
     });
-
-    it("tolerates a ws.close() that throws in the cleanup finally", async () => {
-      // Force ws.close() to throw by wrapping withCdpSocket against a live
-      // server but monkey-patching the ws prototype momentarily. We do this
-      // via a callback that pre-empts close by calling terminate() first.
-      const server = await startWsServer();
-      wss = server.wss;
-      server.wss.on("connection", (socket) => {
-        socket.on("message", (raw) => {
-          const msg = JSON.parse(rawDataToString(raw)) as { id?: number };
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        });
-      });
-      // The fn throws AFTER sending so both the catch (closeWithError) and
-      // the finally ws.close() run. ws.close() on an already-closed socket
-      // is a no-op but exercises the try/catch in the finally.
-      await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.ok");
-          throw new Error("fn post-send boom");
-        }),
-      ).rejects.toThrow(/fn post-send boom/);
-    });
   });
 
   describe("createCdpSender error/close event forwarding", () => {

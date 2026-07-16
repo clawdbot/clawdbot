@@ -55,4 +55,41 @@ describe("legacy usage-cost cache cleanup", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("x");
     }
   });
+
+  it("reports legacy skill-upload staging without deleting it unless repair is enabled", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-doctor-"));
+    const uploadRoot = path.join(root, "tmp", "skill-uploads");
+    const metadataPath = path.join(uploadRoot, randomUploadId(), "metadata.json");
+    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+    await fs.writeFile(metadataPath, "{}\n", "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+
+    await maybeRepairLegacyRuntimeFiles(false, env);
+    await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
+
+    await maybeRepairLegacyRuntimeFiles(true, env);
+    await expect(fs.stat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  const symlinkTest = process.platform === "win32" ? it.skip : it;
+  symlinkTest("removes a legacy staging symlink without touching its target", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-link-"));
+    const uploadRoot = path.join(root, "tmp", "skill-uploads");
+    const external = path.join(root, "external");
+    await fs.mkdir(path.dirname(uploadRoot), { recursive: true });
+    await fs.mkdir(external);
+    await fs.writeFile(path.join(external, "keep.txt"), "keep", "utf8");
+    await fs.symlink(external, uploadRoot, "dir");
+
+    await maybeRepairLegacyRuntimeFiles(true, {
+      OPENCLAW_STATE_DIR: root,
+    } as NodeJS.ProcessEnv);
+
+    await expect(fs.lstat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
+  });
 });
+
+function randomUploadId(): string {
+  return "11111111-1111-4111-8111-111111111111";
+}

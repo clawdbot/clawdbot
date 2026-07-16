@@ -31,6 +31,7 @@ export function resolveLiveTransportQaRunOptions(
     alternateModel: normalizeLiveTransportModelRef(opts.alternateModel),
     fastMode: opts.fastMode,
     allowFailures: opts.allowFailures,
+    failFast: opts.failFast,
     scenarioIds: opts.scenarioIds,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccountId,

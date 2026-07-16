@@ -123,8 +123,16 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--") {
-      for (const extra of argv.slice(i + 1)) {
-        const assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+      const extras = argv.slice(i + 1);
+      for (let extraIndex = 0; extraIndex < extras.length; extraIndex += 1) {
+        const extra = extras[extraIndex];
+        let assignment;
+        if (extra === "-f") {
+          assignment = readOptionValue(extras, extraIndex, extra);
+          extraIndex += 1;
+        } else {
+          assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+        }
         const [key, ...valueParts] = assignment.split("=");
         if (!key || valueParts.length === 0) {
           throw new Error(`Unsupported extra argument after --: ${extra}`);
@@ -157,6 +165,12 @@ export function parseArgs(argv) {
 
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
+  }
+  if (
+    Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&
+    !["true", "false"].includes(args.inputs.allow_unreleased_changelog)
+  ) {
+    throw new Error("allow_unreleased_changelog must be true or false");
   }
   if (
     args.inputs.release_profile &&
@@ -407,6 +421,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);

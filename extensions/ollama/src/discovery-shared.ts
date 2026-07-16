@@ -168,7 +168,7 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
 
 const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
 
-export function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
+function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return false;
   }

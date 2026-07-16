@@ -877,6 +877,7 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "control-ui-run",
         restartRecoveryDeliverySourceRunId: "control-ui-run",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
         deliveryContext: {
           channel: "discord",
           to: "discord:dm:stale",
@@ -906,6 +907,7 @@ describe("main-session-restart-recovery", () => {
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     const resumeParams = firstGatewayParams();
     expect(resumeParams.deliver).toBe(false);
+    expect(resumeParams.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(claimAtDispatch).toBe(resumeParams.idempotencyKey);
     expect(claimAtDispatch).not.toBe("control-ui-run");
     expect(sourceClaimAtDispatch).toBe("control-ui-run");
@@ -2943,3 +2945,4 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

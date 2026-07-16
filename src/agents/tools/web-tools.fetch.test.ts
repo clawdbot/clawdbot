@@ -24,7 +24,8 @@ vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
 import { createWebFetchTool } from "./web-fetch.js";
-import { WEB_FETCH_SPILL_MAX_CHARS } from "./web-fetch.js";
+
+const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
 
 const lookupMock = vi.fn();
 

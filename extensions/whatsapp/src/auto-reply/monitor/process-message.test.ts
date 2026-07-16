@@ -317,11 +317,8 @@ describe("processMessage group system prompt wiring", () => {
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
+      command: {
         kind: "text-slash",
-        source: "text",
         authorized: true,
         body: "/status",
       },
@@ -345,7 +342,11 @@ describe("processMessage group system prompt wiring", () => {
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
       bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
-      commandBody: "/reset",
+      command: {
+        kind: "text-slash",
+        authorized: true,
+        body: "/reset",
+      },
       rawBody: "/reset",
     });
   });
@@ -360,19 +361,13 @@ describe("processMessage group system prompt wiring", () => {
     });
 
     expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
+      command: {
         kind: "normal",
-        source: "message",
-        authorized: false,
+        authorized: true,
         body: "please inspect `/tmp/foo`",
       },
       rawBody: "please inspect `/tmp/foo`",
     });
-    expect(
-      mockCallArg(buildContextMock, "buildWhatsAppInboundContext").commandSource,
-    ).toBeUndefined();
   });
 
   it("passes pending group history from the history window into inbound context", async () => {

@@ -1727,3 +1727,4 @@ export async function spawnAcpDirect(
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

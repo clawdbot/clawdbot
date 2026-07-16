@@ -14,8 +14,9 @@ import {
   restoreCliRunnerPrepareTestDeps,
   supervisorSpawnMock,
 } from "../cli-runner.test-support.js";
-import { resetClaudeLiveSessionsForTest, runClaudeLiveSessionTurn } from "./claude-live-session.js";
-import { setCliRunnerExecuteTestDeps } from "./execute.js";
+import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
+import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
+import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
 import { writeCliSystemPromptFile } from "./helpers.js";
 import type { PreparedCliRunContext } from "./types.js";
 

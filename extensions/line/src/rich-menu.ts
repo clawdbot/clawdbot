@@ -6,7 +6,7 @@ import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
-import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
+import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 
 type RichMenuRequest = messagingApi.RichMenuRequest;
@@ -252,8 +252,6 @@ export function createGridLayout(
     },
   ];
 }
-
-export { datetimePickerAction, messageAction, postbackAction, uriAction };
 
 export function createDefaultMenuConfig(): CreateRichMenuParams {
   return {

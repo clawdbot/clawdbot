@@ -1,7 +1,8 @@
 // Telegram plugin module implements bot core behavior.
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -77,16 +78,10 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
 };
 const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
-let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
-
-export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void {
-  telegramBotRuntimeForTest = runtime;
-}
-
 export function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
 ): TelegramBotInstance {
-  const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
+  const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
   const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
@@ -329,11 +324,9 @@ export function createTelegramBotCore(
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveChannelGroupRequireMention({
-      cfg: turnCfg,
-      channel: "telegram",
-      accountId: account.accountId,
-      groupId: String(chatId),
+    resolveScopeRequireMention({
+      tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
+      path: [String(chatId)],
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });

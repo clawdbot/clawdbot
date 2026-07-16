@@ -7,14 +7,12 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
-import "../../components/web-awesome-select.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
 import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
-  configureWorkboardPolling,
   deleteWorkboardCard,
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
@@ -32,7 +30,6 @@ import {
   workboardHasActiveWrites,
   workboardMutationsReady,
   WORKBOARD_PRIORITIES,
-  type WorkboardAutoRefreshIntervalMs,
   type WorkboardDependencyState,
   type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
@@ -57,13 +54,13 @@ import {
   matchesAgentScope,
   normalizeActiveAgentFilter,
 } from "./agent-filter.ts";
-
-type WorkboardSelectOption<Value extends string = string> = {
-  value: Value;
-  label: string;
-  description?: string;
-  disabled?: boolean;
-};
+import {
+  buildBoardFilterOptions,
+  matchesBoardFilter,
+  normalizeActiveBoardFilter,
+  WORKBOARD_ALL_BOARDS_FILTER,
+} from "./board-filter.ts";
+import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
 
 type WorkboardProps = {
   host: object;
@@ -78,6 +75,7 @@ type WorkboardProps = {
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;
   onOpenSession: (sessionKey: string) => void;
+  onBoardFilterChange?: (boardFilter: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
@@ -444,66 +442,6 @@ function isCardActionTarget(event: Event): boolean {
     : false;
 }
 
-function renderWorkboardSelect<Value extends string>(params: {
-  value: Value;
-  options: readonly WorkboardSelectOption<Value>[];
-  label: string;
-  onChange: (value: Value) => void;
-  requestUpdate?: () => void;
-  className?: string;
-  showLabel?: boolean;
-  disabled?: boolean;
-}) {
-  const select = html`
-    <wa-select
-      class="workboard-select ${params.className ?? ""}"
-      label=${params.label}
-      value=${params.value}
-      ?disabled=${params.disabled}
-      @change=${(event: Event) => {
-        const value = (event.currentTarget as HTMLElement & { value?: string }).value as
-          | Value
-          | undefined;
-        if (
-          value !== undefined &&
-          params.options.some((option) => option.value === value && !option.disabled)
-        ) {
-          params.onChange(value);
-          params.requestUpdate?.();
-        }
-      }}
-    >
-      ${params.options.map(
-        (option) => html`
-          <wa-option
-            class="workboard-select__option"
-            value=${option.value}
-            .label=${option.label}
-            ?selected=${option.value === params.value}
-            ?disabled=${option.disabled}
-          >
-            <span class="workboard-select__copy">
-              <span class="workboard-select__label">${option.label}</span>
-              ${option.description
-                ? html`<span class="workboard-select__description">${option.description}</span>`
-                : nothing}
-            </span>
-          </wa-option>
-        `,
-      )}
-    </wa-select>
-  `;
-  if (params.showLabel === false) {
-    return select;
-  }
-  return html`
-    <div class="workboard-field">
-      <span>${params.label}</span>
-      ${select}
-    </div>
-  `;
-}
-
 function engineDisplayName(engine: WorkboardExecutionEngine): string {
   return engine === "codex" ? t("workboard.engineOpenAI") : t("workboard.engineClaude");
 }
@@ -660,7 +598,6 @@ function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
   return {
     state,
     task,
-    session,
     busy,
     activeTask,
     live,
@@ -1823,14 +1760,6 @@ function renderWorkboardEmptyState() {
   `;
 }
 
-const autoRefreshOptions: Array<{ value: WorkboardAutoRefreshIntervalMs; labelKey: string }> = [
-  { value: 0, labelKey: "workboard.autoRefreshOff" },
-  { value: 5000, labelKey: "workboard.autoRefresh5s" },
-  { value: 15000, labelKey: "workboard.autoRefresh15s" },
-  { value: 30000, labelKey: "workboard.autoRefresh30s" },
-  { value: 60000, labelKey: "workboard.autoRefresh60s" },
-];
-
 const viewPresetOptions: Array<{ value: WorkboardUiState["viewPreset"]; labelKey: string }> = [
   { value: "all", labelKey: "workboard.viewAll" },
   { value: "default_agent", labelKey: "workboard.viewDefaultAgent" },
@@ -1899,7 +1828,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     <article
       class="workboard-card priority-${card.priority} ${busy
         ? "workboard-card--busy"
-        : ""} ${archived ? "workboard-card--archived" : ""} ${healthHighlighted
+        : ""} ${archived ? "workboard-card--archived" : ""}
+      ${state.draggedCardId === card.id ? "workboard-card--dragging" : ""} ${healthHighlighted
         ? `workboard-card--health-highlight workboard-card--health-highlight-${state.activeHealthHighlight}`
         : ""} workboard-card--openable"
       role="button"
@@ -2070,9 +2000,12 @@ export function renderWorkboard(props: WorkboardProps) {
 
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
+  const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
+  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesBoardFilter(card, activeBoardFilter))
       .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
@@ -2114,9 +2047,9 @@ export function renderWorkboard(props: WorkboardProps) {
     state.query.trim() !== "" ||
     state.priorityFilter !== "all" ||
     state.agentFilter !== "all" ||
+    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER ||
     archivedCardsHidden;
   const showEmptyState = filtered.length === 0 && activeFiltering;
-  const autoRefreshEnabled = state.autoRefreshIntervalMs > 0;
   const viewOptions: Array<WorkboardSelectOption<WorkboardUiState["viewPreset"]>> =
     viewPresetOptions.map((option) => {
       const count = cardsForPreset(option.value).length;
@@ -2187,6 +2120,20 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
+            ${boardOptions.length > 2
+              ? renderWorkboardSelect({
+                  value: activeBoardFilter,
+                  options: boardOptions,
+                  label: t("workboard.boardFilter"),
+                  onChange: (value) => {
+                    state.boardFilter = value;
+                    props.onBoardFilterChange?.(value);
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar workboard-select--toolbar-board",
+                  showLabel: false,
+                })
+              : nothing}
             ${props.showAgentFilter !== false
               ? renderWorkboardSelect({
                   value: state.agentFilter,
@@ -2261,55 +2208,21 @@ export function renderWorkboard(props: WorkboardProps) {
             </label>
           </div>
           <div class="workboard-toolbar__actions">
-            ${autoRefreshEnabled
-              ? nothing
-              : html`
-                  <button
-                    class="btn"
-                    type="button"
-                    ?disabled=${state.loading ||
-                    state.dispatching ||
-                    workboardHasActiveWrites(state)}
-                    @click=${() =>
-                      refreshWorkboard({
-                        host: props.host,
-                        client: props.client,
-                        requestUpdate: props.onRequestUpdate,
-                        source: "manual",
-                        refreshDiagnostics: canWrite(props),
-                      })}
-                  >
-                    ${state.loading ? t("common.refreshing") : t("common.refresh")}
-                  </button>
-                `}
-            <label class="workboard-auto-refresh">
-              <span>${t("workboard.autoRefresh")}</span>
-              <select
-                class="input"
-                title=${t("workboard.autoRefresh")}
-                .value=${String(state.autoRefreshIntervalMs)}
-                @change=${(event: Event) => {
-                  state.autoRefreshIntervalMs = Number(
-                    (event.currentTarget as HTMLSelectElement).value,
-                  ) as WorkboardAutoRefreshIntervalMs;
-                  configureWorkboardPolling({
-                    host: props.host,
-                    client: props.client,
-                    enabled:
-                      props.connected &&
-                      props.pluginEnabled === true &&
-                      state.autoRefreshIntervalMs > 0,
-                    requestUpdate: props.onRequestUpdate,
-                  });
-                  props.onRequestUpdate?.();
-                }}
-              >
-                ${autoRefreshOptions.map(
-                  (option) =>
-                    html`<option value=${String(option.value)}>${t(option.labelKey)}</option>`,
-                )}
-              </select>
-            </label>
+            <button
+              class="btn"
+              type="button"
+              ?disabled=${state.loading || state.dispatching || workboardHasActiveWrites(state)}
+              @click=${() =>
+                refreshWorkboard({
+                  host: props.host,
+                  client: props.client,
+                  requestUpdate: props.onRequestUpdate,
+                  source: "manual",
+                  refreshDiagnostics: canWrite(props),
+                })}
+            >
+              ${state.loading ? t("common.refreshing") : t("common.refresh")}
+            </button>
             ${writable
               ? html`
                   <button
@@ -2369,3 +2282,4 @@ export function renderWorkboard(props: WorkboardProps) {
     </section>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

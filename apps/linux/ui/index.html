@@ -10,7 +10,7 @@
   <body>
     <main class="shell">
       <section class="brand" aria-label="OpenClaw">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+        <img class="brand-mark" src="mascot.svg" alt="" aria-hidden="true" />
         <span>OPENCLAW</span>
       </section>
 
@@ -45,6 +45,16 @@
         <div id="action-controls" class="controls hidden">
           <button id="primary-action" class="primary">Try again</button>
         </div>
+
+        <section id="discovery" class="discovery" aria-labelledby="discovery-title">
+          <div class="discovery-head">
+            <span id="discovery-title">GATEWAYS ON THIS NETWORK</span>
+            <span id="discovery-status">SEARCHING</span>
+          </div>
+          <div id="gateway-list" class="gateway-list">
+            <p class="discovery-empty">Looking for nearby OpenClaw gateways…</p>
+          </div>
+        </section>
 
         <div id="log-wrap" class="log-wrap hidden">
           <div class="log-head">

@@ -1,6 +1,6 @@
 ---
 name: openclaw-parallels-smoke
-description: Run, rerun, debug, or interpret OpenClaw Parallels install, onboarding, gateway smoke, and upgrade checks.
+description: Prepare, snapshot, run, rerun, debug, or interpret OpenClaw Parallels guest install, onboarding, gateway smoke, and upgrade checks across macOS, Windows, and Linux.
 ---
 
 # OpenClaw Parallels Smoke
@@ -120,8 +120,27 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Windows flow
 
+- This repo owns the general Windows VM lifecycle: remote `prlctl` management, clean-state checks, WSL 2, Git/Node, snapshot creation/restoration, and OpenClaw smoke. Assume Parallels Desktop is installed/activated and a Windows 11 VM has been downloaded, then run:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- inventory
+  pnpm test:parallels:windows:prepare -- prepare
+  pnpm test:parallels:windows:prepare -- verify
+  ```
+
+- `prepare` inventories before mutation, requires Parallels Tools and a logged-in desktop session, rejects OpenClaw CLI/app/tray/process state and WSL distros, creates a dated power-off clean-OS snapshot only on an unprepared guest, enables WSL/Virtual Machine Platform, installs the signed Microsoft WSL package, sets WSL 2 as default, installs Git and Node/npm, verifies the Windows hypervisor is active and no reboot is pending, and creates a power-off `pre-openclaw-native-e2e-<date>` snapshot.
+- When today's E2E snapshot already exists, `prepare` restores and verifies that snapshot instead of trusting its name. Treat `prepare` as destructive to post-snapshot guest changes, just like an explicit restore.
+- Package elevation resolves the exact version and SHA-256 from Microsoft's official WinGet manifests, validates the expected Authenticode publisher, and copies into a freshly ACL-restricted SYSTEM directory before execution. Keep this generic mechanism here; companion-specific package choices stay in the Windows app repo.
+- Restore `clean`, `e2e`, an exact name, or an id:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- restore --snapshot e2e
+  ```
+
+- Restoring discards all post-snapshot changes. Inventory first and do not restore while another developer or lane owns the VM. `e2e` selects the newest `pre-openclaw-native-e2e-*`; use an exact snapshot for historical reproduction.
+- For native companion work, read `../../../../openclaw-windows-node/.agents/skills/openclaw-proof-validation/PARALLELS.md`. That optional macOS sidecar reuses this controller and adds only .NET, Windows SDK, WebView2, the app checkout, app-layer snapshots, build/tests, and native proof.
 - Preferred entrypoint: `pnpm test:parallels:windows`
-- Use the snapshot closest to `pre-openclaw-native-e2e-2026-03-12`.
+- Use the newest verified `pre-openclaw-native-e2e-*` snapshot and pass its exact name with `--snapshot-hint`.
 - Default upgrade coverage on Windows should now include: fresh snapshot -> site installer pinned to the requested stable tag -> `openclaw update --channel dev` on the guest. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
 - Optional exact npm-tag baseline on Windows: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --target-package-spec openclaw@<tag> --json`. That lane installs the published npm tarball as baseline, then runs `openclaw update --channel dev`.
 - Optional forward-fix Windows validation: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --upgrade-from-packed-main --json`. That lane installs the packed current-main npm tgz as baseline, then runs `openclaw update --channel dev`.
@@ -146,6 +165,11 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - If standalone Windows upgrade fails with a gateway token mismatch but `pnpm test:parallels:npm-update` passes, trust the mismatch as a standalone ref-onboard ordering bug first; the npm-update helper does not re-run ref-mode onboard on the same guest.
 - Keep onboarding and status output ASCII-clean in logs; fancy punctuation becomes mojibake in current capture paths.
 - If you hit an older run with `rc=255` plus an empty `fresh.install-main.log` or `upgrade.install-main.log`, treat it as a likely `prlctl exec` transport drop after guest start-up, not immediate proof of an npm/package failure.
+- If WSL features are enabled but `wsl.exe --version` fails, rerun `prepare`; the inbox features and the signed WSL package are separate prerequisites. If the default reverts to 1, set `wsl.exe --set-default-version 2` and rerun `verify`.
+- If `winget` detaches or prints nothing over `prlctl`, call it through `cmd.exe /d /s /c`. Avoid remote UAC: download as the desktop user, then let the controller verify the trusted manifest hash/publisher and install from its protected SYSTEM staging directory.
+- If snapshot restore reports incompatible saved CPU state, make a power-off replacement snapshot from the known-good disk state and use its exact name. Never bypass snapshot restore for a two-lane fresh+upgrade claim.
+- If baseline verification reports OpenClaw state, restore `clean` or remove the product state deliberately; never bless a dirty guest. Check `%APPDATA%` and `%LOCALAPPDATA%` for both stable and dev companion identities plus Inno uninstall registration.
+- Long Windows installers can remain quiet while healthy. Inspect `tasklist` and installer/MSI logs before declaring a hang; keep long operations behind a background runner with short host-bounded polling calls.
 
 ## Linux flow
 

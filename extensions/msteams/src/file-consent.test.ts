@@ -1,11 +1,7 @@
 // Msteams tests cover file consent plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  CONSENT_UPLOAD_HOST_ALLOWLIST,
-  isPrivateOrReservedIP,
-  uploadToConsentUrl,
-  validateConsentUploadUrl,
-} from "./file-consent.js";
+import { uploadToConsentUrl } from "./file-consent.js";
+import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 // Helper: a resolveFn that returns a public IP by default
@@ -18,6 +14,34 @@ const multiResolve = (ips: string[]) => async () => ips.map((address) => ({ addr
 const failingResolve = async () => {
   throw new Error("DNS failure");
 };
+
+type ConsentValidationOptions = NonNullable<
+  Parameters<typeof uploadToConsentUrl>[0]["validationOpts"]
+>;
+
+async function validateConsentUploadUrl(url: string, validationOpts?: ConsentValidationOptions) {
+  await uploadToConsentUrl({
+    url,
+    buffer: Buffer.from("test"),
+    fetchFn: async () => new Response(null, { status: 200 }),
+    validationOpts,
+  });
+}
+
+async function isPrivateOrReservedIP(ip: string): Promise<boolean> {
+  try {
+    await validateConsentUploadUrl("https://probe.example.org/upload", {
+      allowlist: ["example.org"],
+      resolveFn: async () => ({ address: ip }),
+    });
+    return false;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("private/reserved IP")) {
+      return true;
+    }
+    throw error;
+  }
+}
 
 const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
   const [call] = fetchFn.mock.calls;
@@ -47,8 +71,8 @@ describe("isPrivateOrReservedIP", () => {
     ["8.8.8.8", false],
     ["13.107.136.10", false],
     ["52.96.0.1", false],
-  ] as const)("IPv4 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("IPv4 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 
   it.each([
@@ -67,8 +91,8 @@ describe("isPrivateOrReservedIP", () => {
     ["::ffff:169.254.169.254", true],
     ["::ffff:8.8.8.8", false],
     ["::ffff:13.107.136.10", false],
-  ] as const)("IPv6 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("IPv6 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 
   it.each([
@@ -77,8 +101,8 @@ describe("isPrivateOrReservedIP", () => {
     ["10.0.0.256", true],
     ["-1.0.0.1", false],
     ["1.2.3.4.5", false],
-  ] as const)("malformed IPv4 %s → %s", (ip, expected) => {
-    expect(isPrivateOrReservedIP(ip)).toBe(expected);
+  ] as const)("malformed IPv4 %s → %s", async (ip, expected) => {
+    expect(await isPrivateOrReservedIP(ip)).toBe(expected);
   });
 });
 
@@ -241,29 +265,35 @@ describe("validateConsentUploadUrl", () => {
 // ─── CONSENT_UPLOAD_HOST_ALLOWLIST ───────────────────────────────────────────
 
 describe("CONSENT_UPLOAD_HOST_ALLOWLIST", () => {
-  it("contains only Microsoft/SharePoint domains", () => {
-    for (const domain of CONSENT_UPLOAD_HOST_ALLOWLIST) {
-      expect(
-        domain.includes("microsoft") ||
-          domain.includes("sharepoint") ||
-          domain.includes("onedrive") ||
-          domain.includes("1drv") ||
-          domain.includes("live.com"),
-      ).toBe(true);
-    }
+  it.each([
+    "sharepoint.com",
+    "sharepoint.us",
+    "sharepoint.de",
+    "sharepoint.cn",
+    "sharepoint-df.com",
+    "storage.live.com",
+    "onedrive.com",
+    "1drv.ms",
+    "graph.microsoft.com",
+    "graph.microsoft.us",
+    "graph.microsoft.de",
+    "graph.microsoft.cn",
+  ])("allows the expected Microsoft upload domain %s", async (domain) => {
+    await expect(
+      validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
+    ).resolves.toBeUndefined();
   });
 
-  it("does not contain overly broad domains", () => {
-    const broad = [
-      "microsoft.com",
-      "azure.com",
-      "blob.core.windows.net",
-      "azureedge.net",
-      "trafficmanager.net",
-    ];
-    for (const domain of broad) {
-      expect(CONSENT_UPLOAD_HOST_ALLOWLIST).not.toContain(domain);
-    }
+  it.each([
+    "microsoft.com",
+    "azure.com",
+    "blob.core.windows.net",
+    "azureedge.net",
+    "trafficmanager.net",
+  ])("rejects the overly broad domain %s", async (domain) => {
+    await expect(
+      validateConsentUploadUrl(`https://${domain}/upload`, { resolveFn: publicResolve }),
+    ).rejects.toThrow("not in the allowed domains");
   });
 });
 
@@ -290,6 +320,132 @@ describe("uploadToConsentUrl", () => {
       "User-Agent": buildUserAgent(),
     });
     expect(opts?.body).toEqual(new Uint8Array(Buffer.from("hello")));
+  });
+
+  it("aborts consent uploads that do not finish before the request timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      const fetchFn = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          await new Promise<Response>((_resolve, reject) => {
+            observedSignal = init?.signal ?? undefined;
+            observedSignal?.addEventListener(
+              "abort",
+              () => {
+                const reason = observedSignal?.reason;
+                reject(reason instanceof Error ? reason : new Error("request aborted"));
+              },
+              { once: true },
+            );
+          }),
+      );
+
+      const uploadPromise = uploadToConsentUrl({
+        url: "https://contoso.sharepoint.com/upload",
+        buffer: Buffer.from("hello"),
+        fetchFn,
+        timeoutMs: 25,
+        validationOpts: { resolveFn: publicResolve },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+      const uploadRejection = expect(uploadPromise).rejects.toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+      await uploadRejection;
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows consent uploads that complete before the request timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let observedSignal: AbortSignal | undefined;
+      const fetchFn = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          await new Promise<Response>((resolve, reject) => {
+            observedSignal = init?.signal ?? undefined;
+            observedSignal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("consent upload timed out", "AbortError")),
+              { once: true },
+            );
+            setTimeout(() => resolve(new Response(null, { status: 200 })), 25);
+          }),
+      );
+
+      const uploadPromise = uploadToConsentUrl({
+        url: "https://contoso.sharepoint.com/upload",
+        buffer: Buffer.from("hello"),
+        fetchFn,
+        timeoutMs: 50,
+        validationOpts: { resolveFn: publicResolve },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(uploadPromise).resolves.toBeUndefined();
+      expect(observedSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(25);
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows size-budgeted consent uploads that complete after the base upload deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const buffer = Buffer.alloc(512 * 1024);
+      const resolvedTimeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(buffer.length);
+      const baseTimeoutMs = resolveMSTeamsSharePointUploadTimeoutMs(0);
+      const completionMs = baseTimeoutMs + 1_000;
+      let observedSignal: AbortSignal | undefined;
+      const fetchFn = vi.fn<typeof fetch>(
+        async (_url, init) =>
+          await new Promise<Response>((resolve, reject) => {
+            observedSignal = init?.signal ?? undefined;
+            observedSignal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("consent upload timed out", "AbortError")),
+              { once: true },
+            );
+            setTimeout(() => resolve(new Response(null, { status: 200 })), completionMs);
+          }),
+      );
+
+      expect(completionMs).toBeGreaterThan(baseTimeoutMs);
+      expect(completionMs).toBeLessThan(resolvedTimeoutMs);
+
+      const uploadPromise = uploadToConsentUrl({
+        url: "https://contoso.sharepoint.com/upload",
+        buffer,
+        fetchFn,
+        validationOpts: { resolveFn: publicResolve },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchFn).toHaveBeenCalledOnce();
+      expect(observedSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(completionMs);
+      await expect(uploadPromise).resolves.toBeUndefined();
+      expect(observedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks upload to a disallowed host", async () => {
@@ -335,15 +491,15 @@ describe("uploadToConsentUrl", () => {
     expect(mockFetch).toHaveBeenCalledOnce();
     const [url, opts] = firstFetchCall(mockFetch);
     expect(url).toBe("https://contoso.sharepoint.com/sites/uploads/file.pdf");
-    expect(opts).toEqual({
-      method: "PUT",
-      headers: {
-        "User-Agent": buildUserAgent(),
-        "Content-Type": "application/pdf",
-        "Content-Range": "bytes 0-11/12",
-      },
-      body: new Uint8Array(buffer),
+    expect(opts?.method).toBe("PUT");
+    expect(opts?.headers).toEqual({
+      "User-Agent": buildUserAgent(),
+      "Content-Type": "application/pdf",
+      "Content-Range": "bytes 0-11/12",
     });
+    expect(opts?.body).toEqual(new Uint8Array(buffer));
+    expect(opts?.signal).toBeInstanceOf(AbortSignal);
+    expect(opts?.signal?.aborted).toBe(false);
   });
 
   it("throws on non-OK response after passing validation", async () => {

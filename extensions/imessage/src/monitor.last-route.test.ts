@@ -13,7 +13,7 @@ import {
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./monitor/recovery-cursor.js";
 import {
-  clearCachedIMessagePrivateApiStatus,
+  getCachedIMessagePrivateApiStatus,
   setCachedIMessagePrivateApiStatus,
 } from "./private-api-status.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -22,6 +22,15 @@ type DispatchInboundMessageParams = {
   ctx: MsgContext;
   replyOptions?: GetReplyOptions;
 };
+
+function expireCachedPrivateApiStatus(): void {
+  setCachedIMessagePrivateApiStatus(
+    "imsg",
+    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
+    1,
+  );
+  getCachedIMessagePrivateApiStatus("imsg");
+}
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -125,7 +134,7 @@ describe("iMessage monitor last-route updates", () => {
     dispatchInboundMessageMock.mockClear();
     createChannelInboundDebouncerMock.mockClear();
     debouncerControl.reset();
-    clearCachedIMessagePrivateApiStatus();
+    expireCachedPrivateApiStatus();
   });
 
   afterEach(() => {
@@ -2340,3 +2349,4 @@ describe("iMessage monitor last-route updates", () => {
     expect(debouncerOptions?.debounceMsOverride).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

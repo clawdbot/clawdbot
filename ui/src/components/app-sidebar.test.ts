@@ -1,7 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
@@ -10,21 +8,22 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-sidebar.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   createLobsterPetLook,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
+import "./app-sidebar.ts";
+import { TERMINAL_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
@@ -35,24 +34,10 @@ type SessionState = SessionCapability["state"];
 // assertions on the shared mocked client below. It has its own test file.
 vi.mock("./sidebar-attention.ts", () => ({}));
 
-const PROVIDER_ELEMENT_NAME = "test-app-sidebar-context-provider";
-
-class AppSidebarContextProvider extends LitElement {
-  private readonly contextProvider = new ContextProvider(this, {
-    context: applicationContext,
-  });
-
-  setContext(context: ApplicationContext<RouteId>) {
-    this.contextProvider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
-  customElements.define(PROVIDER_ELEMENT_NAME, AppSidebarContextProvider);
-}
-
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
+  terminalAvailable: boolean;
+  catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
@@ -181,6 +166,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
     }),
   );
+  const refresh = vi.fn(() => Promise.resolve());
   const sessions = {
     get state() {
       return state;
@@ -201,7 +187,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     delete: deleteSession,
     deleteMany,
-    refresh: () => Promise.resolve(),
+    refresh,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -218,6 +204,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     patch,
     deleteSession,
     deleteMany,
+    refresh,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
@@ -272,13 +259,12 @@ async function mountSidebar(
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
 ) {
-  const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
+  const context = createContext(gateway, sessions, agentsList);
+  const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  const context = createContext(gateway, sessions, agentsList);
-  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
@@ -491,11 +477,9 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
-    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
-    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -544,20 +528,8 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
-    const newSessionItem = [
-      ...(reopenedMenu?.querySelectorAll<HTMLElement>(".sidebar-agent-menu__new") ?? []),
-    ].find((item) => item.textContent?.includes("research"));
-    expect(newSessionItem).toBeDefined();
-    reopenedMenu?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: newSessionItem }, bubbles: true }),
-    );
-    await sidebar.updateComplete;
-    expect(onOpenNewSession).toHaveBeenCalledWith("research");
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    await sidebar.updateComplete;
-    const switchMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
+    const switchMenu = reopenedMenu;
     const researchRow = [
       ...(switchMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[type="checkbox"]') ?? []),
     ].find((row) => row.textContent?.includes("research"));
@@ -875,6 +847,72 @@ describe("AppSidebar session catalog pagination", () => {
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 
+  it.each([
+    { id: "claude", label: "Claude Code" },
+    { id: "codex", label: "Codex" },
+  ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.sessionCatalogs = [
+      {
+        id,
+        label,
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Gateway Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "local-thread",
+                name: "Local plan",
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+          {
+            hostId: "node:build",
+            label: "Build Node",
+            kind: "node",
+            connected: true,
+            nodeId: "build",
+            sessions: [
+              {
+                threadId: "remote-thread",
+                name: "Remote review",
+                status: "stored",
+                archived: false,
+                canContinue: false,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
+    const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
+    expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
+      "gateway:local",
+      "node:build",
+    ]);
+    const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+    const remote = section?.querySelector('[data-session-catalog-host="node:build"]');
+    expect(local?.textContent).toContain("Gateway Mac");
+    expect(local?.textContent).toContain("Local plan");
+    expect(local?.textContent).not.toContain("Remote review");
+    expect(remote?.textContent).toContain("Build Node");
+    expect(remote?.textContent).toContain("Remote review");
+    expect(remote?.textContent).not.toContain("Local plan");
+  });
+
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
@@ -1132,10 +1170,13 @@ describe("AppSidebar session catalog pagination", () => {
       );
       expect(
         codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Codex provider unavailable");
+      ).toContain("[unavailable] Codex provider unavailable");
       expect(
         claudeSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-      ).toContain("Claude host unavailable");
+      ).toContain("[unavailable] Claude host unavailable");
+      expect(
+        codexSection?.querySelector(".sidebar-session-group-toggle")?.getAttribute("title"),
+      ).toContain("Settings > Automation > Plugins");
       expect(codexSection?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
       expect(claudeSection?.querySelector('[data-session-catalog-error="claude"]')).not.toBeNull();
     } finally {
@@ -2065,6 +2106,50 @@ describe("AppSidebar session mutation feedback", () => {
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
   }
 
+  it("reconciles and stops an idle active cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+    if (!row) {
+      throw new Error("expected cloud session row");
+    }
+    row.placement = {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "0".repeat(64),
+      workspaceBaseManifestRef: "base-ref",
+      remoteWorkspaceDir: "/workspace",
+    };
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    await sidebar.updateComplete;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    await vi.waitFor(() =>
+      expect(harness.refresh).toHaveBeenCalledWith({ agentId: "main", force: true }),
+    );
+  });
+
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
     const { harness, sidebar } = await mountMutationHarness();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
@@ -2630,7 +2715,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("shows a host subtitle only for paired-node rows", async () => {
+  it("renders local and paired-node rows under persistent host headings", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -2675,12 +2760,90 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
 
-      const subtitles = [
-        ...sidebar.querySelectorAll(
-          '[data-session-section="catalog:codex"] .sidebar-recent-session__subtitle',
-        ),
-      ].map((node) => node.textContent?.trim());
-      expect(subtitles).toEqual(["Dev Box"]);
+      const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
+      const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
+      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Local Codex",
+      );
+      expect(local?.textContent).toContain("Local session");
+      expect(local?.textContent).not.toContain("Node session");
+      expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
+        "Dev Box",
+      );
+      expect(node?.textContent).toContain("Node session");
+      expect(node?.textContent).not.toContain("Local session");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes terminal-preferred clicks to a typed terminal toggle", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Resume me", canOpenTerminal: true }]),
+        ["agent:main:main"],
+      );
+      sidebar.catalogOpenTarget = "terminal";
+      sidebar.terminalAvailable = true;
+      const navigate = vi.fn();
+      sidebar.onNavigate = navigate;
+      let detail: unknown;
+      const listener = (event: Event) => {
+        detail = (event as CustomEvent).detail;
+      };
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
+      try {
+        await sidebar.updateComplete;
+        (sidebar.querySelector('[data-session-key*="thread-1"] a') as HTMLElement).click();
+      } finally {
+        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
+      }
+      expect(detail).toEqual({
+        open: true,
+        catalog: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
+      });
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to the viewer and disables the terminal menu item when ineligible", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "View me", canOpenTerminal: false }]),
+        ["agent:main:main"],
+      );
+      sidebar.catalogOpenTarget = "terminal";
+      sidebar.terminalAvailable = true;
+      const navigate = vi.fn();
+      sidebar.onNavigate = navigate;
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
+      (row.querySelector("a") as HTMLElement).click();
+      expect(navigate).toHaveBeenCalledWith("chat", {
+        search: "?session=catalog%3Acodex%3Agateway%253Alocal%3Athread-1",
+      });
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 30,
+        }),
+      );
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector("openclaw-catalog-session-menu") as HTMLElement & {
+        updateComplete: Promise<boolean>;
+      };
+      await menu.updateComplete;
+      const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
+      expect(items).toHaveLength(2);
+      expect(items[1]?.disabled).toBe(true);
+      expect(row.querySelector("[data-catalog-session-menu]")).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -2896,3 +3059,4 @@ describe("AppSidebar group mutation collapsed state", () => {
     confirmSpy.mockRestore();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

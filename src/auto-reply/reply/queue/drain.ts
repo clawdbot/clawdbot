@@ -147,7 +147,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
@@ -299,7 +299,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
-  | "onFollowupAdmissionWaitChange"
+  | "onReplyAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -533,7 +533,7 @@ function collectRuntimeMetadata(
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const admissionWaitCallbacks = new Set(
     items.flatMap((item) =>
-      item.onFollowupAdmissionWaitChange ? [item.onFollowupAdmissionWaitChange] : [],
+      item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
     ),
   );
   return {
@@ -545,7 +545,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle: items.length === 1 ? items[0]?.queuedLifecycle : undefined,
-    onFollowupAdmissionWaitChange:
+    onReplyAdmissionWaitChange:
       admissionWaitCallbacks.size > 0
         ? (waiting) => {
             for (const callback of admissionWaitCallbacks) {
@@ -887,7 +887,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     queuedLifecycle: source.queuedLifecycle,
-    onFollowupAdmissionWaitChange: source.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: source.onReplyAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -947,8 +947,7 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
-      .onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
     ...(params.onAdmitted
       ? {
           queuedLifecycle: {
@@ -1368,3 +1367,4 @@ export function scheduleFollowupDrain(
     defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

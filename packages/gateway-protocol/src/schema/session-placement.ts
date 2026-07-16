@@ -175,6 +175,26 @@ export const SessionsDispatchResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Requests safe workspace reconciliation and teardown of an active cloud worker. */
+export const SessionsReclaimParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Result returned once worker ownership has been destroyed and reclaimed. */
+export const SessionsReclaimResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: NonEmptyString,
+    placement: ReclaimedSessionPlacementSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionPlacementProtocolSchemas = {
   SessionPlacementState: SessionPlacementStateSchema,
   LocalSessionPlacement: LocalSessionPlacementSchema,
@@ -190,9 +210,13 @@ export const SessionPlacementProtocolSchemas = {
   SessionPlacement: SessionPlacementSchema,
   SessionsDispatchParams: SessionsDispatchParamsSchema,
   SessionsDispatchResult: SessionsDispatchResultSchema,
+  SessionsReclaimParams: SessionsReclaimParamsSchema,
+  SessionsReclaimResult: SessionsReclaimResultSchema,
 } as const;
 
 export type SessionPlacementState = Static<typeof SessionPlacementStateSchema>;
 export type SessionPlacement = Static<typeof SessionPlacementSchema>;
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
+export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
+export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;

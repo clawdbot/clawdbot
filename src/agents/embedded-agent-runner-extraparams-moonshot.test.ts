@@ -8,7 +8,7 @@ import {
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
-import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 beforeEach(() => {
   // Moonshot thinking support lives in its provider wrapper, wired through the

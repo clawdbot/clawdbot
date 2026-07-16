@@ -37,6 +37,7 @@ export type CreateSandboxBackendParams = {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  requireCurrentConfig?: boolean;
 };
 
 /** Factory that creates a backend handle for a sandbox session. */

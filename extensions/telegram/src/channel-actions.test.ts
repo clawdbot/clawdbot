@@ -1,10 +1,14 @@
 // Telegram tests cover channel actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramMessageActions } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());
-const originalHandleTelegramAction = telegramMessageActionRuntime.handleTelegramAction;
+
+vi.mock("./action-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
+  return { ...actual, handleTelegramAction: handleTelegramActionMock };
+});
 
 describe("telegramMessageActions", () => {
   beforeEach(() => {
@@ -13,12 +17,6 @@ describe("telegramMessageActions", () => {
       content: [],
       details: {},
     });
-    telegramMessageActionRuntime.handleTelegramAction = (...args) =>
-      handleTelegramActionMock(...args);
-  });
-
-  afterEach(() => {
-    telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
   it("executes message actions in the gateway when a gateway is available", () => {

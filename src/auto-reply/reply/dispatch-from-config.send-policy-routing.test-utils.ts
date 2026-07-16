@@ -1270,3 +1270,4 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

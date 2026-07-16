@@ -748,3 +748,4 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
 }
 
 export type PluginRuntimeResolver = ReturnType<typeof createPluginRuntimeResolver>;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

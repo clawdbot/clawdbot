@@ -25,7 +25,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOpenAICompatibleReplayPolicy,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaModelDefinition,
@@ -540,7 +540,7 @@ export default definePluginEntry({
             ) ?? OLLAMA_CLOUD_BASE_URL,
         });
       },
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
           ? buildNativeOllamaReplayPolicy()
@@ -671,7 +671,7 @@ export default definePluginEntry({
           ),
         });
       },
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
           ? buildNativeOllamaReplayPolicy()
@@ -770,3 +770,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

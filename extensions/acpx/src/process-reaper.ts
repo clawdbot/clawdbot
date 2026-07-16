@@ -32,7 +32,7 @@ const ACP_PACKAGE_MARKERS = [
 ];
 
 /** Minimal process-table row used by ACPX cleanup. */
-export type AcpxProcessInfo = {
+type AcpxProcessInfo = {
   pid: number;
   ppid: number;
   command: string;
@@ -166,7 +166,7 @@ function liveCommandMatchesLeaseIdentity(params: {
 }
 
 /** Check whether a command is owned by OpenClaw ACPX runtime packages or wrappers. */
-export function isOpenClawOwnedAcpxProcessCommand(params: {
+function isOpenClawOwnedAcpxProcessCommand(params: {
   command: string | undefined;
   wrapperRoot?: string;
 }): boolean {

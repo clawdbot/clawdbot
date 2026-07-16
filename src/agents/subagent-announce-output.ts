@@ -564,7 +564,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   return `Stats: ${parts.join(" • ")}`;
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
     subagentAnnounceOutputDeps = overrides
       ? {
@@ -574,3 +574,8 @@ export const testing = {
       : defaultSubagentAnnounceOutputDeps;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceOutputTestApi")
+  ] = testing;
+}

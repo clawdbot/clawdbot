@@ -772,7 +772,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     }
   });
 
-  it("reaches per-agent new-session actions with menu keys", async () => {
+  it("shows one row per agent and reaches agent switches with menu keys", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -808,33 +808,25 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
       const mainSwitch = menu.getByRole("menuitemradio", { name: "Main" });
       const researchSwitch = menu.getByRole("menuitemradio", { name: "Research" });
-      const researchNewSession = menu.getByRole("menuitem", {
-        name: "New session — Research",
-      });
-
-      // Web Awesome only includes direct light-DOM items in its roving focus model.
       await expect
         .poll(() =>
-          researchNewSession.evaluate(
+          researchSwitch.evaluate(
             (element) => element.parentElement?.matches("wa-dropdown.sidebar-agent-menu") ?? false,
           ),
         )
         .toBe(true);
+      await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await page.keyboard.press("ArrowDown");
-      await page.keyboard.press("ArrowDown");
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => researchNewSession.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await captureUiProof(page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      expect(new URL(page.url()).searchParams.get("agent")).toBe("research");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
+      expect(new URL(page.url()).searchParams.get("session")).toBe("agent:research:main");
     } finally {
       await context.close();
     }

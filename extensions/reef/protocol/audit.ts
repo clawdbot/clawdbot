@@ -1,7 +1,7 @@
 import { gcm } from "@noble/ciphers/aes.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { randomBytes } from "@noble/hashes/utils.js";
+import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { canonicalBytes, canonicalJson } from "./canonical.js";
 import { base64, base64url, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
 
@@ -187,10 +187,7 @@ function encryptSensitive(
           throw new Error("invalid audit nonce");
         }
         const ciphertext = gcm(key, nonce).encrypt(utf8(child));
-        const combined = new Uint8Array(nonce.length + ciphertext.length);
-        combined.set(nonce);
-        combined.set(ciphertext, nonce.length);
-        output[field] = { enc: base64(combined) };
+        output[field] = { enc: base64(concatBytes(nonce, ciphertext)) };
       } else {
         output[field] = encryptSensitive(child, key, rng);
       }
@@ -230,10 +227,7 @@ function decryptSensitive(value: unknown, key: Uint8Array, field?: string): unkn
 function hashEntry(previous: string, event: AuditEvent): string {
   const previousBytes = previous === "" ? new Uint8Array() : fromHex(previous);
   const eventBytes = canonicalBytes(event);
-  const combined = new Uint8Array(previousBytes.length + eventBytes.length);
-  combined.set(previousBytes);
-  combined.set(eventBytes, previousBytes.length);
-  return hex(sha256(combined));
+  return hex(sha256(concatBytes(previousBytes, eventBytes)));
 }
 
 function validateAuditKey(key: Uint8Array): Uint8Array {

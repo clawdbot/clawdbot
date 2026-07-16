@@ -257,6 +257,14 @@ export function startAgentRunExecution(params: {
         (params.canUseInternalRuntimeHandoff ? params.request.traceparent : undefined) ??
         subagentTraceparentHandoff ??
         params.sessionContinuationTraceparent;
+      // Plugin-owned additive grants stay internal to the authenticated in-process run.
+      // Public agent params cannot supply them, and normal tool policy still filters them.
+      const runtimePluginToolGrant =
+        params.client?.internal?.agentRunTracking === "plugin_subagent" &&
+        params.client.internal.pluginRuntimeOwnerId ===
+          params.client.internal.runtimePluginToolGrant?.pluginId
+          ? params.client.internal.runtimePluginToolGrant
+          : undefined;
 
       dispatchAgentRunFromGateway({
         ingressOpts: {
@@ -302,6 +310,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
+          runtimePluginToolGrant,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
           requireExplicitMessageTarget:
             params.restoredCronContinuation?.cliSessionBindingFacts?.requireExplicitMessageTarget,
@@ -321,6 +330,8 @@ export function startAgentRunExecution(params: {
             : params.request.sourceReplyDeliveryMode,
           disableMessageTool: params.request.disableMessageTool,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
+          internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
+          internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:
             params.requestedPromptPersistenceSuppression ||
             shouldSuppressAgentPromptPersistence({

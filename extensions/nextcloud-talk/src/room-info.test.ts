@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
+import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
@@ -14,7 +14,6 @@ vi.mock("../runtime-api.js", () => {
 
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
-  testing.resetRoomCache();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }

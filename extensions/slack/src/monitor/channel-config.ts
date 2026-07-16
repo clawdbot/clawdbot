@@ -2,7 +2,6 @@
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
-  resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import type {
@@ -11,6 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildSlackChannelPolicyScope } from "../group-policy.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -100,13 +100,10 @@ export function resolveSlackChannelConfig(params: {
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
   );
-  const match = resolveChannelEntryMatchWithFallback({
-    entries,
-    keys: candidates,
-    wildcardKey: "*",
-  });
+  const match = buildSlackChannelPolicyScope({ channels: entries, candidates });
   const { entry: matched, wildcardEntry: fallback } = match;
 
+  // The monitor honors root channels.slack.requireMention; the adapter deliberately ignores it.
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
     return { allowed: true, requireMention: requireMentionDefault };

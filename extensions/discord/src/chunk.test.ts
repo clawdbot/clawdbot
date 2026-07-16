@@ -2,7 +2,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
+import { chunkDiscordTextWithMode } from "./chunk.js";
+
+type ChunkOptions = Omit<Parameters<typeof chunkDiscordTextWithMode>[1], "chunkMode">;
+
+function chunkDiscordText(text: string, options: ChunkOptions = {}) {
+  return chunkDiscordTextWithMode(text, { ...options, chunkMode: "length" });
+}
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {

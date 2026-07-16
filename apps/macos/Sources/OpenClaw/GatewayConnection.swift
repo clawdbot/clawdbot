@@ -170,6 +170,7 @@ actor GatewayConnection {
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
         case execApprovalResolve = "exec.approval.resolve"
+        case approvalResolve = "approval.resolve"
         case cronList = "cron.list"
         case cronRuns = "cron.runs"
         case cronRun = "cron.run"
@@ -1231,6 +1232,11 @@ extension GatewayConnection {
         let raw = snapshot.server["version"]?.value as? String
         let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    func cachedGatewayVersion(ifCurrentServerLease lease: ServerLease) async -> String? {
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return self.cachedGatewayVersion()
     }
 
     func snapshotPaths() -> (configPath: String?, stateDir: String?) {

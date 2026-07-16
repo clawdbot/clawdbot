@@ -216,6 +216,13 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     });
   });
 
+  it("does not treat a whitespace-only environment API key as configured", () => {
+    vi.stubEnv("OPENAI_API_KEY", "   ");
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+
+    expect(provider.isConfigured({ cfg: {} as never, providerConfig: {} })).toBe(false);
+  });
+
   it("mints an API-key client secret for realtime transcription sockets", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const release = vi.fn();

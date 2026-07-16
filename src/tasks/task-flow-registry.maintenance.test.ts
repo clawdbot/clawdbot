@@ -5,12 +5,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { createRunningTaskRun as createRunningTaskRunOrNull } from "./task-executor.js";
 import {
-  createFlowRecord as createFlowRecordOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
   getInspectableTaskFlowAuditSummary,
@@ -18,12 +16,14 @@ import {
   runTaskFlowRegistryMaintenance,
 } from "./task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { finalizeTaskRunByRunId } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
-  finalizeTaskRunByRunId,
+  createFlowRecord as createFlowRecordOrNull,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

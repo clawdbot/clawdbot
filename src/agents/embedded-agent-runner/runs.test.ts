@@ -6,15 +6,13 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as replyRunTesting,
   createReplyOperation,
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import {
-  markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
@@ -24,12 +22,10 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
-  testing,
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedAgentRunAbortabilityForRunId,
-  clearEmbeddedRunAbandonment,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunAbortableForRunId,
   isEmbeddedAgentRunAbortableForCompaction,
@@ -37,7 +33,6 @@ import {
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
   markActiveEmbeddedRunAbandoned,
-  markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -49,6 +44,7 @@ import {
   waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
+import { testing } from "./runs.test-support.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
@@ -924,8 +920,7 @@ describe("embedded-agent runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.testing.resetActiveEmbeddedRuns();
-    runsB.testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -934,8 +929,7 @@ describe("embedded-agent runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedAgentRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.testing.resetActiveEmbeddedRuns();
-      runsB.testing.resetActiveEmbeddedRuns();
+      testing.resetActiveEmbeddedRuns();
     }
   });
 
@@ -962,29 +956,37 @@ describe("embedded-agent runner run registry", () => {
     const sessionFile = "/tmp/openclaw-abandoned-session.jsonl";
     const handle = createRunHandle();
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-timeout",
-      sessionKey: "agent:main:main",
-      sessionFile,
-      reason: "timeout",
-    });
+    setActiveEmbeddedRun("session-timeout", handle, "agent:main:main", sessionFile);
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-timeout",
+        handle,
+        sessionKey: "agent:main:main",
+        sessionFile,
+        reason: "timeout",
+      }),
+    ).toBe(true);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
 
-    setActiveEmbeddedRun("session-next", handle, "agent:main:main", sessionFile);
+    const nextHandle = createRunHandle();
+    setActiveEmbeddedRun("session-next", nextHandle, "agent:main:main", sessionFile);
 
     expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
     expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
 
-    markEmbeddedRunAbandoned({
-      sessionId: "session-next",
-      sessionKey: "agent:main:main",
-      reason: "timeout",
-    });
-    clearEmbeddedRunAbandonment({ sessionId: "session-next" });
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-next",
+        handle: nextHandle,
+        sessionKey: "agent:main:main",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
     expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
   });

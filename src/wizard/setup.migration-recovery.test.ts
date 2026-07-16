@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createMigrationItem, summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
@@ -8,9 +8,9 @@ import {
   createSetupMigrationAttempt,
   prepareSetupMigrationRetryPlan,
   resolveSetupMigrationRecovery,
+  runSetupMigrationAttempt,
   setupMigrationAttemptMatchesSource,
   setupMigrationProviderSupportsRecovery,
-  testing,
 } from "./setup.migration-recovery.js";
 import {
   buildSetupMigrationPlanSourceSnapshot,
@@ -22,7 +22,6 @@ const BEFORE_HASH = "a".repeat(64);
 const AFTER_HASH = "b".repeat(64);
 const CHANGED_HASH = "c".repeat(64);
 const SOURCE_HASH = "d".repeat(64);
-const { writeSetupMigrationAttempt } = testing;
 
 async function makeTempRoot(): Promise<string> {
   return tempRoots.make("openclaw-setup-recovery-");
@@ -81,6 +80,55 @@ function buildFailedResult(plan: MigrationPlan): MigrationApplyResult {
   return { ...plan, items, summary: summarizeMigrationItems(items) };
 }
 
+async function persistFailedSetupMigrationAttempt(params: {
+  reportDir: string;
+  attempt: ReturnType<typeof createSetupMigrationAttempt>;
+  targetSnapshotHash: string;
+  result?: MigrationApplyResult;
+}): Promise<void> {
+  const failure = new Error("expected setup migration failure");
+  await expect(
+    runSetupMigrationAttempt({
+      reportDir: params.reportDir,
+      attempt: params.attempt,
+      apply: async () => {
+        if (!params.result) {
+          throw failure;
+        }
+        return params.result;
+      },
+      assertSucceeded: () => {
+        throw failure;
+      },
+      readTargetSnapshot: async () => params.targetSnapshotHash,
+    }),
+  ).rejects.toThrow(failure.message);
+}
+
+async function persistSucceededSetupMigrationAttempt(params: {
+  reportDir: string;
+  attempt: ReturnType<typeof createSetupMigrationAttempt>;
+  result: MigrationApplyResult;
+}): Promise<void> {
+  await runSetupMigrationAttempt({
+    reportDir: params.reportDir,
+    attempt: params.attempt,
+    apply: async () => params.result,
+    assertSucceeded: () => {},
+    readTargetSnapshot: async () => {
+      throw new Error("successful migration should not read the failure snapshot");
+    },
+  });
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("setup migration recovery", () => {
   it("limits recovery to the audited Hermes provider contract", () => {
     expect(setupMigrationProviderSupportsRecovery("hermes")).toBe(true);
@@ -105,10 +153,9 @@ describe("setup migration recovery", () => {
       new Date("2026-07-13T10:00:00Z"),
     );
     const failedReportDir = path.join(stateDir, "migration", "hermes", "2026-07-13T10-00-00Z");
-    await writeSetupMigrationAttempt({
+    await persistFailedSetupMigrationAttempt({
       reportDir: failedReportDir,
       attempt: failed,
-      status: "failed",
       result: buildFailedResult(plan),
       targetSnapshotHash: AFTER_HASH,
     });
@@ -172,10 +219,9 @@ describe("setup migration recovery", () => {
       { ...prepared.items[2]!, status: "skipped" as const, reason: "not attempted" },
       { ...prepared.items[3]!, status: "migrated" as const },
     ];
-    await writeSetupMigrationAttempt({
+    await persistFailedSetupMigrationAttempt({
       reportDir: path.join(stateDir, "migration", "hermes", "2026-07-13T10-30-00Z"),
       attempt: retry,
-      status: "failed",
       result: {
         ...prepared,
         items: retryResultItems,
@@ -228,10 +274,10 @@ describe("setup migration recovery", () => {
       targetSnapshotHash: AFTER_HASH,
       previousAttempt: recovery.attempt,
     });
-    await writeSetupMigrationAttempt({
+    await persistSucceededSetupMigrationAttempt({
       reportDir: path.join(stateDir, "migration", "hermes", "2026-07-13T11-00-00Z"),
       attempt: succeeded,
-      status: "succeeded",
+      result: buildFailedResult(prepared),
     });
     await expect(
       resolveSetupMigrationRecovery({
@@ -257,17 +303,29 @@ describe("setup migration recovery", () => {
       source: path.join(stateDir, "hermes"),
       workspaceDir: path.join(stateDir, "workspace"),
     };
+    const plan = buildPlan(stateDir);
     const attempt = createSetupMigrationAttempt({
       ...identity,
-      plan: buildPlan(stateDir),
+      plan,
       sourceSnapshotHash: SOURCE_HASH,
       preparedTargetSnapshotHash: BEFORE_HASH,
       targetSnapshotHash: AFTER_HASH,
     });
-    await writeSetupMigrationAttempt({
-      reportDir: path.join(stateDir, "migration", "hermes", "2026-07-13T10-00-00Z"),
+    const applyingReportDir = path.join(stateDir, "migration", "hermes", "2026-07-13T10-00-00Z");
+    const apply = createDeferred<MigrationApplyResult>();
+    const applyingRun = runSetupMigrationAttempt({
+      reportDir: applyingReportDir,
       attempt,
-      status: "applying",
+      apply: async () => await apply.promise,
+      assertSucceeded: () => {},
+      readTargetSnapshot: async () => {
+        throw new Error("pending migration should not read the failure snapshot");
+      },
+    });
+    await vi.waitFor(async () => {
+      await expect(
+        fs.readFile(path.join(applyingReportDir, "onboarding-attempt.json"), "utf8"),
+      ).resolves.toContain('"status": "applying"');
     });
 
     await expect(
@@ -295,11 +353,13 @@ describe("setup migration recovery", () => {
       }),
     ).resolves.toEqual({ kind: "none" });
 
+    apply.resolve(buildFailedResult(plan));
+    await applyingRun;
+
     const failedReportDir = path.join(stateDir, "migration", "hermes", "2026-07-13T11-00-00Z");
-    await writeSetupMigrationAttempt({
+    await persistFailedSetupMigrationAttempt({
       reportDir: failedReportDir,
       attempt,
-      status: "failed",
       targetSnapshotHash: BEFORE_HASH,
     });
     await expect(
@@ -311,10 +371,9 @@ describe("setup migration recovery", () => {
       }),
     ).resolves.toMatchObject({ kind: "recoverable" });
 
-    await writeSetupMigrationAttempt({
+    await persistFailedSetupMigrationAttempt({
       reportDir: failedReportDir,
       attempt,
-      status: "failed",
       targetSnapshotHash: CHANGED_HASH,
     });
     await expect(

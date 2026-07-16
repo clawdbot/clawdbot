@@ -6,10 +6,9 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import { deleteFleetCell, getFleetCell, listFleetCells } from "./registry.js";
-import {
-  createFleetService as createFleetServiceRuntime,
-  type FleetServiceOptions,
-} from "./service.runtime.js";
+import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+
+type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
 
 let root: string;
 const TEST_ATTEMPT_ID = "22222222222222222222222222222222";

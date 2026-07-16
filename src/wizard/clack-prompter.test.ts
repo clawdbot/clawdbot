@@ -111,8 +111,8 @@ describe("createClackPrompter", () => {
     expect(write).toHaveBeenCalledWith('{"ok":true}\n');
   });
 
-  it("renders vertical confirms as stacked yes/no select choices", async () => {
-    clackMocks.select.mockResolvedValue(true);
+  it("renders vertical confirms with Clack's native layout", async () => {
+    clackMocks.confirm.mockResolvedValue(true);
     const prompter = createClackPrompter();
 
     await expect(
@@ -122,14 +122,11 @@ describe("createClackPrompter", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(clackMocks.confirm).not.toHaveBeenCalled();
-    expect(clackMocks.select).toHaveBeenCalledWith(
+    expect(clackMocks.select).not.toHaveBeenCalled();
+    expect(clackMocks.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        options: [
-          { value: true, label: "Yes" },
-          { value: false, label: "No" },
-        ],
-        initialValue: true,
+        initialValue: undefined,
+        vertical: true,
       }),
     );
   });
@@ -209,10 +206,13 @@ describe("createClackPrompter", () => {
     );
   });
 
-  it("rejects navigation immediately when a prompt does not resolve after abort", async () => {
-    navigationPromptMocks.textWithNavigationFooter.mockImplementation(
-      async () => await new Promise<string>(() => {}),
-    );
+  it("rejects navigation after Clack resolves an aborted prompt", async () => {
+    navigationPromptMocks.textWithNavigationFooter.mockImplementation(async ({ signal }) => {
+      await new Promise((resolve) => {
+        signal.addEventListener("abort", resolve, { once: true });
+      });
+      return Symbol("clack:cancel");
+    });
     const prompter = createClackPrompter();
 
     const result = prompter.text({

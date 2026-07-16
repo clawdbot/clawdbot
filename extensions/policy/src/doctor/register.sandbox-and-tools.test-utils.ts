@@ -2055,3 +2055,4 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toHaveLength(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

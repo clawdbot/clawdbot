@@ -12,11 +12,11 @@ import {
 } from "../../test/helpers/agents/transport-params-runtime-contract.js";
 import { createOpenAIThinkingLevelWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import {
-  testing as extraParamsTesting,
   applyExtraParamsToAgent,
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 beforeEach(() => {

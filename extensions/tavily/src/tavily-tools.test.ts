@@ -5,12 +5,9 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TAVILY_BASE_URL,
-  DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
-  DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
-  resolveTavilySearchConfig,
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
 
@@ -408,10 +405,6 @@ describe("tavily tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveTavilySearchConfig(cfg)).toEqual({
-      apiKey: "plugin-key",
-      baseUrl: "https://plugin.tavily.test",
-    });
     expect(resolveTavilyApiKey(cfg)).toBe("plugin-key");
     expect(resolveTavilyBaseUrl(cfg)).toBe("https://plugin.tavily.test");
   });
@@ -423,8 +416,8 @@ describe("tavily tools", () => {
     expect(resolveTavilyApiKey()).toBe("env-key");
     expect(resolveTavilyBaseUrl()).toBe("https://env.tavily.test");
     expect(resolveTavilyBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_TAVILY_BASE_URL);
-    expect(resolveTavilySearchTimeoutSeconds()).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
-    expect(resolveTavilyExtractTimeoutSeconds()).toBe(DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS);
+    expect(resolveTavilySearchTimeoutSeconds()).toBe(30);
+    expect(resolveTavilyExtractTimeoutSeconds()).toBe(60);
   });
 
   it("accepts positive numeric timeout overrides and floors them", () => {
@@ -432,10 +425,8 @@ describe("tavily tools", () => {
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
     expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
     expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
-    expect(resolveTavilySearchTimeoutSeconds(0)).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
-    expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(
-      DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
-    );
+    expect(resolveTavilySearchTimeoutSeconds(0)).toBe(30);
+    expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(60);
   });
 
   it("appends endpoints to reverse-proxy base urls", () => {

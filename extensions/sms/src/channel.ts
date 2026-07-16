@@ -156,7 +156,7 @@ function createSmsReceipt(params: {
   };
 }
 
-export function resolveSmsTextChunkLimit(params: {
+function resolveSmsTextChunkLimit(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   fallbackLimit?: number;

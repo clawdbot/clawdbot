@@ -1,25 +1,37 @@
 // Matrix tests cover approval reactions plugin behavior.
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixApprovalReactionHint,
-  clearMatrixApprovalReactionTargetsForTest,
   listMatrixApprovalReactionBindings,
   registerMatrixApprovalReactionTarget as registerMatrixApprovalReactionTargetRaw,
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
   unregisterMatrixApprovalReactionTarget as unregisterMatrixApprovalReactionTargetRaw,
 } from "./approval-reactions.js";
-import { clearMatrixRuntime, setMatrixRuntime } from "./runtime.js";
+import type { PluginRuntime } from "./runtime-api.js";
+import { setMatrixRuntime } from "./runtime.js";
+
+const { clearRuntime: clearMatrixRuntime } = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "matrix",
+  errorMessage: "Matrix runtime not initialized",
+});
 
 type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTargetRaw>[0];
 type ResolveTargetParams = Parameters<
   typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
 >[0];
 type UnregisterTargetParams = Parameters<typeof unregisterMatrixApprovalReactionTargetRaw>[0];
+const touchedTargetRefs = new Map<string, UnregisterTargetParams>();
+
+function rememberTargetRef(params: UnregisterTargetParams): void {
+  touchedTargetRefs.set(JSON.stringify(params), params);
+}
 
 function registerMatrixApprovalReactionTarget(
   params: Omit<RegisterTargetParams, "accountId"> & { accountId?: string },
 ): void {
   const { accountId = "default", ...target } = params;
+  rememberTargetRef({ accountId, roomId: target.roomId, eventId: target.eventId });
   registerMatrixApprovalReactionTargetRaw({ ...target, accountId });
 }
 
@@ -27,6 +39,7 @@ function resolveMatrixApprovalReactionTargetWithPersistence(
   params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
 ) {
   const { accountId = "default", ...target } = params;
+  rememberTargetRef({ accountId, roomId: target.roomId, eventId: target.eventId });
   return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
     ...target,
     accountId,
@@ -58,7 +71,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearMatrixApprovalReactionTargetsForTest();
+  for (const target of touchedTargetRefs.values()) {
+    unregisterMatrixApprovalReactionTargetRaw(target);
+  }
+  touchedTargetRefs.clear();
   clearMatrixRuntime();
   vi.restoreAllMocks();
 });
@@ -213,29 +229,30 @@ describe("matrix approval reactions", () => {
   });
 
   it("persists approval reaction targets when runtime state is available", async () => {
+    const warn = vi.fn();
     const register = vi.fn().mockResolvedValue(undefined);
     const lookup = vi.fn().mockResolvedValue({
       version: 1,
       target: {
         accountId: "default",
-        approvalId: "req-persisted",
+        approvalId: "req-123",
         approvalKind: "exec",
         roomId: "!ops:example.org",
         eventId: "$approval-msg-2",
-        allowedDecisions: ["deny"],
+        allowedDecisions: ["allow-once", "deny"],
       },
     });
     const openKeyedStore = vi.fn(() => ({
       register,
       lookup,
       consume: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue(undefined),
       entries: vi.fn(),
       clear: vi.fn(),
     }));
     setMatrixRuntime({
       state: { openKeyedStore },
-      logging: { getChildLogger: () => createRuntimeLogger() },
+      logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
     } as never);
 
     registerMatrixApprovalReactionTarget({
@@ -244,7 +261,7 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       allowedDecisions: ["allow-once", "deny"],
-      ttlMs: 1000,
+      ttlMs: 1,
     });
 
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
@@ -261,32 +278,23 @@ describe("matrix approval reactions", () => {
           allowedDecisions: ["allow-once", "deny"],
         },
       },
-      { ttlMs: 1000 },
+      { ttlMs: 1 },
     );
 
-    clearMatrixApprovalReactionTargetsForTest();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
     await expect(
       resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg-2",
         reactionKey: "❌",
       }),
-    ).resolves.toEqual({ approvalId: "req-persisted", approvalKind: "exec", decision: "deny" });
-    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    ).resolves.toEqual({ approvalId: "req-123", approvalKind: "exec", decision: "deny" });
+    expect(openKeyedStore).toHaveBeenCalledOnce();
     expect(lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
-  });
 
-  it("falls back to in-memory approval reaction targets when persistent state cannot open", async () => {
-    const warn = vi.fn();
-    setMatrixRuntime({
-      state: {
-        openKeyedStore: vi.fn(() => {
-          throw new Error("sqlite unavailable");
-        }),
-      },
-      logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
-    } as never);
-
+    register.mockRejectedValueOnce(new Error("sqlite unavailable"));
     registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg-3",
@@ -294,6 +302,7 @@ describe("matrix approval reactions", () => {
       approvalKind: "exec",
       allowedDecisions: ["deny"],
     });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
 
     expect(
       await resolveMatrixApprovalReactionTargetWithPersistence({
@@ -302,6 +311,5 @@ describe("matrix approval reactions", () => {
         reactionKey: "❌",
       }),
     ).toEqual({ approvalId: "req-fallback", approvalKind: "exec", decision: "deny" });
-    expect(warn).toHaveBeenCalled();
   });
 });

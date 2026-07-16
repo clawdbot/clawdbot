@@ -49,6 +49,7 @@ const installPluginFromClawHubMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
+const validatePackageExtensionEntriesForInstallMock = vi.fn();
 const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
@@ -58,6 +59,7 @@ vi.mock("./install.js", () => ({
     return `${extensionsDir.replace(/[\\/]+$/, "")}${separator}${pluginId}`;
   },
   PLUGIN_INSTALL_ERROR_CODE: {
+    NPM_METADATA_FAILURE: "npm_metadata_failure",
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
   },
 }));
@@ -91,6 +93,19 @@ vi.mock("./bundled-sources.js", () => ({
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
+
+vi.mock("./package-entry-resolution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./package-entry-resolution.js")>();
+  return {
+    ...actual,
+    validatePackageExtensionEntriesForInstall: async (
+      ...args: Parameters<typeof actual.validatePackageExtensionEntriesForInstall>
+    ) => {
+      validatePackageExtensionEntriesForInstallMock(...args);
+      return await actual.validatePackageExtensionEntriesForInstall(...args);
+    },
+  };
+});
 
 vi.resetModules();
 
@@ -325,6 +340,7 @@ function createInstalledPackageDir(params: {
   name?: string;
   version: string;
   peerDependencies?: Record<string, string>;
+  runnable?: boolean;
 }): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
   tempDirs.push(dir);
@@ -335,11 +351,15 @@ function createInstalledPackageDir(params: {
         name: params.name ?? "test-plugin",
         version: params.version,
         ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+        ...(params.runnable ? { openclaw: { extensions: ["./index.js"] } } : {}),
       },
       null,
       2,
     ),
   );
+  if (params.runnable) {
+    fs.writeFileSync(path.join(dir, "index.js"), "export default function register() {}\n");
+  }
   return dir;
 }
 
@@ -517,6 +537,7 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
+    validatePackageExtensionEntriesForInstallMock.mockReset();
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -561,6 +582,7 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReset();
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
+    validatePackageExtensionEntriesForInstallMock.mockReset();
   });
 
   afterEach(() => {
@@ -2037,11 +2059,40 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("uses failure cleanup when metadata probing fails and disableOnFailure is enabled", async () => {
+  it("defers installed payload validation until metadata probing fails", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    mockNpmViewMetadata({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw@^0.9.0",
+        installPath,
+        resolvedName: "@martian-engineering/lossless-claw",
+        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+        resolvedVersion: "0.9.0",
+      }),
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+    });
+
+    expect(result.outcomes[0]?.status).toBe("unchanged");
+    expect(validatePackageExtensionEntriesForInstallMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves healthy plugin state when metadata probing fails before replacement", async () => {
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
+      runnable: true,
     });
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
@@ -2081,24 +2132,176 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn },
     });
 
+    expect(warn).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: true,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
+    expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "lossless-claw",
+      contextEngine: "lossless-claw",
+    });
+    expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "error",
+        message: "Failed to check lossless-claw: npm view failed: registry timeout",
+      },
+    ]);
+  });
+
+  it("disables a corrupt installed payload when metadata probing also fails", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+      runnable: true,
+    });
+    fs.rmSync(path.join(installPath, "index.js"));
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["lossless-claw", "keep"],
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            "lossless-claw": {
+              source: "npm",
+              spec: "@martian-engineering/lossless-claw@^0.9.0",
+              installPath,
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
     const message =
       'Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it. Failed to check lossless-claw: npm view failed: registry timeout';
     expect(warn).toHaveBeenCalledWith(message);
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
       enabled: false,
       config: { preserved: true },
     });
     expect(result.config.plugins?.allow).toEqual(["keep"]);
-    expect(result.config.plugins?.deny).toEqual(["blocked"]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-      contextEngine: "legacy",
-    });
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
+        status: "skipped",
+        message,
+      },
+    ]);
+  });
+
+  it("continues the plugin sweep when deferred payload validation throws", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.0.0",
+      runnable: true,
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+    validatePackageExtensionEntriesForInstallMock.mockImplementationOnce(() => {
+      throw new Error("permission denied");
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@acme/demo@^1.0.0",
+              installPath,
+            },
+            local: {
+              source: "path",
+              installPath: "/tmp/local",
+            },
+          },
+        },
+      },
+      pluginIds: ["demo", "local"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+    expect(result.outcomes.map(({ pluginId }) => pluginId)).toEqual(["demo", "local"]);
+  });
+
+  it("disables a missing plugin payload when metadata probing also fails", async () => {
+    const warn = vi.fn();
+    const installPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-missing-"));
+    tempDirs.push(installPath);
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "npm view failed: registry timeout",
+      code: "npm_metadata_failure",
+    });
+    const config = {
+      plugins: {
+        allow: ["demo", "other"],
+        slots: { memory: "demo" },
+        entries: {
+          demo: {
+            enabled: true,
+            config: { preserved: true },
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: npm view failed: registry timeout';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.allow).toEqual(["other"]);
+    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
         status: "skipped",
         message,
       },
@@ -5635,3 +5838,4 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

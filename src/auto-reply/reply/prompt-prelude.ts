@@ -19,7 +19,7 @@ const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
 ];
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */
-export function buildReplyPromptBodies(params: {
+function buildReplyPromptBodies(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   effectiveBaseBody: string;

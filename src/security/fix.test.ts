@@ -6,11 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  applySecurityFixConfigMutations,
-  collectSecurityPermissionTargets,
-  fixSecurityFootguns,
-} from "./fix.js";
+import { fixSecurityFootguns } from "./fix.js";
 
 const isWindows = process.platform === "win32";
 
@@ -37,6 +33,24 @@ describe("security fix", () => {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   });
+
+  const runConfigFixScenario = async (params: {
+    prefix: string;
+    cfg: OpenClawConfig;
+    channelPlugins?: ChannelPlugin[];
+  }) => {
+    const stateDir = await createStateDir(params.prefix);
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(configPath, `${JSON.stringify(params.cfg, null, 2)}\n`, "utf-8");
+    const res = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins: params.channelPlugins,
+    });
+    const cfg = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+    return { res, cfg };
+  };
 
   const createWhatsAppConfigFixTestPlugin = (storeAllowFrom: string[]): ChannelPlugin => ({
     id: "whatsapp",
@@ -138,17 +152,17 @@ describe("security fix", () => {
     whatsapp: Record<string, unknown>;
     allowFromStore: string[];
   }) => {
-    const fixed = await applySecurityFixConfigMutations({
+    const fixed = await runConfigFixScenario({
+      prefix: "whatsapp-config",
       cfg: {
         channels: {
           whatsapp: params.whatsapp,
         },
       } satisfies OpenClawConfig,
-      env: process.env,
       channelPlugins: [createWhatsAppConfigFixTestPlugin(params.allowFromStore)],
     });
     return {
-      res: { ok: true, changes: fixed.changes },
+      res: fixed.res,
       channels: fixed.cfg.channels as Record<string, Record<string, unknown>>,
     };
   };
@@ -174,12 +188,12 @@ describe("security fix", () => {
       },
       logging: { redactSensitive: "off" },
     } satisfies OpenClawConfig;
-    const fixed = await applySecurityFixConfigMutations({
+    const fixed = await runConfigFixScenario({
+      prefix: "group-policy",
       cfg,
-      env: process.env,
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
-    expect(fixed.changes).toEqual([
+    expect(fixed.res.changes).toEqual([
       'logging.redactSensitive=off -> "tools"',
       "channels.telegram.groupPolicy=open -> allowlist",
       "channels.whatsapp.groupPolicy=open -> allowlist",
@@ -305,32 +319,30 @@ describe("security fix", () => {
     await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
     await fs.chmod(transcriptPath, 0o644);
 
-    const targets = await collectSecurityPermissionTargets({
+    const result = await fixSecurityFootguns({
       env: createFixEnv(stateDir, configPath),
       stateDir,
       configPath,
-      cfg: {
-        channels: { whatsapp: { groupPolicy: "open" } },
-      } as OpenClawConfig,
-      includePaths: [includePath],
+      channelPlugins: [],
     });
+    const canonicalIncludePath = await fs.realpath(includePath);
 
-    expect(targets).toEqual([
-      { path: stateDir, mode: 0o700, require: "dir" },
-      { path: configPath, mode: 0o600, require: "file" },
-      { path: includePath, mode: 0o600, require: "file" },
-      { path: credsDir, mode: 0o700, require: "dir" },
-      { path: allowFromPath, mode: 0o600, require: "file" },
-      { path: path.join(stateDir, "agents", "main"), mode: 0o700, require: "dir" },
-      { path: agentDir, mode: 0o700, require: "dir" },
-      { path: authDatabasePath, mode: 0o600, require: "file" },
-      { path: `${authDatabasePath}-wal`, mode: 0o600, require: "file" },
-      { path: `${authDatabasePath}-shm`, mode: 0o600, require: "file" },
-      { path: `${authDatabasePath}-journal`, mode: 0o600, require: "file" },
-      { path: authProfilesPath, mode: 0o600, require: "file" },
-      { path: sessionsDir, mode: 0o700, require: "dir" },
-      { path: sessionsStorePath, mode: 0o600, require: "file" },
-      { path: transcriptPath, mode: 0o600, require: "file" },
+    expect(result.actions.map((action) => action.path)).toEqual([
+      stateDir,
+      configPath,
+      canonicalIncludePath,
+      credsDir,
+      allowFromPath,
+      path.join(stateDir, "agents", "main"),
+      agentDir,
+      authDatabasePath,
+      `${authDatabasePath}-wal`,
+      `${authDatabasePath}-shm`,
+      `${authDatabasePath}-journal`,
+      authProfilesPath,
+      sessionsDir,
+      sessionsStorePath,
+      transcriptPath,
     ]);
   });
 

@@ -2,7 +2,11 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import {
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+  migrateMemoryIndexSourcesIdentity,
+} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -15,7 +19,10 @@ import {
   type CanonicalSqliteUniqueIndex,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  assertSqliteSchemaContains,
+  type SqliteSchemaCompatibility,
+} from "../infra/sqlite-schema-contract.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -101,6 +108,14 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
     `,
   },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
+const OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  optionalCanonicalTriggerGroups: [
+    {
+      tableName: MEMORY_INDEX_SOURCES_TABLE,
+      triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+    },
+  ],
+} satisfies SqliteSchemaCompatibility;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
@@ -607,7 +622,50 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertSqliteSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertSqliteSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  );
+}
+
+/** Upgrade a supported older owned schema before strict offline maintenance. */
+export function migrateOpenClawAgentDatabaseForMaintenance(options: {
+  agentId: string;
+  pathname: string;
+}): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(options.pathname);
+  try {
+    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    const metadata = readExistingSchemaMeta(database);
+    if (!metadata) {
+      return;
+    }
+    assertExistingSchemaOwner(metadata, agentId, options.pathname);
+    assertSupportedAgentSchemaVersion(database, options.pathname);
+    const userVersion = readSqliteUserVersion(database);
+    const metadataVersion = metadata.schemaVersion;
+    const hasSupportedOlderVersion =
+      userVersion >= 1 &&
+      userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
+      metadataVersion !== null &&
+      metadataVersion === userVersion &&
+      metadataVersion >= 1 &&
+      metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
+    if (!hasSupportedOlderVersion) {
+      return;
+    }
+    ensureOpenClawAgentDatabaseSchema(database, {
+      agentId,
+      path: options.pathname,
+    });
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(database);
+    database.close();
+  }
 }
 
 function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string): void {
@@ -1095,3 +1153,4 @@ export function closeOpenClawAgentDatabases(): void {
 
 /** Test alias for closing cached agent database handles from teardown code. */
 export const closeOpenClawAgentDatabasesForTest = closeOpenClawAgentDatabases;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

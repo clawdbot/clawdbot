@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { CORE_TOOL_FACTORY_DESCRIPTORS } from "./core-tool-factory-descriptors.js";
+import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -66,11 +66,6 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("keeps concrete OpenClaw tool names in the factory descriptor catalog", () => {
-    const describedNames = new Set<string>(
-      CORE_TOOL_FACTORY_DESCRIPTORS.filter((descriptor) => descriptor.family === "openclaw").map(
-        (descriptor) => descriptor.name,
-      ),
-    );
     const emittedNames = createFastToolNames({
       agentSessionKey: "agent:main:main",
       config: {
@@ -82,7 +77,9 @@ describe("openclaw-tools update_plan gating", () => {
       taskSuggestionDeliveryMode: "gateway",
     });
 
-    expect(emittedNames.filter((name) => !describedNames.has(name))).toEqual([]);
+    expect(
+      emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
+    ).toEqual([]);
   });
 
   it("keeps update_plan disabled by default", () => {
@@ -133,6 +130,32 @@ describe("openclaw-tools update_plan gating", () => {
     });
 
     expect(toolNames(tools)).toContain("message");
+  });
+
+  it("exposes delegation only to regular unsandboxed gateway agents", () => {
+    const regular = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+    });
+    const sandboxed = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+    });
+    const system = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:openclaw:main",
+    });
+    setEmbeddedMode(true);
+    const embedded = createFastToolNames({
+      config: {} as OpenClawConfig,
+      agentSessionKey: "agent:main:main",
+    });
+
+    expect(regular).toContain("openclaw");
+    expect(sandboxed).not.toContain("openclaw");
+    expect(system).not.toContain("openclaw");
+    expect(embedded).not.toContain("openclaw");
   });
 
   it("requires explicit transcripts enablement before registering the transcripts tool", () => {

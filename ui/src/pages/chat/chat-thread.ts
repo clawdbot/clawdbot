@@ -12,10 +12,6 @@ import type {
   ToolCard,
 } from "../../lib/chat/chat-types.ts";
 import {
-  CHAT_HISTORY_RENDER_CHAR_BUDGET,
-  CHAT_HISTORY_RENDER_LIMIT,
-} from "../../lib/chat/chat-types.ts";
-import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
@@ -50,6 +46,7 @@ import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type BuildChatItemsProps = {
+  paneId: string;
   sessionKey: string;
   runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
@@ -67,13 +64,13 @@ type BuildChatItemsProps = {
   loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
-  historyRenderLimit?: number;
-  allowExpandedHistoryRenderLimit?: boolean;
 };
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
   items: ReturnType<typeof buildChatItems>;
+  liveStreamIndex: number;
+  liveStreamPrefix: string | null;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
@@ -83,13 +80,17 @@ type StreamRunRenderItem = {
   parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
 };
 
-const chatItemsBySession = new Map<string, CachedChatItems>();
+const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
-export function resetChatThreadState(): void {
-  chatItemsBySession.clear();
+export function resetChatThreadState(paneId?: string): void {
+  if (paneId) {
+    chatItemsByPane.delete(paneId);
+    return;
+  }
+  chatItemsByPane.clear();
   resetWorkingStartedAt();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
@@ -387,9 +388,12 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         : null;
     const timestamp = normalized.timestamp || Date.now();
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
+    const startsProjectedTurn =
+      asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
 
     if (
       !currentGroup ||
+      startsProjectedTurn ||
       currentGroup.role !== role ||
       (shouldSplitBySender && currentGroup.senderLabel !== senderLabel)
     ) {
@@ -763,6 +767,10 @@ function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   });
 }
 
+function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
+  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
+}
+
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -773,10 +781,12 @@ function annotateToolTurnOutcome(
       continue;
     }
     const role = item.role.toLowerCase();
+    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
+    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (assistantGroupIsForwardedBoundary(item)) {
+      if (forwardedBoundary) {
         // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
         // Those groups start a new autonomous turn; they are not replies to an earlier tool.
         sawAssistantReply = false;
@@ -785,6 +795,11 @@ function annotateToolTurnOutcome(
       }
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
+    }
+    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
+      // This group belongs to the new hidden-input turn. Reset only after
+      // processing it so replies from this turn cannot classify older tools.
+      sawAssistantReply = false;
     }
   }
   return items;
@@ -809,6 +824,69 @@ function sourceMessageId(message: unknown): string | null {
   }
   const id = typeof record.id === "string" ? record.id.trim() : "";
   return id || null;
+}
+
+function transcriptMessageSourceKey(message: unknown): string | null {
+  const record = asRecord(message);
+  if (!record) {
+    return null;
+  }
+  const id = sourceMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const seq = asRecord(record["__openclaw"])?.seq;
+  const normalizedSeq =
+    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
+  return normalizedSeq == null ? null : `seq:${normalizedSeq}`;
+}
+
+const messageProjectionDigests = new WeakMap<object, string>();
+
+function messageProjectionDigest(message: unknown): string {
+  if (message && typeof message === "object") {
+    const cached = messageProjectionDigests.get(message);
+    if (cached) {
+      return cached;
+    }
+  }
+  const record = asRecord(message);
+  const source = [
+    typeof record?.role === "string" ? record.role : "",
+    typeof record?.toolCallId === "string" ? record.toolCallId : "",
+    record ? extractTextCached(message) : "",
+  ].join("\u0000");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const digest = `p${(hash >>> 0).toString(36)}${source.length.toString(36)}`;
+  if (message && typeof message === "object") {
+    messageProjectionDigests.set(message, digest);
+  }
+  return digest;
+}
+
+function buildMessageKeys(messages: unknown[], indexOffset = 0): string[] {
+  const sourceKeys = messages.map(transcriptMessageSourceKey);
+  const sourceCounts = new Map<string, number>();
+  for (const sourceKey of sourceKeys) {
+    if (sourceKey) {
+      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
+    }
+  }
+  const projectionOccurrences = new Map<string, number>();
+  return messages.map((message, index) => {
+    const sourceKey = sourceKeys[index];
+    const needsProjectionIdentity = sourceKey == null || (sourceCounts.get(sourceKey) ?? 0) > 1;
+    const projectionKey = needsProjectionIdentity
+      ? `${sourceKey ?? "legacy"}:projection:${messageProjectionDigest(message)}`
+      : (sourceKey ?? "legacy");
+    const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
+    projectionOccurrences.set(projectionKey, occurrence + 1);
+    return messageKey(message, index + indexOffset, `${projectionKey}:${occurrence}`);
+  });
 }
 
 function collapseDuplicateSourceKey(message: unknown): string | null {
@@ -1011,9 +1089,7 @@ function rawMessageTimestamp(message: unknown): number | null {
 function chatItemTimestamp(item: ChatItem): number | null {
   switch (item.kind) {
     case "message":
-      return item.key === "chat:history:notice"
-        ? Number.NEGATIVE_INFINITY
-        : rawMessageTimestamp(item.message);
+      return rawMessageTimestamp(item.message);
     case "divider":
       return item.timestamp;
     case "stream":
@@ -1087,179 +1163,14 @@ function sortChatItemsByVisibleTime(
     .map(({ item }) => item);
 }
 
-type RawContentEstimateState = {
-  visited: WeakSet<object>;
-  nodes: number;
-};
-
-const RAW_CONTENT_ESTIMATE_MAX_DEPTH = 8;
-const RAW_CONTENT_ESTIMATE_MAX_NODES = 400;
-
-function addCapped(total: number, amount: number, limit: number): number {
-  return Math.min(limit, total + Math.max(0, amount));
-}
-
-function estimateRawContentChars(
-  value: unknown,
-  limit: number,
-  state: RawContentEstimateState,
-  depth = 0,
-): number {
-  if (limit <= 0) {
-    return 0;
-  }
-  if (typeof value === "string") {
-    return Math.min(value.length, limit);
-  }
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-  if (depth >= RAW_CONTENT_ESTIMATE_MAX_DEPTH || state.nodes >= RAW_CONTENT_ESTIMATE_MAX_NODES) {
-    return 0;
-  }
-  if (state.visited.has(value)) {
-    return 0;
-  }
-  state.visited.add(value);
-  state.nodes += 1;
-
-  if (Array.isArray(value)) {
-    let chars = 0;
-    for (const item of value) {
-      chars = addCapped(
-        chars,
-        estimateRawContentChars(item, limit - chars, state, depth + 1),
-        limit,
-      );
-      if (chars >= limit) {
-        break;
-      }
-    }
-    return chars;
-  }
-
-  const record = value as Record<string, unknown>;
-  let chars = 0;
-  for (const key of ["text", "content", "args", "arguments", "input"] as const) {
-    chars = addCapped(
-      chars,
-      estimateRawContentChars(record[key], limit - chars, state, depth + 1),
-      limit,
-    );
-    if (chars >= limit) {
-      break;
-    }
-  }
-  return chars;
-}
-
-function estimateMessageRenderChars(message: unknown, limit: number): number {
-  const record = asRecord(message);
-  if (!record) {
-    return 1;
-  }
-  const state: RawContentEstimateState = { visited: new WeakSet<object>(), nodes: 0 };
-  let chars = 0;
-  for (const key of ["content", "text", "args", "arguments", "input"] as const) {
-    chars = addCapped(chars, estimateRawContentChars(record[key], limit - chars, state), limit);
-    if (chars >= limit) {
-      break;
-    }
-  }
-  return Math.max(chars, 1);
-}
-
-function isHiddenToolMessage(message: unknown, showToolCalls: boolean): boolean {
-  if (showToolCalls) {
-    return false;
-  }
-  return safeNormalizeMessage(message)?.role.toLowerCase() === "toolresult";
-}
-
-function countVisibleHistoryMessages(messages: unknown[], showToolCalls: boolean): number {
-  let count = 0;
-  for (const message of messages) {
-    if (!isHiddenToolMessage(message, showToolCalls)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function resolveHistoryRenderLimit(limit: number | undefined, allowExpanded = false): number {
-  if (typeof limit !== "number" || !Number.isFinite(limit)) {
-    return CHAT_HISTORY_RENDER_LIMIT;
-  }
-  const normalized = Math.max(1, Math.floor(limit));
-  return allowExpanded ? normalized : Math.min(CHAT_HISTORY_RENDER_LIMIT, normalized);
-}
-
-function resolveHistoryStartIndex(
-  messages: unknown[],
-  showToolCalls: boolean,
-  renderLimit: number,
-): number {
-  let visibleCount = 0;
-  let renderChars = 0;
-  let startIndex = messages.length;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (isHiddenToolMessage(message, showToolCalls)) {
-      continue;
-    }
-    if (visibleCount >= renderLimit) {
-      break;
-    }
-    const remainingBudget = Math.max(1, CHAT_HISTORY_RENDER_CHAR_BUDGET - renderChars + 1);
-    const messageChars = estimateMessageRenderChars(message, remainingBudget);
-    if (visibleCount > 0 && renderChars + messageChars > CHAT_HISTORY_RENDER_CHAR_BUDGET) {
-      break;
-    }
-    renderChars += messageChars;
-    visibleCount += 1;
-    startIndex = index;
-  }
-  return startIndex;
-}
-
-function expandHistoryStartForPersistedPreviews(messages: unknown[], historyStart: number): number {
-  const firstVisible = safeNormalizeMessage(messages[historyStart]);
-  if (!firstVisible || normalizeRoleForGrouping(firstVisible.role).toLowerCase() !== "assistant") {
-    return historyStart;
-  }
-  let expandedStart = historyStart;
-  for (let index = historyStart - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const normalized = safeNormalizeMessage(message);
-    if (!normalized) {
-      continue;
-    }
-    const normalizedRole = normalized.role.toLowerCase();
-    const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-    if (role === "user" || role === "system") {
-      break;
-    }
-    if (normalizedRole === "toolresult" && extractChatMessagePreview(message)) {
-      expandedStart = index;
-      continue;
-    }
-    if (role === "assistant" && hasRenderableNormalizedMessage(message)) {
-      break;
-    }
-  }
-  return expandedStart;
-}
-
 function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
-  const historyRenderLimit = resolveHistoryRenderLimit(
-    props.historyRenderLimit,
-    props.allowExpandedHistoryRenderLimit,
-  );
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const historyKeys = buildMessageKeys(history);
+  const toolKeys = buildMessageKeys(tools, history.length);
   const liftedCanvasSources = tools.flatMap((message, index) => {
     const source = extractChatMessagePreview(message);
     return source ? [{ ...source, message, index }] : [];
@@ -1278,29 +1189,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       persistedCanvasIdentities.add(baseIdentity);
     }
   }
-  const historyStart = resolveHistoryStartIndex(history, props.showToolCalls, historyRenderLimit);
-  const previewHistoryStart = expandHistoryStartForPersistedPreviews(history, historyStart);
-  const hiddenHistoryCount = countVisibleHistoryMessages(
-    history.slice(0, previewHistoryStart),
-    props.showToolCalls,
-  );
-  const visibleHistoryCount = countVisibleHistoryMessages(
-    history.slice(previewHistoryStart),
-    props.showToolCalls,
-  );
-  if (hiddenHistoryCount > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${visibleHistoryCount} messages (${hiddenHistoryCount} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = previewHistoryStart; i < history.length; i++) {
+  for (let i = 0; i < history.length; i++) {
     const msg = history[i];
+    const itemKey = historyKeys[i] ?? messageKey(msg, i);
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
       continue;
@@ -1320,7 +1211,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     if (persistedCanvasSource && renderPersistedPreview) {
       items.push({
         kind: "message",
-        key: `${messageKey(msg, i)}:canvas`,
+        key: `${itemKey}:canvas`,
         message: createCanvasAssistantMessage(
           persistedCanvasSource,
           persistedCanvasSource.timestamp ?? transcriptPositionTimestamp(history, i),
@@ -1342,7 +1233,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
 
     items.push({
       kind: "message",
-      key: messageKey(msg, i),
+      key: itemKey,
       message: msg,
     });
   }
@@ -1405,7 +1296,10 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
           : liftedCanvasSource.timestamp;
       items.splice(insertionIndex, 0, {
         kind: "message",
-        key: `${messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)}:canvas`,
+        key: `${
+          toolKeys[liftedCanvasSource.index] ??
+          messageKey(liftedCanvasSource.message, liftedCanvasSource.index + history.length)
+        }:canvas`,
         message: createCanvasAssistantMessage(liftedCanvasSource, timestamp),
       });
       continue;
@@ -1433,7 +1327,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const toolItems = tools.map((message, index) => ({
-    key: messageKey(message, index + history.length),
+    key: toolKeys[index] ?? messageKey(message, index + history.length),
     message,
   }));
   const toolKeysByCallId = new Map<string, string>();
@@ -1649,8 +1543,71 @@ function stabilizeChatItems(
   if (previous.length === 0 || next.length === 0) {
     return next;
   }
+  // Same-role groups can grow at either edge. Preserve the existing row key
+  // when loaded-history arrays retain message objects across prepend or append.
+  const previousGroupByMessage = new WeakMap<object, MessageGroup>();
+  const previousGroupByMessageKey = new Map<string, MessageGroup>();
+  for (const item of previous) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const message of item.messages) {
+      if (message.message && typeof message.message === "object") {
+        previousGroupByMessage.set(message.message, item);
+      }
+      previousGroupByMessageKey.set(message.key, item);
+    }
+  }
+  const nextNaturalGroupKeys = new Set(
+    next.filter((item) => item.kind === "group").map((item) => item.key),
+  );
+  const claimedGroupKeys = new Set<string>();
+  const reconciled = next.map((item) => {
+    if (item.kind !== "group") {
+      return item;
+    }
+    const candidates = new Map<MessageGroup, { overlap: number; lastMatchIndex: number }>();
+    for (const [index, message] of item.messages.entries()) {
+      const prior =
+        message.message && typeof message.message === "object"
+          ? (previousGroupByMessage.get(message.message) ??
+            previousGroupByMessageKey.get(message.key))
+          : previousGroupByMessageKey.get(message.key);
+      if (
+        !prior ||
+        claimedGroupKeys.has(prior.key) ||
+        prior.role !== item.role ||
+        prior.senderLabel !== item.senderLabel
+      ) {
+        continue;
+      }
+      const candidate = candidates.get(prior);
+      candidates.set(prior, {
+        overlap: (candidate?.overlap ?? 0) + 1,
+        lastMatchIndex: index,
+      });
+    }
+    let best: { group: MessageGroup; overlap: number; lastMatchIndex: number } | null = null;
+    for (const [group, candidate] of candidates) {
+      if (
+        !best ||
+        candidate.overlap > best.overlap ||
+        (candidate.overlap === best.overlap && candidate.lastMatchIndex > best.lastMatchIndex)
+      ) {
+        best = { group, ...candidate };
+      }
+    }
+    if (!best) {
+      return item;
+    }
+    if (best.group.key !== item.key && nextNaturalGroupKeys.has(best.group.key)) {
+      return item;
+    }
+    claimedGroupKeys.add(best.group.key);
+    return item.key === best.group.key ? item : { ...item, key: best.group.key };
+  });
   const previousByKey = new Map(previous.map((item) => [`${item.kind}\u0000${item.key}`, item]));
-  const stabilized = next.map((item) => {
+  const stabilized = reconciled.map((item) => {
     const prior = previousByKey.get(`${item.kind}\u0000${item.key}`);
     return prior && sameChatItem(prior, item) ? prior : item;
   });
@@ -1660,7 +1617,10 @@ function stabilizeChatItems(
     : stabilized;
 }
 
-function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+function sameChatItemsStructuralInput(
+  previous: BuildChatItemsProps,
+  next: BuildChatItemsProps,
+): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
     previous.runId === next.runId &&
@@ -1668,32 +1628,102 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
-    previous.stream === next.stream &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
-    previous.searchQuery === next.searchQuery &&
-    previous.historyRenderLimit === next.historyRenderLimit &&
-    previous.allowExpandedHistoryRenderLimit === next.allowExpandedHistoryRenderLimit
+    previous.searchQuery === next.searchQuery
   );
+}
+
+function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
+  return previous.stream === next.stream && sameChatItemsStructuralInput(previous, next);
+}
+
+function sameChatItemsInputExceptStream(
+  previous: BuildChatItemsProps,
+  next: BuildChatItemsProps,
+): boolean {
+  return (
+    previous.stream !== null && next.stream !== null && sameChatItemsStructuralInput(previous, next)
+  );
+}
+
+function accumulatedIndexedStreamText(segments: readonly ChatStreamSegment[]): string | null {
+  let accumulated: string | null = null;
+  for (const segment of segments) {
+    if (streamSegmentHasItemId(segment) || !streamSegmentUsesAccumulatedText(segment)) {
+      continue;
+    }
+    const text = sanitizeStreamText(segment.text);
+    if (text.length > 0) {
+      accumulated = text;
+    }
+  }
+  return accumulated;
+}
+
+function updateCachedLiveStream(
+  items: ReturnType<typeof buildChatItems>,
+  index: number,
+  accumulatedPrefix: string | null,
+  input: BuildChatItemsProps,
+): boolean {
+  const item = items[index];
+  if (item?.kind !== "stream" || !item.isStreaming) {
+    return false;
+  }
+  const expectedKey = `stream:${input.sessionKey}:${input.streamStartedAt ?? "live"}`;
+  if (item.key !== expectedKey || input.stream === null) {
+    return false;
+  }
+  const text = trimAccumulatedStreamPrefix(sanitizeStreamText(input.stream), accumulatedPrefix);
+  if (text.length === 0 || stripHeartbeatTokenForDisplay(text).shouldSkip) {
+    return false;
+  }
+  items[index] = { ...item, text };
+  return true;
+}
+
+function findLiveStreamIndex(items: ReturnType<typeof buildChatItems>): number {
+  return items.findIndex((item) => item.kind === "stream" && item.isStreaming);
 }
 
 export function buildCachedChatItems(
   input: BuildChatItemsProps,
 ): ReturnType<typeof buildChatItems> {
-  const cached = getOrCreateSessionCacheValue(chatItemsBySession, input.sessionKey, () => ({
+  let paneCache = chatItemsByPane.get(input.paneId);
+  if (!paneCache) {
+    paneCache = new Map();
+    chatItemsByPane.set(input.paneId, paneCache);
+  }
+  const cached = getOrCreateSessionCacheValue(paneCache, input.sessionKey, () => ({
     input: null,
     items: [],
+    liveStreamIndex: -1,
+    liveStreamPrefix: null,
   }));
   if (cached.input && sameChatItemsInput(cached.input, input)) {
+    return cached.items;
+  }
+  // Streaming updates are the hottest transcript path. When every structural
+  // input is unchanged, update the owned live row without rescanning
+  // loaded history; shape changes still use the canonical full builder.
+  if (
+    cached.input &&
+    sameChatItemsInputExceptStream(cached.input, input) &&
+    updateCachedLiveStream(cached.items, cached.liveStreamIndex, cached.liveStreamPrefix, input)
+  ) {
+    cached.input = input;
     return cached.items;
   }
   const items = stabilizeChatItems(cached.items, buildChatItems(input));
   cached.input = input;
   cached.items = items;
+  cached.liveStreamIndex = findLiveStreamIndex(items);
+  cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
   return items;
 }
 
@@ -1741,7 +1771,11 @@ function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
   const role = item.role.toLowerCase();
   // sessions_send projections start a new autonomous turn, same contract as
   // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return role === "user" || (role === "assistant" && assistantGroupIsForwardedBoundary(item));
+  return (
+    role === "user" ||
+    groupStartsProjectedTurnBoundary(item) ||
+    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
+  );
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
@@ -1876,7 +1910,8 @@ export function collapseCompletedTurnWork(
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
-      key: `work:${firstGroup.key}`,
+      // The final reply survives older-history prepends; the first work row does not.
+      key: `work:${finalReply.key}`,
       groups,
       durationMs,
       hasError: workGroupHasError(groups),
@@ -1959,11 +1994,14 @@ export function syncToolCardExpansionState(
   lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
 }
 
-function messageKey(message: unknown, index: number): string {
+function messageKey(message: unknown, index: number, transcriptKey?: string): string {
   const m = asRecord(message) ?? {};
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   if (toolCallId) {
     const role = typeof m.role === "string" ? m.role : "unknown";
+    if (transcriptKey) {
+      return `tool:${role}:${toolCallId}:${transcriptKey}`;
+    }
     const id = typeof m.id === "string" ? m.id : "";
     if (id) {
       return `tool:${role}:${toolCallId}:${id}`;
@@ -1977,6 +2015,9 @@ function messageKey(message: unknown, index: number): string {
       return `tool:${role}:${toolCallId}:${timestamp}:${index}`;
     }
     return `tool:${role}:${toolCallId}:${index}`;
+  }
+  if (transcriptKey) {
+    return `msg:${transcriptKey}`;
   }
   const id = typeof m.id === "string" ? m.id : "";
   if (id) {
@@ -1993,3 +2034,4 @@ function messageKey(message: unknown, index: number): string {
   }
   return `msg:${role}:${index}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -15,11 +15,9 @@ import type { TtsAutoMode } from "../types.tts.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type { SessionEntryProvenance } from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
+import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
-
-type SessionChannelId = ChannelId;
-
 export type SessionChatType = ChatType;
 
 export type SessionOrigin = {
@@ -415,6 +413,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** Selected model that produced the current auto fallback override. */
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
+    /** One-run rollback guard for a model selected by the agent sessions tool. */
+    modelFallback?: AgentPatchedSessionModelFallback;
     authProfileOverride?: string;
     authProfileOverrideSource?: "auto" | "user";
     authProfileOverrideCompactionCount?: number;
@@ -512,7 +512,7 @@ export type SessionEntry = SessionRestartRecoveryState &
     deliveryContext?: DeliveryContext;
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
-    lastChannel?: SessionChannelId;
+    lastChannel?: ChannelId;
     lastTo?: string;
     lastAccountId?: string;
     lastThreadId?: string | number;

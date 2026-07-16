@@ -8,7 +8,6 @@ import {
   createBoundaryAwareStreamFnForModel,
   createOpenClawTransportStreamFnForModel,
   createTransportAwareStreamFnForModel,
-  isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
@@ -100,7 +99,6 @@ describe("provider transport stream contracts", () => {
         },
       );
 
-      expect(isTransportAwareApiSupported(testCase.api)).toBe(true);
       expect(resolveTransportAwareSimpleApi(testCase.api)).toBe(testCase.alias);
       if (testCase.providerOwnedRuntime) {
         continue;
@@ -130,7 +128,6 @@ describe("provider transport stream contracts", () => {
       },
     );
 
-    expect(isTransportAwareApiSupported(model.api)).toBe(false);
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(

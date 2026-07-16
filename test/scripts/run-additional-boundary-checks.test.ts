@@ -66,7 +66,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (fs.existsSync(filePath)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -77,7 +77,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -88,7 +88,7 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
     if (!isProcessAlive(pid) || isProcessZombie(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still running: ${pid}`);
 }
@@ -109,12 +109,14 @@ async function waitForChildClose(
 }
 
 describe("run-additional-boundary-checks", () => {
-  it("runs prompt snapshot drift checks in CI", () => {
-    expect(BOUNDARY_CHECKS[0]).toEqual({
-      label: "prompt:snapshots:check",
-      command: "pnpm",
-      args: ["prompt:snapshots:check"],
-    });
+  it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
+    // The snapshot check regenerates prompts with real embedded-agent turns
+    // (~2min); packing it into a boundary shard makes that shard the PR wall
+    // clock, so it owns the check-prompt-snapshots lane instead.
+    expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
+    const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+    expect(workflow).toContain("check_name: check-prompt-snapshots");
+    expect(workflow).toContain('run_check "prompt:snapshots:check" pnpm prompt:snapshots:check');
   });
 
   it("normalizes concurrency input", () => {

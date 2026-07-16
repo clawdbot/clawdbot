@@ -3,7 +3,10 @@
  * endpoint, including pagination and shared-client lease handling.
  */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import type {
+  CodexAppServerAuthRequirement,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { readCodexModelListResponse } from "./protocol-validators.js";
@@ -37,6 +40,7 @@ export type CodexAppServerListModelsOptions = {
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  authRequirement?: CodexAppServerAuthRequirement;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sharedClient?: boolean;
@@ -93,6 +97,7 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
         agentDir: options.agentDir,
         config: options.config,
       })
@@ -100,6 +105,7 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
         agentDir: options.agentDir,
         config: options.config,
       });

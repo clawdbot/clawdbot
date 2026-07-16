@@ -464,7 +464,7 @@ export function buildGatewayCronService(params: {
               agentId: job.agentId,
               script,
               state,
-              toolsAllow: job.payload.kind === "agentTurn" ? job.payload.toolsAllow : undefined,
+              toolsAllow: job.payload.toolsAllow,
               abortSignal,
             }),
         }
@@ -855,3 +855,4 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,6 @@
 // Gateway net tests cover bind-host selection, loopback/private host detection,
 // trusted proxy IP resolution, container defaults, and interface matching.
+import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
@@ -686,7 +687,9 @@ describe("resolveGatewayBindHost", () => {
   });
 
   it("returns 127.0.0.1 for loopback mode", async () => {
+    const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+    expect(createServerSpy).not.toHaveBeenCalled();
   });
 
   it("returns 0.0.0.0 for lan mode", async () => {

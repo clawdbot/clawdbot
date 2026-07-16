@@ -1,0 +1,17 @@
+title: WhatsApp inbound structured messages reach the agent
+scenario:
+  id: whatsapp-inbound-structured-messages
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 240000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-inbound-structured-messages }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppInboundStructuredMessagesScenario
+  args: [{ expr: whatsappScenarioContext }]

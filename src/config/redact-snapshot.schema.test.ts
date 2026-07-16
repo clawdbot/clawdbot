@@ -67,4 +67,24 @@ describe("realredactConfigSnapshot_real", () => {
       "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
     );
   });
+
+  it("redacts Discord Activity client secrets registered on plain string schemas", () => {
+    const hints = buildConfigSchema().uiHints;
+    expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);
+    const snapshot = makeSnapshot({
+      channels: {
+        discord: {
+          activities: {
+            clientSecret: "cfgsec",
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    const discord = expectDefined(channels.discord, "channels.discord test invariant");
+    const activities = discord.activities as Record<string, unknown>;
+    expect(activities.clientSecret).toBe(REDACTED_SENTINEL);
+  });
 });

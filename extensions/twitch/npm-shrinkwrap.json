@@ -8,7 +8,7 @@
       "name": "@openclaw/twitch",
       "version": "2026.7.2",
       "dependencies": {
-        "@twurple/api": "8.1.4",
+        "@twurple/api-call": "8.1.4",
         "@twurple/auth": "8.1.4",
         "@twurple/chat": "8.1.4",
         "zod": "4.4.3"
@@ -123,30 +123,6 @@
       },
       "funding": {
         "url": "https://github.com/sponsors/d-fischer"
-      }
-    },
-    "node_modules/@twurple/api": {
-      "version": "8.1.4",
-      "resolved": "https://registry.npmjs.org/@twurple/api/-/api-8.1.4.tgz",
-      "integrity": "sha512-UA2eg5lyZRB0w55NjGvdhSmWPyIBaOthFKGPjg3L/jCQVYnY/FcmUuPipe2Op9U4Ej99c29cdjsmTSQI7P7Vqg==",
-      "license": "MIT",
-      "dependencies": {
-        "@d-fischer/cache-decorators": "^4.0.0",
-        "@d-fischer/detect-node": "^3.0.1",
-        "@d-fischer/logger": "^4.2.1",
-        "@d-fischer/rate-limiter": "^1.1.0",
-        "@d-fischer/shared-utils": "^3.6.1",
-        "@d-fischer/typed-event-emitter": "^3.3.3",
-        "@twurple/api-call": "8.1.4",
-        "@twurple/common": "8.1.4",
-        "retry": "^0.13.1",
-        "tslib": "^2.0.3"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/d-fischer"
-      },
-      "peerDependencies": {
-        "@twurple/auth": "8.1.4"
       }
     },
     "node_modules/@twurple/api-call": {
@@ -275,15 +251,6 @@
       "license": "MIT",
       "engines": {
         "node": ">= 8"
-      }
-    },
-    "node_modules/retry": {
-      "version": "0.13.1",
-      "resolved": "https://registry.npmjs.org/retry/-/retry-0.13.1.tgz",
-      "integrity": "sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 4"
       }
     },
     "node_modules/tslib": {

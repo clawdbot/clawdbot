@@ -89,7 +89,6 @@ export type PluginToolRegistration = {
   source: string;
   rootDir?: string;
 };
-
 type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -486,6 +485,7 @@ export type PluginRegistry = {
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  mcpServerConnectionResolvers: import("./types.mcp-connection.js").PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads: PluginReloadRegistration[];
   nodeHostCommands: PluginNodeHostCommandRegistration[];

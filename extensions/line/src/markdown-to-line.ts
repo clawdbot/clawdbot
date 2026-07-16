@@ -373,7 +373,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = textWithLinks;
 
   // 4. Strip remaining markdown formatting
-  processedText = stripMarkdown(processedText);
+  processedText = stripMarkdown(processedText, { assistantTranscriptRoleHeaders: true });
 
   return {
     text: processedText,

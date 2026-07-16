@@ -31,7 +31,7 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.js").testing.resetReplyRunRegistry;
+let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
 
@@ -73,7 +73,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
-    resetReplyRunRegistry = () => replyRunRegistryModule.testing.resetReplyRunRegistry();
+    const { testing } = await import("./reply-run-registry.test-support.js");
+    resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
   });
 
   beforeEach(() => {

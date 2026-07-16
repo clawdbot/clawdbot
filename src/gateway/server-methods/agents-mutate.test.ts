@@ -67,6 +67,8 @@ const mocks = vi.hoisted(() => ({
   rootWrite: vi.fn(async (_params?: unknown) => {}),
 }));
 
+const RESERVED_SYSTEM_AGENT_IDS_FOR_TEST = ["openclaw", "crestodian"] as const; // reserved ids
+
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
@@ -568,6 +570,20 @@ describe("agents.create", () => {
 
     expectRespondErrorContaining(respond, "reserved");
   });
+
+  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
+    "rejects creating an agent with reserved system-agent id %s",
+    async (name) => {
+      const { respond, promise } = makeCall("agents.create", {
+        name,
+        workspace: "/tmp/ws",
+      });
+      await promise;
+
+      expectRespondErrorContaining(respond, `"${name}" is reserved`);
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects creating a duplicate agent", async () => {
     mocks.findAgentEntryIndex.mockReturnValue(0);
@@ -1435,3 +1451,4 @@ describe("agents.files.get/set symlink safety", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

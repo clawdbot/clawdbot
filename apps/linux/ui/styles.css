@@ -16,7 +16,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  overflow: hidden;
+  overflow: auto;
   background:
     radial-gradient(circle at 50% -20%, rgb(255 92 92 / 12%), transparent 42%),
     #0e1015;
@@ -52,30 +52,10 @@ body::before {
 }
 
 .brand-mark {
-  position: relative;
   display: block;
-  width: 27px;
-  height: 24px;
-}
-
-.brand-mark i {
-  position: absolute;
-  bottom: 1px;
-  width: 15px;
-  height: 19px;
-  border: 3px solid #ff5c5c;
-  border-radius: 11px 11px 7px 7px;
-  box-shadow: 0 0 18px rgb(255 92 92 / 25%);
-}
-
-.brand-mark i:first-child {
-  left: 0;
-  transform: rotate(-20deg);
-}
-
-.brand-mark i:last-child {
-  right: 0;
-  transform: rotate(20deg);
+  width: 30px;
+  height: 30px;
+  filter: drop-shadow(0 0 18px rgb(255 92 92 / 25%));
 }
 
 .panel {
@@ -232,6 +212,97 @@ button.primary:hover:not(:disabled) {
   margin: 10px 0 0;
   color: #717686;
   font-size: 12px;
+}
+
+.discovery {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid #292d38;
+}
+
+.discovery-head {
+  display: flex;
+  justify-content: space-between;
+  color: #858a9a;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.15em;
+}
+
+#discovery-status {
+  color: #ff7777;
+}
+
+.gateway-list {
+  display: grid;
+  gap: 8px;
+  max-height: 190px;
+  margin-top: 11px;
+  overflow: auto;
+}
+
+.gateway-card {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+  background: #151820;
+}
+
+.gateway-card:disabled {
+  cursor: not-allowed;
+}
+
+.gateway-card:hover:not(:disabled) {
+  /* Rows live inside the overflow:auto list, so keep the border highlight but
+     drop the generic button lift — a 1px translate clips the top row's border. */
+  transform: none;
+}
+
+.gateway-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.gateway-name,
+.gateway-endpoint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-name {
+  color: #f6f7fb;
+  font-size: 13px;
+}
+
+.gateway-endpoint,
+.discovery-empty {
+  color: #858a9a;
+  font-size: 11px;
+}
+
+.gateway-badge {
+  align-self: center;
+  margin-left: 12px;
+  padding: 4px 7px;
+  border: 1px solid #3a3e4b;
+  border-radius: 999px;
+  color: #9ba0af;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.gateway-badge.secure {
+  border-color: rgb(255 92 92 / 45%);
+  color: #ff8b8b;
+  background: rgb(255 92 92 / 8%);
+}
+
+.discovery-empty {
+  margin: 5px 0 0;
 }
 
 .log-wrap {

@@ -63,10 +63,6 @@ const groupDropWarned = createDedupeCache({
   maxSize: MAX_GROUP_DROP_WARNINGS,
 });
 
-export function resetGroupDropWarningsForTests() {
-  groupDropWarned.clear();
-}
-
 function shouldWarnForGroupDrop(warnKey: string): boolean {
   return !groupDropWarned.check(warnKey);
 }

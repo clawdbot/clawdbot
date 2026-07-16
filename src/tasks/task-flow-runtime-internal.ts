@@ -12,7 +12,6 @@ export {
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
   resolveTaskFlowForLookupToken,
-  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,

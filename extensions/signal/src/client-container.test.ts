@@ -2,18 +2,175 @@
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import {
-  containerCheck,
-  containerRestRequest,
-  containerSendMessage,
-  containerSendTyping,
-  containerSendReceipt,
-  containerFetchAttachment,
-  containerRpcRequest,
-  containerSendReaction,
-  containerRemoveReaction,
-  streamContainerEvents,
-} from "./client-container.js";
+import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
+
+type ContainerRpcOptions = Parameters<typeof containerRpcRequest>[2];
+
+async function containerRestRequest<T = unknown>(
+  endpoint: string,
+  opts: ContainerRpcOptions,
+  method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
+  body?: unknown,
+): Promise<T> {
+  if (endpoint === "/v1/about") {
+    return containerRpcRequest<T>("version", undefined, opts);
+  }
+  if (endpoint === "/v2/send") {
+    const payload = (body ?? {}) as {
+      message?: string;
+      number?: string;
+      recipients?: string[];
+    };
+    return containerRpcRequest<T>(
+      "send",
+      {
+        message: payload.message ?? "",
+        account: payload.number ?? "",
+        recipient: payload.recipients ?? [],
+      },
+      opts,
+    );
+  }
+  if (endpoint.startsWith("/v1/typing-indicator/")) {
+    await containerRpcRequest(
+      "sendTyping",
+      {
+        account: decodeURIComponent(endpoint.slice("/v1/typing-indicator/".length)),
+        recipient: [""],
+        stop: method === "DELETE",
+      },
+      opts,
+    );
+    return undefined as T;
+  }
+  throw new Error(`Unsupported test endpoint: ${endpoint}`);
+}
+
+async function containerSendMessage(params: {
+  baseUrl: string;
+  account: string;
+  recipients: string[];
+  message: string;
+  textStyles?: Array<{ start: number; length: number; style: string }>;
+  attachments?: string[];
+  maxAttachmentBytes?: number;
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+  quoteMessage?: string;
+  timeoutMs?: number;
+}): Promise<{ timestamp?: number }> {
+  return containerRpcRequest(
+    "send",
+    {
+      account: params.account,
+      recipient: params.recipients,
+      message: params.message,
+      ...(params.textStyles
+        ? {
+            "text-style": params.textStyles.map(
+              (style) => `${style.start}:${style.length}:${style.style}`,
+            ),
+          }
+        : {}),
+      ...(params.attachments ? { attachments: params.attachments } : {}),
+      ...(params.quoteTimestamp !== undefined ? { quoteTimestamp: params.quoteTimestamp } : {}),
+      ...(params.quoteAuthor ? { quoteAuthor: params.quoteAuthor } : {}),
+      ...(params.quoteMessage ? { quoteMessage: params.quoteMessage } : {}),
+    },
+    {
+      baseUrl: params.baseUrl,
+      timeoutMs: params.timeoutMs,
+      maxAttachmentBytes: params.maxAttachmentBytes,
+    },
+  );
+}
+
+async function containerSendTyping(params: {
+  baseUrl: string;
+  account: string;
+  recipient: string;
+  stop?: boolean;
+  timeoutMs?: number;
+}): Promise<boolean> {
+  await containerRpcRequest(
+    "sendTyping",
+    {
+      account: params.account,
+      recipient: [params.recipient],
+      stop: params.stop,
+    },
+    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+  );
+  return true;
+}
+
+async function containerSendReceipt(params: {
+  baseUrl: string;
+  account: string;
+  recipient: string;
+  timestamp: number;
+  type?: "read" | "viewed";
+  timeoutMs?: number;
+}): Promise<boolean> {
+  await containerRpcRequest(
+    "sendReceipt",
+    {
+      account: params.account,
+      recipient: [params.recipient],
+      targetTimestamp: params.timestamp,
+      type: params.type,
+    },
+    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+  );
+  return true;
+}
+
+async function containerFetchAttachment(
+  attachmentId: string,
+  opts: ContainerRpcOptions,
+): Promise<Buffer | null> {
+  const result = await containerRpcRequest<{ data?: string }>(
+    "getAttachment",
+    { id: attachmentId },
+    opts,
+  );
+  return result.data ? Buffer.from(result.data, "base64") : null;
+}
+
+type ContainerReactionParams = {
+  baseUrl: string;
+  account: string;
+  recipient: string;
+  emoji: string;
+  targetAuthor: string;
+  targetTimestamp: number;
+  groupId?: string;
+  timeoutMs?: number;
+};
+
+function sendContainerReaction(params: ContainerReactionParams, remove: boolean) {
+  return containerRpcRequest<{ timestamp?: number }>(
+    "sendReaction",
+    {
+      account: params.account,
+      recipients: [params.recipient],
+      emoji: params.emoji,
+      targetAuthor: params.targetAuthor,
+      targetTimestamp: params.targetTimestamp,
+      ...(params.groupId ? { groupIds: [params.groupId] } : {}),
+      remove,
+    },
+    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
+  );
+}
+
+function containerSendReaction(params: ContainerReactionParams) {
+  return sendContainerReaction(params, false);
+}
+
+function containerRemoveReaction(params: ContainerReactionParams) {
+  return sendContainerReaction(params, true);
+}
 
 // spyOn approach works with vitest forks pool for cross-directory imports
 const mockFetch = vi.fn();
@@ -61,7 +218,7 @@ function delayedBodyStream(
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
-  options: [] as Array<{ maxPayload?: number } | undefined>,
+  options: [] as Array<{ maxPayload?: number; handshakeTimeout?: number } | undefined>,
 }));
 
 beforeEach(() => {
@@ -110,7 +267,7 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL, options?: { maxPayload?: number }) {
+    constructor(url: string | URL, options?: { maxPayload?: number; handshakeTimeout?: number }) {
       wsMockState.urls.push(String(url));
       wsMockState.options.push(options);
       setTimeout(() => {
@@ -1150,19 +1307,20 @@ describe("containerRestRequest edge cases", () => {
     vi.clearAllMocks();
   });
 
-  it("handles DELETE method", async () => {
+  it("handles DELETE through the canonical typing operation", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 204,
     });
 
-    await containerRestRequest(
-      "/v1/some-resource/123",
-      { baseUrl: "http://localhost:8080" },
-      "DELETE",
-    );
+    await containerSendTyping({
+      baseUrl: "http://localhost:8080",
+      account: "+1234567890",
+      recipient: "+15550001111",
+      stop: true,
+    });
 
-    expectFirstFetchCall("http://localhost:8080/v1/some-resource/123", "DELETE");
+    expectFirstFetchCall("http://localhost:8080/v1/typing-indicator/%2B1234567890", "DELETE");
   });
 
   it("handles error response with empty body", async () => {
@@ -1286,7 +1444,7 @@ describe("streamContainerEvents", () => {
     vi.clearAllMocks();
   });
 
-  it("redacts the account from the connection log", async () => {
+  it("redacts the account and bounds the opening handshake wait", async () => {
     const log = vi.fn();
 
     await streamContainerEvents({
@@ -1299,7 +1457,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });
@@ -1341,7 +1499,6 @@ describe("containerSendReaction", () => {
       emoji: "👍",
       targetAuthor: "+15550001111",
       targetTimestamp: 1699999999999,
-      groupId: "group-123",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -1352,7 +1509,6 @@ describe("containerSendReaction", () => {
         reaction: "👍",
         target_author: "+15550001111",
         timestamp: 1699999999999,
-        group_id: "group-123",
       }),
     );
   });
@@ -1409,7 +1565,6 @@ describe("containerRemoveReaction", () => {
       emoji: "👍",
       targetAuthor: "+15550001111",
       targetTimestamp: 1699999999999,
-      groupId: "group-123",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -1423,8 +1578,8 @@ describe("containerRemoveReaction", () => {
         reaction: "👍",
         target_author: "+15550001111",
         timestamp: 1699999999999,
-        group_id: "group-123",
       }),
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

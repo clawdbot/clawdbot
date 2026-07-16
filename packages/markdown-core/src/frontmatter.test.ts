@@ -115,11 +115,14 @@ Body text`;
   });
 
   it("ignores non-delimiter closing prefixes", () => {
-    const content = `---
+    for (const closing of ["---not", "---\u2028Body text"]) {
+      const content = `---
 name: nope
----not
+${closing}
 Body text`;
-    expect(parseFrontmatterBlock(content)).toStrictEqual({});
+      expect(parseFrontmatterBlock(content)).toStrictEqual({});
+      expect(stripFrontmatterBlock(content)).toBe(content);
+    }
   });
 
   it("accepts delimiter lines with trailing whitespace", () => {

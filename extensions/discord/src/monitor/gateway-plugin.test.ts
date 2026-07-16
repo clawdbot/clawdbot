@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
-  parseDiscordGatewayInfoBody,
+  fetchDiscordGatewayInfoWithTimeout,
   resolveDiscordGatewayInfoTimeoutMs,
 } from "./gateway-metadata.js";
 
@@ -149,21 +149,25 @@ describe("createDiscordGatewayPlugin", () => {
     expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
   });
 
-  it("parses valid Discord gateway metadata", () => {
-    expect(
-      parseDiscordGatewayInfoBody(
-        JSON.stringify({
-          url: "wss://gateway.discord.gg",
-          shards: 1,
-          session_start_limit: {
-            total: 1000,
-            remaining: 999,
-            reset_after: 0,
-            max_concurrency: 1,
-          },
-        }),
-      ),
-    ).toEqual({
+  it("parses valid Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 1,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).resolves.toEqual({
       url: "wss://gateway.discord.gg",
       shards: 1,
       session_start_limit: {
@@ -175,21 +179,25 @@ describe("createDiscordGatewayPlugin", () => {
     });
   });
 
-  it("rejects malformed Discord gateway metadata", () => {
-    expect(() =>
-      parseDiscordGatewayInfoBody(
-        JSON.stringify({
-          url: "",
-          shards: 0,
-          session_start_limit: {
-            total: 1000,
-            remaining: 999,
-            reset_after: 0,
-            max_concurrency: 1,
-          },
-        }),
-      ),
-    ).toThrow(/url|shards/);
+  it("rejects malformed Discord gateway metadata", async () => {
+    await expect(
+      fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () =>
+          new Response(
+            JSON.stringify({
+              url: "wss://gateway.discord.gg",
+              shards: 0,
+              session_start_limit: {
+                total: 1000,
+                remaining: 999,
+                reset_after: 0,
+                max_concurrency: 1,
+              },
+            }),
+          ),
+      }),
+    ).rejects.toThrow(/url|shards/);
   });
 
   it("omits voice states when Discord voice is disabled in account config", () => {

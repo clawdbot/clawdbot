@@ -1,9 +1,11 @@
 // Discord plugin module implements group policy behavior.
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
-  resolveToolsBySender,
-  type GroupToolPolicyBySenderConfig,
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+  scopeKey,
   type GroupToolPolicyConfig,
+  type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
@@ -13,102 +15,116 @@ function normalizeDiscordSlug(value?: string | null) {
   return normalizeAtHashSlug(value);
 }
 
-type SenderScopedToolsEntry = {
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  requireMention?: boolean;
-};
+// Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
+const guildScopeKey = (guildKey: string) => scopeKey(["guild", guildKey]);
+const channelScopeKey = (guildKey: string, channelKey: string) =>
+  scopeKey(["guild", guildKey], ["channel", channelKey]);
 
-function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: string | null) {
+function resolveDiscordGuildKey(
+  guilds: DiscordConfig["guilds"],
+  groupSpace?: string | null,
+): string | undefined {
   if (!guilds || Object.keys(guilds).length === 0) {
-    return null;
+    return undefined;
   }
   const space = normalizeOptionalString(groupSpace) ?? "";
   if (space && guilds[space]) {
-    return guilds[space];
+    return space;
   }
   const normalized = normalizeDiscordSlug(space);
   if (normalized && guilds[normalized]) {
-    return guilds[normalized];
+    return normalized;
   }
   if (normalized) {
-    const match = Object.values(guilds).find(
-      (entry) => normalizeDiscordSlug(entry?.slug ?? undefined) === normalized,
+    const match = Object.entries(guilds).find(
+      ([, entry]) => normalizeDiscordSlug(entry?.slug ?? undefined) === normalized,
     );
     if (match) {
-      return match;
+      return match[0];
     }
   }
-  return guilds["*"] ?? null;
+  return guilds["*"] ? "*" : undefined;
 }
 
-function resolveDiscordChannelEntry<TEntry extends SenderScopedToolsEntry>(
-  channelEntries: Record<string, TEntry> | undefined,
+function resolveDiscordChannelKey(
+  channelEntries: NonNullable<DiscordConfig["guilds"]>[string]["channels"],
   params: { groupId?: string | null; groupChannel?: string | null },
-): TEntry | undefined {
+): string | undefined {
   if (!channelEntries || Object.keys(channelEntries).length === 0) {
     return undefined;
   }
   const groupChannel = params.groupChannel;
   const channelSlug = normalizeDiscordSlug(groupChannel);
-  return (
-    (params.groupId ? channelEntries[params.groupId] : undefined) ??
-    (channelSlug
-      ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
-      : undefined) ??
-    (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined)
-  );
-}
-
-function resolveSenderToolsEntry(
-  entry: SenderScopedToolsEntry | undefined | null,
-  params: ChannelGroupContext,
-): GroupToolPolicyConfig | undefined {
-  if (!entry) {
-    return undefined;
+  if (params.groupId && channelEntries[params.groupId]) {
+    return params.groupId;
   }
-  const senderPolicy = resolveToolsBySender({
-    toolsBySender: entry.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  return senderPolicy ?? entry.tools;
+  if (channelSlug && channelEntries[channelSlug]) {
+    return channelSlug;
+  }
+  if (channelSlug && channelEntries[`#${channelSlug}`]) {
+    return `#${channelSlug}`;
+  }
+  const normalizedGroupChannel = groupChannel ? normalizeDiscordSlug(groupChannel) : undefined;
+  return normalizedGroupChannel !== undefined && channelEntries[normalizedGroupChannel]
+    ? normalizedGroupChannel
+    : undefined;
 }
 
-function resolveDiscordPolicyContext(params: ChannelGroupContext) {
+function buildDiscordPolicyTree(guilds: DiscordConfig["guilds"]): ScopeTree {
+  const scopes: ScopeTree["scopes"] = {};
+  for (const [guildKey, guild] of Object.entries(guilds ?? {})) {
+    scopes[guildScopeKey(guildKey)] = {
+      requireMention: guild.requireMention,
+      tools: guild.tools,
+      toolsBySender: guild.toolsBySender,
+    };
+    for (const [channelKey, channel] of Object.entries(guild.channels ?? {})) {
+      scopes[channelScopeKey(guildKey, channelKey)] = {
+        requireMention: channel.requireMention,
+        tools: channel.tools,
+        toolsBySender: channel.toolsBySender,
+      };
+    }
+  }
+  return { scopes };
+}
+
+function resolveDiscordPolicyScope(params: ChannelGroupContext) {
   const guilds =
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const guildEntry = resolveDiscordGuildEntry(guilds, params.groupSpace);
-  const channelEntries = guildEntry?.channels;
-  const channelEntry =
-    channelEntries && Object.keys(channelEntries).length > 0
-      ? resolveDiscordChannelEntry(channelEntries, params)
-      : undefined;
-  return { guildEntry, channelEntry };
+  const tree = buildDiscordPolicyTree(guilds);
+  // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
+  // Within the selected guild, channel fields still cascade to guild fields.
+  const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace);
+  if (!guildKey) {
+    return { tree, path: [] };
+  }
+  const channelKey = resolveDiscordChannelKey(guilds?.[guildKey]?.channels, params);
+  return {
+    tree,
+    path: [
+      guildScopeKey(guildKey),
+      ...(channelKey !== undefined ? [channelScopeKey(guildKey, channelKey)] : []),
+    ],
+  };
 }
 
 export function resolveDiscordGroupRequireMention(params: ChannelGroupContext): boolean {
-  const context = resolveDiscordPolicyContext(params);
-  if (typeof context.channelEntry?.requireMention === "boolean") {
-    return context.channelEntry.requireMention;
-  }
-  if (typeof context.guildEntry?.requireMention === "boolean") {
-    return context.guildEntry.requireMention;
-  }
-  return true;
+  return resolveScopeRequireMention(resolveDiscordPolicyScope(params));
 }
 
 export function resolveDiscordGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
-  const context = resolveDiscordPolicyContext(params);
-  const channelPolicy = resolveSenderToolsEntry(context.channelEntry, params);
-  if (channelPolicy) {
-    return channelPolicy;
-  }
-  return resolveSenderToolsEntry(context.guildEntry, params);
+  const scope = resolveDiscordPolicyScope(params);
+  // No messageProvider: channel-prefixed sender keys were historically dead here.
+  return resolveScopeToolsPolicy({
+    ...scope,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
 }

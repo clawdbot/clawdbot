@@ -35,7 +35,7 @@ export function readUtilityModelSetting(cfg: OpenClawConfig, agentId: string): U
  * metadata snapshot, so the lookup stays synchronous and cheap; contexts
  * without a snapshot simply get no derived default.
  */
-export function resolveProviderDefaultUtilityModelRef(params: {
+function resolveProviderDefaultUtilityModelRef(params: {
   cfg: OpenClawConfig;
   provider: string;
   metadataSnapshot?: PluginMetadataSnapshot;

@@ -1,0 +1,35 @@
+title: Matrix E2EE crypto state loss restores backup from a surviving recovery key
+scenario:
+  id: matrix-e2ee-state-loss-stored-recovery-key
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-state-loss-stored-recovery-key
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE State Loss Stored Key Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeStateLossStoredRecoveryKeyScenario
+  args:
+    - expr: "scenarioContext"

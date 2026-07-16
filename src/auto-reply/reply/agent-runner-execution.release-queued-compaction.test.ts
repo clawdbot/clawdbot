@@ -42,6 +42,7 @@ vi.mock("../../globals.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
+  resolveFreshSessionTotalTokens: vi.fn(),
   resolveSessionStoreEntry: (params: unknown) => state.resolveSessionStoreEntryMock(params),
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionTranscriptPath: vi.fn(),
@@ -63,11 +64,12 @@ vi.mock("../../infra/continuation-tracer.js", () => ({
 }));
 
 async function getReleaseQueuedCompactionCompletion() {
-  return (await import("./agent-runner-execution.js")).releaseQueuedCompactionCompletion;
+  return (await import("./agent-runner-post-compaction-release.js"))
+    .releaseQueuedCompactionCompletion;
 }
 
 async function getReleaseQueuedCompactionTolerant() {
-  return (await import("./agent-runner-execution.js")).releaseQueuedCompactionTolerant;
+  return (await import("./agent-runner-post-compaction-release.js")).releaseQueuedCompactionTolerant;
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {

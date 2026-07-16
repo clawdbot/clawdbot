@@ -15,29 +15,31 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
   const { isRecord } = await import("../utils.js");
 
   return {
-    collectUnsupportedSecretRefConfigCandidates: (raw: unknown) => {
-      if (!isRecord(raw)) {
-        return [];
-      }
-      const candidates: Array<{ path: string; value: unknown }> = [];
+    unsupportedSecretRefSurfacePolicy: {
+      collectConfigCandidates: (raw: unknown) => {
+        if (!isRecord(raw)) {
+          return [];
+        }
+        const candidates: Array<{ path: string; value: unknown }> = [];
 
-      const hooks = isRecord(raw.hooks) ? raw.hooks : null;
-      if (hooks) {
-        candidates.push({ path: "hooks.token", value: hooks.token });
-      }
+        const hooks = isRecord(raw.hooks) ? raw.hooks : null;
+        if (hooks) {
+          candidates.push({ path: "hooks.token", value: hooks.token });
+        }
 
-      const channels = isRecord(raw.channels) ? raw.channels : null;
-      const discord = channels && isRecord(channels.discord) ? channels.discord : null;
-      const threadBindings =
-        discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
-      if (threadBindings) {
-        candidates.push({
-          path: "channels.discord.threadBindings.webhookToken",
-          value: threadBindings.webhookToken,
-        });
-      }
+        const channels = isRecord(raw.channels) ? raw.channels : null;
+        const discord = channels && isRecord(channels.discord) ? channels.discord : null;
+        const threadBindings =
+          discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
+        if (threadBindings) {
+          candidates.push({
+            path: "channels.discord.threadBindings.webhookToken",
+            value: threadBindings.webhookToken,
+          });
+        }
 
-      return candidates;
+        return candidates;
+      },
     },
   };
 });

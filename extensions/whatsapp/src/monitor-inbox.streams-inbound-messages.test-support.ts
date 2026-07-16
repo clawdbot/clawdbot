@@ -10,8 +10,9 @@ import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
-  WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES,
 } from "./inbound/monitor.js";
+
+const EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
   type InboxMonitorOptions,
@@ -714,7 +715,7 @@ describe("web monitor inbox", () => {
   it("bounds cached group metadata kept across reconnects", async () => {
     const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
     const groups = Object.fromEntries(
-      Array.from({ length: WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
+      Array.from({ length: EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 2 }, (_, index) => [
         `${index}@g.us`,
         {
           id: `${index}@g.us`,
@@ -732,12 +733,12 @@ describe("web monitor inbox", () => {
     });
 
     await vi.waitFor(() => {
-      expect(groupMetadataCache.size).toBe(WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
+      expect(groupMetadataCache.size).toBe(EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
     });
     expect(groupMetadataCache.has("0@g.us")).toBe(false);
-    expect(groupMetadataCache.has(`${WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1}@g.us`)).toBe(
-      true,
-    );
+    expect(
+      groupMetadataCache.has(`${EXPECTED_WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES + 1}@g.us`),
+    ).toBe(true);
 
     await listener.close();
   });
@@ -1947,3 +1948,4 @@ describe("web monitor inbox", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

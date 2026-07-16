@@ -33,6 +33,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { runtime, attemptTools } = context;
   const { connection, hookChannelId } = runtime;
   const {
+    appServer,
     params,
     effectiveCwd,
     sessionAgentId,
@@ -203,6 +204,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
+      loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
@@ -221,6 +223,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()

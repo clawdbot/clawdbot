@@ -34,6 +34,22 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
   };
 }
 
+function makeMatrixFlowQaSuiteTestScenario(
+  id: string,
+  providerMode?: "live-frontier" | "mock-openai",
+): ReturnType<typeof makeQaSuiteTestScenario> {
+  return {
+    ...makeQaSuiteTestScenario(id),
+    execution: {
+      kind: "flow",
+      channel: "matrix",
+      timeoutMs: 60_000,
+      retryCount: 0,
+      ...(providerMode ? { providerMode } : {}),
+    },
+  };
+}
+
 describe("qa suite planning helpers", () => {
   it("normalizes blank scenario channels as unpinned", () => {
     expect(
@@ -172,6 +188,25 @@ describe("qa suite planning helpers", () => {
     releaseQueuedTasks();
     const result = await resultPromise;
     expect(result).toEqual([10, 20, 30, 40]);
+  });
+
+  it("stops sequential suite work after the first matching result", async () => {
+    const started: number[] = [];
+    const result = await mapQaSuiteWithConcurrency(
+      [1, 2, 3, 4],
+      1,
+      async (item) => {
+        started.push(item);
+        return { item, failed: item === 2 };
+      },
+      { shouldStop: (entry) => entry.failed },
+    );
+
+    expect(started).toEqual([1, 2]);
+    expect(result).toEqual([
+      { item: 1, failed: false },
+      { item: 2, failed: true },
+    ]);
   });
 
   it("staggers scenario starts without reducing mapped concurrency", async () => {
@@ -507,6 +542,18 @@ describe("qa suite planning helpers", () => {
     ).toBe(false);
   });
 
+  it("isolates serial runs when a flow scenario changes provider mode", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [
+          makeMatrixFlowQaSuiteTestScenario("default"),
+          makeMatrixFlowQaSuiteTestScenario("live-override", "live-frontier"),
+        ],
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
   it("isolates serial runs when transport policy would leak into another scenario", () => {
     expect(
       shouldUseIsolatedQaSuiteScenarioWorkers({
@@ -602,7 +649,7 @@ describe("qa suite planning helpers", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
       }),
     ).toThrow(
-      "flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
+      "suite execution requires flow scenarios; unsupported scenario(s): playwright (playwright)",
     );
   });
 
@@ -691,6 +738,47 @@ describe("qa suite planning helpers", () => {
         primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["qa-channel-only"]);
+  });
+
+  it("requires an external lane matching a channel-specific scenario", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("matrix-transport", {
+        channel: "matrix",
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: matrix-transport (channel=matrix)",
+    );
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
   });
 
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {

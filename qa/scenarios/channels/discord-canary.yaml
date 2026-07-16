@@ -1,0 +1,17 @@
+title: Discord canary echo
+scenario:
+  id: discord-canary
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: discord
+    timeoutMs: 45000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { discordScenarioId: discord-canary }
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordCanaryScenario
+  args: [{ expr: discordScenarioContext }]

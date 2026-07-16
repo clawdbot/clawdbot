@@ -2,9 +2,10 @@
 import type { AddressInfo } from "node:net";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
+import { rawDataToString } from "../../../src/infra/ws.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -31,19 +32,6 @@ function sendJson(socket: WebSocket, payload: JsonObject): void {
   socket.send(JSON.stringify(payload));
 }
 
-function readRawMessage(raw: RawData): string {
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Buffer.isBuffer(raw)) {
-    return raw.toString("utf8");
-  }
-  if (raw instanceof ArrayBuffer) {
-    return Buffer.from(raw).toString("utf8");
-  }
-  return Buffer.concat(raw).toString("utf8");
-}
-
 async function reservePort(): Promise<number> {
   const server = net.createServer();
   await new Promise<void>((resolve) => {
@@ -64,11 +52,8 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
   });
   let seq = 1;
   const requests: FakeGatewayRequest[] = [];
-  const sockets = new Set<WebSocket>();
-
   server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
+    socket.binaryType = "nodebuffer";
     sendJson(socket, {
       type: "event",
       event: "connect.challenge",
@@ -77,7 +62,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
     });
 
     socket.on("message", (raw) => {
-      const frame = JSON.parse(readRawMessage(raw)) as FakeGatewayRequest;
+      const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
       requests.push(frame);
       const reply = (payload: JsonObject): void => {
         sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
@@ -340,10 +325,9 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       if (index >= 0) {
         servers.splice(index, 1);
       }
-      for (const socket of sockets) {
+      for (const socket of server.clients) {
         socket.terminate();
       }
-      sockets.clear();
       return new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

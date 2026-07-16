@@ -7,8 +7,11 @@ import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  describeQaProviderLaneMismatches,
+  scenarioMatchesQaProviderLane,
+} from "./scenario-lane.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
@@ -23,67 +26,13 @@ const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
-function normalizeQaConfigString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function describeQaProviderLaneMismatches(params: {
-  scenario: QaSeedScenario;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  channelDriver?: QaScorecardChannelDriver | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-}) {
-  const mismatches: string[] = [];
-  const provider = getQaProvider(params.providerMode);
-  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
-    mismatches.push("live provider mode");
-  }
-  const config = params.scenario.execution.config ?? {};
-  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
-  if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
-    mismatches.push(`providerMode=${requiredProviderMode}`);
-  }
-  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
-  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
-  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
-    mismatches.push(`channelDriver=${requiredChannelDriver}`);
-  }
-  if (provider.kind !== "live") {
-    return mismatches;
-  }
-  const selected = splitModelRef(params.primaryModel);
-  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
-  if (requiredProvider && selected?.provider !== requiredProvider) {
-    mismatches.push(`provider=${requiredProvider}`);
-  }
-  const requiredModel = normalizeQaConfigString(config.requiredModel);
-  if (requiredModel && selected?.model !== requiredModel) {
-    mismatches.push(`model=${requiredModel}`);
-  }
-  const requiredAuthMode = normalizeQaConfigString(config.authMode);
-  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
-    mismatches.push(`authMode=${requiredAuthMode}`);
-  }
-  return mismatches;
-}
-
-function scenarioMatchesQaProviderLane(params: {
-  scenario: QaSeedScenario;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  channelDriver?: QaScorecardChannelDriver | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-}) {
-  return describeQaProviderLaneMismatches(params).length === 0;
-}
-
 function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
   channelDriver?: QaScorecardChannelDriver | null;
+  channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -99,15 +48,15 @@ function selectQaFlowSuiteScenarios(params: {
     const selectedScenarios = [...requestedScenarioIds].map(
       (scenarioId) => scenarioById.get(scenarioId)!,
     );
-    const nonFlowScenarios = selectedScenarios.filter(
+    const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
     );
-    if (nonFlowScenarios.length > 0) {
-      const scenarioList = nonFlowScenarios
+    if (unsupportedScenarios.length > 0) {
+      const scenarioList = unsupportedScenarios
         .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
         .join(", ");
       throw new Error(
-        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+        `suite execution requires flow scenarios; unsupported scenario(s): ${scenarioList}`,
       );
     }
     const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
@@ -116,8 +65,11 @@ function selectQaFlowSuiteScenarios(params: {
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
+        channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
-      }).filter((mismatch) => mismatch.startsWith("channelDriver="));
+      }).filter(
+        (mismatch) => mismatch.startsWith("channelDriver=") || mismatch.startsWith("channel="),
+      );
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
     if (channelDriverMismatches.length > 0) {
@@ -135,6 +87,7 @@ function selectQaFlowSuiteScenarios(params: {
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
         channelDriver: params.channelDriver,
+        channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
   );
@@ -329,6 +282,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
       params.scenarios.some(
         (scenario) =>
           isQaMergePatchObject(scenario.gatewayConfigPatch) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined) ||
+          (scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined) ||
           (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
       ))
   );
@@ -340,6 +295,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
+    scenario.execution.runtime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||
@@ -410,8 +366,10 @@ async function mapQaSuiteWithConcurrency<T, U>(
   opts?: {
     startStaggerMs?: number;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    shouldStop?: (result: U, index: number) => boolean;
   },
 ) {
+  let stopped = false;
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
@@ -442,17 +400,34 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  return await pMap(
+  const results = await pMap(
     items,
     async (item, index) => {
+      if (stopped) {
+        return undefined;
+      }
       await waitForStartSlot(index < items.length - 1);
-      return await mapper(item, index);
+      if (stopped) {
+        return undefined;
+      }
+      const result = await mapper(item, index);
+      if (opts?.shouldStop?.(result, index)) {
+        stopped = true;
+      }
+      return result;
     },
     {
       concurrency: Math.max(1, Math.floor(concurrency)),
       stopOnError: true,
     },
   );
+  const completed: U[] = [];
+  for (const result of results) {
+    if (result !== undefined) {
+      completed.push(result as U);
+    }
+  }
+  return completed;
 }
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
@@ -488,7 +463,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   scenarioRequiresIsolatedQaSuiteWorker,
-  scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,

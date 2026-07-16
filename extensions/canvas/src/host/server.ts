@@ -19,7 +19,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { type WebSocket, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
@@ -28,7 +28,7 @@ import {
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
-export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 
 /** Options for Canvas host creation. */
 type CanvasHostOpts = {
@@ -289,30 +289,17 @@ export async function createCanvasHostHandler(
         maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       })
     : null;
-  const sockets = new Set<WebSocket>();
-  if (wss) {
-    wss.on("connection", (ws) => {
-      sockets.add(ws);
-      // ws emits error for maxPayload rejections; close handles final cleanup.
-      ws.on("error", () => {
-        sockets.delete(ws);
-      });
-      ws.on("close", () => sockets.delete(ws));
-    });
-  }
+  wss?.on("connection", (ws) => {
+    // Consume maxPayload errors; ws owns client tracking and close cleanup.
+    ws.on("error", () => {});
+  });
 
   let debounce: NodeJS.Timeout | null = null;
   const broadcastReload = () => {
-    if (!liveReload) {
+    if (!wss) {
       return;
     }
-    for (const ws of sockets) {
-      try {
-        ws.send("reload");
-      } catch {
-        // ignore
-      }
-    }
+    wss.clients.forEach((ws) => ws.send("reload"));
   };
   const scheduleReload = () => {
     if (debounce) {
@@ -466,13 +453,7 @@ export async function createCanvasHostHandler(
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
-      for (const ws of sockets) {
-        try {
-          ws.terminate?.();
-        } catch {
-          // ignore
-        }
-      }
+      wss?.clients.forEach((ws) => ws.terminate());
       if (wss) {
         await new Promise<void>((resolve) => {
           wss.close(() => resolve());

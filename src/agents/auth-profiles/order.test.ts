@@ -368,6 +368,56 @@ describe("resolveAuthProfileOrder", () => {
     ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
   });
 
+  it("does not apply a block scoped to another model when ordering profiles", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "placeholder",
+        },
+        "fixture-provider:backup": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "placeholder",
+        },
+      },
+      usageStats: {
+        "fixture-provider:primary": {
+          blockedUntil: Date.now() + 60_000,
+          blockedReason: "subscription_limit",
+          blockedModel: "model-a",
+          blockedScope: "model",
+        },
+      },
+    };
+    const cfg = {
+      auth: {
+        order: {
+          "fixture-provider": ["fixture-provider:primary", "fixture-provider:backup"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: "fixture-provider",
+        forModel: "model-b",
+      }),
+    ).toStrictEqual(["fixture-provider:primary", "fixture-provider:backup"]);
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: "fixture-provider",
+        forModel: "model-a",
+      }),
+    ).toStrictEqual(["fixture-provider:backup", "fixture-provider:primary"]);
+  });
+
   it("keeps unresolved OAuth refs only in read-only profile ordering", () => {
     const store: AuthProfileStore = {
       version: 1,

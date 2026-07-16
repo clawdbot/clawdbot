@@ -17,8 +17,8 @@ const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
 const MESSAGE_TIME_BASE_MS = Date.UTC(2026, 0, 1);
 
-const { buildCompactionSummarizationInstructions, summarizeInStages } =
-  await import("./compaction.js");
+const { buildCompactionSummarizationInstructions } = await import("./compaction.test-support.js");
+const { summarizeInStages } = await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {

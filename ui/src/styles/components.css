@@ -5033,6 +5033,25 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
+.session-row-badge--cloud[data-placement-state="active"] {
+  color: var(--ok);
+}
+
+.session-row-badge--cloud[data-placement-state="failed"] {
+  color: var(--danger);
+}
+
+.session-row-badge--cloud:is(
+  [data-placement-state="requested"],
+  [data-placement-state="provisioning"],
+  [data-placement-state="syncing"],
+  [data-placement-state="starting"],
+  [data-placement-state="draining"],
+  [data-placement-state="reconciling"]
+) {
+  color: var(--accent);
+}
+
 .session-row-badge svg {
   width: 12px;
   height: 12px;

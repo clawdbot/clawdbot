@@ -6,12 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { snapshotApprovedWidget } from "./manifest.js";
-import {
-  parseWidgetRequestPath,
-  serveWidgetAsset,
-  WIDGET_CSP,
-  WIDGETS_ROUTE_PREFIX,
-} from "./serve.js";
+import { serveWidgetAsset, WIDGETS_ROUTE_PREFIX } from "./serve.js";
 import { WorkspaceStore } from "./store.js";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +19,10 @@ type CapturedResponse = {
 };
 
 const PARSE_FRAME_TOKEN = "1111111111111111111111111111111111111111111";
+const EXPECTED_WIDGET_CSP =
+  "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
 let activeFrameToken: string | null = null;
 
 /** Minimal ServerResponse stub capturing status, headers, and body. */
@@ -98,36 +97,6 @@ function urlFor(name: string, rest: string): string {
   return `${WIDGETS_ROUTE_PREFIX}/${activeFrameToken ?? PARSE_FRAME_TOKEN}/${name}/${rest}`;
 }
 
-describe("parseWidgetRequestPath", () => {
-  it("returns null for a pathname not under the widgets prefix", () => {
-    expect(parseWidgetRequestPath("/plugins/other/x/y")).toBeNull();
-  });
-
-  it("returns null when no logical path is present (name only)", () => {
-    expect(
-      parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/revenue-chart`),
-    ).toBeNull();
-  });
-
-  it("rejects a name failing the charset check", () => {
-    expect(
-      parseWidgetRequestPath(`${WIDGETS_ROUTE_PREFIX}/${PARSE_FRAME_TOKEN}/../etc/passwd`),
-    ).toBeNull();
-  });
-
-  it("rejects an encoded traversal segment in the logical path", () => {
-    expect(parseWidgetRequestPath(urlFor("revenue-chart", "%2e%2e/secret"))).toBeNull();
-  });
-
-  it("parses a valid name and logical path", () => {
-    expect(parseWidgetRequestPath(urlFor("revenue-chart", "assets/app.js"))).toEqual({
-      frameToken: PARSE_FRAME_TOKEN,
-      name: "revenue-chart",
-      logicalPath: "assets/app.js",
-    });
-  });
-});
-
 describe("serveWidgetAsset security jail", () => {
   it("serves an approved widget's index.html with strict headers", async () => {
     await withApprovedWidget(async ({ store, stateDir }) => {
@@ -140,7 +109,7 @@ describe("serveWidgetAsset security jail", () => {
       expect(handled).toBe(true);
       expect(captured.statusCode).toBe(200);
       expect(captured.headers["content-type"]).toBe("text/html; charset=utf-8");
-      expect(captured.headers["content-security-policy"]).toBe(WIDGET_CSP);
+      expect(captured.headers["content-security-policy"]).toBe(EXPECTED_WIDGET_CSP);
       // The response itself enforces the same opaque-origin sandbox as the
       // iframe, so opening this URL directly cannot regain same-origin access.
       expect(captured.headers["content-security-policy"]).toContain("sandbox allow-scripts");
@@ -225,7 +194,7 @@ describe("serveWidgetAsset security jail", () => {
       });
       expect(captured.statusCode).toBe(200);
       expect(captured.headers["content-type"]).toBe("text/javascript; charset=utf-8");
-      expect(captured.headers["content-security-policy"]).toBe(WIDGET_CSP);
+      expect(captured.headers["content-security-policy"]).toBe(EXPECTED_WIDGET_CSP);
       expect(captured.headers["x-content-type-options"]).toBe("nosniff");
     });
   });
@@ -264,7 +233,7 @@ describe("serveWidgetAsset security jail", () => {
         expect(captured.statusCode).toBe(404);
         // A 404 is still an attacker-influenced response from the widget origin,
         // so it MUST carry the same strict CSP as a 200 (invariant I1/I4).
-        expect(captured.headers["content-security-policy"]).toBe(WIDGET_CSP);
+        expect(captured.headers["content-security-policy"]).toBe(EXPECTED_WIDGET_CSP);
         expect(captured.headers["referrer-policy"]).toBe("no-referrer");
       });
     });

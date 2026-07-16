@@ -131,11 +131,14 @@ function createStartOptions(
   return {
     transport: "stdio",
     command: "codex",
+    commandSource: "resolved-managed",
     args: ["app-server"],
     headers: { authorization: "Bearer dev-token" },
     ...overrides,
   };
 }
+
+const EPHEMERAL_AUTH_ARGS = ["app-server", "-c", 'cli_auth_credentials_store="ephemeral"'];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
@@ -226,6 +229,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: codexHome,
         },
@@ -254,6 +258,56 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("places the ephemeral auth-store override after configured root overrides", async () => {
+    await withTempDir("openclaw-codex-auth-store-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        args: ["-c", 'cli_auth_credentials_store="keyring"', "app-server"],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([
+        "-c",
+        'cli_auth_credentials_store="keyring"',
+        "app-server",
+        "-c",
+        'cli_auth_credentials_store="ephemeral"',
+      ]);
+    });
+  });
+
+  it("does not mistake an option value for the app-server subcommand", async () => {
+    await withTempDir("openclaw-codex-profile-name-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        args: ["--profile", "app-server", "app-server"],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([
+        "--profile",
+        "app-server",
+        "app-server",
+        "-c",
+        'cli_auth_credentials_store="ephemeral"',
+      ]);
+    });
+  });
+
+  it("preserves custom stdio backend arguments", async () => {
+    await withTempDir("openclaw-codex-custom-backend-", async (agentDir) => {
+      const startOptions = createStartOptions({
+        command: "custom-codex-compatible-server",
+        commandSource: "config",
+        args: [],
+      });
+
+      const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+
+      expect(bridged.args).toEqual([]);
+    });
+  });
+
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({
@@ -267,6 +321,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -294,6 +349,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: codexHome,
           HOME: nativeHome,
@@ -336,6 +392,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           EXISTING: "1",
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
@@ -374,6 +431,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -406,6 +464,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -438,6 +497,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         });
         expect(bridged).toEqual({
           ...startOptions,
+          args: EPHEMERAL_AUTH_ARGS,
           env: { CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) },
           clearEnv: ["FOO", "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
         });
@@ -608,6 +668,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         }),
       ).resolves.toEqual({
         ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
         },
@@ -1904,6 +1965,112 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("fails subscription auth instead of falling back to an API key", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const request = vi.fn(async () => ({ type: "apiKey" }));
+    vi.stubEnv("CODEX_API_KEY", "placeholder");
+    let rejection: unknown;
+    try {
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {},
+        },
+        authRequirement: "subscription",
+        startOptions: createStartOptions({
+          env: { CODEX_API_KEY: "placeholder" },
+        }),
+      });
+    } catch (error) {
+      rejection = error;
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as { status?: unknown }).status).toBe(401);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("preserves transient subscription credential resolution errors", async () => {
+    const transientError = Object.assign(new Error("temporary refresh failure"), { status: 503 });
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(transientError);
+    const request = vi.fn();
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: "placeholder",
+              refresh: "placeholder",
+              expires: Date.now() - 60_000,
+            },
+          },
+        },
+        authRequirement: "subscription",
+      }),
+    ).rejects.toBe(transientError);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("accepts native ChatGPT auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "chatgpt", email: null, planType: "plus" },
+      requiresOpenaiAuth: true,
+    }));
+
+    await applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: null,
+      authRequirement: "subscription",
+    });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
+  it("rejects native API-key auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({
+      account: { type: "apiKey" },
+      requiresOpenaiAuth: false,
+    }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
+  it("rejects missing native auth for subscription routes", async () => {
+    const request = vi.fn(async () => ({ account: null, requiresOpenaiAuth: true }));
+
+    await expect(
+      applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: null,
+        authRequirement: "subscription",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
+  });
+
   it("falls back to CODEX_API_KEY when no auth profile and no Codex account is available", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async (method: string) => {
@@ -1918,15 +2085,16 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
-          env: { CODEX_API_KEY: "configured-codex-api-key" },
+          env: { CODEX_API_KEY: "test-token-placeholder" },
         }),
       });
 
       expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
       expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
         type: "apiKey",
-        apiKey: "configured-codex-api-key",
+        apiKey: "test-token-placeholder",
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
@@ -1947,6 +2115,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -1976,6 +2145,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -1999,6 +2169,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions(),
       });
 
@@ -2031,6 +2202,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           env: { CODEX_HOME: path.join(root, "isolated-codex-home") },
         }),
@@ -2112,6 +2284,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           clearEnv: ["CODEX_API_KEY", "OPENAI_API_KEY"],
         }),
@@ -2137,6 +2310,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir,
+        authRequirement: "api-key",
         startOptions: createStartOptions({
           transport: "websocket",
           url: "ws://127.0.0.1:1455",
@@ -2573,3 +2747,4 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

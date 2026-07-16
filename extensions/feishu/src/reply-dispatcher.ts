@@ -18,6 +18,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
+import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import {
@@ -501,17 +502,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
+    firstChunkMentions?: MentionTarget[];
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
-      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
-    const chunkText = paramsLocal.useCard
-      ? core.channel.text.chunkMarkdownTextWithMode
-      : core.channel.text.chunkTextWithMode;
+      : materializeFeishuPostMarkdownSoftBreaks(
+          core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
+        );
+    const initialChunks = core.channel.text.chunkMarkdownTextWithMode(
+      chunkSource,
+      textChunkLimit,
+      chunkMode,
+    );
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      paramsLocal.useCard
+        ? initialChunks
+        : chunkFeishuPostMarkdown({
+            text: chunkSource,
+            limit: textChunkLimit,
+            mode: chunkMode,
+            firstChunkMentions: paramsLocal.firstChunkMentions,
+            initialChunks,
+          }),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({
@@ -733,10 +747,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               if (coreBlockStreamingEnabled) {
                 // Reuse normal text chunking, but notify mentions only on the first visible chunk.
                 const isFirstBlock = !sentIndependentBlockText;
+                const firstChunkMentions =
+                  isFirstBlock && mentionTargets?.length ? mentionTargets : undefined;
                 await sendChunkedTextReply({
                   text,
                   useCard: false,
                   infoKind: "block",
+                  firstChunkMentions,
                   sendChunk: async ({ chunk, isFirst }) => {
                     await sendMessageFeishu({
                       cfg,
@@ -746,9 +763,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                       replyInThread: effectiveReplyInThread,
                       allowTopLevelReplyFallback,
                       accountId,
-                      ...(isFirstBlock && isFirst && mentionTargets?.length
-                        ? { mentions: mentionTargets }
-                        : {}),
+                      ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
                     });
                   },
                 });
@@ -817,10 +832,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             });
           } else {
+            const firstChunkMentions =
+              info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
             await sendChunkedTextReply({
               text,
               useCard: false,
               infoKind: info?.kind,
+              firstChunkMentions,
               sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
@@ -830,9 +848,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
-                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
-                    ? { mentions: mentionTargets }
-                    : {}),
+                  ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
                 });
               },
             });
@@ -947,3 +963,4 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

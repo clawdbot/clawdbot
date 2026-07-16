@@ -2,10 +2,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import {
-  testing as bundleMcpRuntimeTesting,
-  getOrCreateSessionMcpRuntime,
-} from "./agent-bundle-mcp-tools.js";
+import { testing as bundleMcpRuntimeTesting } from "./agent-bundle-mcp-runtime.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
@@ -21,7 +19,7 @@ import {
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
+} from "./subagent-registry.test-helpers.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;

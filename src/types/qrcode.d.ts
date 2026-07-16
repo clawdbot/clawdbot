@@ -42,19 +42,15 @@ declare module "qrcode" {
   export function toString(text: string, options?: QrCodeRenderOptions): Promise<string>;
   /** Render a QR code to a data URL. */
   export function toDataURL(text: string, options?: QrCodeRenderOptions): Promise<string>;
-  /** Render a QR code to a file. */
-  export function toFile(
-    filePath: string,
-    text: string,
-    options?: QrCodeRenderOptions,
-  ): Promise<void>;
+  /** Render a QR code to a PNG buffer. */
+  export function toBuffer(text: string, options?: QrCodeRenderOptions): Promise<Buffer>;
 
   /** Default qrcode export with the functions OpenClaw uses. */
   const qrcode: {
     create: typeof create;
     toString: typeof toString;
     toDataURL: typeof toDataURL;
-    toFile: typeof toFile;
+    toBuffer: typeof toBuffer;
   };
 
   export default qrcode;

@@ -28,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
-import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
+import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -253,10 +253,7 @@ export async function handleIrcInbound(params: {
     core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes) ||
     (explicitMentionRegex ? explicitMentionRegex.test(rawBody) : false);
   const requireMention = message.isGroup
-    ? resolveIrcRequireMention({
-        groupConfig: groupMatch.groupConfig,
-        wildcardConfig: groupMatch.wildcardConfig,
-      })
+    ? resolveIrcGroupRequireMention({ groups: account.config.groups, target: message.target })
     : false;
   const routeGroupAllowFrom = normalizeStringEntries(
     groupMatch.groupConfig?.allowFrom?.length

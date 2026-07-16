@@ -23,7 +23,7 @@ export type FleetCellRecord = {
   dataDir: string;
 };
 
-export type ReserveFleetCellParams = Omit<FleetCellRecord, "hostPort"> & {
+type ReserveFleetCellParams = Omit<FleetCellRecord, "hostPort"> & {
   requestedPort?: number;
 };
 

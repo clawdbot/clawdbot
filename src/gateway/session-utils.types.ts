@@ -76,6 +76,8 @@ export type GatewaySessionRow = {
   pinnedAt?: number;
   unread?: boolean;
   lastReadAt?: number;
+  /** Last real user/channel interaction; background work does not advance it. */
+  lastInteractionAt?: number;
   lastActivityAt?: number;
   sessionId?: string;
   placement?: SessionPlacement;

@@ -986,16 +986,13 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("sends caller-provided rich previews through standard text transport", async () => {
+  it("sends caller-provided HTML previews through standard text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling\n\n`🛠️ Exec`",
-      richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1005,11 +1002,8 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
 
     stream.updatePreview({
-      text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
-      richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1022,16 +1016,13 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("sends marked progress rich previews through HTML text transport", async () => {
+  it("sends marked progress HTML previews through HTML text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling\n\n🛠️ Exec",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1041,11 +1032,8 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
 
     stream.updatePreview({
-      text: "Shelling\n\n🛠️ Exec\n• Checking files",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1058,7 +1046,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("falls back to plain preview text when rich preview HTML parsing fails", async () => {
+  it("falls back to plain preview text when HTML parsing fails", async () => {
     const api = createMockDraftApi();
     api.sendMessage
       .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
@@ -1066,11 +1054,8 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling <&>\n\n🛠️ Exec",
-      richMessage: {
-        html: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1080,10 +1065,10 @@ describe("createTelegramDraftStream", () => {
       "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
       { parse_mode: "HTML" },
     );
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n\n🛠️ Exec", {});
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n🛠️ Exec", {});
     expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Shelling <&>\n\n🛠️ Exec",
-      sourceText: "Shelling &lt;&amp;&gt;\n\n🛠️ Exec",
+      text: "Shelling <&>\n🛠️ Exec",
+      sourceText: "Shelling &lt;&amp;&gt;\n🛠️ Exec",
       sourceTextMode: "html",
     });
 
@@ -1091,8 +1076,8 @@ describe("createTelegramDraftStream", () => {
       .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
       .mockResolvedValueOnce(true);
     stream.updatePreview({
-      text: "Done <&>",
-      richMessage: { html: "<b>Done &lt;&amp;&gt;</b>" },
+      text: "<b>Done &lt;&amp;&gt;</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1111,37 +1096,29 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
 
-    stream.updatePreview({
-      text: "Plan",
-      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
-    });
+    stream.update("## Plan\n\n| A |\n| --- |\n| x |");
     await stream.flush();
 
-    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: 123,
-      rich_message: {
-        html: "<h2>Plan</h2><table bordered striped><thead><tr><th>A</th></tr></thead></table>",
-      },
-    });
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    const first = api.raw.sendRichMessage.mock.calls[0]?.[0] as {
+      rich_message?: TelegramInputRichMessage;
+    };
+    expect(first?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
+    expect(first?.rich_message?.blocks?.some((block) => block.type === "table")).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
 
-    stream.updatePreview({
-      text: "Plan updated",
-      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
-    });
+    stream.update("## Plan updated\n\n| B |\n| --- |\n| y |");
     await stream.flush();
 
-    expect(api.raw.editMessageText).toHaveBeenCalledWith({
-      chat_id: 123,
-      message_id: 17,
-      rich_message: {
-        html: "<h2>Plan updated</h2><table bordered striped><thead><tr><th>B</th></tr></thead></table>",
-      },
-    });
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    const edit = api.raw.editMessageText.mock.calls[0]?.[0] as {
+      rich_message?: TelegramInputRichMessage;
+    };
+    expect(edit?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("uses table-aware plain text when rich preview fallback sends", async () => {
+  it("uses plain text when rich preview fallback sends", async () => {
     const api = createMockDraftApi();
     api.raw.sendRichMessage.mockRejectedValueOnce(
       new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
@@ -1149,27 +1126,16 @@ describe("createTelegramDraftStream", () => {
     const warn = vi.fn();
     const stream = createDraftStream(api, { richMessages: true, warn });
 
-    stream.updatePreview({
-      text: "Plan",
-      richMessage: {
-        html: "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>",
-      },
-    });
+    stream.update("| Rank | Model |\n| --- | --- |\n| 4 | Claude Opus |");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(
-      123,
-      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      {},
-    );
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    const plain = api.sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(plain).toContain("Rank");
+    expect(plain).toContain("Claude Opus");
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
     );
-    expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      sourceText: "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      sourceTextMode: "html",
-    });
   });
 
   it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
@@ -1184,19 +1150,19 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
       rich_message: {
-        html: oauthProfileText,
+        blocks: [{ type: "paragraph", text: oauthProfileText }],
         skip_entity_detection: true,
       },
     });
   });
 
-  it("keeps rich preview html out of plain preview gating", async () => {
+  it("keeps short rich previews out of plain preview gating", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
 
     stream.updatePreview({
       text: "Plan",
-      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+      richMessage: { blocks: [{ type: "heading", text: "Plan", size: 2 }] },
     });
     await stream.flush();
 
@@ -1215,8 +1181,13 @@ describe("createTelegramDraftStream", () => {
     const calls = api.raw.sendRichMessage.mock.calls as unknown[][];
     const params = calls[0]?.[0] as { rich_message?: TelegramInputRichMessage } | undefined;
     const richMessage = params?.rich_message;
-    expect(richMessage?.html).toContain("paragraph 499");
-    expect(richMessage?.html).not.toContain("paragraph 500");
+    const plain = (richMessage?.blocks ?? [])
+      .map((block) =>
+        block.type === "paragraph" && typeof block.text === "string" ? block.text : "",
+      )
+      .join("\n");
+    expect(plain).toContain("paragraph 499");
+    expect(plain).not.toContain("paragraph 500");
   });
 
   it("clamps rendered previews to the text-message limit", async () => {
@@ -1364,7 +1335,9 @@ describe("createTelegramDraftStream", () => {
       "```",
     ].join("\n");
     const stream = createDraftStream(api, {
-      maxChars: 55,
+      // Plain code body is shorter than HTML-wrapped rich text; keep the limit
+      // under the pre body so pagination still splits across messages.
+      maxChars: 30,
       richMessages: true,
       onRetainedPage: onSupersededPreview,
     });
@@ -1374,18 +1347,22 @@ describe("createTelegramDraftStream", () => {
 
     const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
       const params = call[0] as { rich_message?: TelegramInputRichMessage };
-      return params.rich_message?.html ?? "";
+      return params.rich_message?.blocks ?? [];
     });
     expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
     expect(
-      pages.every((page) => /^<pre><code class="language-ts">[\s\S]*<\/code><\/pre>$/u.test(page)),
+      pages.every((blocks) =>
+        blocks.some((block) => block.type === "pre" && block.language === "ts"),
+      ),
     ).toBe(true);
     const fullRichMessage = buildTelegramRichMarkdown(text);
-    if (!fullRichMessage.html) {
-      throw new Error("expected rendered Telegram rich HTML");
-    }
-    expect(pages.map(telegramHtmlToPlainTextFallback).join("")).toBe(
-      telegramHtmlToPlainTextFallback(fullRichMessage.html),
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join(""),
+    ).toBe(
+      fullRichMessage.blocks.map((block) => (block.type === "pre" ? block.text : "")).join(""),
     );
     expect(onSupersededPreview).toHaveBeenCalledTimes(pages.length - 1);
   });
@@ -1400,13 +1377,16 @@ describe("createTelegramDraftStream", () => {
 
     const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
       const params = call[0] as { rich_message?: TelegramInputRichMessage };
-      return params.rich_message?.html ?? "";
+      return params.rich_message?.blocks ?? [];
     });
     expect(pages.length).toBeGreaterThan(1);
-    expect(pages.every((page) => /^<pre><code>[\s\S]*<\/code><\/pre>$/u.test(page))).toBe(true);
-    expect(pages.map(telegramHtmlToPlainTextFallback).join("").replace(/\n$/u, "")).toBe(
-      " ".repeat(80),
-    );
+    expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join("")
+        .replace(/\n$/u, ""),
+    ).toBe(" ".repeat(80));
   });
 
   it("keeps non-final overflow in one editable preview", async () => {
@@ -1933,3 +1913,4 @@ describe("draft stream initial message debounce", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

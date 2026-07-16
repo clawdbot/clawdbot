@@ -80,7 +80,7 @@ function detectResult() {
 function exerciseGuidedAdapters(): RunGuidedOnboarding {
   const run: RunGuidedOnboarding = async (_opts, runtime, deps) => {
     const guidedDeps: GuidedOnboardingDeps = deps ?? {};
-    if (!guidedDeps.detect || !guidedDeps.activate || !guidedDeps.runCrestodianChat) {
+    if (!guidedDeps.detect || !guidedDeps.activate || !guidedDeps.runSystemAgentChat) {
       throw new Error("remote guided adapters missing");
     }
     const detection = await guidedDeps.detect();
@@ -97,7 +97,7 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
       runtime,
     });
     if (activation.ok) {
-      await guidedDeps.runCrestodianChat("/client/workspace", runtime, true);
+      await guidedDeps.runSystemAgentChat("/client/workspace", runtime, true);
     }
   };
   return vi.fn(run);
@@ -116,7 +116,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       secret: "selected-password",
     },
   ])(
-    "pins $label across detect, activate, verify, Crestodian, and in-process TUI",
+    "pins $label across detect, activate, verify, OpenClaw, and in-process TUI",
     async ({ auth, secret }) => {
       const localConfig = makeLocalConfig();
       const localConfigBefore = structuredClone(localConfig);
@@ -131,11 +131,11 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
         order.push(options.method);
 
-        if (options.method === "crestodian.setup.detect") {
+        if (options.method === "openclaw.setup.detect") {
           expect(options.timeoutMs).toBe(20_000);
           return detectResult();
         }
-        if (options.method === "crestodian.setup.activate") {
+        if (options.method === "openclaw.setup.activate") {
           expect(options.timeoutMs).toBe(150_000);
           expect(options.params).toEqual({
             kind: "claude-cli",
@@ -150,12 +150,12 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             lines: ["Default model: claude-cli/opus"],
           };
         }
-        if (options.method === "crestodian.setup.verify") {
+        if (options.method === "openclaw.setup.verify") {
           expect(options.timeoutMs).toBe(30_000);
           expect(remoteConfig.modelRef).toBe("claude-cli/opus");
           return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
         }
-        if (options.method === "crestodian.chat") {
+        if (options.method === "openclaw.chat") {
           expect(options.timeoutMs).toBe(190_000);
           expect(remoteConfig.modelRef).toBe("claude-cli/opus");
           expect(options.params).toEqual({
@@ -199,10 +199,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
 
       expect(order).toEqual([
-        "crestodian.setup.detect",
-        "crestodian.setup.activate",
-        "crestodian.setup.verify",
-        "crestodian.chat",
+        "openclaw.setup.detect",
+        "openclaw.setup.activate",
+        "openclaw.setup.verify",
+        "openclaw.chat",
         "tui",
       ]);
       expect(remoteConfig.modelRef).toBe("claude-cli/opus");
@@ -217,10 +217,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
 
   it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         return {
           ok: true,
           modelRef: "claude-cli/opus",
@@ -228,10 +228,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           lines: ["Default model: claude-cli/opus"],
         };
       }
-      if (options.method === "crestodian.setup.verify") {
+      if (options.method === "openclaw.setup.verify") {
         return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
       }
-      if (options.method === "crestodian.chat") {
+      if (options.method === "openclaw.chat") {
         return {
           sessionId: (options.params as { sessionId: string }).sessionId,
           reply: "Ready.",
@@ -274,16 +274,16 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       verification: { ok: true, modelRef: "openai/other", latencyMs: 100 },
       error: "Gateway verified openai/other, not the activated claude-cli/opus",
     },
-  ])("fails closed on $label before Crestodian", async ({ verification, error }) => {
+  ])("fails closed on $label before OpenClaw", async ({ verification, error }) => {
     const localConfig = makeLocalConfig();
     const localConfigBefore = structuredClone(localConfig);
     const methods: string[] = [];
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       methods.push(options.method);
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         return {
           ok: true,
           modelRef: "claude-cli/opus",
@@ -291,7 +291,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           lines: ["Default model: claude-cli/opus"],
         };
       }
-      if (options.method === "crestodian.setup.verify") {
+      if (options.method === "openclaw.setup.verify") {
         return verification;
       }
       throw new Error(`unexpected Gateway method ${options.method}`);
@@ -312,9 +312,9 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     ).rejects.toThrow(error);
 
     expect(methods).toEqual([
-      "crestodian.setup.detect",
-      "crestodian.setup.activate",
-      "crestodian.setup.verify",
+      "openclaw.setup.detect",
+      "openclaw.setup.activate",
+      "openclaw.setup.verify",
     ]);
     expect(runTui).not.toHaveBeenCalled();
     expect(localConfig).toEqual(localConfigBefore);
@@ -324,10 +324,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     const methods: string[] = [];
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       methods.push(options.method);
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         throw new Error("gateway connection closed after request");
       }
       throw new Error(`unexpected Gateway method ${options.method}`);
@@ -347,18 +347,18 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       ),
     ).rejects.toThrow("gateway connection closed after request");
 
-    expect(methods).toEqual(["crestodian.setup.detect", "crestodian.setup.activate"]);
+    expect(methods).toEqual(["openclaw.setup.detect", "openclaw.setup.activate"]);
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it("treats a cancelled remote Crestodian conversation as a pause without opening the agent", async () => {
+  it("treats a cancelled remote OpenClaw conversation as a pause without opening the agent", async () => {
     const methods: string[] = [];
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       methods.push(options.method);
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return detectResult();
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         return {
           ok: true,
           modelRef: "claude-cli/opus",
@@ -366,10 +366,10 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
           lines: ["Default model: claude-cli/opus"],
         };
       }
-      if (options.method === "crestodian.setup.verify") {
+      if (options.method === "openclaw.setup.verify") {
         return { ok: true, modelRef: "claude-cli/opus", latencyMs: 100 };
       }
-      if (options.method === "crestodian.chat") {
+      if (options.method === "openclaw.chat") {
         return {
           sessionId: (options.params as { sessionId: string }).sessionId,
           reply: "Which channel should I configure?",
@@ -397,12 +397,12 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     );
 
     expect(methods).toEqual([
-      "crestodian.setup.detect",
-      "crestodian.setup.activate",
-      "crestodian.setup.verify",
-      "crestodian.chat",
+      "openclaw.setup.detect",
+      "openclaw.setup.activate",
+      "openclaw.setup.verify",
+      "openclaw.chat",
     ]);
-    expect(prompter.outro).toHaveBeenCalledWith("Crestodian setup paused.");
+    expect(prompter.outro).toHaveBeenCalledWith("OpenClaw setup paused.");
     expect(runTui).not.toHaveBeenCalled();
   });
 });

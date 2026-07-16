@@ -61,7 +61,7 @@ type MissingPluginInstallPayload = {
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
-export function resolvePostSyncPluginUpdateSkipIds(params: {
+function resolvePostSyncPluginUpdateSkipIds(params: {
   switchedToClawHub: readonly string[];
   switchedToNpm: readonly string[];
   repairedMissingPayloadIds: ReadonlySet<string>;
@@ -142,7 +142,7 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
   );
 }
 
-export async function collectMissingPluginInstallPayloads(params: {
+async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
   skipDisabledPlugins?: boolean;
@@ -302,10 +302,8 @@ function isActionableSkippedPostUpdateOutcome(outcome: PluginUpdateOutcome): boo
  * refuse to restart the gateway and surface this as a hard error so the
  * existing `status === "error"` ⇒ `exit 1` pre-restart gate fires.
  *
- * Exported for unit testing without having to drive the entire
- * `updatePluginsAfterCoreUpdate` orchestrator.
  */
-export function buildInvalidConfigPostCoreUpdateResult(): {
+function buildInvalidConfigPostCoreUpdateResult(): {
   message: string;
   guidance: string[];
   result: PostCorePluginUpdateResult;
@@ -338,6 +336,15 @@ export function buildInvalidConfigPostCoreUpdateResult(): {
       warnings: [{ reason: "invalid-config", message, guidance }],
     },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandPluginsTestApi")] =
+    {
+      buildInvalidConfigPostCoreUpdateResult,
+      collectMissingPluginInstallPayloads,
+      resolvePostSyncPluginUpdateSkipIds,
+    };
 }
 
 export async function updatePluginsAfterCoreUpdate(params: {

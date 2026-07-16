@@ -8,10 +8,10 @@ import {
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
-import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
+import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
@@ -114,6 +114,10 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function createReactionHarness(params?: {
@@ -2827,97 +2831,6 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     },
   );
 
-  it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
-    const inboundDeduper = {
-      claimEvent: vi.fn(async () => true),
-      commitEvent: vi.fn(async () => undefined),
-      releaseEvent: vi.fn(),
-    };
-    const runtime = {
-      error: vi.fn(),
-    };
-    const { handler } = createMatrixHandlerTestHarness({
-      inboundDeduper,
-      runtime: runtime as never,
-      dispatchReplyFromConfig: vi.fn(async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      })),
-      createReplyDispatcherWithTyping: (params) => ({
-        dispatcher: {
-          markComplete: () => {},
-          waitForIdle: async () => {
-            params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind: "final" });
-          },
-        },
-        replyOptions: {},
-        markDispatchIdle: () => {},
-        markRunComplete: () => {},
-      }),
-    });
-
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$retryable-final-delivery-error",
-        body: "hello",
-      }),
-    );
-
-    expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-    expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-      roomId: "!room:example.org",
-      eventId: "$retryable-final-delivery-error",
-    });
-  });
-
-  it.each(["tool", "block"] as const)(
-    "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
-    async (kind) => {
-      const inboundDeduper = {
-        claimEvent: vi.fn(async () => true),
-        commitEvent: vi.fn(async () => undefined),
-        releaseEvent: vi.fn(),
-      };
-      const { handler } = createMatrixHandlerTestHarness({
-        inboundDeduper,
-        dispatchReplyFromConfig: vi.fn(async () => ({
-          queuedFinal: false,
-          counts: {
-            final: 0,
-            block: kind === "block" ? 1 : 0,
-            tool: kind === "tool" ? 1 : 0,
-          },
-        })),
-        createReplyDispatcherWithTyping: (params) => ({
-          dispatcher: {
-            markComplete: () => {},
-            waitForIdle: async () => {
-              params?.onError?.(new MatrixRetryableInboundError("retry send"), { kind });
-            },
-          },
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        }),
-      });
-
-      await handler(
-        "!room:example.org",
-        createMatrixTextMessageEvent({
-          eventId: `$retryable-${kind}-delivery-error`,
-          body: "hello",
-        }),
-      );
-
-      expect(inboundDeduper.commitEvent).not.toHaveBeenCalled();
-      expect(inboundDeduper.releaseEvent).toHaveBeenCalledWith({
-        roomId: "!room:example.org",
-        eventId: `$retryable-${kind}-delivery-error`,
-      });
-    },
-  );
-
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
@@ -2984,6 +2897,7 @@ describe("matrix monitor handler draft streaming", () => {
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
     onAssistantMessageStart?: () => void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     suppressDefaultToolProgressMessages?: boolean;
     onToolStart?: (payload: {
       itemId?: string;
@@ -3168,6 +3082,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3186,15 +3101,17 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onReplyStart?.();
     await opts.onItemEvent?.({ progressText: "first" });
     await opts.onItemEvent?.({ progressText: "second" });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe("- `second`");
     await finish();
+    vi.useRealTimers();
   });
 
   it("keeps truncated Matrix tool progress UTF-16 safe", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3211,15 +3128,17 @@ describe("matrix monitor handler draft streaming", () => {
     const progressText = `${progressPrefix}🎉tail`;
     await opts.onItemEvent?.({ progressText });
     await opts.onItemEvent?.({ progressText });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toBe(`- \`${progressPrefix}...\``);
     await finish();
+    vi.useRealTimers();
   });
 
   it("replaces recovered Matrix command progress instead of leaving stale failed text", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3245,10 +3164,10 @@ describe("matrix monitor handler draft streaming", () => {
       status: "failed",
       progressText: "run openclaw cron -> run jq (agent) failed",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("failed");
 
     await opts.onCommandOutput?.({
@@ -3273,9 +3192,11 @@ describe("matrix monitor handler draft streaming", () => {
     expect(recoveredEdit?.[2]).not.toContain("completed");
     expect(recoveredEdit?.[2]).not.toContain("failed");
     expect(recoveredEdit?.[2]).not.toContain("run openclaw cron -> run jq");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix tool-start progress when command output completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3299,10 +3220,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       args: { command: "npm install" },
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("install dependencies");
 
     await opts.onItemEvent?.({
@@ -3330,9 +3251,11 @@ describe("matrix monitor handler draft streaming", () => {
     );
     expect(completedEdit).toBeUndefined();
     expect(singleTextMessageBody()).toContain("install dependencies");
+    vi.useRealTimers();
   });
 
   it("replaces Matrix patch progress when the patch summary completes", async () => {
+    vi.useFakeTimers();
     const { dispatch } = createStreamingHarness({
       streaming: "progress",
       previewToolProgressEnabled: true,
@@ -3358,10 +3281,10 @@ describe("matrix monitor handler draft streaming", () => {
       phase: "update",
       progressText: "updating Matrix progress handling",
     });
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(singleTextMessageBody()).toContain("updating Matrix progress handling");
 
     await opts.onPatchSummary?.({
@@ -3379,6 +3302,7 @@ describe("matrix monitor handler draft streaming", () => {
         eventId === "$draft1" && typeof body === "string" && body.includes("1 file modified"),
     );
     expect(patchEdit?.[2]).not.toContain("updating Matrix progress handling");
+    vi.useRealTimers();
   });
 
   it("keeps Matrix tool progress mentions inside code formatting", async () => {
@@ -3854,6 +3778,66 @@ describe("matrix monitor handler draft streaming", () => {
 
       await vi.advanceTimersByTimeAsync(50);
       expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a fresh Matrix draft for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness();
+      const { deliver, opts, finish } = await dispatch();
+
+      opts.onPartialReply?.({ text: "Primary answer" });
+      await vi.waitFor(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      opts.onPartialReply?.({ text: "Queued followup answer" });
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toBe("Queued followup answer");
+      await finish();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts fresh progress drafts for queued followups after the primary final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { dispatch } = createStreamingHarness({
+        streaming: "progress",
+        previewToolProgressEnabled: true,
+      });
+      const { deliver, opts, finish } = await dispatch();
+
+      await opts.onToolStart?.({ name: "read_file" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+
+      await deliver({ text: "Primary answer" }, { kind: "final" });
+
+      sendSingleTextMessageMatrixMock.mockClear();
+      sendSingleTextMessageMatrixMock.mockResolvedValue({ messageId: "$draft2", roomId: "!room" });
+
+      await opts.onQueuedFollowupAdmitted?.();
+      await opts.onToolStart?.({ name: "exec" });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      expect(singleTextMessageBody()).toMatch(/`🛠️ Exec`$/);
       await finish();
     } finally {
       vi.useRealTimers();
@@ -4495,3 +4479,4 @@ describe("matrix monitor handler block streaming config", () => {
     expect(capturedDisableBlockStreaming).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

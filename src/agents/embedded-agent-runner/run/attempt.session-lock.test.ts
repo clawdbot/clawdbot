@@ -22,18 +22,16 @@ import {
   SessionWriteLockStaleError,
   SessionWriteLockTimeoutError,
 } from "../../session-write-lock-error.js";
-import {
-  acquireSessionWriteLock,
-  resetSessionWriteLockStateForTest,
-} from "../../session-write-lock.js";
+import { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { resetSessionWriteLockStateForTest } from "../../session-write-lock.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
   installPromptSubmissionLockRelease,
-  resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
+import { resetEmbeddedAttemptSessionFileOwnersForTest } from "./attempt.session-lock.test-support.js";
 
 const lockOptions = {
   sessionFile: "/tmp/session.jsonl",
@@ -3807,3 +3805,4 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

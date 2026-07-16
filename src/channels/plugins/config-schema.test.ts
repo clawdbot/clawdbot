@@ -50,6 +50,33 @@ describe("buildChannelConfigSchema", () => {
     });
   });
 
+  it("can describe accepted transform inputs instead of unrepresentable outputs", () => {
+    const result = buildChannelConfigSchema(
+      z.object({
+        policy: z.union([
+          z.enum(["open", "disabled"]),
+          z.literal("legacy").transform(() => "open" as const),
+        ]),
+      }),
+      { jsonSchemaMode: "input" },
+    );
+
+    expect(result.schema).toMatchObject({
+      properties: {
+        policy: {
+          anyOf: [
+            { type: "string", enum: ["open", "disabled"] },
+            { type: "string", const: "legacy" },
+          ],
+        },
+      },
+    });
+    expect(result.runtime?.safeParse({ policy: "legacy" })).toEqual({
+      success: true,
+      data: { policy: "open" },
+    });
+  });
+
   it("passes through ui hints and exposes a runtime parser", () => {
     const result = buildChannelConfigSchema(z.object({ enabled: z.boolean().default(true) }), {
       uiHints: { enabled: { label: "Enabled" } },

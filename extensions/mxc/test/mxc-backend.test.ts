@@ -1526,3 +1526,4 @@ describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", (
     ).resolves.toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

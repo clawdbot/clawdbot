@@ -1117,3 +1117,4 @@ describe("presentation capability limits", () => {
     expect(fallbackBlocks.slice(1).join("")).toBe(`- Value: ${value}`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

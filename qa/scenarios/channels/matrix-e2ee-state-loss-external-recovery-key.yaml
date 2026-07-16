@@ -1,0 +1,35 @@
+title: Matrix E2EE total state loss restores backup with an external recovery key
+scenario:
+  id: matrix-e2ee-state-loss-external-recovery-key
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-state-loss-external-recovery-key
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE State Loss External Key Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeStateLossExternalRecoveryKeyScenario
+  args:
+    - expr: "scenarioContext"

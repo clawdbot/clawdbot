@@ -109,6 +109,9 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
+  overflow-anchor: none;
+  /* The transcript is document content, unlike the surrounding app chrome. */
+  user-select: text;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--muted-strong) transparent;
   /* The tall top inset is a titlebar band: it keeps the floating rail
@@ -157,11 +160,38 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-inline: auto;
 }
 
+.chat-virtual-sizer {
+  position: relative;
+  width: 100%;
+}
+
+.chat-virtual-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flow-root;
+  width: 100%;
+}
+
+.chat-virtual-row--first > :first-child {
+  margin-top: 0 !important;
+}
+
 .chat-history-sentinel {
   display: flex;
   min-height: 28px;
   align-items: center;
   justify-content: center;
+}
+
+.chat-virtual-sizer > .chat-history-sentinel {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  min-height: 1px;
+  pointer-events: none;
 }
 
 .chat-history-loading {

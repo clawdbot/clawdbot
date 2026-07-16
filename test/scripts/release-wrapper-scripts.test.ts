@@ -62,6 +62,8 @@ describe("release wrapper scripts", () => {
 
   it("loads the OpenClaw ClawHub plan CLI and validates required arguments before planning", () => {
     const result = runTsxScript("scripts/openclaw-release-clawhub-plan.ts", [
+      "--bootstrap-workflow-ref",
+      "main",
       "--bootstrap-workflow-sha",
       "b".repeat(40),
       "--release-tag",
@@ -83,9 +85,12 @@ describe("release wrapper scripts", () => {
     const oldTarget = createOldReleaseTarget();
     const repositoryRoot = process.cwd();
     const releaseSha = "a".repeat(40);
+    const bootstrapWorkflowRef = `release-publish/${"b".repeat(12)}-123`;
     const plan = runTsxScript(
       join(repositoryRoot, "scripts/openclaw-release-clawhub-plan.ts"),
       [
+        "--bootstrap-workflow-ref",
+        bootstrapWorkflowRef,
         "--bootstrap-workflow-sha",
         "b".repeat(40),
         "--release-tag",
@@ -106,7 +111,7 @@ describe("release wrapper scripts", () => {
     expect(plan.status, plan.stderr).toBe(0);
     expect(JSON.parse(plan.stdout)).toMatchObject({
       bootstrapWorkflowSha: "b".repeat(40),
-      bootstrap: { ref: "main", shouldDispatch: false },
+      bootstrap: { ref: bootstrapWorkflowRef, shouldDispatch: false },
       normal: { ref: "v2026.7.1-beta.3", shouldDispatch: false },
     });
     expect(plan.stderr).not.toContain("old target planner invoked");

@@ -106,6 +106,7 @@ type MockCallSource = {
 type TestNodeSession = {
   nodeId: string;
   commands: string[];
+  declaredCommands?: string[];
   platform?: string;
 };
 
@@ -631,6 +632,68 @@ describe("node.invoke APNs wake path", () => {
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
       'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains when a declared node command surface awaits approval", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["system.notify", "camera.list", "location.get"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node's declared command surface is pending approval; run `openclaw nodes pending`, then `openclaw nodes approve <requestId>`",
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not claim approval can add an undeclared command", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "node did not declare commands",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "linux-node",
+        commands: [],
+        declaredCommands: ["camera.list"],
+        platform: "linux",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "linux-node",
+        command: "system.notify",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      "node command not allowed: the node did not declare any supported commands",
     );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
@@ -1251,3 +1314,4 @@ describe("node.invoke APNs wake path", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

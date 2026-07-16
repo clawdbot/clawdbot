@@ -70,8 +70,6 @@
     "!dist/plugin-sdk/test-node-mocks.d.ts",
     "!dist/plugin-sdk/test-utils.js",
     "!dist/plugin-sdk/test-utils.d.ts",
-    "!dist/plugin-sdk/testing.js",
-    "!dist/plugin-sdk/testing.d.ts",
     "!dist/plugin-sdk/src/agents/test-helpers/**",
     "!dist/plugin-sdk/src/test-helpers/**",
     "!dist/plugin-sdk/src/test-utils/**",
@@ -651,6 +649,10 @@
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
+    "./plugin-sdk/html-entity-runtime": {
+      "types": "./dist/plugin-sdk/html-entity-runtime.d.ts",
+      "default": "./dist/plugin-sdk/html-entity-runtime.js"
+    },
     "./plugin-sdk/host-runtime": {
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"
@@ -927,10 +929,6 @@
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
     },
-    "./plugin-sdk/channel-ingress": {
-      "types": "./dist/plugin-sdk/channel-ingress.d.ts",
-      "default": "./dist/plugin-sdk/channel-ingress.js"
-    },
     "./plugin-sdk/channel-ingress-runtime": {
       "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
@@ -990,6 +988,10 @@
     "./plugin-sdk/inline-image-data-url-runtime": {
       "types": "./dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
       "default": "./dist/plugin-sdk/inline-image-data-url-runtime.js"
+    },
+    "./plugin-sdk/node-host": {
+      "types": "./dist/plugin-sdk/node-host.d.ts",
+      "default": "./dist/plugin-sdk/node-host.js"
     },
     "./plugin-sdk/response-limit-runtime": {
       "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
@@ -1554,7 +1556,7 @@
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:map:check",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
-    "check:loc": "node --import tsx scripts/check-ts-max-loc.ts",
+    "check:max-lines-ratchet": "node scripts/check-max-lines-ratchet.mjs",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
@@ -1589,7 +1591,6 @@
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
     "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:exports": "node scripts/check-deadcode-exports.mjs",
-    "deadcode:exports:update": "node scripts/check-deadcode-exports.mjs --update",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:exports",
     "deadcode:unused-files": "node scripts/check-deadcode-unused-files.mjs",
@@ -1661,7 +1662,7 @@
     "ios:version:check": "node --import tsx scripts/ios-sync-versioning.ts --check",
     "ios:version:sync": "node --import tsx scripts/ios-sync-versioning.ts --write",
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
-    "lint": "node scripts/run-oxlint-shards.mjs",
+    "lint": "pnpm lint:ui:i18n && node scripts/run-oxlint-shards.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
     "lint:all": "node scripts/run-oxlint.mjs",
     "lint:apps": "pnpm lint:swift",
@@ -1699,6 +1700,7 @@
     "lint:tmp:session-transcript-reader-boundary": "node scripts/check-session-transcript-reader-boundary.mjs",
     "lint:tmp:sqlite-transaction-boundary": "node scripts/check-sqlite-transaction-boundary.mjs",
     "lint:tmp:tsgo-core-boundary": "node scripts/check-tsgo-core-boundary.mjs",
+    "lint:ui:i18n": "pnpm ui:i18n:verify",
     "lint:ui:no-raw-window-open": "node scripts/check-no-raw-window-open.mjs",
     "lint:web-fetch-provider-boundaries": "node scripts/check-web-fetch-provider-boundaries.mjs",
     "lint:web-search-provider-boundaries": "node scripts/check-web-search-provider-boundaries.mjs",
@@ -1809,8 +1811,8 @@
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:commitments-safety": "bash scripts/e2e/commitments-safety-docker.sh",
     "test:docker:config-reload": "bash scripts/e2e/config-reload-source-docker.sh",
-    "test:docker:crestodian-first-run": "bash scripts/e2e/crestodian-first-run-docker.sh",
-    "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
+    "test:docker:system-agent-first-run": "bash scripts/e2e/system-agent-first-run-docker.sh",
+    "test:docker:system-agent-rescue": "bash scripts/e2e/system-agent-rescue-docker.sh",
     "test:docker:cron-cli": "bash scripts/e2e/cron-cli-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
     "test:docker:codex-media-path": "bash scripts/e2e/codex-media-path-docker.sh",
@@ -1913,7 +1915,7 @@
     "test:live": "node scripts/test-live.mjs",
     "test:live:cache": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
     "test:live:codex-harness": "node scripts/test-live.mjs --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
-    "test:live:crestodian-rescue-channel": "node scripts/run-with-env.mjs OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL=1 -- node scripts/test-live.mjs -- src/crestodian/rescue-channel.live.test.ts",
+    "test:live:system-agent-rescue-channel": "node scripts/run-with-env.mjs OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL=1 -- node scripts/test-live.mjs -- src/system-agent/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts",
     "test:live:media:image": "node --import tsx test/e2e/qa-lab/media/hosted-media-provider-live.ts image",
@@ -1925,6 +1927,7 @@
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
     "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
+    "test:parallels:windows:prepare": "bash scripts/e2e/parallels-windows-prepare.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:changed:bench": "node scripts/bench-test-changed.mjs",
@@ -1991,9 +1994,11 @@
     "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
     "ui:build": "node scripts/ui.js build && node scripts/check-control-ui-precompressed-assets.mjs && node scripts/check-control-ui-performance.mjs",
     "ui:dev": "node scripts/ui.js dev",
+    "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
+    "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
@@ -2082,6 +2087,7 @@
     "@types/node": "26.1.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.7.1",
+    "@types/web-push": "3.6.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.9",

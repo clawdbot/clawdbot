@@ -184,6 +184,38 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
   });
 
+  it("adds runtime tools without replacing the configured tool surface", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          deny: ["workboard_block"],
+        },
+      },
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+      },
+    });
+
+    expect(profile.policy.profileAlsoAllow).toEqual(["workboard_heartbeat", "workboard_complete"]);
+    expect(profile.policy.providerProfileAlsoAllow).toEqual([
+      "workboard_heartbeat",
+      "workboard_complete",
+    ]);
+    expect(profile.policy.explicitToolAllowlist).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(profile.policy.explicitToolAllowlist).not.toContain("workboard_heartbeat");
+    expect(profile.policy.explicitToolOverrideAllowlist).toEqual([]);
+    expect(profile.policy.explicitToolDenylist).toEqual(["workboard_block"]);
+    expect(profile.policy.runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+    });
+    expect(profile.policy.inheritancePolicies).not.toContainEqual({
+      allow: ["workboard_heartbeat", "workboard_complete"],
+    });
+  });
+
   it("keeps inherited subagent grants out of explicit overrides", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
     const storePath = path.join(tempDir, "sessions.json");

@@ -390,11 +390,17 @@ export async function approveChannelPairingCode(params: {
       normalizeOptionalString(params.accountId) ?? normalizeOptionalString(entry.meta?.accountId),
     );
     const currentAllow = state.allowFrom?.[allowAccountId] ?? [];
-    const normalizedAllow = normalizeAllowFromInput(
-      params.channel,
-      entry.id,
-      params.pairingAdapter,
-    );
+    const adapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
+    // Channels with key-bound handoffs can persist an opaque approval token
+    // derived from request metadata instead of a durable sender allowlist id.
+    const approvalEntry = adapter?.resolveApprovalStoreEntry
+      ? adapter.resolveApprovalStoreEntry({
+          id: entry.id,
+          ...(entry.meta ? { meta: entry.meta } : {}),
+        })
+      : entry.id;
+    const normalizedAllow =
+      approvalEntry == null ? "" : normalizeAllowFromInput(params.channel, approvalEntry, adapter);
     if (normalizedAllow && !currentAllow.includes(normalizedAllow)) {
       state.allowFrom ??= {};
       state.allowFrom[allowAccountId] = [...currentAllow, normalizedAllow];

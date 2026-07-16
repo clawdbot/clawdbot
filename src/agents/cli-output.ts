@@ -1662,3 +1662,4 @@ export function extractCliErrorMessage(raw: string): string | null {
 
   return errorText || null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

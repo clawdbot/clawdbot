@@ -5,11 +5,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import {
+  type ExecApprovalDecision,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequestPayload,
+} from "../infra/system-agent-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
@@ -32,12 +37,12 @@ import {
   ExecApprovalManager,
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
+import { createLazyHandler } from "./lazy-handler.js";
 import {
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
-import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   claimSharedGatewaySessionGenerationIfOwned,
@@ -94,20 +99,6 @@ async function restoreSecretsRuntimeSnapshotIfCurrent(
   return runtime.getActiveSecretsRuntimeSnapshotRevision();
 }
 
-function createLazyHandler(
-  method: string,
-  loadHandlers: () => Promise<GatewayRequestHandlers>,
-): GatewayRequestHandler {
-  return async (opts) => {
-    const handlers = await loadHandlers();
-    const handler = handlers[method];
-    if (!handler) {
-      throw new Error(`lazy gateway handler not found: ${method}`);
-    }
-    await handler(opts);
-  };
-}
-
 /** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
@@ -132,19 +123,25 @@ export function createGatewayAuxHandlers(params: {
     nowMs: approvalStartupNowMs,
   });
   pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
-
-  const execApprovalManager = new ExecApprovalManager<ExecApprovalRequestPayload>({
-    approvalKind: "exec",
-    persistence: approvalPersistence,
-    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    onLifecycle: params.onApprovalLifecycle,
-    onError: (error, context) => {
-      params.log.error?.(
-        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
-      );
-    },
-  });
+  const createApprovalManager = <TPayload>(
+    approvalKind: "exec" | "plugin" | "system-agent",
+    resolveAllowedDecisions: (request: TPayload) => readonly ExecApprovalDecision[],
+  ) =>
+    new ExecApprovalManager<TPayload>({
+      approvalKind,
+      persistence: approvalPersistence,
+      resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
+      resolveAllowedDecisions,
+      onLifecycle: params.onApprovalLifecycle,
+      onError: (error, context) =>
+        params.log.error?.(
+          `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+        ),
+    });
+  const execApprovalManager = createApprovalManager<ExecApprovalRequestPayload>(
+    "exec",
+    resolveExecApprovalRequestAllowedDecisions,
+  );
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
   const loadExecApprovalHandlers = createLazyPromise(
@@ -158,18 +155,14 @@ export function createGatewayAuxHandlers(params: {
     { cacheRejections: true },
   );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
-  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-    approvalKind: "plugin",
-    persistence: approvalPersistence,
-    resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
-    resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
-    onLifecycle: params.onApprovalLifecycle,
-    onError: (error, context) => {
-      params.log.error?.(
-        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
-      );
-    },
-  });
+  const pluginApprovalManager = createApprovalManager<PluginApprovalRequestPayload>(
+    "plugin",
+    resolveCanonicalPluginApprovalRequestAllowedDecisions,
+  );
+  const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
+    "system-agent",
+    () => SYSTEM_AGENT_APPROVAL_DECISIONS,
+  );
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>
       import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
@@ -185,6 +178,7 @@ export function createGatewayAuxHandlers(params: {
         createApprovalHandlers({
           execApprovalManager,
           pluginApprovalManager,
+          systemAgentApprovalManager,
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
         }),
@@ -512,6 +506,7 @@ export function createGatewayAuxHandlers(params: {
     execApprovalManager,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     pluginApprovalManager,
+    systemAgentApprovalManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),
       "exec.approval.list": createLazyHandler("exec.approval.list", loadExecApprovalHandlers),

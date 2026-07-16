@@ -9,7 +9,8 @@ import {
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
-import { collectElevatedFindings, runSecurityAudit } from "./audit.js";
+import { runSecurityAudit } from "./audit.js";
+import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
 function captureSecurityEvents(): {
   events: DiagnosticSecurityEvent[];
@@ -48,8 +49,8 @@ describe("security audit config basics", () => {
     ).toBe(true);
   });
 
-  it("flags tools.elevated allowFrom wildcard as critical", () => {
-    const findings = collectElevatedFindings({
+  it("flags tools.elevated allowFrom wildcard as critical", async () => {
+    const findings = await collectSecurityAuditFindings({
       tools: {
         elevated: {
           allowFrom: { whatsapp: ["*"] },

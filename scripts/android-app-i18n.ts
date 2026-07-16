@@ -467,7 +467,7 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.take(87)}..."]),
+    new Set(["${normalized.takeUtf16Safe(87)}..."]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatCommandControls.kt",

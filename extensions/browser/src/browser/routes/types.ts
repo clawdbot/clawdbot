@@ -23,10 +23,7 @@ export type BrowserResponse = {
 };
 
 /** Async route handler signature shared by HTTP and in-process dispatch. */
-export type BrowserRouteHandler = (
-  req: BrowserRequest,
-  res: BrowserResponse,
-) => void | Promise<void>;
+type BrowserRouteHandler = (req: BrowserRequest, res: BrowserResponse) => void | Promise<void>;
 
 /** Minimal registrar interface implemented by HTTP and test dispatchers. */
 export type BrowserRouteRegistrar = {

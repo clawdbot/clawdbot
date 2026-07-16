@@ -28,6 +28,7 @@ describe("buildControlUiCspHeader", () => {
       "'self'",
       "ws:",
       "wss:",
+      "data:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
@@ -67,10 +68,10 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toMatch(/script-src 'self'(?:;|$)/);
   });
 
-  it("does not relax the policy for the terminal unless allowWasm is set", () => {
+  it("does not relax script execution for the terminal unless allowWasm is set", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).not.toContain("wasm-unsafe-eval");
-    expect(csp).not.toMatch(/connect-src[^;]*data:/);
+    expect(csp).toMatch(/connect-src[^;]*data:/);
   });
 
   it("relaxes script-src and connect-src for the terminal's ghostty-web WASM engine", () => {
@@ -78,7 +79,7 @@ describe("buildControlUiCspHeader", () => {
     // Narrow WASM compilation permission — never full unsafe-eval.
     expect(csp).toMatch(/script-src[^;]*'wasm-unsafe-eval'/);
     expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'(?!-)/);
-    // ghostty-web fetches its inlined WASM from a data: URL.
+    // Web Awesome icons and ghostty-web both fetch inlined data: assets.
     expect(csp).toMatch(/connect-src[^;]*\bdata:/);
   });
 

@@ -1158,3 +1158,4 @@ export function configureTaskRegistryMaintenance(options?: {
     configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

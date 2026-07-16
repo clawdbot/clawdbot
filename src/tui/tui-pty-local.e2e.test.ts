@@ -91,6 +91,12 @@ const GATEWAY_SCENARIOS = {
     holdFirstResponse: true,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
+  reconnect: {
+    agentId: "tui-pty-reconnect",
+    modelId: "tui-pty-reconnect",
+    toolsProfile: "minimal",
+    replyText: "RECONNECTED_RUN_COMPLETE",
+  },
 } as const satisfies Record<string, GatewayScenario>;
 
 type GatewayScenarioId = keyof typeof GATEWAY_SCENARIOS;
@@ -979,6 +985,52 @@ describe("TUI PTY real backends", () => {
   }
 
   registerGatewayTest(
+    "preserves a disconnected draft across a real Gateway restart",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("reconnect", onTestFinished);
+      let gatewayStopped = false;
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        const disconnectOffset = fixture.run.output().length;
+        await fixture.gateway.stopGateway();
+        gatewayStopped = true;
+        await waitForOutputAfter(fixture.run, "gateway disconnected", disconnectOffset);
+
+        await fixture.run.write("send preserved draft after restart\r");
+        await fixture.run.waitForOutput("not connected to gateway — message not sent");
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+
+        const reconnectOffset = fixture.run.output().length;
+        await fixture.gateway.startGateway();
+        gatewayStopped = false;
+        await waitForOutputAfter(fixture.run, "gateway reconnected", reconnectOffset);
+        await fixture.run.write("\r", { delay: false });
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `preserved prompt did not reach the model after restart\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[0]?.body)).toContain(
+          "send preserved draft after restart",
+        );
+        await fixture.run.waitForOutput("RECONNECTED_RUN_COMPLETE");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        if (gatewayStopped) {
+          await fixture.gateway.startGateway();
+        }
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
     "creates and adopts a fresh session through the real Gateway backend",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("newSession", onTestFinished);
@@ -1259,3 +1311,4 @@ describe("TUI PTY real backends", () => {
     registerValidationLoopTest("gateway");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

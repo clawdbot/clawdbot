@@ -117,14 +117,14 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   const abortSignal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, daemonAbortController.signal])
     : daemonAbortController.signal;
-  const stop = () => {
+  const stop = (): Promise<void> => {
     daemonStopRequested = true;
     if (!daemonAbortController.signal.aborted) {
       daemonAbortController.abort(
         params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
       );
     }
-    daemonHandle?.stop();
+    return daemonHandle?.stop() ?? Promise.resolve();
   };
   const attach = (handle: SignalDaemonHandle) => {
     daemonHandle = handle;
@@ -615,7 +615,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   }
 
   const onAbort = () => {
-    daemonLifecycle.stop();
+    void daemonLifecycle.stop();
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -710,10 +710,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
-    // Stop first: pending retry delays observe abort, while retries that already
-    // started remain in the task runner and drain before monitor teardown.
-    daemonLifecycle.stop();
-    await monitorTaskRunner.waitForIdle();
+    // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
+    // child has exited and already-started reply work has drained.
+    await Promise.all([daemonLifecycle.stop(), monitorTaskRunner.waitForIdle()]);
     opts.abortSignal?.removeEventListener("abort", onAbort);
   }
 }

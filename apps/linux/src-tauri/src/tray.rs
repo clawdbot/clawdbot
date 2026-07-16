@@ -128,7 +128,7 @@ fn handle_menu(app: &AppHandle, state: &DesktopState, id: &str) {
 
 fn spawn_connect(app: AppHandle, state: DesktopState) {
     std::thread::spawn(move || {
-        if let Err(error) = state.connect(&app) {
+        if let Err(error) = state.connect_explicit_local(&app) {
             state.show_error(&app, &error);
         }
     });

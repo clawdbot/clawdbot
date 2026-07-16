@@ -26,8 +26,32 @@ type TelegramReplyFenceKey = {
 };
 
 // Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
-const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
-const telegramReplyFenceKeysByLane = new Map<string, Set<string>>();
+const TELEGRAM_REPLY_FENCE_STATE_KEY = Symbol.for("openclaw.telegram.replyFenceState");
+
+function getTelegramReplyFenceState(): {
+  byKey: Map<string, TelegramReplyFenceState>;
+  keysByLane: Map<string, Set<string>>;
+} {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_REPLY_FENCE_STATE_KEY] as
+    | {
+        byKey: Map<string, TelegramReplyFenceState>;
+        keysByLane: Map<string, Set<string>>;
+      }
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    byKey: new Map<string, TelegramReplyFenceState>(),
+    keysByLane: new Map<string, Set<string>>(),
+  };
+  globalRecord[TELEGRAM_REPLY_FENCE_STATE_KEY] = created;
+  return created;
+}
+
+const { byKey: telegramReplyFenceByKey, keysByLane: telegramReplyFenceKeysByLane } =
+  getTelegramReplyFenceState();
 
 export function buildTelegramReplyFenceLaneKey(params: {
   accountId: string;
@@ -228,9 +252,4 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
     ctxPayload.CommandAuthorized &&
     (isExplicitCommandTurn(ctxPayload.CommandTurn) || isRecognizedTelegramTextCommand(dispatchText))
   );
-}
-
-export function resetTelegramReplyFenceForTests(): void {
-  telegramReplyFenceByKey.clear();
-  telegramReplyFenceKeysByLane.clear();
 }

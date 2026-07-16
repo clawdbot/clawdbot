@@ -168,7 +168,7 @@ async function waitForNormalizedSessionLifecycleMutationIdle(
   }
 }
 
-export async function runExclusiveSessionLifecycle<T>(params: {
+async function runExclusiveSessionLifecycle<T>(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   signal?: AbortSignal;
@@ -523,4 +523,10 @@ export async function interruptSessionWorkAdmissions(params: {
       clearTimeout(timer);
     }
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.sessionLifecycleAdmissionTestApi")
+  ] = { runExclusiveSessionLifecycle };
 }

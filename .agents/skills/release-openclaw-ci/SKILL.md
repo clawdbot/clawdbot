@@ -215,16 +215,15 @@ Stop watchers before ending the turn or switching strategy.
      failed child; never rebuild an immutable version that already published
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
-   First check the target-owned workflow with `git show
-<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
-   declares `pr_number`, dispatch the explicit exact-SHA fallback:
+   First verify the PR head carries the current fallback schema:
+   `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
+--jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
+   refresh the PR head from `main` and use the new head SHA; let normal CI run
+   before considering another fallback.
+   From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
-release_gate=true`.
-   The workflow authenticates that PR's head/base, validates GitHub's current
-   synthetic merge tree, and runs the LOC task from that tree. Older workflow
-   schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
-   restart exact-head proof on the new SHA instead of dispatching them.
+target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
+include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.

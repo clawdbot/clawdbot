@@ -1,34 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
 import { expectDefined } from "@openclaw/normalization-core";
-import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../test-helpers/application-context.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import "./plugins-page.ts";
-
-const PROVIDER_TAG = "test-plugins-page-context-provider";
-
-class PluginsPageContextProvider extends LitElement {
-  private readonly provider = new ContextProvider(this, { context: applicationContext });
-
-  setContext(context: ApplicationContext) {
-    this.provider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_TAG)) {
-  customElements.define(PROVIDER_TAG, PluginsPageContextProvider);
-}
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -191,11 +178,10 @@ function createContext(
 async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: PluginsPageContextProvider }> {
-  const provider = document.createElement(PROVIDER_TAG) as PluginsPageContextProvider;
+): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
   page.routeData = routeData;
-  provider.setContext(context);
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;

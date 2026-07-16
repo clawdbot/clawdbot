@@ -2,7 +2,8 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 export const {
   buildOpenAIResponsesParams,

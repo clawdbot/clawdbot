@@ -20,7 +20,7 @@ function truncateReplyBody(value: string): string {
   return `${sliceUtf16Safe(value, 0, MAX_REPLY_BODY_LENGTH - 3)}...`;
 }
 
-export function summarizeMatrixReplyEvent(event: MatrixRawEvent): string | undefined {
+function summarizeMatrixReplyEvent(event: MatrixRawEvent): string | undefined {
   const body = summarizeMatrixMessageContextEvent(event);
   return body ? truncateReplyBody(body) : undefined;
 }

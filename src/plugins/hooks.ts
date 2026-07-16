@@ -1643,3 +1643,4 @@ export type SubagentLifecycleHookRunner = Pick<
   HookRunner,
   "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
 >;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

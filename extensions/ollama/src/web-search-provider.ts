@@ -92,10 +92,6 @@ function resolveEnvOllamaWebSearchApiKey(): string | undefined {
   return resolveEnvApiKey("ollama")?.apiKey;
 }
 
-function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefined {
-  return resolveConfiguredOllamaWebSearchApiKey(config) ?? resolveEnvOllamaWebSearchApiKey();
-}
-
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   const pluginBaseUrl = normalizeOptionalString(
     resolveProviderWebSearchPluginConfig(config, "ollama")?.baseUrl,
@@ -161,7 +157,7 @@ function buildOllamaWebSearchAttempts(params: {
   return attempts;
 }
 
-export async function runOllamaWebSearch(params: {
+async function runOllamaWebSearch(params: {
   config?: OpenClawConfig;
   query: string;
   count?: number;
@@ -336,15 +332,3 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
     }),
   };
 }
-
-export const testing = {
-  buildOllamaWebSearchAttempts,
-  normalizeOllamaWebSearchResult,
-  resolveConfiguredOllamaWebSearchApiKey,
-  resolveEnvOllamaWebSearchApiKey,
-  resolveOllamaWebSearchApiKey,
-  resolveOllamaWebSearchBaseUrl,
-  isOllamaCloudBaseUrl,
-  readOllamaWebSearchResponse,
-  warnOllamaWebSearchPrereqs,
-};

@@ -1096,3 +1096,4 @@ export function sanitizeAssistantVisibleTextWithOptions(
   const profile = options?.trim === "none" ? "history" : "delivery";
   return sanitizeAssistantVisibleTextWithProfile(text, profile);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

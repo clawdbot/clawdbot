@@ -8,16 +8,6 @@ on:
         required: false
         default: ""
         type: string
-      pr_number:
-        description: Pull request number required by the exact-SHA release gate
-        required: false
-        default: ""
-        type: string
-      loc_base_ref:
-        description: Optional exact LOC comparison-base SHA for standalone manual runs
-        required: false
-        default: ""
-        type: string
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -28,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      pull_request_number:
+        description: Pull request number required by the exact-SHA release gate.
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -50,8 +45,6 @@ on:
       - "docs/**"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths-ignore:
-      - "CHANGELOG.md"
 
 permissions:
   contents: read
@@ -91,15 +84,13 @@ jobs:
   preflight:
     permissions:
       contents: read
-      pull-requests: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
-      loc_base_sha: ${{ steps.release_gate_loc_tree.outputs.base_sha || inputs.loc_base_ref || '' }}
-      loc_head_sha: ${{ steps.release_gate_loc_tree.outputs.head_sha || '' }}
+      diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -143,7 +134,8 @@ jobs:
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
-          PR_NUMBER: ${{ inputs.pr_number }}
+          HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
@@ -153,8 +145,8 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            echo "release_gate requires pr_number to identify an open pull request" >&2
+          if [[ ! "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_gate requires pull_request_number" >&2
             exit 1
           fi
 
@@ -163,14 +155,8 @@ jobs:
             exit 1
           fi
 
-      - name: Validate manual LOC base input
-        if: github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''
-        env:
-          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$LOC_BASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "loc_base_ref must be a full commit SHA" >&2
+          if [[ -n "$HISTORICAL_TARGET_TAG" ]]; then
+            echo "release_gate cannot be combined with historical_target_tag" >&2
             exit 1
           fi
 
@@ -257,66 +243,20 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release-gate PR merge tree
-        id: release_gate_loc_tree
-        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+      - name: Resolve exact diff base
+        id: diff_base
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          TARGET_REF: ${{ inputs.target_ref }}
+          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
         run: |
           set -euo pipefail
-          merge_sha=""
-          pr_base_sha=""
-          for attempt in {1..12}; do
-            pr_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-            pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
-            pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
-            pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
-            pr_base_repo="$(jq -r '.base.repo.full_name // ""' <<<"$pr_json")"
-            if [[ "$pr_state" != "open" || "$pr_base_repo" != "$GITHUB_REPOSITORY" ]]; then
-              echo "release_gate pr_number must identify an open pull request in ${GITHUB_REPOSITORY}" >&2
-              exit 1
-            fi
-            if [[ "$pr_head_sha" != "$TARGET_REF" ]]; then
-              echo "release_gate target_ref must match pull request ${PR_NUMBER} head ${pr_head_sha}" >&2
-              exit 1
-            fi
-            if [[ ! "$pr_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Could not resolve pull request ${PR_NUMBER} base SHA." >&2
-              exit 1
-            fi
-            mergeable="$(jq -r 'if .mergeable == null then "pending" else (.mergeable | tostring) end' <<<"$pr_json")"
-            if [[ "$mergeable" == "true" ]]; then
-              merge_sha="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
-              if [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                echo "Could not resolve pull request ${PR_NUMBER} test merge commit." >&2
-                exit 1
-              fi
-              break
-            fi
-            if [[ "$mergeable" == "false" ]]; then
-              echo "Pull request ${PR_NUMBER} is not mergeable with its current base." >&2
-              exit 1
-            fi
-            if [[ "$attempt" == "12" ]]; then
-              echo "Timed out waiting for pull request ${PR_NUMBER} mergeability." >&2
-              exit 1
-            fi
-            sleep 2
-          done
-          merge_ref="refs/remotes/origin/release-gate-merge"
-          git fetch --no-tags --depth=2 origin \
-            "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"
-          resolved_merge_sha="$(git rev-parse "$merge_ref")"
-          merge_base_parent="$(git rev-parse "${merge_ref}^1")"
-          merge_head_parent="$(git rev-parse "${merge_ref}^2")"
-          if [[ "$resolved_merge_sha" != "$merge_sha" || "$merge_base_parent" != "$pr_base_sha" || "$merge_head_parent" != "$TARGET_REF" ]]; then
-            echo "release_gate pull request merge ref does not match the current base and head" >&2
-            exit 1
+          base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # A long-lived PR event can retain an old base SHA. The tested merge
+            # commit's first parent is the exact target tree for this run.
+            base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
+              --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
-          echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"
-          echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Validate historical release target
         id: historical_target
@@ -366,13 +306,15 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/detect-docs-changes
+        with:
+          base-sha: ${{ steps.diff_base.outputs.sha }}
 
       - name: Detect changed scopes
         id: changed_scope
@@ -382,10 +324,10 @@ jobs:
           set -euo pipefail
 
           if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
+            BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
           else
-            BASE="${{ github.event.pull_request.base.sha }}"
+            BASE="${{ steps.diff_base.outputs.sha }}"
             node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD --merge-head-first-parent
           fi
 
@@ -406,7 +348,6 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
-          OPENCLAW_CI_RUN_TS_LOC: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
@@ -553,7 +494,6 @@ jobs:
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
-          const runTsLoc = parseBoolean(process.env.OPENCLAW_CI_RUN_TS_LOC) && !docsOnly;
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
@@ -562,8 +502,15 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          const checksFastCoreTasks = runTsLoc
-            ? [{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]
+          const checksFastCoreTasks =
+            runNode && !frozenTarget
+              ? [
+                  {
+                    check_name: "checks-fast-max-lines-ratchet",
+                    runtime: "node",
+                    task: "max-lines-ratchet",
+                  },
+                ]
             : [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
@@ -593,8 +540,24 @@ jobs:
               console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
             }
           }
+          // Heavy packaging lanes run only when the diff touches surfaces they
+          // exist to prove: test-only diffs cannot change dist bytes, and QA
+          // smoke only sees changes on its scenario surface or inside the
+          // packaged CLI's import graph. QA gating is diff-based, so it also
+          // applies when test targeting fell back to the full compact suite.
+          const changedScopeHasBuildImpact =
+            changedNodeTestShards === null ||
+            typeof changedNodeTestPlan.hasBuildArtifactAffectingChange !== "function" ||
+            changedNodeTestPlan.hasBuildArtifactAffectingChange(changedPaths);
+          const changedScopeHasQaImpact =
+            changedPaths === null ||
+            eventName !== "pull_request" ||
+            typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
+            changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
+          const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
           const runQaSmokeCi =
             runNodeFull &&
+            changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? (changedNodeTestShards
@@ -615,6 +578,7 @@ jobs:
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
+                plan_concurrency: shard.planConcurrency,
                 targets: shard.targets,
                 requires_go:
                   shard.shardName === "core-tooling" ||
@@ -624,8 +588,12 @@ jobs:
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
-          // through imports, so preserve the existing full boundary gate.
-          const runNodeCoreDist = changedNodeTestShards !== null || nodeTestDistShards.length > 0;
+          // through imports. Keep the full boundary gate inside build-artifacts
+          // when that lane runs; test-only targeted plans carry their own
+          // nondist changed-boundary shard instead.
+          const runNodeCoreDist =
+            (changedNodeTestShards !== null && runBuildArtifacts) ||
+            nodeTestDistShards.length > 0;
           const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
@@ -640,7 +608,7 @@ jobs:
             run_android: runAndroid,
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
-            run_build_artifacts: runNodeFull,
+            run_build_artifacts: runBuildArtifacts,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
@@ -747,7 +715,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -776,17 +744,40 @@ jobs:
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Resolve security diff base
+        id: diff_base
+        env:
+          EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+        run: |
+          set -euo pipefail
+          base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # Do not execute a helper from the untrusted PR tree before trusted
+            # pre-commit configuration is selected.
+            read -r head_sha first_parent second_parent extra <<< \
+              "$(git rev-list --parents -n 1 HEAD)"
+            if [[
+              "$head_sha" = "$(git rev-parse HEAD)" &&
+              "$first_parent" =~ ^[0-9a-f]{40}$ &&
+              "$second_parent" =~ ^[0-9a-f]{40}$ &&
+              -z "${extra:-}"
+            ]]; then
+              base_sha="$first_parent"
+            fi
+          fi
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
@@ -824,7 +815,7 @@ jobs:
 
       - name: Audit changed GitHub workflows with zizmor
         env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.diff_base.outputs.sha }}
         run: |
           set -euo pipefail
 
@@ -941,7 +932,7 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
@@ -1235,6 +1226,7 @@ jobs:
   checks-fast-core:
     permissions:
       contents: read
+      pull-requests: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
@@ -1246,26 +1238,56 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - *linux_node_checkout_step
-      - name: Checkout verified release-gate LOC merge tree
-        if: matrix.task == 'loc-ratchet' && needs.preflight.outputs.loc_head_sha != ''
+      - name: Prepare release-gate max-lines merge tree
+        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
-          LOC_HEAD_SHA: ${{ needs.preflight.outputs.loc_head_sha }}
-          LOC_PR_NUMBER: ${{ inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          TARGET_SHA: ${{ inputs.target_ref }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$LOC_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            echo "A release-gate LOC head requires a pull request number." >&2
+          prepared=false
+          for attempt in {1..6}; do
+            pr_info="$(
+              gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" |
+                jq -r --arg repo "$GITHUB_REPOSITORY" --arg target "$TARGET_SHA" '
+                  select(.state == "open" and .head.sha == $target and .base.repo.full_name == $repo)
+                  | [.base.sha, (if .mergeable == null then "unknown" else (.mergeable | tostring) end)]
+                  | @tsv
+                '
+            )"
+            if [[ -z "$pr_info" ]]; then
+              echo "release-gate pull request must be open and match the target head" >&2
+              exit 1
+            fi
+            IFS=$'\t' read -r base_sha mergeable <<<"$pr_info"
+            if [[ "$mergeable" == "false" ]]; then
+              echo "release-gate pull request is not mergeable" >&2
+              exit 1
+            fi
+            if [[ "$mergeable" == "true" ]] &&
+              git fetch --no-tags --depth=2 origin \
+                "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              read -r merge_base merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
+              if [[ "$merge_base" == "$base_sha" && "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
+                prepared=true
+                break
+              fi
+            fi
+            if [[ "$attempt" != "6" ]]; then
+              sleep 5
+            fi
+          done
+          if [[ "$prepared" != "true" ]]; then
+            echo "release-gate merge tree did not refresh to the current pull request base and head" >&2
             exit 1
           fi
-          git fetch --no-tags --depth=2 origin \
-            "+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"
-          resolved_loc_head="$(git rev-parse refs/remotes/origin/ci-head)"
-          if [[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]; then
-            echo "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check." >&2
-            exit 1
-          fi
-          git checkout --detach refs/remotes/origin/ci-head
+          git checkout --detach "$merge_sha"
+          echo "RATCHET_RELEASE_BASE_SHA=${base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -1273,10 +1295,12 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
-          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
-          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
-          LOC_EXPECTED_PR_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.preflight.outputs.loc_head_sha != '' && inputs.target_ref || '' }}
+          GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
+          RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -1294,38 +1318,66 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
-            loc-ratchet)
-              # Frozen compatibility targets were governed by their original CI. Comparing
-              # them with moving main would turn unrelated branch drift into release failures.
-              if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
-                loc_base_ref="refs/remotes/origin/ci-base"
-                if [ -n "$LOC_EXPECTED_PR_HEAD" ]; then
-                  # Pull-request merge refs can advance past the event base as main moves.
-                  # Compare with the base parent of the exact merge tree under test.
-                  if ! git rev-parse --verify HEAD^1 >/dev/null 2>&1 || ! git rev-parse --verify HEAD^2 >/dev/null 2>&1; then
-                    loc_merge_sha="$(git rev-parse HEAD)"
-                    git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"
-                  fi
-                  merge_head="$(git rev-parse HEAD^2)"
-                  if [[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]; then
-                    echo "LOC merge tree head ${merge_head} does not match expected pull-request head ${LOC_EXPECTED_PR_HEAD}." >&2
-                    exit 1
-                  fi
-                  loc_base_ref="$(git rev-parse HEAD^1)"
-                else
-                  git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"
-                fi
-                if has_package_script "check:loc"; then
-                  pnpm check:loc --base "$loc_base_ref" --head HEAD
-                else
-                  echo "Current CI targets must provide the check:loc package script." >&2
+            max-lines-ratchet)
+              if ! has_package_script "check:max-lines-ratchet"; then
+                echo "Current CI targets must provide check:max-lines-ratchet." >&2
+                exit 1
+              fi
+              base_sha="${RATCHET_EVENT_BASE_SHA:-${RATCHET_RELEASE_BASE_SHA:-}}"
+              if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+                base_sha=""
+              fi
+              base_ref=""
+              if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+                mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
+                if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
+                  echo "Pull request checkout is not the expected two-parent merge tree." >&2
                   exit 1
                 fi
+                merge_base="${merge_parents[0]}"
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "$base_sha" ]]; then
+                git fetch --no-tags --depth=1 origin \
+                  "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                default_sha="$(
+                  git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }'
+                )"
+                if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the default branch head for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                merge_base_sha="$(
+                  gh api --method GET \
+                    "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
+                    --jq '.merge_base_commit.sha'
+                )"
+                if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
+                  exit 1
+                fi
+                git fetch --no-tags --depth=1 origin \
+                  "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              else
+                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+                git fetch --no-tags --depth=1 origin \
+                  "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
+                base_ref="refs/remotes/origin/ci-max-lines-base"
+              fi
+              unset GH_TOKEN
+              pnpm check:max-lines-ratchet --base "$base_ref"
+              if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
+                node scripts/run-oxlint.mjs src ui/src packages extensions
               fi
               ;;
             bun-launcher)
@@ -1409,7 +1461,7 @@ jobs:
             // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
-              "crestodian-ring-zero-setup",
+              "system-agent-ring-zero-setup",
               "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
@@ -1641,7 +1693,10 @@ jobs:
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
       - name: Run Node test shard
+        # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
+        # non-secret job context, then validate the defining workflow identity below.
         env:
+          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
@@ -1651,83 +1706,38 @@ jobs:
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
-          OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
+          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'EOF'
-          import { spawnSync } from "node:child_process";
-          import { writeFileSync } from "node:fs";
-          import { join } from "node:path";
-
-          const targets = JSON.parse(process.env.OPENCLAW_NODE_TEST_TARGETS_JSON ?? "null");
-          if (Array.isArray(targets) && targets.length > 0) {
-            // One file per process preserves the isolation boundaries encoded by
-            // full-suite include-pattern shards while keeping one runner job.
-            for (const target of targets) {
-              const result = spawnSync(
-                "pnpm",
-                ["exec", "node", "scripts/test-projects.mjs", target],
-                { env: process.env, stdio: "inherit" },
-              );
-              if (result.status !== 0) {
-                process.exit(result.status ?? 1);
-              }
-            }
-            process.exit(0);
-          }
-
-          const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
-          const plans = Array.isArray(groups) && groups.length > 0
-            ? groups
-            : [{
-                configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
-                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
-                includePatterns: JSON.parse(
-                  process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
-                ),
-                shard_name: process.env.OPENCLAW_VITEST_SHARD_NAME,
-              }];
-          for (const plan of plans) {
-            const configs = plan.configs;
-            if (!Array.isArray(configs) || configs.length === 0) {
-              console.error("Missing node test shard configs");
-              process.exit(1);
-            }
-            const childEnv = {
-              ...process.env,
-              ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
-            };
-            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
-              for (const [key, value] of Object.entries(plan.env)) {
-                if (typeof value === "string") {
-                  childEnv[key] = value;
-                }
-              }
-            }
-            if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
-              const includeFile = join(
-                process.env.RUNNER_TEMP ?? ".",
-                `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
-              );
-              writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
-              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-            } else {
-              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
-            }
-            const result = spawnSync(
-              "pnpm",
-              ["exec", "node", "scripts/test-projects.mjs", ...configs],
-              {
-                env: childEnv,
-                stdio: "inherit",
-              },
-            );
-            if ((result.status ?? 1) !== 0) {
-              process.exit(result.status ?? 1);
-            }
-          }
-          EOF
+          runner="scripts/ci-run-node-test-shard.mjs"
+          if [[ ! -f "$runner" ]]; then
+            # Frozen release targets can predate the workflow-owned shard runner.
+            # Load only that runner from the exact trusted workflow commit while
+            # keeping its child tests rooted in the checked-out candidate.
+            job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT_JSON")
+            job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT_JSON")
+            if [[ ! "$job_workflow_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "invalid job workflow repository: $job_workflow_repository" >&2
+              exit 1
+            fi
+            if [[ ! "$job_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "invalid job workflow SHA: $job_workflow_sha" >&2
+              exit 1
+            fi
+            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
+            workflow_remote="https://github.com/${job_workflow_repository}.git"
+            git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
+            for file in \
+              scripts/ci-run-node-test-shard.mjs \
+              scripts/lib/direct-run.mjs \
+              scripts/lib/local-heavy-check-runtime.mjs; do
+              mkdir -p "${harness_root}/$(dirname "$file")"
+              git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"
+            done
+            runner="${harness_root}/${runner}"
+          fi
+          node "$runner"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -1763,7 +1773,9 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
+            # PR critical path for roughly the same billed core-minutes.
+            runner: blacksmith-16vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1777,7 +1789,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1877,6 +1889,11 @@ jobs:
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
+          # Prompt snapshot regeneration runs real embedded-agent turns (~2min)
+          # and used to own the boundaries-a wall clock; keep it in its own lane.
+          - check_name: check-prompt-snapshots
+            group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
@@ -1989,6 +2006,12 @@ jobs:
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
               node scripts/run-additional-boundary-checks.mjs
+              ;;
+            prompt-snapshots)
+              # No presence fallback: the boundary runner previously invoked
+              # this unconditionally, and silent success would drop snapshot
+              # drift coverage.
+              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
@@ -2364,17 +2387,18 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets before the pinned installer used one of these
             # reviewed formatter contracts. Fail closed for any unknown minimum.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2406,7 +2430,7 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2568,17 +2592,18 @@ jobs:
 
       - name: Install iOS Swift tooling
         run: |
-          brew update
-          if [[ -x ./scripts/install-swift-tools.sh ]]; then
-            brew install xcodegen
+          if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
             swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-xcodegen.sh "$swift_tools_dir"
             ./scripts/install-swift-tools.sh "$swift_tools_dir"
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/xcodegen" --version
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # The generated Xcode project runs SwiftFormat during the build, so
             # frozen targets must keep the formatter contract they were authored for.
+            brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
             case "$swiftformat_min_version" in
@@ -2615,7 +2640,7 @@ jobs:
             ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
             [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
 
@@ -2774,6 +2799,97 @@ jobs:
               exit 1
               ;;
           esac
+
+  ci-gate:
+    permissions:
+      contents: read
+    name: openclaw/ci-gate
+    needs:
+      - runner-admission
+      - preflight
+      - security-fast
+      - pnpm-store-warmup
+      - build-artifacts
+      - native-i18n
+      - checks-ui
+      - control-ui-i18n
+      - checks-fast-core
+      - qa-smoke-ci-profile
+      - checks-fast-plugin-contracts-shard
+      - checks-fast-channel-contracts-shard
+      - checks-node-compat
+      - checks-node-core-test-nondist-shard
+      - check-shard
+      - check-additional-shard
+      - check-docs
+      - skills-python
+      - checks-windows
+      - macos-node
+      - macos-swift
+      - ios-build
+      - android
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify selected CI lanes
+        shell: bash
+        env:
+          REQUIRED_RESULTS: |
+            runner-admission=${{ needs.runner-admission.result }}
+            preflight=${{ needs.preflight.result }}
+            security-fast=${{ needs.security-fast.result }}
+          SELECTED_RESULTS: |
+            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
+            build-artifacts=${{ needs.build-artifacts.result }}
+            native-i18n=${{ needs.native-i18n.result }}
+            checks-ui=${{ needs.checks-ui.result }}
+            control-ui-i18n=${{ needs.control-ui-i18n.result }}
+            checks-fast-core=${{ needs.checks-fast-core.result }}
+            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
+            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
+            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}
+            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
+            check-shard=${{ needs.check-shard.result }}
+            check-additional-shard=${{ needs.check-additional-shard.result }}
+            check-docs=${{ needs.check-docs.result }}
+            skills-python=${{ needs.skills-python.result }}
+            checks-windows=${{ needs.checks-windows.result }}
+            macos-node=${{ needs.macos-node.result }}
+            macos-swift=${{ needs.macos-swift.result }}
+            ios-build=${{ needs.ios-build.result }}
+            android=${{ needs.android.result }}
+        run: |
+          set -euo pipefail
+
+          failures=0
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            if [[ "$result" != "success" ]]; then
+              echo "::error title=Required CI job did not succeed::${name} finished with ${result}"
+              failures=1
+            fi
+          done <<< "$REQUIRED_RESULTS"
+
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] || continue
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            echo "${name}: ${result}"
+            case "$result" in
+              success | skipped) ;;
+              *)
+                echo "::error title=Selected CI job did not succeed::${name} finished with ${result}"
+                failures=1
+                ;;
+            esac
+          done <<< "$SELECTED_RESULTS"
+
+          exit "$failures"
 
   ci-timings-summary:
     permissions:

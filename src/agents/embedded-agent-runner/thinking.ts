@@ -22,9 +22,9 @@ type RecoverySessionMeta = {
 
 const THINKING_BLOCK_ERROR_PATTERN =
   /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
-export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
-export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
+function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
   return (
     Boolean(message) &&
     typeof message === "object" &&

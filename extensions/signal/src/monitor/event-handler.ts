@@ -32,7 +32,7 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -84,6 +84,12 @@ import {
 } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
+import {
+  createSignalPendingInboundRegistry,
+  resolveSignalControlLaneKey,
+  resolveSignalInboundDebounceKey,
+  type SignalInboundEntry,
+} from "./event-handler.control-lane.js";
 import type {
   SignalEnvelope,
   SignalEventHandlerDeps,
@@ -208,33 +214,6 @@ async function finalizeSignalStatusReaction(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
-  type SignalInboundEntry = {
-    senderName: string;
-    senderDisplay: string;
-    senderRecipient: string;
-    senderPeerId: string;
-    groupId?: string;
-    groupName?: string;
-    isGroup: boolean;
-    bodyText: string;
-    nativeReplyBody?: string;
-    commandBody: string;
-    timestamp?: number;
-    messageId?: string;
-    replyToId?: string;
-    isBatched?: boolean;
-    mediaPath?: string;
-    mediaType?: string;
-    mediaPaths?: string[];
-    mediaTypes?: string[];
-    commandAuthorized: boolean;
-    canDetectMention?: boolean;
-    requireMention?: boolean;
-    wasMentioned?: boolean;
-    replyToBody?: string;
-    replyToSender?: string;
-    replyToIsQuote?: boolean;
-  };
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -741,16 +720,41 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     throw lastError;
   }
 
+  const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
+    // enqueue() awaits inline and overflow flushes, but not timer-backed work.
+    // Drain tracked inline work on shutdown; stop delayed work with no owner.
+    const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+    if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+      return;
+    }
+    try {
+      await flushSignalInboundEntries(entries);
+    } catch (err) {
+      if (!isSignalReplySessionInitConflictError(err)) {
+        throw err;
+      }
+      if (deps.abortSignal?.aborted) {
+        return;
+      }
+      // Keep the current keyed debounce task reserved through backoff so a
+      // newer same-conversation flush cannot overtake this failed batch.
+      const retryTask = retrySignalInboundFlush(entries, err);
+      deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
+      await retryTask;
+    }
+  };
+  const reportSignalInboundFlushError = (err: unknown) => {
+    deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
+  };
+  const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
+  const flushNormalSignalInboundEntries = pendingInboundRegistry.completeAfter(
+    flushDebouncedSignalInboundEntries,
+  );
+
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
-    buildKey: (entry) => {
-      const conversationId = entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId;
-      if (!conversationId || !entry.senderPeerId) {
-        return null;
-      }
-      return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
-    },
+    buildKey: (entry) => resolveSignalInboundDebounceKey(deps.accountId, entry),
     shouldDebounce: (entry) => {
       return shouldDebounceTextInbound({
         text: entry.commandBody,
@@ -758,32 +762,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
-    onFlush: async (entries) => {
-      // enqueue() awaits inline and overflow flushes, but not timer-backed work.
-      // Drain tracked inline work on shutdown; stop delayed work with no owner.
-      const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
-      if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
-        return;
-      }
-      try {
-        await flushSignalInboundEntries(entries);
-      } catch (err) {
-        if (!isSignalReplySessionInitConflictError(err)) {
-          throw err;
-        }
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        // Keep the current keyed debounce task reserved through backoff so a
-        // newer same-conversation flush cannot overtake this failed batch.
-        const retryTask = retrySignalInboundFlush(entries, err);
-        deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
-        await retryTask;
-      }
-    },
-    onError: (err) => {
-      deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
-    },
+    onFlush: flushNormalSignalInboundEntries,
+    onError: reportSignalInboundFlushError,
+    onCancel: pendingInboundRegistry.complete,
+  });
+  const { debouncer: controlDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
+    cfg: deps.cfg,
+    channel: "signal",
+    // Controls bypass normal batching but retain FIFO ordering with each other.
+    serializeImmediate: true,
+    buildKey: (entry) => resolveSignalControlLaneKey(deps.accountId, entry),
+    shouldDebounce: () => false,
+    onFlush: flushDebouncedSignalInboundEntries,
+    onError: reportSignalInboundFlushError,
   });
 
   async function handleReactionOnlyInbound(params: {
@@ -940,7 +931,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const messageText = normalizedMessage.trim();
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
-    const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
+    const hasControlCommandInMessage = isControlCommandMessage(messageText, deps.cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const { senderAccess, commandAccess } = await resolveSignalAccessState({
@@ -1310,11 +1301,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
     };
+    pendingInboundRegistry.cancelPendingOnAbort(entry, debouncer.cancelKey);
+    // Normal and stateful turns stay on the existing ingress path so core session admission owns
+    // queueing and lifecycle mutations; only the narrow safe set uses channel-level serialization.
+    const inboundLane = resolveSignalControlLaneKey(deps.accountId, entry)
+      ? controlDebouncer
+      : debouncer;
+    if (inboundLane === debouncer) {
+      pendingInboundRegistry.track(entry);
+    }
     activeEnqueueEntries.add(entry);
     try {
-      await debouncer.enqueue(entry);
+      await inboundLane.enqueue(entry);
     } finally {
       activeEnqueueEntries.delete(entry);
     }
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

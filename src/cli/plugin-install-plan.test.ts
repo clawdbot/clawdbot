@@ -3,11 +3,13 @@ import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
 import {
+  resolveCatalogOfficialExternalInstallPlan,
+  resolveCatalogOfficialExternalNpmPackageTrust,
+} from "../plugins/official-external-install-trust.js";
+import {
   resolveBundledInstallPlanForCatalogEntry,
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
-  resolveOfficialExternalInstallPlanBeforeNpm,
-  resolveOfficialExternalNpmPackageTrust,
 } from "./plugin-install-plan.js";
 
 describe("plugin install plan helpers", () => {
@@ -70,81 +72,39 @@ describe("plugin install plan helpers", () => {
   });
 
   it("resolves exact official external plugin ids before npm fallback", () => {
-    const findOfficialExternalPlugin = vi.fn().mockReturnValue({
-      pluginId: "brave",
-      npmSpec: "@openclaw/brave-plugin",
-      expectedIntegrity: "sha512-brave",
-    });
+    const result = resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin");
 
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "brave",
-      findOfficialExternalPlugin,
-    });
-
-    expect(findOfficialExternalPlugin).toHaveBeenCalledWith("brave");
     expect(result).toEqual({
-      pluginId: "brave",
-      npmSpec: "@openclaw/brave-plugin",
-      expectedIntegrity: "sha512-brave",
+      pluginId: "wecom-openclaw-plugin",
+      npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+      expectedIntegrity:
+        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     });
   });
 
   it("skips official external plan for explicit npm selectors", () => {
-    const findOfficialExternalPlugin = vi.fn();
-
+    expect(resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin@beta")).toBeNull();
     expect(
-      resolveOfficialExternalInstallPlanBeforeNpm({
-        rawSpec: "brave@beta",
-        findOfficialExternalPlugin,
-      }),
+      resolveCatalogOfficialExternalInstallPlan("@wecom/wecom-openclaw-plugin@2026.5.7"),
     ).toBeNull();
-    expect(
-      resolveOfficialExternalInstallPlanBeforeNpm({
-        rawSpec: "@openclaw/brave-plugin",
-        findOfficialExternalPlugin,
-      }),
-    ).toBeNull();
-    expect(findOfficialExternalPlugin).not.toHaveBeenCalled();
-  });
-
-  it("skips official external plan without an npm install spec", () => {
-    const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "brave",
-      findOfficialExternalPlugin: vi.fn().mockReturnValue({
-        pluginId: "brave",
-      }),
-    });
-
-    expect(result).toBeNull();
   });
 
   it("trusts exact official external npm packages without remapping the spec", () => {
-    const findOfficialExternalPackage = vi.fn().mockReturnValue({
-      pluginId: "discord",
-      npmSpec: "@openclaw/discord",
-    });
+    const result = resolveCatalogOfficialExternalNpmPackageTrust(
+      "@wecom/wecom-openclaw-plugin@2026.5.7",
+    );
 
-    const result = resolveOfficialExternalNpmPackageTrust({
-      npmSpec: "@openclaw/discord",
-      findOfficialExternalPackage,
-    });
-
-    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/discord");
     expect(result).toEqual({
-      pluginId: "discord",
+      pluginId: "wecom-openclaw-plugin",
+      expectedIntegrity:
+        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
       trustedSourceLinkedOfficialInstall: true,
     });
   });
 
   it("does not trust npm package names outside the official external catalog", () => {
-    const findOfficialExternalPackage = vi.fn();
+    const result = resolveCatalogOfficialExternalNpmPackageTrust("@acme/outside@1.0.0");
 
-    const result = resolveOfficialExternalNpmPackageTrust({
-      npmSpec: "brave",
-      findOfficialExternalPackage,
-    });
-
-    expect(findOfficialExternalPackage).toHaveBeenCalledWith("brave");
     expect(result).toBeNull();
   });
 

@@ -218,6 +218,83 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 }
 
 describe("gateway/node-registry", () => {
+  it("routes ordered input to the pending invoke connection and rejects unknown invokes", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+      onProgress: () => {},
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    const invokeId = request.payload?.id ?? "";
+
+    registry.sendInvokeInput(invokeId, { kind: "data", data: "a" });
+    registry.sendInvokeInput(invokeId, { kind: "resize", cols: 90, rows: 30 });
+    expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+      event: "node.invoke.input",
+      payload: {
+        id: invokeId,
+        nodeId: "node-1",
+        seq: 0,
+        payloadJSON: JSON.stringify({ kind: "data", data: "a" }),
+      },
+    });
+    expect(JSON.parse(frames[2] ?? "{}")).toMatchObject({
+      event: "node.invoke.input",
+      payload: { id: invokeId, nodeId: "node-1", seq: 1 },
+    });
+    expect(() => registry.sendInvokeInput("missing", { kind: "data", data: "x" })).toThrow(
+      "node invoke is not pending",
+    );
+
+    controller.abort();
+    await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
+  });
+
+  it("rejects node invoke input above 16 KiB", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+    expect(() =>
+      registry.sendInvokeInput(request.payload?.id ?? "", {
+        kind: "data",
+        data: "x".repeat(17 * 1024),
+      }),
+    ).toThrow("exceeds 16 KiB");
+    controller.abort();
+    await invoke;
+  });
+
+  it("rejects node invoke input that cannot be serialized", async () => {
+    const registry = new NodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "codex.terminal.resume.v1",
+      timeoutMs: 0,
+      signal: controller.signal,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+    expect(() => registry.sendInvokeInput(request.payload?.id ?? "", undefined)).toThrow(
+      "node invoke input is not serializable",
+    );
+    controller.abort();
+    await invoke;
+  });
+
   it("ranks connected nodes by gateway-derived input activity", () => {
     const registry = createTestNodeRegistry();
     registry.register(
@@ -547,6 +624,31 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("forwards the agent session that owns a stateful node invoke", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 0,
+      sessionKey: "agent:main:canvas",
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { id?: string; sessionKey?: string };
+    };
+
+    expect(request.payload?.sessionKey).toBe("agent:main:canvas");
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: true,
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toMatchObject({ ok: true });
+  });
+
   it("rejects zero-timeout invokes when the node disconnects", async () => {
     const registry = createNodeRegistry();
     registerNode(registry);
@@ -663,6 +765,61 @@ describe("gateway/node-registry", () => {
           }),
         ).toBe(false);
       }
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds future progress behind a permanent sequence gap until idle teardown", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "agent.cli.claude.run.v1",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 50,
+        onProgress: () => {},
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+      const invokeId = request.payload?.id ?? "";
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 0,
+          chunk: "start",
+        }),
+      ).toBe(true);
+
+      for (let seq = 2; seq < 130; seq += 1) {
+        expect(
+          registry.handleInvokeProgress({
+            invokeId,
+            nodeId: "node-1",
+            connId: "conn-1",
+            seq,
+            chunk: `future-${seq}`,
+          }),
+        ).toBe(true);
+      }
+      expect(
+        registry.handleInvokeProgress({
+          invokeId,
+          nodeId: "node-1",
+          connId: "conn-1",
+          seq: 130,
+          chunk: "over-cap",
+        }),
+      ).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(50);
       await expect(invoke).resolves.toEqual({
         ok: false,
         error: { code: "IDLE_TIMEOUT", message: "node invoke produced no progress" },
@@ -1585,3 +1742,4 @@ describe("gateway/node-registry", () => {
     expect(updated?.commands).toEqual(["device.info"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,11 @@
 // Irc tests cover policy plugin behavior.
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { describe, expect, it } from "vitest";
-import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
+import {
+  resolveIrcGroupMatch,
+  resolveIrcGroupRequireMention,
+  resolveIrcGroupToolPolicy,
+} from "./policy.js";
 
 describe("irc policy", () => {
   it("matches direct and wildcard group entries", () => {
@@ -12,7 +16,12 @@ describe("irc policy", () => {
       target: "#ops",
     });
     expect(direct.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ groupConfig: direct.groupConfig })).toBe(false);
+    expect(
+      resolveIrcGroupRequireMention({
+        groups: { "#ops": { requireMention: false } },
+        target: "#ops",
+      }),
+    ).toBe(false);
 
     const wildcard = resolveIrcGroupMatch({
       groups: {
@@ -21,7 +30,12 @@ describe("irc policy", () => {
       target: "#random",
     });
     expect(wildcard.allowed).toBe(true);
-    expect(resolveIrcRequireMention({ wildcardConfig: wildcard.wildcardConfig })).toBe(true);
+    expect(
+      resolveIrcGroupRequireMention({
+        groups: { "*": { requireMention: true } },
+        target: "#random",
+      }),
+    ).toBe(true);
   });
 
   it("keeps case-insensitive group matching aligned with shared channel policy resolution", () => {
@@ -52,5 +66,26 @@ describe("irc policy", () => {
     });
     expect(sharedDisabled.allowed).toBe(inboundDisabled.allowed);
     expect(inboundDisabled.groupConfig?.enabled).toBe(false);
+  });
+
+  it("uses exact keys before case-insensitive matches", () => {
+    const groups = {
+      "#Ops": { requireMention: false },
+      "#ops": { requireMention: true },
+    };
+
+    expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(true);
+  });
+
+  it("falls through to wildcard fields when the matched field is unset", () => {
+    const groups = {
+      "#ops": { toolsBySender: { "*": { allow: ["sessions.list"] } } },
+      "*": { requireMention: false, tools: { deny: ["exec"] } },
+    };
+
+    expect(resolveIrcGroupRequireMention({ groups, target: "#ops" })).toBe(false);
+    expect(resolveIrcGroupToolPolicy({ groups, target: "#ops" })).toEqual({
+      deny: ["exec"],
+    });
   });
 });

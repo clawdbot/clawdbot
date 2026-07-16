@@ -261,6 +261,43 @@ describe("gateway-cli coverage", () => {
     expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
   });
 
+  it("prints the provider/model breakdown for missing costs", async () => {
+    callGateway.mockResolvedValue({
+      updatedAt: 1,
+      days: 7,
+      daily: [],
+      totals: {
+        input: 12,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 12,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 12,
+        missingCostByModel: {
+          "openai/gpt-5.6-sol": 10,
+          "openai-codex/gpt-5.5": 2,
+        },
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--days", "7"]);
+
+    expect(runtimeLogs.join("\n")).toContain(
+      "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
+    );
+  });
+
   it("waits for real all-agent usage caches before printing totals", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-cost-cli-"));
     const config = {

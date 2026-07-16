@@ -996,3 +996,4 @@ function redactAbsoluteHomePaths(value: string): string {
   }
   return value.split(home).join("~");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

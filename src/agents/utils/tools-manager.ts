@@ -115,7 +115,7 @@ function commandExists(cmd: string): boolean {
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg"): string | null {
   const config = TOOLS[tool];
   if (!config) {
     return null;
@@ -417,6 +417,12 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 }
 
-export const testing = {
+const testing = {
   downloadFile,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
+    testing,
+  };
+}

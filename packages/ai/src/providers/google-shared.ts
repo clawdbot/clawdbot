@@ -917,3 +917,4 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   });
   params.stream.end();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

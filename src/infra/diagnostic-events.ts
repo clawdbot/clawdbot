@@ -1529,3 +1529,4 @@ export function resetDiagnosticEventsForTest(): void {
   state.asyncDroppedUntrustedEvents = 0;
   state.asyncDroppedPriorityEvents = 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

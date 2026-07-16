@@ -58,7 +58,7 @@ function loadStatusNodeModeModule() {
 }
 
 /** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
-export function resolvePairingRecoveryContext(params: {
+function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   details?: unknown;
@@ -89,6 +89,12 @@ export function resolvePairingRecoveryContext(params: {
     requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
     reason: pairing.reason ?? null,
     remediationHint: null,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.statusCommandTestApi")] = {
+    resolvePairingRecoveryContext,
   };
 }
 

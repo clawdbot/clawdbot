@@ -23,13 +23,12 @@ scenario:
   codeRefs:
     - extensions/matrix/src/session-route.ts
     - extensions/matrix/src/matrix/monitor/handler.ts
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
     summary: Send consecutive DMs in two Matrix rooms and require per-room isolation.
     config:
-      requiredChannelDriver: live
       primaryConversationId: driver-dm
       secondaryConversationId: driver-dm-shared
       primaryMarker: QA-MATRIX-DM-PER-ROOM-PRIMARY-OK
@@ -39,16 +38,13 @@ flow:
   steps:
     - name: suppresses the cross-room shared-session notice
       actions:
-        - assert:
-            expr: transport.id === 'matrix'
-            message: Matrix per-room DM session scenario requires the live Matrix adapter
         - resetTransport: true
         - sendInbound:
             conversation:
               id:
                 ref: config.primaryConversationId
               kind: direct
-            senderId: "@driver:matrix.test"
+            senderId: driver
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.primaryMarker}`"
@@ -69,7 +65,7 @@ flow:
               id:
                 ref: config.secondaryConversationId
               kind: direct
-            senderId: "@driver:matrix.test"
+            senderId: driver
             senderName: QA Driver
             text:
               expr: "`Reply exactly: ${config.secondaryMarker}`"

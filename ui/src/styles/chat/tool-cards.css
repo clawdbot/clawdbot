@@ -1287,6 +1287,60 @@
   text-decoration-color: currentColor;
 }
 
+/* Hover preview on the status row: the latest tasks in a read-only card. The
+   tooltip body is content-sized (width: max-content up to --max-width), so a
+   single task stays one compact line instead of a fixed-size panel. */
+wa-tooltip.chat-tasks-status__preview {
+  --max-width: min(360px, calc(100vw - 24px));
+  font-family: var(--font-body);
+}
+
+wa-tooltip.chat-tasks-status__preview::part(body) {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 94%, black 6%);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.chat-tasks-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-tasks-preview__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-tasks-preview__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 550;
+}
+
+.chat-tasks-preview__meta {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-tasks-preview__more {
+  color: var(--muted);
+}
+
 @keyframes chatTasksStatusBreath {
   0%,
   100% {

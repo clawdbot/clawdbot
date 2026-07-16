@@ -1,21 +1,21 @@
 // Google provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
-import type {
+import {
   ActivityHandling,
   Behavior,
   EndSensitivity,
-  FunctionDeclaration,
-  FunctionResponse,
+  type FunctionDeclaration,
+  type FunctionResponse,
   FunctionResponseScheduling,
-  LiveConnectConfig,
-  LiveServerContent,
-  LiveServerMessage,
-  LiveServerToolCall,
+  type LiveConnectConfig,
+  type LiveServerContent,
+  type LiveServerMessage,
+  type LiveServerToolCall,
   Modality,
-  RealtimeInputConfig,
-  Session,
+  type RealtimeInputConfig,
+  type Session,
   StartSensitivity,
-  ThinkingConfig,
+  type ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
 import {
@@ -79,6 +79,24 @@ type GoogleRealtimeSensitivity = "low" | "high";
 type GoogleRealtimeThinkingLevel = "minimal" | "low" | "medium" | "high";
 type GoogleRealtimeActivityHandling = "start-of-activity-interrupts" | "no-interruption";
 type GoogleRealtimeTurnCoverage = "only-activity" | "all-input" | "audio-activity-and-all-video";
+
+const START_SENSITIVITY = {
+  high: StartSensitivity.START_SENSITIVITY_HIGH,
+  low: StartSensitivity.START_SENSITIVITY_LOW,
+} satisfies Record<GoogleRealtimeSensitivity, StartSensitivity>;
+const END_SENSITIVITY = {
+  high: EndSensitivity.END_SENSITIVITY_HIGH,
+  low: EndSensitivity.END_SENSITIVITY_LOW,
+} satisfies Record<GoogleRealtimeSensitivity, EndSensitivity>;
+const ACTIVITY_HANDLING = {
+  "start-of-activity-interrupts": ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+  "no-interruption": ActivityHandling.NO_INTERRUPTION,
+} satisfies Record<GoogleRealtimeActivityHandling, ActivityHandling>;
+const TURN_COVERAGE = {
+  "only-activity": TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+  "all-input": TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+  "audio-activity-and-all-video": TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO,
+} satisfies Record<GoogleRealtimeTurnCoverage, TurnCoverage>;
 
 type GoogleRealtimeVoiceProviderConfig = {
   apiKey?: string;
@@ -242,58 +260,6 @@ function resolveEnvApiKey(): string | undefined {
   return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
 }
 
-function mapStartSensitivity(
-  value: GoogleRealtimeSensitivity | undefined,
-): StartSensitivity | undefined {
-  switch (value) {
-    case "high":
-      return "START_SENSITIVITY_HIGH" as StartSensitivity;
-    case "low":
-      return "START_SENSITIVITY_LOW" as StartSensitivity;
-    default:
-      return undefined;
-  }
-}
-
-function mapEndSensitivity(
-  value: GoogleRealtimeSensitivity | undefined,
-): EndSensitivity | undefined {
-  switch (value) {
-    case "high":
-      return "END_SENSITIVITY_HIGH" as EndSensitivity;
-    case "low":
-      return "END_SENSITIVITY_LOW" as EndSensitivity;
-    default:
-      return undefined;
-  }
-}
-
-function mapActivityHandling(
-  value: GoogleRealtimeActivityHandling | undefined,
-): ActivityHandling | undefined {
-  switch (value) {
-    case "no-interruption":
-      return "NO_INTERRUPTION" as ActivityHandling;
-    case "start-of-activity-interrupts":
-      return "START_OF_ACTIVITY_INTERRUPTS" as ActivityHandling;
-    default:
-      return undefined;
-  }
-}
-
-function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCoverage | undefined {
-  switch (value) {
-    case "only-activity":
-      return "TURN_INCLUDES_ONLY_ACTIVITY" as TurnCoverage;
-    case "all-input":
-      return "TURN_INCLUDES_ALL_INPUT" as TurnCoverage;
-    case "audio-activity-and-all-video":
-      return "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO" as TurnCoverage;
-    default:
-      return undefined;
-  }
-}
-
 // Gemini 3.1 Live replaces client-content text and async tools with realtime text
 // and sequential function responses; explicit older models keep their prior contract.
 function isGemini31LiveModel(model: string): boolean {
@@ -328,10 +294,14 @@ function buildThinkingConfig(
 function buildRealtimeInputConfig(
   config: GoogleRealtimeLiveConfig,
 ): RealtimeInputConfig | undefined {
-  const startSensitivity = mapStartSensitivity(config.startSensitivity);
-  const endSensitivity = mapEndSensitivity(config.endSensitivity);
-  const activityHandling = mapActivityHandling(config.activityHandling);
-  const turnCoverage = mapTurnCoverage(config.turnCoverage);
+  const startSensitivity = config.startSensitivity
+    ? START_SENSITIVITY[config.startSensitivity]
+    : undefined;
+  const endSensitivity = config.endSensitivity ? END_SENSITIVITY[config.endSensitivity] : undefined;
+  const activityHandling = config.activityHandling
+    ? ACTIVITY_HANDLING[config.activityHandling]
+    : undefined;
+  const turnCoverage = config.turnCoverage ? TURN_COVERAGE[config.turnCoverage] : undefined;
   const automaticActivityDetection = {
     ...(typeof config.automaticActivityDetectionDisabled === "boolean"
       ? { disabled: config.automaticActivityDetectionDisabled }
@@ -374,7 +344,7 @@ function buildFunctionDeclarations(
         parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
       };
       if (allowNonBlocking && name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-        declaration.behavior = "NON_BLOCKING" as Behavior;
+        declaration.behavior = Behavior.NON_BLOCKING;
       }
       declarations.push(declaration);
     } catch {
@@ -398,7 +368,7 @@ function buildGoogleLiveConnectConfig(
   const realtimeInputConfig = buildRealtimeInputConfig(config);
   const thinkingConfig = buildThinkingConfig(config, model);
   return {
-    responseModalities: ["AUDIO" as Modality],
+    responseModalities: [Modality.AUDIO],
     ...(typeof config.temperature === "number" && config.temperature > 0
       ? { temperature: config.temperature }
       : {}),
@@ -430,7 +400,7 @@ function buildBrowserInitialSetup(model: string) {
     setup: {
       model: toGoogleModelResource(model),
       generationConfig: {
-        responseModalities: ["AUDIO" as Modality],
+        responseModalities: [Modality.AUDIO],
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
@@ -684,7 +654,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             : { output: result },
       };
       if (isConsultTool && this.supportsToolResultContinuation) {
-        functionResponse.scheduling = "WHEN_IDLE" as FunctionResponseScheduling;
+        functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
         if (options?.willContinue === true) {
           functionResponse.willContinue = true;
         }
@@ -1086,3 +1056,4 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createGoogleRealtimeBrowserSession,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

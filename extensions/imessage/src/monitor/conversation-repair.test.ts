@@ -1,6 +1,6 @@
 // Imessage tests cover conversation repair plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { isIMessageAnchorless, repairIMessageConversationAnchor } from "./conversation-repair.js";
+import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import type { IMessagePayload } from "./types.js";
 
 function anchorlessMessage(overrides: Partial<IMessagePayload> = {}): IMessagePayload {
@@ -36,41 +36,18 @@ function mockClient(chats: Array<{ id: number; messages: Record<string, unknown>
   return { request };
 }
 
-describe("isIMessageAnchorless", () => {
-  it("detects explicit broken conversation anchors", () => {
-    expect(isIMessageAnchorless(anchorlessMessage())).toBe(true);
-    expect(isIMessageAnchorless(anchorlessMessage({ chat_guid: undefined }))).toBe(true);
-    expect(isIMessageAnchorless(anchorlessMessage({ chat_identifier: undefined }))).toBe(true);
-    expect(
-      isIMessageAnchorless(
-        anchorlessMessage({ chat_id: undefined, chat_guid: "", chat_identifier: "" }),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not classify sender-only direct messages as anchorless", () => {
-    expect(
-      isIMessageAnchorless({
-        guid: "DM-GUID",
-        sender: "+15550001111",
-        is_from_me: false,
-        text: "hello",
-      }),
-    ).toBe(false);
-  });
-
-  it("does not classify messages with any usable conversation anchor", () => {
-    expect(isIMessageAnchorless(anchorlessMessage({ chat_id: 349 }))).toBe(false);
-    expect(isIMessageAnchorless(anchorlessMessage({ chat_guid: "iMessage;+;chat349" }))).toBe(
-      false,
-    );
-    expect(isIMessageAnchorless(anchorlessMessage({ chat_identifier: "chat349" }))).toBe(false);
-  });
-});
-
 describe("repairIMessageConversationAnchor", () => {
-  it("passes through non-anchorless messages without recovery RPCs", async () => {
-    const message = anchorlessMessage({ chat_id: 349, is_group: true });
+  it.each([
+    anchorlessMessage({ chat_id: 349, is_group: true }),
+    anchorlessMessage({ chat_guid: "iMessage;+;chat349", is_group: true }),
+    anchorlessMessage({ chat_identifier: "chat349", is_group: true }),
+    {
+      guid: "DM-GUID",
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "hello",
+    } satisfies IMessagePayload,
+  ])("passes through anchored and sender-only messages without recovery RPCs", async (message) => {
     const client = mockClient([]);
 
     await expect(

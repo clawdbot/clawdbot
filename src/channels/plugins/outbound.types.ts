@@ -166,7 +166,12 @@ export type ChannelOutboundAdapter = {
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
   textChunkLimit?: number;
-  sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
+  sanitizeText?: (params: {
+    text: string;
+    payload: ReplyPayload;
+    cfg?: OpenClawConfig;
+    accountId?: string;
+  }) => string;
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;

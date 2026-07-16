@@ -75,7 +75,7 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Require trusted main workflow source
+      - name: Require trusted workflow source
         env:
           APPROVED_WORKFLOW_SHA: ${{ inputs.bootstrap_workflow_sha }}
           PRETAG_VALIDATION: ${{ inputs.pretag_validation }}
@@ -83,26 +83,42 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          [[ "${WORKFLOW_REF}" == "refs/heads/main" ]] || {
-            echo "Plugin ClawHub New must be dispatched from trusted main." >&2
-            exit 1
-          }
           [[ "$(git rev-parse HEAD)" == "${WORKFLOW_SHA}" ]] || {
             echo "Trusted workflow checkout does not match github.sha." >&2
             exit 1
           }
           if [[ "${PRETAG_VALIDATION}" != "true" ]]; then
+            # Repository release-tag rules make this exact-SHA ref immutable.
+            # Parent attestation is checked again before environment approval.
+            [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]] || {
+              echo "Plugin ClawHub bootstrap release must be dispatched by the approved parent workflow." >&2
+              exit 1
+            }
             [[ "${APPROVED_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || {
               echo "Plugin ClawHub bootstrap requires an exact approved workflow SHA." >&2
               exit 1
             }
+            if [[ "${WORKFLOW_REF}" == "refs/heads/main" ]]; then
+              :
+            elif [[ "${WORKFLOW_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ && "${APPROVED_WORKFLOW_SHA:0:12}" == "${BASH_REMATCH[1]}" ]]; then
+              :
+            else
+              echo "Plugin ClawHub bootstrap requires trusted main or the protected SHA-pinned release-publish tag." >&2
+              exit 1
+            fi
             [[ "${WORKFLOW_SHA}" == "${APPROVED_WORKFLOW_SHA}" ]] || {
               echo "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA." >&2
               exit 1
             }
-          elif [[ -n "${APPROVED_WORKFLOW_SHA}" && "${WORKFLOW_SHA}" != "${APPROVED_WORKFLOW_SHA}" ]]; then
-            echo "Plugin ClawHub pre-tag validation workflow SHA does not match the requested trusted-main SHA." >&2
-            exit 1
+          else
+            [[ "${WORKFLOW_REF}" == "refs/heads/main" ]] || {
+              echo "Plugin ClawHub pre-tag validation must be dispatched from trusted main." >&2
+              exit 1
+            }
+            if [[ -n "${APPROVED_WORKFLOW_SHA}" && "${WORKFLOW_SHA}" != "${APPROVED_WORKFLOW_SHA}" ]]; then
+              echo "Plugin ClawHub pre-tag validation workflow SHA does not match the requested trusted-main SHA." >&2
+              exit 1
+            fi
           fi
 
       - name: Resolve checked-out ref
@@ -362,10 +378,14 @@ jobs:
           EXPECTED_WORKFLOW_SHA="$(
             jq -er '.headSha | select(test("^[a-f0-9]{40}$"))' <<< "${RUN_JSON}"
           )"
+          EXPECTED_WORKFLOW_REF="refs/heads/${EXPECTED_WORKFLOW_BRANCH}"
+          if [[ "${EXPECTED_WORKFLOW_BRANCH}" =~ ^release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
+            EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"
+          fi
           gh attestation verify "${APPROVAL_PATH}" \
             --repo "${GITHUB_REPOSITORY}" \
             --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml" \
-            --source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}" \
+            --source-ref "${EXPECTED_WORKFLOW_REF}" \
             --source-digest "${EXPECTED_WORKFLOW_SHA}" \
             --deny-self-hosted-runners
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
@@ -647,6 +667,8 @@ jobs:
           ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
           CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
           CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
@@ -668,6 +690,8 @@ jobs:
             --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
             --run-id "${ARTIFACT_RUN_ID}" \
             --target-sha "${TARGET_SHA}" \
+            --workflow-head-branch "${WORKFLOW_HEAD_BRANCH}" \
+            --workflow-ref "${WORKFLOW_REF}" \
             --workflow-sha "${WORKFLOW_SHA}"
 
       - name: Rehash immutable ClawHub bootstrap artifacts
@@ -799,6 +823,8 @@ jobs:
           ARTIFACT_SIZE: ${{ needs.pack_bootstrap_plugins.outputs.artifact_size }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
           CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
           CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
@@ -820,6 +846,8 @@ jobs:
             --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
             --run-id "${ARTIFACT_RUN_ID}" \
             --target-sha "${TARGET_SHA}" \
+            --workflow-head-branch "${WORKFLOW_HEAD_BRANCH}" \
+            --workflow-ref "${WORKFLOW_REF}" \
             --workflow-sha "${WORKFLOW_SHA}"
 
       - name: Rehash immutable ClawHub bootstrap artifacts

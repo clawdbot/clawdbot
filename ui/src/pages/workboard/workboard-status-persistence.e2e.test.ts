@@ -197,7 +197,7 @@ async function waitForRequestCount(
       stableSince = null;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(

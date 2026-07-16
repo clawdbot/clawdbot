@@ -429,6 +429,7 @@ describe("telegram state migrations", () => {
         kind: "plugin-state-import",
         sourcePath: sentMessagePath,
         namespace: "telegram.sent-messages",
+        cleanupWhenEmpty: true,
       });
       expect(byLabel.get("Telegram thread bindings")).toMatchObject({
         kind: "plugin-state-import",
@@ -440,6 +441,7 @@ describe("telegram state migrations", () => {
         pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
         sourcePath: dispatchPath,
         namespace: dispatchNamespace,
+        cleanupWhenEmpty: true,
       });
       const dispatchPlan = byLabel.get("Telegram message dispatch dedupe");
       if (!dispatchPlan || dispatchPlan.kind !== "plugin-state-import") {
@@ -470,6 +472,55 @@ describe("telegram state migrations", () => {
           throw new Error(`expected plugin-state import plan: ${label}`);
         }
         expect(await plan.readEntries()).toHaveLength(1);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans up expired Telegram TTL cache sidecars with no importable entries", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const sentMessagePath = `${storePath}.telegram-sent-messages.json`;
+    const dispatchPath = resolveTelegramMessageDispatchLegacyPath({
+      storePath,
+      namespace: "ops",
+    });
+    const expiredAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    try {
+      await mkdir(path.dirname(sentMessagePath), { recursive: true });
+      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: expiredAt } }));
+      await writeFile(
+        dispatchPath,
+        JSON.stringify({ [JSON.stringify(["message", "7", 42])]: expiredAt }),
+      );
+
+      const cfg = {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                botToken: "test",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const expiredPlans = plans.filter(
+        (plan) =>
+          plan.kind === "plugin-state-import" &&
+          (plan.sourcePath === sentMessagePath || plan.sourcePath === dispatchPath),
+      );
+
+      expect(expiredPlans).toHaveLength(2);
+      for (const plan of expiredPlans) {
+        expect(plan).toMatchObject({ cleanupSource: "rename", cleanupWhenEmpty: true });
+        if (plan.kind !== "plugin-state-import") {
+          throw new Error("expected Telegram TTL cache import plan");
+        }
+        expect(await plan.readEntries()).toStrictEqual([]);
       }
     } finally {
       await rm(dir, { recursive: true, force: true });

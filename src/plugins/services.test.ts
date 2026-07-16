@@ -168,6 +168,103 @@ describe("startPluginServices", () => {
     expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
+  it("binds gateway events to the owning plugin namespace and scope", async () => {
+    const broadcastPluginEvent = vi.fn();
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "events",
+            start: (ctx) => {
+              ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
+            },
+          },
+        ],
+        "workboard",
+      ),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.workboard.changed",
+      { revision: 1 },
+      "operator.read",
+    );
+  });
+
+  it("rejects unsafe event names, scopes, and payloads", async () => {
+    let context: OpenClawPluginServiceContext | undefined;
+    const broadcastPluginEvent = vi.fn();
+    await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+    const emit = context?.gatewayEvents?.emit as unknown as (
+      event: string,
+      payload: unknown,
+      opts: { scope: string },
+    ) => void;
+
+    expect(() => emit("other.changed", {}, { scope: "operator.read" })).toThrow(
+      "invalid plugin gateway event name",
+    );
+    expect(() => emit("changed", { value: Number.NaN }, { scope: "operator.read" })).toThrow(
+      "bounded JSON",
+    );
+    expect(() => emit("changed", {}, { scope: "operator.approvals" })).toThrow("operator scope");
+    expect(broadcastPluginEvent).not.toHaveBeenCalled();
+  });
+
+  it("revokes gateway event emitters after failed start and stop", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const broadcastPluginEvent = vi.fn();
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            contexts.push(ctx);
+          },
+          stop: (ctx) => {
+            ctx.gatewayEvents?.emit("stopping", {}, { scope: "operator.read" });
+          },
+        },
+        {
+          id: "failed-events",
+          start: (ctx) => {
+            contexts.push(ctx);
+            throw new Error("start failed");
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(() =>
+      contexts[1]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).toThrow("no longer active");
+    await handle.stop();
+    expect(() =>
+      contexts[0]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).toThrow("no longer active");
+    expect(broadcastPluginEvent).toHaveBeenCalledOnce();
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.plugin:test.stopping",
+      {},
+      "operator.read",
+    );
+  });
+
   it("registers dynamic HTTP routes into the service registry scope", async () => {
     const serviceRegistry = createRegistry([
       {

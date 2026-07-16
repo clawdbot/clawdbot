@@ -1,6 +1,9 @@
 // sessions_spawn tool tests cover model-visible schema gating, ACP/subagent
 // dispatch, and result details for spawned child sessions.
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -246,6 +249,454 @@ describe("sessions_spawn tool", () => {
 
     expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
+  });
+
+  it("advertises visible sessions with terse UI guidance", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: { visible?: { description?: string }; worktree?: unknown };
+    };
+
+    expect(schema.properties?.visible?.description).toBe(
+      "visible: user sees session in UI. Use when user asked or talks via web/app.",
+    );
+    expect(schema.properties?.worktree).toBeDefined();
+  });
+
+  it("creates visible worktree sessions and registers completion announce", async () => {
+    await withTempDir({ prefix: "openclaw-visible-spawn-" }, async (dir) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible",
+      }));
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        agentChannel: "slack",
+        agentTo: "channel:C-stale",
+        agentThreadId: "stale-thread",
+        currentMessagingTarget: "channel:C-current",
+        currentChannelId: "C-native",
+        currentThreadTs: "current-thread",
+        config: {
+          session: { store: path.join(dir, "sessions.json") },
+          agents: {
+            defaults: {
+              subagents: { model: "openai/gpt-5.4", runTimeoutSeconds: 120 },
+            },
+            list: [{ id: "main" }],
+          },
+        },
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible", {
+        task: "inspect issue",
+        label: "Issue review",
+        visible: true,
+        worktree: true,
+        worktreeName: "issue-review",
+        worktreeBaseRef: "main",
+        cleanup: "delete",
+      });
+
+      expect(result.details).toMatchObject({
+        status: "accepted",
+        childSessionKey: "agent:main:dashboard:child",
+        runId: "run-visible",
+        cleanup: "keep",
+      });
+      expect(callGateway).toHaveBeenCalledWith("sessions.create", {
+        agentId: "main",
+        label: "Issue review",
+        model: "openai/gpt-5.4",
+        task: "inspect issue",
+        parentSessionKey: "agent:main:main",
+        worktree: true,
+        worktreeName: "issue-review",
+        worktreeBaseRef: "main",
+      });
+      expect(registerRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-visible",
+          childSessionKey: "agent:main:dashboard:child",
+          requesterSessionKey: "agent:main:main",
+          requesterOrigin: {
+            channel: "slack",
+            to: "channel:C-current",
+            threadId: "current-thread",
+          },
+          cleanup: "keep",
+          runTimeoutSeconds: 120,
+          expectsCompletionMessage: true,
+          spawnMode: "run",
+        }),
+      );
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("requires visible sessions for worktree options", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
+    ).rejects.toThrow("worktree options require visible=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the target agent model for cross-agent visible sessions", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:reviewer:dashboard:child",
+      runStarted: true,
+      runId: "run-reviewer",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { allowAgents: ["reviewer"] } },
+          list: [
+            { id: "main" },
+            { id: "reviewer", subagents: { model: "anthropic/claude-sonnet-4-6" } },
+          ],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-reviewer", {
+      task: "review patch",
+      agentId: "reviewer",
+      visible: true,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "reviewer",
+        model: "anthropic/claude-sonnet-4-6",
+        parentSessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("denies visible sessions when tool restrictions cannot carry forward", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      inheritedToolDenylist: ["exec"],
+      callGateway,
+    });
+
+    const result = await tool.execute("visible-restricted", {
+      task: "inspect",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "Visible sessions unavailable with inherited tool restrictions.",
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("blocks unsandboxed visible targets for a sandboxed caller runtime", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-sandboxed", { task: "inspect", visible: true });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "Sandboxed sessions cannot spawn unsandboxed sessions.",
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reserves visible child capacity before session creation", async () => {
+    let resolveCreate!: (value: { key: string; runStarted: true; runId: string }) => void;
+    const pendingCreate = new Promise<{
+      key: string;
+      runStarted: true;
+      runId: string;
+    }>((resolve) => {
+      resolveCreate = resolve;
+    });
+    const callGateway = vi.fn(async () => await pendingCreate);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { maxChildrenPerAgent: 1 } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const first = tool.execute("visible-first", { task: "first", visible: true });
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
+    const second = await tool.execute("visible-second", { task: "second", visible: true });
+
+    expect(second.details).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("max active children"),
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+
+    resolveCreate({
+      key: "agent:main:dashboard:first",
+      runStarted: true,
+      runId: "run-first",
+    });
+    await expect(first).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "accepted" }) }),
+    );
+  });
+
+  it("deletes a visible session whose initial run did not start", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:not-started",
+        runStarted: false,
+        runError: "model unavailable",
+      })
+      .mockResolvedValueOnce({ deleted: true });
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-not-started", {
+      task: "inspect",
+      visible: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "model unavailable",
+      childSessionKey: "agent:main:dashboard:not-started",
+    });
+    expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.delete", {
+      key: "agent:main:dashboard:not-started",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(registerRun).not.toHaveBeenCalled();
+  });
+
+  it("aborts a partially started visible run before deleting its session", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:partial",
+        runStarted: true,
+        runError: "missing run id",
+      })
+      .mockResolvedValueOnce({ ok: true, abortedRunId: "run-partial" })
+      .mockResolvedValueOnce({ deleted: true });
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-partial", { task: "inspect", visible: true });
+
+    // A started-but-untrackable run (no run id) is always aborted and deleted,
+    // never left as a visible orphan the parent cannot cancel.
+    expect(result.details).toMatchObject({ status: "error" });
+    expect((result.details as { childSessionKey?: string }).childSessionKey).toBeUndefined();
+    expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.abort", {
+      key: "agent:main:dashboard:partial",
+      agentId: "main",
+    });
+    expect(callGateway).toHaveBeenNthCalledWith(3, "sessions.delete", {
+      key: "agent:main:dashboard:partial",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(registerRun).not.toHaveBeenCalled();
+  });
+
+  it("deletes a started run with no run id even when abort reports nothing stopped", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:untracked",
+        runStarted: true,
+        runError: "missing run id",
+      })
+      .mockResolvedValueOnce({ ok: true, abortedRunId: null })
+      .mockResolvedValueOnce({ deleted: true });
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-untracked", { task: "inspect", visible: true });
+
+    expect(result.details).toMatchObject({ status: "error" });
+    expect(callGateway).toHaveBeenNthCalledWith(3, "sessions.delete", {
+      key: "agent:main:dashboard:untracked",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(registerRun).not.toHaveBeenCalled();
+  });
+
+  it("rolls back a visible session when announce registration fails", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:orphan",
+        runStarted: true,
+        runId: "run-orphan",
+      })
+      .mockResolvedValueOnce({ ok: true, abortedRunId: "run-orphan" })
+      .mockResolvedValueOnce({ deleted: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun: () => {
+        throw new Error("registry unavailable");
+      },
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-orphan", { task: "inspect", visible: true });
+
+    expect(result.details).toMatchObject({ status: "error", runId: "run-orphan" });
+    expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.abort", {
+      key: "agent:main:dashboard:orphan",
+      runId: "run-orphan",
+      agentId: "main",
+    });
+    expect(callGateway).toHaveBeenNthCalledWith(3, "sessions.delete", {
+      key: "agent:main:dashboard:orphan",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+  });
+
+  it("keeps a visible session when rollback cannot abort its run", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:live",
+        runStarted: true,
+        runId: "run-live",
+      })
+      .mockRejectedValueOnce(new Error("abort unavailable"));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun: () => {
+        throw new Error("registry unavailable");
+      },
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-live", { task: "inspect", visible: true });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      childSessionKey: "agent:main:dashboard:live",
+      runId: "run-live",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a visible session when rollback does not confirm its run", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "agent:main:dashboard:finished",
+        runStarted: true,
+        runId: "run-finished",
+      })
+      .mockResolvedValueOnce({ ok: true, abortedRunId: null, status: "no-active-run" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway,
+      registerRun: () => {
+        throw new Error("registry unavailable");
+      },
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-finished", { task: "inspect", visible: true });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("Run abort unconfirmed. Session kept."),
+      childSessionKey: "agent:main:dashboard:finished",
+      runId: "run-finished",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("applies spawn depth limits to visible dashboard descendants", async () => {
+    await withTempDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const childKey = "agent:main:dashboard:child";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "root", updatedAt: 1 },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: childKey, storePath },
+        { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
+      );
+      const callGateway = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: childKey,
+        config: {
+          session: { store: storePath },
+          agents: {
+            list: [{ id: "main" }],
+            defaults: { subagents: { maxSpawnDepth: 1 } },
+          },
+        },
+        callGateway,
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("visible-depth", { task: "inspect", visible: true });
+
+      expect(result.details).toMatchObject({ status: "forbidden" });
+      expect(callGateway).not.toHaveBeenCalled();
+    });
   });
 
   it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
@@ -1162,3 +1613,4 @@ describe("sessions_spawn tool", () => {
     expect(registration.requesterDisplayKey).toBe("agent:main:main");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

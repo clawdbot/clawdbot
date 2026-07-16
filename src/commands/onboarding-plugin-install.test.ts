@@ -117,7 +117,8 @@ vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
 }));
 
-import { ensureOnboardingPluginInstalled, testing } from "./onboarding-plugin-install.js";
+import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
+import { testing } from "./onboarding-plugin-install.test-support.js";
 
 describe("plugin install error summaries", () => {
   it("keeps bounded terminal text UTF-16 well-formed", () => {
@@ -1846,3 +1847,4 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

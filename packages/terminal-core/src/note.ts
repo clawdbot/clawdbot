@@ -230,7 +230,6 @@ export function note(message: unknown, title?: string) {
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
     output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
-    format: (line) => line,
   });
 }
 

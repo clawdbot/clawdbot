@@ -1,0 +1,35 @@
+title: Matrix E2EE local keys re-upload after server backup deletion
+scenario:
+  id: matrix-e2ee-server-backup-deleted-local-reupload-restores
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-and-identity
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 180000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-server-backup-deleted-local-reupload-restores
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Server Backup Reupload Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js
+  call: runMatrixQaE2eeServerBackupDeletedLocalReuploadRestoresScenario
+  args:
+    - expr: "scenarioContext"

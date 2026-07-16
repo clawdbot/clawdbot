@@ -47,10 +47,10 @@ import { join, resolve } from "node:path";
  *   5. `useLoggedInUser` (default)
  */
 
-export const COPILOT_TOKEN_PROFILE_ERROR =
+const COPILOT_TOKEN_PROFILE_ERROR =
   "[copilot-attempt] gitHubToken auth requires profileId+profileVersion (pool keying safety; per Q5/Q1 decisions)";
 
-export const COPILOT_DEFAULT_AGENT_ID = "copilot";
+const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
 interface ResolvedCopilotAuth {
@@ -236,7 +236,7 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
  * (`COPILOT_DEFAULT_AGENT_ID`) rather than throwing - the harness's
  * job is to keep running with a safe default, not to validate config.
  */
-export function sanitizeAgentId(value: string | undefined | null): string {
+function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim().toLowerCase();
   if (!trimmed) {
     return COPILOT_DEFAULT_AGENT_ID;

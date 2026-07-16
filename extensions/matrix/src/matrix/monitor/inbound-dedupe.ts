@@ -13,7 +13,7 @@ const MATRIX_INBOUND_DEDUPE_PLUGIN_ID = "matrix";
 // One shared "global" namespace with the account baked into each key: the
 // plugin-state fuse sheds only the writing namespace, so per-account
 // namespaces could starve a new account once older ones fill the per-plugin
-// row budget. A single bounded pool stays far under that fuse. The qa-matrix
+// row budget. A single bounded pool stays far under that fuse. The QA Lab Matrix
 // runtime-state probe mirrors this prefix and key shape when asserting commits.
 const MATRIX_INBOUND_DEDUPE_NAMESPACE_PREFIX = "matrix.inbound-dedupe";
 const MATRIX_INBOUND_DEDUPE_NAMESPACE = "global";

@@ -6,42 +6,15 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { resolveSafeChildProcessInvocation } from "../process/windows-command.js";
-import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import type { ClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
 import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
+import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 
 const OUTPUT_CAP_BYTES = 200_000;
 const STDERR_TAIL_BYTES = 20_000;
-const PROGRESS_CHUNK_BYTES = 16 * 1024;
 const TERMINAL_EVENT_MAX_BYTES = 1024 * 1024;
-const MIN_HEARTBEAT_INTERVAL_MS = 250;
-const MAX_HEARTBEAT_INTERVAL_MS = 5_000;
-
-async function sendProgressChunks(
-  client: NodeHostClient,
-  frame: NodeInvokeRequestPayload,
-  startSeq: number,
-  text: string,
-): Promise<number> {
-  let seq = startSeq;
-  let remaining = text;
-  while (remaining) {
-    const chunk = truncateUtf8Prefix(remaining, PROGRESS_CHUNK_BYTES);
-    if (!chunk) {
-      break;
-    }
-    await client.request("node.invoke.progress", {
-      invokeId: frame.id,
-      nodeId: frame.nodeId,
-      seq,
-      chunk,
-    });
-    seq += 1;
-    remaining = remaining.slice(chunk.length);
-  }
-  return seq;
-}
 
 function isClaudeResultLine(line: string): boolean {
   try {
@@ -95,13 +68,6 @@ export async function runClaudeCliNodeCommand(params: {
       let truncated = false;
       let outputBytes = 0;
       let stderr = "";
-      let progressSeq = 0;
-      let progressQueue = Promise.resolve();
-      let progressError: Error | undefined;
-      let heartbeatQueued = false;
-      let heartbeatDirty = false;
-      let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-      let lastProgressAt = 0;
       const decoder = new StringDecoder("utf8");
       const stderrDecoder = new StringDecoder("utf8");
       const terminalDecoder = new StringDecoder("utf8");
@@ -133,6 +99,12 @@ export async function runClaudeCliNodeCommand(params: {
           // Best effort; close/error settles the result.
         }
       };
+      const progress = createNodeInvokeProgressWriter({
+        client: params.client,
+        frame: params.frame,
+        idleTimeoutMs: params.request.idleTimeoutMs,
+        onError: kill,
+      });
       const abortRun = () => {
         cancelled = true;
         kill();
@@ -193,57 +165,6 @@ export async function runClaudeCliNodeCommand(params: {
           terminalLineTouchesTruncation = false;
         }
       };
-      const queueProgressTask = (stream: typeof child.stdout, task: () => Promise<void>): void => {
-        stream.pause();
-        progressQueue = progressQueue
-          .then(task)
-          .catch((error: unknown) => {
-            progressError = error instanceof Error ? error : new Error(String(error));
-            kill();
-          })
-          .finally(() => stream.resume());
-      };
-      const heartbeatIntervalMs = Math.max(
-        MIN_HEARTBEAT_INTERVAL_MS,
-        Math.min(MAX_HEARTBEAT_INTERVAL_MS, Math.floor(params.request.idleTimeoutMs / 2)),
-      );
-      const queueHeartbeat = () => {
-        if (settled) {
-          return;
-        }
-        if (heartbeatQueued) {
-          heartbeatDirty = true;
-          return;
-        }
-        heartbeatQueued = true;
-        const delayMs = Math.max(0, heartbeatIntervalMs - (Date.now() - lastProgressAt));
-        heartbeatTimer = setTimeout(() => {
-          heartbeatTimer = undefined;
-          progressQueue = progressQueue
-            .then(async () => {
-              await params.client.request("node.invoke.progress", {
-                invokeId: params.frame.id,
-                nodeId: params.frame.nodeId,
-                seq: progressSeq,
-                chunk: "",
-              });
-              progressSeq += 1;
-              lastProgressAt = Date.now();
-            })
-            .catch((error: unknown) => {
-              progressError = error instanceof Error ? error : new Error(String(error));
-              kill();
-            })
-            .finally(() => {
-              heartbeatQueued = false;
-              if (heartbeatDirty && !settled) {
-                heartbeatDirty = false;
-                queueHeartbeat();
-              }
-            });
-        }, delayMs);
-      };
-
       child.stdout.on("data", (raw: Buffer) => {
         const retained = retain(raw);
         if (retained.length > 0) {
@@ -256,20 +177,17 @@ export async function runClaudeCliNodeCommand(params: {
         // keep the node-local kill timer on the same signal to avoid orphan runs.
         resetIdleTimer();
         if (retained.length === 0) {
-          queueHeartbeat();
+          progress.queueHeartbeat();
           return;
         }
         const text = decoder.write(retained);
-        lastProgressAt = Date.now();
-        queueProgressTask(child.stdout, async () => {
-          progressSeq = await sendProgressChunks(params.client, params.frame, progressSeq, text);
-        });
+        void progress.write(text, child.stdout);
       });
       child.stderr.on("data", (raw: Buffer) => {
         retain(raw);
         stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.write(raw)}`, STDERR_TAIL_BYTES);
         resetIdleTimer();
-        queueHeartbeat();
+        progress.queueHeartbeat();
       });
       child.stdin.on("error", () => {});
       child.stdin.end(params.request.stdin ?? "");
@@ -281,19 +199,11 @@ export async function runClaudeCliNodeCommand(params: {
         settled = true;
         clearTimeout(hardTimer);
         clearTimeout(idleTimer);
-        clearTimeout(heartbeatTimer);
-        heartbeatDirty = false;
+        progress.stopHeartbeats();
         params.signal?.removeEventListener("abort", abortRun);
         const finalText = decoder.end();
         if (finalText) {
-          progressQueue = progressQueue.then(async () => {
-            progressSeq = await sendProgressChunks(
-              params.client,
-              params.frame,
-              progressSeq,
-              finalText,
-            );
-          });
+          void progress.write(finalText);
         }
         const terminalText = terminalDecoder.end();
         if (terminalText) {
@@ -311,22 +221,16 @@ export async function runClaudeCliNodeCommand(params: {
           terminalResultLine = terminalLineBuffer;
         }
         if (truncated && terminalResultLine) {
-          progressQueue = progressQueue.then(async () => {
-            progressSeq = await sendProgressChunks(
-              params.client,
-              params.frame,
-              progressSeq,
-              `\n${terminalResultLine}\n`,
-            );
-          });
+          void progress.write(`\n${terminalResultLine}\n`);
         }
-        await progressQueue.catch(() => {});
+        await progress.flush();
+        progress.stop();
         const timeoutMessage = idleTimedOut
           ? "Claude CLI produced no output before the idle timeout"
           : hardTimedOut
             ? "Claude CLI exceeded the hard timeout"
             : "";
-        const finalError = progressError ?? error;
+        const finalError = progress.error ?? error;
         const cancelledMessage = cancelled ? "Claude CLI invocation cancelled" : "";
         resolve({
           exitCode: exitCode ?? (idleTimedOut || hardTimedOut ? 124 : cancelled ? 130 : 1),

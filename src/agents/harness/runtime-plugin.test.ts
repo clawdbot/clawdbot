@@ -477,6 +477,28 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
 
+  it("keeps official OpenAI providers on embedded OpenClaw when explicitly configured", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.2",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
   it("does not treat CLI backend runtime aliases as plugin ids", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "anthropic",

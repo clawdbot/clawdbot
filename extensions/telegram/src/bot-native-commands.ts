@@ -216,11 +216,6 @@ const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.runtime.js"),
 );
 
-export const testing = {
-  loadNativeCommandRuntime: loadTelegramNativeCommandRuntime,
-};
-export { testing as __testing };
-
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
 function resolveTelegramCommandSessionFile(params: {
@@ -1968,3 +1963,4 @@ export const registerTelegramNativeCommands = ({
     }).catch(() => {});
   }
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,8 +8,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getOpenRouterModelCapabilities,
@@ -263,7 +263,10 @@ export default definePluginEntry({
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
     }
 
-    const passthroughReplayHook = PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy;
+    const passthroughGeminiReplayHooks = buildProviderReplayFamilyHooks({
+      family: "passthrough-gemini",
+    });
+    const passthroughReplayHook = passthroughGeminiReplayHooks.buildReplayPolicy;
     function buildOpenRouterReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
       const base = passthroughReplayHook?.(ctx) ?? {};
       // OpenRouter proxies Mistral, which uses non-base62 tool_call_ids and
@@ -352,7 +355,7 @@ export default definePluginEntry({
             }
           : undefined;
       },
-      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
       supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),

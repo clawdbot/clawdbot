@@ -12,13 +12,10 @@ vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
 
-import {
-  clearCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshotState,
-} from "../plugins/current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   buildShouldSuppressBuiltInModel,
-  clearModelSuppressionResolverCacheForTest,
   shouldSuppressBuiltInModel,
 } from "./model-suppression.js";
 
@@ -26,8 +23,7 @@ const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 describe("model suppression", () => {
   beforeEach(() => {
-    clearCurrentPluginMetadataSnapshotState();
-    clearModelSuppressionResolverCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
   });
 

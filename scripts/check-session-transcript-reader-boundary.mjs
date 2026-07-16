@@ -51,6 +51,24 @@ const transcriptReaderNames = new Set([
 
 const storageSpecificTranscriptReaderAliasNames = new Set(["readSessionMessagesFromFileAsync"]);
 
+const gatewaySessionServerMethodFiles = [
+  "src/gateway/server-methods/sessions-abort.ts",
+  "src/gateway/server-methods/sessions-compact.ts",
+  "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
+  "src/gateway/server-methods/sessions-compaction-queries.ts",
+  "src/gateway/server-methods/sessions-compaction-runner.ts",
+  "src/gateway/server-methods/sessions-create.ts",
+  "src/gateway/server-methods/sessions-delete.ts",
+  "src/gateway/server-methods/sessions-dispatch.ts",
+  "src/gateway/server-methods/sessions-groups.ts",
+  "src/gateway/server-methods/sessions-messaging.ts",
+  "src/gateway/server-methods/sessions-mutations.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/gateway/server-methods/sessions-shared.ts",
+  "src/gateway/server-methods/sessions-subscriptions.ts",
+  "src/gateway/server-methods/sessions.ts",
+];
+
 export const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/main-session-restart-recovery.ts",
   "src/agents/subagent-announce-output.test.ts",
@@ -73,7 +91,7 @@ export const migratedSessionTranscriptReaderFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/sessions-files.test.ts",
   "src/gateway/server-methods/sessions-files.ts",
-  "src/gateway/server-methods/sessions.ts",
+  ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-history-state.test.ts",
   "src/gateway/session-history-state.ts",

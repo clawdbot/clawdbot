@@ -622,6 +622,56 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips a trigger-script systemEvent tool cap through SQLite", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("trigger-system-event-cap", true);
+    const job = expectDefined(
+      payload.jobs[0],
+      'makeStore("trigger-system-event-cap", true).jobs[0] test invariant',
+    );
+    job.trigger = { script: "return { fire: false }" };
+    job.payload = {
+      kind: "systemEvent",
+      text: "changed",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
+      kind: "systemEvent",
+      text: "changed",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("round-trips a command payload tool cap through SQLite", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("command-cap-job", true);
+    const job = expectDefined(
+      payload.jobs[0],
+      'makeStore("command-cap-job", true).jobs[0] test invariant',
+    );
+    job.sessionTarget = "isolated";
+    job.payload = {
+      kind: "command",
+      argv: ["echo", "hi"],
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
+      kind: "command",
+      argv: ["echo", "hi"],
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
   it("round-trips completion destinations through SQLite delivery columns", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
@@ -1186,3 +1236,4 @@ describe("saveCronStore", () => {
     await expectPathMissing(`${storePath}.bak`);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

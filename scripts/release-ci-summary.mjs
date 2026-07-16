@@ -5,7 +5,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -102,52 +102,28 @@ function jsonGh(args) {
   return JSON.parse(gh(args));
 }
 
+export function githubRestArgs(pathSuffix, repository = DEFAULT_REPO) {
+  return ["api", `repos/${repository}/${pathSuffix}`];
+}
+
 function githubRestJson(pathSuffix, repository = DEFAULT_REPO) {
-  const result = execFileSync(
-    "bash",
-    [
-      "-lc",
-      [
-        "set -euo pipefail",
-        'token="$("$OPENCLAW_PLAIN_GH_BIN" auth token)"',
-        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
-      ].join("\n"),
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...plainGhEnv(),
-        OPENCLAW_PLAIN_GH_BIN: resolvePlainGhBin(),
-        OPENCLAW_GITHUB_REST_URL: `https://api.github.com/repos/${repository}/${pathSuffix}`,
-      },
-      maxBuffer: 16 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  return JSON.parse(result);
+  return jsonGh(githubRestArgs(pathSuffix, repository));
+}
+
+export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
+  return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
 function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
-  execFileSync(
-    "bash",
-    [
-      "-lc",
-      [
-        "set -euo pipefail",
-        'token="$("$OPENCLAW_PLAIN_GH_BIN" auth token)"',
-        'curl -fsSL -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" --output "$OPENCLAW_GITHUB_ARTIFACT_DESTINATION" "$OPENCLAW_GITHUB_ARTIFACT_URL"',
-      ].join("\n"),
-    ],
-    {
-      env: {
-        ...plainGhEnv(),
-        OPENCLAW_GITHUB_ARTIFACT_DESTINATION: destination,
-        OPENCLAW_GITHUB_ARTIFACT_URL: `https://api.github.com/repos/${repository}/actions/artifacts/${artifactId}/zip`,
-        OPENCLAW_PLAIN_GH_BIN: resolvePlainGhBin(),
-      },
-      stdio: ["ignore", "ignore", "pipe"],
-    },
-  );
+  const output = openSync(destination, "w");
+  try {
+    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
+      env: plainGhEnv(),
+      stdio: ["ignore", output, "pipe"],
+    });
+  } finally {
+    closeSync(output);
+  }
 }
 
 function rate() {

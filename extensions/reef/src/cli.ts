@@ -4,14 +4,21 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
-import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
+import {
+  parseReefRelayUrl,
+  ReefChannelConfigSchema,
+  type ReefChannelConfig,
+} from "./config-schema.js";
+import { ReefAutonomySchema } from "./friend-types.js";
 import { ReefFriendManager } from "./friends.js";
 import { getReefRuntime } from "./runtime.js";
 import { generateAndStoreKeys, loadKeys, resolveStateDir, writePrivateJson } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
+import { openReefTrustStore } from "./trust-store.js";
 import type { ReefKeys } from "./types.js";
 
 const HANDLE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
@@ -102,7 +109,19 @@ async function loadConfiguredManager(output: ReefCliOutput): Promise<{
   const stateDir = resolveStateDir(config.stateDir);
   const keys = await loadOrCreateKeys(stateDir, false);
   const transport = new ReefTransportClient(config.relayUrl, config.handle, keys);
-  return { config, keys, manager: new ReefFriendManager(config, transport, stateDir) };
+  const runtime = getReefRuntime();
+  const pairing = createChannelPairingController({
+    core: runtime,
+    channel: "reef",
+    accountId: "default",
+  });
+  const manager = new ReefFriendManager(transport, openReefTrustStore(runtime, config), {
+    list: pairing.readAllowFromStore,
+    remove: async (peer) => {
+      return (await pairing.removeAllowFromStoreEntry(peer)).changed;
+    },
+  });
+  return { config, keys, manager };
 }
 
 type RegisterOptions = {
@@ -124,28 +143,9 @@ async function writeReefRegistration(candidate: ReefChannelConfig): Promise<void
   await mutateConfigFile({
     afterWrite: { mode: "auto" },
     mutate(draft: OpenClawConfig) {
-      // Merge friends/allowFrom from the live draft, not a pre-auth snapshot,
-      // so a concurrently running gateway's approvals are not overwritten —
-      // but only for the SAME identity. A different handle, relay, or state
-      // dir is a new identity and must not inherit the old trust pins.
-      const existing = (draft.channels?.reef ?? {}) as {
-        handle?: string;
-        relayUrl?: string;
-        stateDir?: string;
-        friends?: Record<string, unknown>;
-        allowFrom?: unknown[];
-      };
-      const sameIdentity =
-        existing.handle === candidate.handle &&
-        existing.relayUrl === candidate.relayUrl &&
-        resolveStateDir(existing.stateDir) === resolveStateDir(candidate.stateDir);
       draft.channels = {
         ...draft.channels,
-        reef: {
-          ...candidate,
-          friends: sameIdentity ? (existing.friends ?? {}) : {},
-          allowFrom: sameIdentity ? (existing.allowFrom ?? []) : [],
-        },
+        reef: candidate,
       };
     },
   });
@@ -160,6 +160,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   if (!guardDefaults) {
     return await fail(output, "--guard-provider must be one of: anthropic, openai.");
   }
+  const relayUrl = parseReefRelayUrl(options.relay);
   const stateDir = resolveStateDir(options.stateDir);
   const requestedHandle = options.handle?.toLowerCase();
   // One state dir is one identity. Reusing existing keys for a different handle
@@ -171,10 +172,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     (raw) => JSON.parse(raw) as { handle?: string; relayUrl?: string },
     () => undefined,
   );
-  if (
-    identity?.handle &&
-    (identity.handle !== requestedHandle || identity.relayUrl !== options.relay)
-  ) {
+  if (identity?.handle && (identity.handle !== requestedHandle || identity.relayUrl !== relayUrl)) {
     return await fail(
       output,
       `This state dir already holds the identity @${identity.handle} on ${identity.relayUrl}. Re-register the same handle and relay, or pass a fresh --state-dir for a new identity.`,
@@ -182,7 +180,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   }
   const keys = await loadOrCreateKeys(stateDir, true);
 
-  const bootstrap = new ReefTransportClient(options.relay, options.handle ?? "pending", keys);
+  const bootstrap = new ReefTransportClient(relayUrl, options.handle ?? "pending", keys);
   const sessionPath = join(stateDir, "setup-session.json");
   // A previously exchanged session is reused from the key store so retries
   // never need the single-use token again and the credential never appears in
@@ -195,9 +193,7 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   );
   const token = options.token?.trim();
   const storedSession =
-    !options.session?.trim() &&
-    stored?.relayUrl === options.relay &&
-    stored?.email === options.email
+    !options.session?.trim() && stored?.relayUrl === relayUrl && stored?.email === options.email
       ? stored.session
       : undefined;
   // A scoped cached session beats a --token that a prior run already consumed,
@@ -243,14 +239,11 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
   // silently recording an unapplied one.
   const provisional = {
     enabled: true,
-    relayUrl: options.relay,
+    relayUrl,
     handle,
     email: options.email,
     requestPolicy: options.policy,
     stateDir,
-    friends: {},
-    dmPolicy: "pairing",
-    allowFrom: [],
     guard,
   };
   ReefChannelConfigSchema.parse(provisional);
@@ -260,11 +253,11 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
     resolvedSession = (await bootstrap.authComplete(token ?? "")).session;
     await writePrivateJson(sessionPath, {
       session: resolvedSession,
-      relayUrl: options.relay,
+      relayUrl,
       email: options.email,
     });
   }
-  const transport = new ReefTransportClient(options.relay, handle, keys);
+  const transport = new ReefTransportClient(relayUrl, handle, keys);
   let effectivePolicy = options.policy;
   try {
     await transport.createHandle(resolvedSession, options.policy);
@@ -310,19 +303,15 @@ async function runRegister(output: ReefCliOutput, options: RegisterOptions): Pro
       `Handle @${handle} is claimed, but writing the local config failed: ${error instanceof Error ? error.message : String(error)}. Fix the local issue and rerun the exact same command — the retry reuses the stored session and recognizes the existing claim.`,
     );
   }
-  await writePrivateJson(identityPath, { handle, relayUrl: options.relay });
+  await writePrivateJson(identityPath, { handle, relayUrl });
   await rm(sessionPath, { force: true });
 
   const printed = fingerprint(keys.signing.publicKey, keys.encryption.publicKey);
-  emit(
-    output,
-    { status: "registered", handle, relayUrl: options.relay, stateDir, fingerprint: printed },
-    [
-      `Registered @${handle} on ${options.relay}.`,
-      `Safety fingerprint (share out of band): ${printed}`,
-      "Restart the gateway to connect: openclaw gateway restart",
-    ],
-  );
+  emit(output, { status: "registered", handle, relayUrl, stateDir, fingerprint: printed }, [
+    `Registered @${handle} on ${relayUrl}.`,
+    `Safety fingerprint (share out of band): ${printed}`,
+    "Restart the gateway to connect: openclaw gateway restart",
+  ]);
 }
 
 export function registerReefCli({ program }: { program: Command }): void {
@@ -337,7 +326,7 @@ export function registerReefCli({ program }: { program: Command }): void {
     .option("--handle <handle>", "Unlisted handle for this claw")
     .option("--session <session>", "Setup session from the relay welcome page")
     .option("--token <token>", "Magic-link token to exchange for a session")
-    .option("--relay <url>", "Relay URL", "https://reefwire.ai")
+    .option("--relay <url>", "Relay origin URL", "https://reefwire.ai")
     .option("--policy <policy>", "Inbound friend-request policy", "code-only")
     .option("--state-dir <dir>", "Local key/state directory")
     .option("--guard-provider <provider>", "Guard provider (anthropic|openai)", "openai")
@@ -403,6 +392,20 @@ export function registerReefCli({ program }: { program: Command }): void {
     );
 
   friend
+    .command("autonomy <handle> <tier>")
+    .description("Set a trusted friend's autonomy tier")
+    .option("--json", "Emit JSON", false)
+    .action(
+      reefCliAction<{ json: boolean }, [string, string]>(async (output, _options, handle, tier) => {
+        const { manager } = await loadConfiguredManager(output);
+        const peer = handle.replace(/^@/, "").toLowerCase();
+        const autonomy = ReefAutonomySchema.parse(tier);
+        await manager.setAutonomy(peer, autonomy);
+        emit(output, { peer, autonomy }, [`Set @${peer} autonomy to ${autonomy}.`]);
+      }),
+    );
+
+  friend
     .command("request <handle>")
     .description("Request a friendship (adopted automatically once accepted)")
     .option("--code <code>", "Friend code minted by the recipient")
@@ -456,24 +459,6 @@ export function registerReefCli({ program }: { program: Command }): void {
         const { manager } = await loadConfiguredManager(output);
         const peer = handle.replace(/^@/, "").toLowerCase();
         await manager.remove(peer);
-        await mutateConfigFile({
-          afterWrite: { mode: "auto" },
-          mutate(draft: OpenClawConfig) {
-            const reefDraft = draft.channels?.reef as
-              | { friends?: Record<string, unknown>; allowFrom?: unknown[] }
-              | undefined;
-            if (reefDraft?.friends) {
-              delete reefDraft.friends[peer];
-            }
-            // Removal must fully revoke: the pairing-derived allowlist entry
-            // would otherwise re-authorize the peer without a fresh approval.
-            if (Array.isArray(reefDraft?.allowFrom)) {
-              reefDraft.allowFrom = reefDraft.allowFrom.filter(
-                (entry) => String(entry).replace(/^@/, "").toLowerCase() !== peer,
-              );
-            }
-          },
-        });
         emit(output, { peer, status: "removed" }, [`Removed @${peer}.`]);
       }),
     );

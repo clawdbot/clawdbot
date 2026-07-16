@@ -69,6 +69,7 @@ function createPrompt(overrides?: Record<string, unknown>) {
 
 function createInput(options?: {
   attempt?: EmbeddedRunAttemptParams;
+  preparedUserTurnMessage?: AgentMessage;
   prompt?: ReturnType<typeof createPrompt>;
   report?: SessionSystemPromptReport;
 }) {
@@ -81,7 +82,9 @@ function createInput(options?: {
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
       messages,
-      preparedUserTurnTimestamp: 123,
+      preparedUserTurnMessage:
+        options?.preparedUserTurnMessage ??
+        ({ role: "user", content: "Visible request", timestamp: 123 } as AgentMessage),
       prompt: options?.prompt ?? createPrompt(),
       replaceSessionMessages,
       sessionAgentId: "agent-1",
@@ -139,6 +142,22 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
     const clonedProjectionState = hoisted.truncateOversizedToolResultsInMessages.mock.calls[0]?.[4];
     expect(clonedProjectionState).not.toBe(projectionState);
+  });
+
+  it("includes persisted sender context in the overflow-precheck prompt", () => {
+    const fixture = createInput({
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "Visible request",
+        timestamp: 123,
+        __openclaw: { senderId: "alice-id", senderName: "Alice" },
+      } as AgentMessage,
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.llmBoundaryPromptForPrecheck).toContain('"name": "Alice"');
+    expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
   });
 
   it("reports aggregate tool-result pressure for compact-then-truncate routing", () => {

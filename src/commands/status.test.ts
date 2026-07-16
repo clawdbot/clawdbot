@@ -830,7 +830,8 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
+import { statusCommand } from "./status.command.js";
+import { resolvePairingRecoveryContext } from "./status.command.test-support.js";
 
 const runtime = {
   log: vi.fn(),
@@ -1551,3 +1552,4 @@ describe("statusCommand", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -93,4 +93,8 @@ export class GatewayClient {
   getConnectionMetadata(): GatewayClientConnectionMetadata {
     return this.#client.getConnectionMetadata();
   }
+
+  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+    this.#client.updateNodeManifest(manifest);
+  }
 }

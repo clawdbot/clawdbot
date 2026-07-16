@@ -128,6 +128,23 @@ describe("message hook mappers", () => {
     expect(canonical.guildId).toBe("guild-1");
   });
 
+  it("uses the session key as the Control UI conversation id", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        From: undefined,
+        To: undefined,
+        OriginatingTo: undefined,
+        Provider: "webchat",
+        Surface: "webchat",
+        OriginatingChannel: "webchat",
+        SessionKey: "agent:main:adopted",
+      }),
+    );
+
+    expect(canonical.channelId).toBe("webchat");
+    expect(canonical.conversationId).toBe("agent:main:adopted");
+  });
+
   it("maps inbound reply metadata into canonical and plugin payloads", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({

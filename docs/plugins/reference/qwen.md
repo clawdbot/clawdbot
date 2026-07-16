@@ -16,7 +16,7 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CL
 
 ## Surface
 
-providers: qwen, qwencloud, modelstudio, dashscope, qwen-oauth, qwen-portal, qwen-cli, qwen-token-plan, bailian-token-plan; contracts: mediaUnderstandingProviders, videoGenerationProviders
+providers: `qwen`, `qwencloud`, `modelstudio`, `dashscope`, `qwen-oauth`, `qwen-portal`, `qwen-cli`, `qwen-token-plan`, `bailian-token-plan`; contracts: `mediaUnderstandingProviders`, `videoGenerationProviders`
 
 ## Related docs
 

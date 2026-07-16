@@ -1274,12 +1274,8 @@ refresh_gateway_service_if_loaded() {
     return 0
   fi
 
-  if ! "$claw" gateway restart >/dev/null 2>&1; then
-    emit_json '{"event":"step","name":"gateway-service","status":"warn","reason":"restart-failed"}'
-    log "Warning: gateway service restart failed; continuing. Run: openclaw gateway restart"
-    return 0
-  fi
-
+  # `gateway install --force` activates the replacement service. A second
+  # restart can kill startup migrations and strand their lock until expiry.
   "$claw" gateway status --probe --json >/dev/null 2>&1 || true
   emit_json '{"event":"step","name":"gateway-service","status":"ok"}'
 }

@@ -1760,3 +1760,4 @@ describe("doctor.memory.remHarness", () => {
     expect(payload.deep.candidateLimit).toBe(100);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

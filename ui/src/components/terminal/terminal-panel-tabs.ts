@@ -8,13 +8,13 @@ export type TerminalPanelTab = {
   shellName: string | null;
   agentId: string | null;
   cwd: string | null;
-  status: "live" | "exited";
+  status: "connecting" | "live" | "exited";
   exitReason?: string;
   exitCode?: number | null;
 };
 
 const TERMINAL_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3-3 3M8 11h5" /></svg>`;
-const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
+const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
 const PLUS_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10" /></svg>`;
 
 function terminalTabLabel(tab: TerminalPanelTab): string {
@@ -28,6 +28,9 @@ function terminalTabHint(tab: TerminalPanelTab): string | null {
 }
 
 function terminalTabStatusLabel(tab: TerminalPanelTab): string | null {
+  if (tab.status === "connecting") {
+    return t("terminal.connecting");
+  }
   if (tab.status !== "exited") {
     return null;
   }
@@ -47,6 +50,24 @@ export function renderTerminalPanelTabs(params: {
   onClose: (id: string) => void;
   onNew: () => void;
 }) {
+  const newButton = (slotted: boolean) => html`
+    <button
+      slot=${slotted ? "nav" : nothing}
+      class="tp-new"
+      type="button"
+      ?disabled=${params.booting}
+      title=${t("terminal.newSession")}
+      aria-label=${t("terminal.newSession")}
+      @click=${params.onNew}
+    >
+      ${PLUS_GLYPH}
+    </button>
+  `;
+  if (params.tabs.length === 0) {
+    // Web Awesome 3.10 dereferences its first tab when an empty group becomes
+    // visible. Keep the new-session control outside the group until one exists.
+    return newButton(false);
+  }
   return html`
     <wa-tab-group
       class="tp-tabs"
@@ -60,7 +81,7 @@ export function renderTerminalPanelTabs(params: {
         return html`
           <wa-tab
             id=${`terminal-tab-${tab.id}`}
-            class="tp-tab ${tab.status === "exited" ? "is-exited" : ""}"
+            class="tp-tab is-${tab.status}"
             panel=${tab.id}
             aria-controls="terminal-tab-panel"
             title=${terminalTabHint(tab) || nothing}
@@ -81,17 +102,7 @@ export function renderTerminalPanelTabs(params: {
           </button>
         `;
       })}
-      <button
-        slot="nav"
-        class="tp-new"
-        type="button"
-        ?disabled=${params.booting}
-        title=${t("terminal.newSession")}
-        aria-label=${t("terminal.newSession")}
-        @click=${params.onNew}
-      >
-        ${PLUS_GLYPH}
-      </button>
+      ${newButton(true)}
     </wa-tab-group>
   `;
 }

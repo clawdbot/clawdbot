@@ -138,8 +138,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
-    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
-    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force');
     expect(sweepScript).toContain("assert-cutover-preinstalled");
     expect(sweepScript).toContain('install_args+=("--force")');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
@@ -149,7 +149,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "${install_args[@]}"')).toBeLessThan(
+    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
       successScenario.indexOf("configure_kitchen_sink_runtime"),
     );
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
@@ -397,8 +397,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
-      OPENCLAW_CI_RUN_TS_LOC:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
@@ -430,6 +428,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$release_checks_target_ref"');
+    expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
@@ -568,7 +567,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",
-        targeted_docker_lane_group_size: 4,
+        targeted_docker_lane_group_size: 2,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
@@ -615,6 +614,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
+    expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
@@ -657,6 +657,51 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseSource).toContain(
       "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
+  });
+
+  it("allows Unreleased notes only for current-tree release checks", () => {
+    const workflow = parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+    const fullReleaseWorkflow = readFullReleaseValidationWorkflow();
+    const resolveTarget = workflow.jobs.resolve_target;
+    const captureInputs = resolveTarget.steps.find(
+      (step: WorkflowStep) => step.name === "Capture selected inputs",
+    );
+    const currentTreeAllowance =
+      "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}";
+
+    expect(workflow.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual({
+      default: false,
+      description:
+        "Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict",
+      required: false,
+      type: "boolean",
+    });
+    expect(resolveTarget.outputs.allow_unreleased_changelog).toBe(
+      "${{ steps.inputs.outputs.allow_unreleased_changelog }}",
+    );
+    expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "main"');
+    expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "refs/heads/main"');
+    expect(captureInputs?.run).toContain("release/[0-9]{4}");
+    expect(captureInputs?.run).toContain("extended-stable/[0-9]{4}");
+    expect(captureInputs?.run).toContain("tideclaw/alpha/");
+    expect(captureInputs?.run).toContain("refs/tags/");
+    expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
+    expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
+    expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.live_repo_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.docker_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    const fullReleaseAllowance =
+      "${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}";
+    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    );
+    expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
   });
 
   it("keeps runtime tool coverage blocking in release checks", () => {

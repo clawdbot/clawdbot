@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
-import { setTelegramTopicNameStoreFactoryForTest } from "./topic-name-cache.js";
+import { setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -74,24 +75,29 @@ function createTelegramMessageContextSessionRuntimeForTest(
 }
 
 function installTelegramTopicNameStoreForTest() {
-  setTelegramTopicNameStoreFactoryForTest((namespace) => {
-    const entries = telegramTopicNameStoresForTest.get(namespace) ?? new Map();
-    telegramTopicNameStoresForTest.set(namespace, entries);
-    return {
-      async register(key, value) {
-        entries.set(key, value);
-      },
-      async entries() {
-        return Array.from(entries, ([key, value]) => ({ key, value }));
-      },
-      async delete(key) {
-        return entries.delete(key);
-      },
-      async clear() {
-        entries.clear();
-      },
-    };
-  });
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (({ namespace }: { namespace: string }) => {
+        const entries = telegramTopicNameStoresForTest.get(namespace) ?? new Map();
+        telegramTopicNameStoresForTest.set(namespace, entries);
+        return {
+          async register(key: string, value: TopicNameEntryForTest) {
+            entries.set(key, value);
+          },
+          async entries() {
+            return Array.from(entries, ([key, value]) => ({ key, value }));
+          },
+          async delete(key: string) {
+            return entries.delete(key);
+          },
+          async clear() {
+            entries.clear();
+          },
+        };
+      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
 }
 
 export async function buildTelegramMessageContextForTest(

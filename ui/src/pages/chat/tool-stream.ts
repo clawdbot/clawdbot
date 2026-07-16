@@ -790,3 +790,4 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

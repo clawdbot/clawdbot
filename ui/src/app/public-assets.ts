@@ -1,5 +1,5 @@
 // Control UI module implements public assets behavior.
-import { normalizeBasePath } from "../app-route-paths.ts";
+import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 
 type ControlUiPublicAsset =
@@ -28,7 +28,10 @@ export function inferControlUiPublicAssetPath(
   },
 ): string {
   const basePath =
-    params?.basePath ?? resolveControlUiBasePath(params?.pathname ?? currentPathname());
+    params?.basePath ??
+    (params?.pathname === undefined
+      ? resolveControlUiBasePath(currentPathname())
+      : inferBasePathFromPathname(params.pathname));
   return controlUiPublicAssetPath(asset, basePath);
 }
 

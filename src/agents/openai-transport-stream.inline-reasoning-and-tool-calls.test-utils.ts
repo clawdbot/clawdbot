@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { createOpenAICompletionsTransportStreamFn, testing } from "./openai-transport-stream.js";
+import { createOpenAICompletionsTransportStreamFn } from "./openai-transport-stream.js";
 import {
   type OpenAICompletionsOutput,
   type CapturedStreamEvent,
@@ -13,6 +13,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("openai transport stream", () => {
   it("partitions inline reasoning tags out of OpenAI-compatible visible text", async () => {
@@ -1804,3 +1805,4 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,7 +1,7 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { testing } from "./run.js";
+import { testing } from "./run.test-support.js";
 
 function createLogger() {
   return {

@@ -110,9 +110,7 @@ interface MirrorCopilotTranscriptParams {
   config?: SessionTranscriptWriteLockParams["config"];
 }
 
-export async function mirrorCopilotTranscript(
-  params: MirrorCopilotTranscriptParams,
-): Promise<void> {
+async function mirrorCopilotTranscript(params: MirrorCopilotTranscriptParams): Promise<void> {
   const messages = params.messages.filter(
     (message): message is MirroredAgentMessage =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",

@@ -21,6 +21,7 @@ async function runLoadedScenarioFlow(
   params: {
     flow?: QaScenarioFlow;
     api?: Record<string, unknown>;
+    state?: ReturnType<typeof createQaBusState>;
     omitOutboundSequence?: boolean;
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
@@ -34,7 +35,7 @@ async function runLoadedScenarioFlow(
     throw new Error(`scenario has no flow: ${scenarioId}`);
   }
 
-  const state = createQaBusState();
+  const state = params.state ?? createQaBusState();
   let waitCount = 0;
   const transport = {
     state,
@@ -207,6 +208,39 @@ async function runWebchatTranscriptWait(
 }
 
 describe("scenario-flow-runner", () => {
+  it("runs the canonical reaction lifecycle with target-bound actions", async () => {
+    const state = createQaBusState();
+    const actionTargets: unknown[] = [];
+    const result = await runLoadedScenarioFlow("reaction-edit-delete", {
+      state,
+      api: {
+        handleQaAction: async (params: {
+          action: "delete" | "edit" | "react";
+          args: Record<string, unknown>;
+        }) => {
+          actionTargets.push(params.args.to);
+          const messageId = String(params.args.messageId);
+          if (params.action === "react") {
+            return state.reactToMessage({
+              messageId,
+              emoji: String(params.args.emoji),
+            });
+          }
+          if (params.action === "edit") {
+            return state.editMessage({
+              messageId,
+              text: String(params.args.text),
+            });
+          }
+          return state.deleteMessage({ messageId });
+        },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(actionTargets).toEqual(["channel:qa-room", "channel:qa-room", "channel:qa-room"]);
+  });
+
   it("fails when a flow calls a transport method the adapter does not implement", async () => {
     await expect(
       runLoadedScenarioFlow("channel-message-flows", {
@@ -252,6 +286,7 @@ describe("scenario-flow-runner", () => {
         },
       },
       scenarioTitle: "qa-import",
+      vars: { preparedValue: "ready" },
       flow: {
         steps: [
           {
@@ -268,6 +303,7 @@ describe("scenario-flow-runner", () => {
                   expr: 'basename === "SKILL.md"',
                 },
               },
+              { assert: 'preparedValue === "ready"' },
             ],
             detailsExpr: "basename",
           },

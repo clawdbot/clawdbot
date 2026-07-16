@@ -1744,3 +1744,4 @@ export class ChatComposerPersistence {
     return loadChatComposerDraftRevisionState(state, sessionKey, agentId);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

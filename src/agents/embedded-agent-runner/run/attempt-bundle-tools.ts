@@ -87,6 +87,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         agentDir: params.agentDir,
         cfg: params.attempt.config,
         manifestRegistry: bundleManifestRegistry,
+        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+        requesterSenderId: params.attempt.senderId,
+        agentAccountId: params.attempt.agentAccountId,
+        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
     : undefined;
   const bundleMcpRuntime = bundleMcpSessionRuntime

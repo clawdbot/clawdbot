@@ -15,7 +15,7 @@ message once real work starts, edits it as the agent reads, plans, calls
 tools, or waits for approval, then turns it into the final answer.
 
 ```text
-Shelling...
+Working...
 📖 from docs/concepts/progress-drafts.md
 🔎 Web Search: for "discord edit message"
 🛠️ Bash: run tests
@@ -43,11 +43,11 @@ Shelling...
 }
 ```
 
-Defaults from here: a start delay of 5 seconds (or immediately on a second work
-event), compact progress lines while useful work happens, and suppression of
-the older standalone progress messages for that turn. Raw tool-line drafts use
-an automatic one-word label; narrated status omits that redundant title unless
-you configure one explicitly.
+Defaults from here: a start delay of 5 seconds, compact progress lines while
+useful work happens, and suppression of the older standalone progress messages
+for that turn. Raw tool-line drafts use
+an automatic one-word label; a status headline omits that redundant title
+unless you configure one explicitly.
 
 This page covers the progress-draft experience and its config knobs. For the
 full streaming-mode matrix, per-channel runtime notes, and legacy key
@@ -55,15 +55,16 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part           | Purpose                                                                           |
-| -------------- | --------------------------------------------------------------------------------- |
-| Label          | Optional starter/status line such as `Working` or `Shelling`.                     |
-| Progress lines | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
+| Part            | Purpose                                                                           |
+| --------------- | --------------------------------------------------------------------------------- |
+| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
+| Label           | Optional starter/status line such as `Working`.                                   |
+| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
 
 For raw tool progress, the label appears once the agent starts meaningful work
-and stays busy for the initial delay, or a second work event fires immediately.
+and stays busy for the initial delay.
 It sits at the top of the rolling progress-line list, so it scrolls away once
-enough concrete work lines appear. Narrated progress shows only the agent's
+enough concrete work lines appear. A status headline shows only the agent's
 plain-language status unless a label is configured explicitly. Plain text-only
 replies never show a progress draft; a line appears only for real work updates,
 for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
@@ -93,14 +94,12 @@ block-reply delivery — use `streaming.block.enabled` for that.
 ## Configure labels
 
 Progress labels live under `channels.<channel>.streaming.progress`. The default
-raw tool-line label is `"auto"`, which picks from OpenClaw's built-in
-single-word label pool. Narrated progress hides that implicit label; set
-`label: "auto"` explicitly if you want it above narration too:
+raw tool-line label is `"auto"`, which uses the plain built-in `Working`
+label. A status headline hides that implicit label; set
+`label: "auto"` explicitly if you want a label above it too:
 
 ```text
-Working, Shelling, Scuttling, Clawing, Pinching, Molting, Bubbling, Tiding,
-Reefing, Cracking, Sifting, Brining, Nautiling, Krilling, Barnacling,
-Lobstering, Tidepooling, Pearling, Snapping, Surfacing
+Working
 ```
 
 Use a fixed label:
@@ -260,28 +259,40 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-### Narrated status
+With the commentary lane enabled, preambles render only as those interleaved
+💬 lines; the status headline below stays out of the way so the lane keeps its
+documented shape.
 
-When a utility model resolves for the agent — an explicit
+### Status headline
+
+On Discord and Telegram in progress mode, the model's typed pre-tool preamble
+becomes the draft's status headline whenever it is available. Other
+progress-mode channels keep their existing status behavior. The headline is on
+by default and does not bypass the normal activity gate for short turns;
+enabling `streaming.progress.commentary` hands preambles to the interleaved
+commentary lane instead.
+
+On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
-Anthropic → `claude-haiku-4-5`) — the progress draft replaces the rolling
-tool lines with a short plain-language narration of what the agent is doing,
-written by that cheaper model and refreshed as the work moves along:
+Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
+when the model emits no preamble or has been quiet for about 20 seconds
+(Telegram's headline is preamble-only today):
 
 ```text
 Updating the default model in your config, then restarting the gateway to pick
 it up. One agent listing call failed and is being retried.
 ```
 
-Narration is on by default (`streaming.progress.narration`, default `true`)
-and never falls back to the primary model: it runs only with an explicit
+Utility narration is on by default (`streaming.progress.narration`, default
+`true`) and never falls back to the primary model: it runs only with an explicit
 `utilityModel` or a provider-declared default for the agent's primary
 provider. Set `utilityModel: ""` to disable utility routing entirely. Tool lines
-keep accumulating underneath and return if narration stops, and the draft is
-edited only after the normal activity gate and when the narration text actually
-changes, which avoids flashes on fast turns and reduces edit churn in busy
-channels. Disable it to keep the raw tool lines:
+keep accumulating underneath and return if both status sources stop. Draft
+edits still wait for the normal activity gate and an actual
+text change, which avoids flashes on fast turns and reduces edit churn in busy
+channels. Set `narration: false` to disable only the utility-model filler; model
+preamble headlines remain enabled:
 
 ```json5
 {

@@ -7,7 +7,7 @@ const SECRET_TARGET_CALLSITES = [
   bundledPluginFile("memory-core", "src/cli.runtime.ts"),
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
-  "src/commands/agent.ts",
+  "src/agents/command/prepare.ts",
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",

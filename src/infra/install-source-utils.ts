@@ -4,6 +4,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  gt as gtSemver,
+  satisfies as satisfiesSemver,
+  validRange as validSemverRange,
+} from "semver";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
@@ -57,11 +62,42 @@ export function createNpmMetadataEnv(
   return env;
 }
 
-function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
-  // npm 12 always wraps `npm view --json` results in an array, while older
-  // releases unwrap a single match. Multiple matches are ambiguous for
-  // integrity checks, so only normalize the equivalent singleton shapes.
-  const entry = Array.isArray(value) && value.length === 1 ? value[0] : value;
+function resolveNpmSpecVersionSelector(spec: string): string | undefined {
+  const separator = spec.lastIndexOf("@");
+  return separator > 0 ? normalizeOptionalString(spec.slice(separator + 1)) : undefined;
+}
+
+function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  const selector = resolveNpmSpecVersionSelector(spec);
+  const range = selector ? validSemverRange(selector) : null;
+  if (range) {
+    // npm view output order tracks publication, not SemVer (a backport can be
+    // published after a higher release), so pick the max satisfying version.
+    let best: { entry: unknown; version: string } | undefined;
+    for (const entry of entries) {
+      const version = normalizeOptionalString(entry.version);
+      if (!version || !satisfiesSemver(version, range)) {
+        continue;
+      }
+      if (!best || gtSemver(version, best.version)) {
+        best = { entry, version };
+      }
+    }
+    // A recognized range with no satisfying entry must fail the metadata read
+    // rather than silently resolve outside the requested constraint.
+    return best?.entry;
+  }
+  return entries.at(-1);
+}
+
+function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
+  // npm output varies by version, selector, and field projection. npm orders
+  // view arrays ascending, so non-semver selectors intentionally use the last entry.
+  const entry = selectNpmViewMetadataEntry(value, spec);
   if (!isRecord(entry) || Array.isArray(entry)) {
     return null;
   }
@@ -83,6 +119,8 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
+type NpmMetadataFailureCategory = "metadata-env";
+
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -91,6 +129,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   | {
       ok: false;
       error: string;
+      category?: NpmMetadataFailureCategory;
     }
 > {
   const res = await runCommandWithTimeout(
@@ -118,18 +157,29 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
         error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
       };
     }
-    return { ok: false, error: `npm view failed: ${raw}` };
+    return { ok: false, error: `npm view failed: ${raw}`, category: "metadata-env" };
   }
 
   try {
     const parsed = JSON.parse(res.stdout.trim()) as unknown;
-    const metadata = normalizeNpmViewMetadata(parsed);
+    const metadata = normalizeNpmViewMetadata(parsed, params.spec);
     if (!metadata?.name || !metadata.version) {
-      return { ok: false, error: "npm view produced incomplete package metadata" };
+      const missingFields = [!metadata?.name ? "name" : null, !metadata?.version ? "version" : null]
+        .filter((field): field is string => field !== null)
+        .join(", ");
+      return {
+        ok: false,
+        error: `npm view produced incomplete package metadata (missing: ${missingFields})`,
+        category: "metadata-env",
+      };
     }
     return { ok: true, metadata };
   } catch (err) {
-    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
   }
 }
 

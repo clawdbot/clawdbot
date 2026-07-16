@@ -339,6 +339,60 @@ describe("basic browser routes", () => {
     );
   });
 
+  it("retries unavailable graphics diagnostics and caches the first available result", async () => {
+    const unavailable = {
+      status: "unavailable",
+      observedAt: 123,
+      reason: "SystemInfo.getInfo timed out",
+    } as const;
+    const available = {
+      status: "available",
+      observedAt: 456,
+      acceleration: "hardware",
+      renderer: "ANGLE (Intel)",
+      vendor: "Intel",
+      version: "OpenGL ES 3.0",
+      backend: "(gl=angle,angle=metal)",
+      devices: [],
+      featureStatus: { webgl: "enabled" },
+      disabledFeatures: [],
+      driverBugWorkarounds: [],
+      videoDecoding: [],
+      videoEncoding: [],
+    } as const;
+    inspectChromeGraphicsDiagnosticsMock
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValue(available);
+    const state = createManagedProfileState(
+      {},
+      {
+        isHttpReachable: async () => true,
+        isTransportAvailable: async () => true,
+      },
+    );
+    const profile = (state.forProfile() as { profile: unknown }).profile as never;
+    state.profiles.set("openclaw", {
+      profile,
+      running: {
+        pid: 222,
+        exe: { kind: "chromium", path: "/usr/bin/chromium" },
+        userDataDir: "/tmp/openclaw-profile",
+        cdpPort: 18800,
+        startedAt: Date.now(),
+        proc: {} as never,
+      },
+    });
+
+    const first = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+    const second = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+    const third = await callBasicRouteWithState({ query: { profile: "openclaw" }, state });
+
+    expect(responseBodyRecord(first).graphics).toEqual(unavailable);
+    expect(responseBodyRecord(second).graphics).toEqual(available);
+    expect(responseBodyRecord(third).graphics).toEqual(available);
+    expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not inspect graphics while the managed process is pending reconcile", async () => {
     const state = createManagedProfileState(
       {},

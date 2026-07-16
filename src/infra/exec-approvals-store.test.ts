@@ -1970,3 +1970,4 @@ describe("exec approvals store helpers", () => {
     ).resolves.toBe("deny");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

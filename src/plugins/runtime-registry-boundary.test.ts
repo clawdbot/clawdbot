@@ -84,7 +84,7 @@ function isProductionTypeScriptFile(path: string): boolean {
     path.endsWith(".ts") &&
     !path.endsWith(".test.ts") &&
     !path.endsWith(".test.tsx") &&
-    !path.endsWith(".test-utils.ts")
+    !/\.test-(?:fixtures|harness|helpers|mocks|setup|support|utils)\.tsx?$/u.test(path)
   );
 }
 

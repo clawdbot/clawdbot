@@ -1,7 +1,2 @@
-/**
- * @deprecated Compatibility alias for the legacy `plugin-sdk/testing` barrel.
- *
- * Prefer focused `openclaw/plugin-sdk/*` test subpaths for public test helpers.
- */
-
-export * from "./testing.js";
+/** @deprecated Prefer the focused `plugin-test-runtime` subpath. */
+export * from "./plugin-test-runtime.js";

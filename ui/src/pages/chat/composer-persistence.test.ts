@@ -1656,3 +1656,4 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.draft).toBe("retry this write");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

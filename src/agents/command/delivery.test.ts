@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
-import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
+import { deliverAgentCommandResult } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const deliverOutboundPayloadsMock = vi.hoisted(() =>
@@ -32,9 +32,8 @@ vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
 }));
 
-type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
-type RunResult = NormalizeParams["result"];
 type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
+type RunResult = DeliverParams["result"];
 type TextPayloadLike = { text?: unknown };
 type ResolveReplyTransportParams = Parameters<
   NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
@@ -220,7 +219,7 @@ async function deliverMediaReplyForTest(
   });
 }
 
-describe("normalizeAgentCommandReplyPayloads", () => {
+describe("deliverAgentCommandResult payload normalization", () => {
   beforeEach(() => {
     setActivePluginRegistry(slackRegistry);
     deliverOutboundPayloadsMock.mockReset();
@@ -237,10 +236,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it("keeps Slack directives in text for direct agent deliveries", () => {
+  it("keeps Slack directives in text for direct agent deliveries", async () => {
     // Direct CLI deliveries preserve Slack directive markup because no channel
     // adapter has consumed it yet.
-    const normalized = normalizeAgentCommandReplyPayloads({
+    const delivered = await deliverAgentCommandResult({
       cfg: {
         channels: {
           slack: {
@@ -248,15 +247,17 @@ describe("normalizeAgentCommandReplyPayloads", () => {
           },
         },
       } as OpenClawConfig,
-      opts: { message: "test" } as AgentCommandOpts,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn() } as never,
+      opts: { message: "test", channel: "slack" } as AgentCommandOpts,
       outboundSession: undefined,
-      deliveryChannel: "slack",
+      sessionEntry: undefined,
       payloads: [{ text: "Choose [[slack_buttons: Retry:retry]]" }],
       result: createResult(),
     });
 
-    expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "Choose [[slack_buttons: Retry:retry]]");
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(delivered.payloads[0], "Choose [[slack_buttons: Retry:retry]]");
   });
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
@@ -383,16 +384,18 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverySignal?.aborted).toBe(false);
   });
 
-  it("renders response prefix templates with the selected runtime model", () => {
-    const normalized = normalizeAgentCommandReplyPayloads({
+  it("renders response prefix templates with the selected runtime model", async () => {
+    const delivered = await deliverAgentCommandResult({
       cfg: {
         messages: {
           responsePrefix: "[{modelFull}]",
         },
       } as OpenClawConfig,
-      opts: { message: "test" } as AgentCommandOpts,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn() } as never,
+      opts: { message: "test", channel: "slack" } as AgentCommandOpts,
       outboundSession: undefined,
-      deliveryChannel: "slack",
+      sessionEntry: undefined,
       payloads: [{ text: "Ready." }],
       result: createResult({
         meta: {
@@ -406,8 +409,8 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       }),
     });
 
-    expect(normalized).toHaveLength(1);
-    expectTextPayload(normalized[0], "[openai/gpt-5.4] Ready.");
+    expect(delivered.payloads).toHaveLength(1);
+    expectTextPayload(delivered.payloads[0], "[openai/gpt-5.4] Ready.");
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -1969,6 +1972,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
 
   it("emits JSON deliveryStatus before strict delivery failures rethrow", async () => {
     deliverOutboundPayloadsMock.mockRejectedValueOnce(new Error("Slack API timeout"));
+    const onDeliveryResult = vi.fn();
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -2000,6 +2004,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         sessionEntry: undefined,
         payloads: [{ text: "here you go" }],
         result: createResult(),
+        onDeliveryResult,
       }),
     ).rejects.toThrow("Slack API timeout");
 
@@ -2011,6 +2016,11 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(json.deliveryStatus?.succeeded).toBe(false);
     expect(json.deliveryStatus?.error).toBe(true);
     expect(String(json.deliveryStatus?.errorMessage)).toContain("Slack API timeout");
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryStatus: expect.objectContaining({ status: "failed" }),
+      }),
+    );
   });
 
   it("emits JSON deliveryStatus before strict preflight failures rethrow", async () => {
@@ -2063,3 +2073,4 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

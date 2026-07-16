@@ -1,5 +1,7 @@
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
+const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
+
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -39,4 +41,30 @@ export function coerceNodeInvokeCancelPayload(
   return value && typeof value.invokeId === "string" && typeof value.nodeId === "string"
     ? { invokeId: value.invokeId, nodeId: value.nodeId }
     : null;
+}
+
+export function coerceNodeInvokeInputPayload(
+  payload: unknown,
+): { invokeId: string; nodeId: string; seq: number; payloadJSON: string } | null {
+  const value =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  if (
+    !value ||
+    typeof value.id !== "string" ||
+    typeof value.nodeId !== "string" ||
+    !Number.isInteger(value.seq) ||
+    (value.seq as number) < 0 ||
+    typeof value.payloadJSON !== "string" ||
+    Buffer.byteLength(value.payloadJSON, "utf8") > MAX_INVOKE_INPUT_BYTES
+  ) {
+    return null;
+  }
+  return {
+    invokeId: value.id,
+    nodeId: value.nodeId,
+    seq: value.seq as number,
+    payloadJSON: value.payloadJSON,
+  };
 }

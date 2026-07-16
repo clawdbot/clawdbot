@@ -28,7 +28,7 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 /** Dependency hook for resolving implicit model providers while planning models.json. */
-export type ResolveImplicitProvidersForModelsJson = (params: {
+type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -92,7 +92,7 @@ function buildPluginCatalogWrites(
 }
 
 /** Resolves providers for models.json with injectable implicit-provider discovery. */
-export async function resolveProvidersForModelsJsonWithDeps(
+async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
     agentDir: string;
@@ -200,7 +200,7 @@ function filterWritableProviders(
 }
 
 /** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
-export async function planOpenClawModelsJsonWithDeps(
+async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
     sourceConfigForSecrets?: OpenClawConfig;
@@ -315,4 +315,11 @@ export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {
   return planOpenClawModelsJsonWithDeps(params);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelsConfigPlanTestApi")] = {
+    planOpenClawModelsJsonWithDeps,
+    resolveProvidersForModelsJsonWithDeps,
+  };
 }

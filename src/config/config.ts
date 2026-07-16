@@ -32,9 +32,12 @@ export {
   writeConfigFile,
 } from "./io.js";
 export {
+  getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
   resolveConfigWriteAfterWrite,
   resolveConfigWriteFollowUp,
+  setAppliedRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
 } from "./runtime-snapshot.js";
 export type {
   ConfigWriteAfterWrite,

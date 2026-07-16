@@ -573,6 +573,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       setup: msteamsSetupAdapter,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
+        directTargetStyle: "user-prefixed",
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
@@ -1342,3 +1343,4 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     outbound: msteamsChannelOutbound,
   });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

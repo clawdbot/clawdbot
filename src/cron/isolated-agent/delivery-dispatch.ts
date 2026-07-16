@@ -915,13 +915,21 @@ async function appendAdmittedDirectCronDeliveryTranscriptMirror(params: {
 }
 
 /** Clears the direct-delivery idempotency cache for deterministic tests. */
-export function resetCompletedDirectCronDeliveriesForTests() {
+function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
 }
 
 /** Returns the direct-delivery idempotency cache size for tests. */
-export function getCompletedDirectCronDeliveriesCountForTests(): number {
+function getCompletedDirectCronDeliveriesCountForTests(): number {
   return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronDeliveryDispatchTestApi")] =
+    {
+      resetCompletedDirectCronDeliveriesForTests,
+      getCompletedDirectCronDeliveriesCountForTests,
+    };
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
@@ -1573,3 +1581,4 @@ export async function dispatchCronDelivery(
 
   return buildDeliveryState();
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

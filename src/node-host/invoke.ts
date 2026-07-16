@@ -30,7 +30,6 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
-import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
@@ -38,10 +37,8 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
-import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -50,6 +47,7 @@ import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
 } from "./invoke-agent-cli-claude-handler.js";
+import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -64,7 +62,8 @@ import type {
   SystemRunParams,
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
-import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { buildNodeEventParams } from "./node-event-params.js";
+import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
@@ -254,7 +253,7 @@ function resolveExecAsk(value?: string): ExecAsk {
 }
 
 /** Builds a sanitized execution environment with controlled PATH and approved overrides. */
-export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
+function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
   return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
 }
 
@@ -263,14 +262,6 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
     return { text: raw, truncated: false };
   }
   return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
-}
-
-export function decodeCapturedOutputBuffer(params: {
-  buffer: Buffer;
-  platform?: NodeJS.Platform;
-  windowsEncoding?: string | null;
-}): string {
-  return decodeWindowsOutputBuffer(params);
 }
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -668,15 +659,12 @@ async function dispatchInvoke(
     return;
   }
 
-  if (command === NODE_FS_LIST_DIR_COMMAND) {
-    try {
-      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
-      if (params.path !== undefined && typeof params.path !== "string") {
-        throw new Error("INVALID_REQUEST: path must be a string");
-      }
-      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
-    } catch (err) {
-      await sendInvalidRequestResult(client, frame, err);
+  const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
+  if (fileCommand) {
+    if ("error" in fileCommand) {
+      await sendInvalidRequestResult(client, frame, fileCommand.error);
+    } else {
+      await sendJsonPayloadResult(client, frame, fileCommand.payload);
     }
     return;
   }
@@ -706,11 +694,13 @@ async function dispatchInvoke(
     });
     return;
   }
-
   try {
-    const pluginNodeHostResult = await invokeRegisteredNodeHostCommand(command, frame.paramsJSON);
-    if (pluginNodeHostResult !== null) {
-      await sendRawPayloadResult(client, frame, pluginNodeHostResult);
+    const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const invokeContext =
+      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    if (pluginResult !== null) {
+      await sendRawPayloadResult(client, frame, pluginResult);
       return;
     }
   } catch (err) {
@@ -1037,7 +1027,7 @@ async function sendInvokeResult(
   }
 }
 
-export function buildNodeInvokeResultParams(
+function buildNodeInvokeResultParams(
   frame: NodeInvokeRequestPayload,
   result: {
     ok: boolean;
@@ -1077,17 +1067,6 @@ export function buildNodeInvokeResultParams(
   return params;
 }
 
-export function buildNodeEventParams(
-  event: string,
-  payload: unknown,
-): { event: string; payloadJSON: string | null } {
-  const payloadJSON = payload === undefined ? undefined : JSON.stringify(payload);
-  return {
-    event,
-    payloadJSON: typeof payloadJSON === "string" ? payloadJSON : null,
-  };
-}
-
 async function sendNodeEvent(client: NodeHostClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", buildNodeEventParams(event, payload));
@@ -1096,9 +1075,15 @@ async function sendNodeEvent(client: NodeHostClient, event: string, payload: unk
   }
 }
 
-export const testing = {
+const testing = {
   MCP_TEXT_CONTENT_MAX_BYTES,
   MCP_INVOKE_PAYLOAD_MAX_BYTES,
   clarifyNodeExecCwdSpawnError,
   runCommand,
 } as const;
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostInvokeTestApi")] =
+    testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

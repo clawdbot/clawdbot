@@ -129,10 +129,8 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
   consumeGatewaySigusr1RestartIntent: () => consumeGatewaySigusr1RestartIntent(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
-  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
@@ -150,6 +148,11 @@ vi.mock("../../infra/restart.js", () => ({
   },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
+}));
+
+vi.mock("../../infra/restart-intent.js", () => ({
+  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
+  consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
 }));
 
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
@@ -1576,7 +1579,7 @@ describe("runGatewayLoop", () => {
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false).",
       );
       expect(gatewayLog.warn).toHaveBeenCalledTimes(2);
       expect(gatewayLog.warn).toHaveBeenNthCalledWith(
@@ -2283,3 +2286,4 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
-import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
+import type { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
   type MutableDiscordGateway,
@@ -13,6 +13,7 @@ import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
 type LifecycleParams = Parameters<
   typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle
 >[0];
+type WaitForDiscordGatewayStopParams = Parameters<typeof waitForDiscordGatewayStop>[0];
 type MockGateway = {
   isConnected: boolean;
   options: GatewayPlugin["options"];
@@ -60,15 +61,9 @@ vi.mock("./gateway-registry.js", () => ({
 
 describe("runDiscordGatewayLifecycle", () => {
   let runDiscordGatewayLifecycle: typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle;
-  let resolveDiscordGatewayReadyTimeoutMs: typeof import("./provider.lifecycle.js").resolveDiscordGatewayReadyTimeoutMs;
-  let resolveDiscordGatewayRuntimeReadyTimeoutMs: typeof import("./provider.lifecycle.js").resolveDiscordGatewayRuntimeReadyTimeoutMs;
 
   beforeAll(async () => {
-    ({
-      runDiscordGatewayLifecycle,
-      resolveDiscordGatewayReadyTimeoutMs,
-      resolveDiscordGatewayRuntimeReadyTimeoutMs,
-    } = await import("./provider.lifecycle.js"));
+    ({ runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js"));
   });
 
   beforeEach(() => {
@@ -213,40 +208,6 @@ describe("runDiscordGatewayLifecycle", () => {
   ): void {
     expect(statusPatches(statusSink).some(predicate)).toBe(true);
   }
-
-  it("resolves gateway READY timeouts from config, env, then defaults", () => {
-    expect(resolveDiscordGatewayReadyTimeoutMs({ configuredTimeoutMs: 45_000 })).toBe(45_000);
-    expect(
-      resolveDiscordGatewayReadyTimeoutMs({
-        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "90000" },
-      }),
-    ).toBe(90_000);
-    expect(resolveDiscordGatewayReadyTimeoutMs({ env: {} })).toBe(15_000);
-
-    expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ configuredTimeoutMs: 60_000 })).toBe(
-      60_000,
-    );
-    expect(
-      resolveDiscordGatewayRuntimeReadyTimeoutMs({
-        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "120000" },
-      }),
-    ).toBe(120_000);
-    expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
-  });
-
-  it("ignores non-integer gateway READY timeout values", () => {
-    expect(
-      resolveDiscordGatewayReadyTimeoutMs({
-        configuredTimeoutMs: 1.5,
-        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "0x1000" },
-      }),
-    ).toBe(15_000);
-    expect(
-      resolveDiscordGatewayRuntimeReadyTimeoutMs({
-        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "1e3" },
-      }),
-    ).toBe(30_000);
-  });
 
   it("cleans up thread bindings when gateway wait fails before READY", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));

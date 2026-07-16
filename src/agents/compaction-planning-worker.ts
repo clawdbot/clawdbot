@@ -363,8 +363,13 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
 }
 
 /** Test-only worker internals for URL resolution and error-path coverage. */
-export const compactionPlanningWorkerTesting = {
+const compactionPlanningWorkerTesting = {
   resolveCompactionPlanningWorkerUrl,
   runCompactionPlanningWorker,
-  CompactionPlanningWorkerError,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.compactionPlanningWorkerTestApi")
+  ] = compactionPlanningWorkerTesting;
+}

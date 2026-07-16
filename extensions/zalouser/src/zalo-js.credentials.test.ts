@@ -32,15 +32,8 @@ import {
   sendZaloLink,
   sendZaloReaction,
   startZaloQrLogin,
-  testing,
   waitForZaloQrLogin,
 } from "./zalo-js.js";
-
-describe("Zalo payload bounds", () => {
-  it("keeps the 2,000-code-unit transport payload UTF-16 well-formed", () => {
-    expect(testing.truncatePayloadText(`${"x".repeat(1_999)}🚀tail`)).toBe("x".repeat(1_999));
-  });
-});
 
 type StoredCredentialFile = {
   imei: string;

@@ -257,7 +257,13 @@ function describeUnknownAllowlistSuffix(params: {
 }
 
 /** Clears process-local warning dedupe state between tests. */
-export function resetToolPolicyWarningCacheForTest(): void {
+function resetToolPolicyWarningCacheForTest(): void {
   seenToolPolicyWarnings.clear();
   toolPolicyWarningOrder.length = 0;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
+  ] = { resetToolPolicyWarningCacheForTest };
 }

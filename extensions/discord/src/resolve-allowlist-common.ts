@@ -14,7 +14,7 @@ export function buildDiscordUnresolvedResults<T extends { input: string; resolve
   return entries.map(buildResult);
 }
 
-export function findDiscordGuildByName(
+function findDiscordGuildByName(
   guilds: DiscordGuildSummary[],
   input: string,
 ): DiscordGuildSummary | undefined {

@@ -334,6 +334,7 @@ private fun SkillWorkshopControls(
         options = skillWorkshopFilterLabels.map(::nativeString),
         selected = skillWorkshopFilterLabel(statusFilter),
         onSelect = { label -> onStatusFilterChange(skillWorkshopFilterFromLabel(label)) },
+        maxOptionsPerRow = 4,
       )
       ClawTextField(
         value = query,

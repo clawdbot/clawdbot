@@ -2713,6 +2713,25 @@ describe("runCli exit behavior", () => {
     expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
+  it("resumes onboarding when an interrupted first run only persisted risk acknowledgement", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig: {
+        meta: { updatedBy: "fixture" },
+        wizard: { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" },
+      },
+    });
+
+    await withInteractiveTty(async () => {
+      await runCli(["node", "openclaw"]);
+    });
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+  });
+
   it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
     const previousExitCode = process.exitCode;
     const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -3850,3 +3869,4 @@ describe("runCli exit behavior", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

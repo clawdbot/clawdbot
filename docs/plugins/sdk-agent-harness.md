@@ -67,7 +67,7 @@ implementation that completed the probe. When
 matching `runtimeArtifact.validate(...)` capability that rechecks that binding
 without loading a different harness or scanning unrelated plugins.
 
-Verified Crestodian continuations also pass `params.expectedRuntimeArtifact`.
+Verified OpenClaw continuations also pass `params.expectedRuntimeArtifact`.
 The harness must compare it with the exact native process it acquired and fail
 before starting or resuming a native thread if they differ. Ordinary agent
 turns omit both fields, so content hashing stays out of the normal request hot

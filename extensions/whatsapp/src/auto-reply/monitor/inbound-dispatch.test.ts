@@ -34,6 +34,7 @@ type CapturedDispatchParams = {
 const {
   dispatchReplyWithBufferedBlockDispatcherMock,
   deliverInboundReplyWithMessageSendContextMock,
+  sourceReplyDeliveryModeContexts,
 } = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: CapturedDispatchParams) => {
     capturedDispatchParams = params;
@@ -42,6 +43,7 @@ const {
   deliverInboundReplyWithMessageSendContextMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(
     async () => null,
   ),
+  sourceReplyDeliveryModeContexts: [] as unknown[],
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
@@ -53,12 +55,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
 });
 
 vi.mock("./runtime-api.js", async () => {
-  const { finalizeInboundContext } = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/reply-runtime")
-  >("openclaw/plugin-sdk/reply-runtime");
   return {
     dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
-    finalizeInboundContext,
     getAgentScopedMediaLocalRoots: () => [],
     jidToE164: (value: string) => {
       const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
@@ -77,6 +75,7 @@ vi.mock("./runtime-api.js", async () => {
       };
       ctx: { ChatType?: string; CommandSource?: "native" | "text"; CommandAuthorized?: boolean };
     }) => {
+      sourceReplyDeliveryModeContexts.push(ctx);
       if (
         ctx.CommandSource === "native" ||
         (ctx.CommandSource === "text" && ctx.CommandAuthorized === true)
@@ -277,6 +276,15 @@ function expectRememberSentContextFields(
 }
 
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
+type BufferedReplyOverrides = Partial<Omit<BufferedReplyParams, "context">> & {
+  context?: Partial<BufferedReplyParams["context"]>;
+};
+
+function finalizedContext(
+  overrides: Partial<BufferedReplyParams["context"]> = {},
+): BufferedReplyParams["context"] {
+  return { CommandAuthorized: false, ...overrides };
+}
 
 function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
   return {
@@ -310,11 +318,11 @@ function unacceptedDeliveryResult() {
   };
 }
 
-async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {}) {
+async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
   const params: BufferedReplyParams = {
     cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
     connectionId: "conn",
-    context: { Body: "hi" },
+    context: finalizedContext({ Body: "hi" }),
     deliverReply: async () => acceptedDeliveryResult(),
     groupHistories: new Map(),
     groupHistoryKey: "+1000",
@@ -328,12 +336,17 @@ async function dispatchBufferedReply(overrides: Partial<BufferedReplyParams> = {
     shouldClearGroupHistory: false,
   };
 
-  return dispatchWhatsAppBufferedReply({ ...params, ...overrides });
+  return dispatchWhatsAppBufferedReply({
+    ...params,
+    ...overrides,
+    context: finalizedContext({ ...params.context, ...overrides.context }),
+  });
 }
 
 describe("whatsapp inbound dispatch", () => {
   beforeEach(() => {
     capturedDispatchParams = undefined;
+    sourceReplyDeliveryModeContexts.length = 0;
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
     deliverInboundReplyWithMessageSendContextMock.mockReset();
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValue({
@@ -388,7 +401,11 @@ describe("whatsapp inbound dispatch", () => {
     const ctx = await buildWhatsAppInboundContext({
       bodyForAgent: "spoken transcript",
       combinedBody: "spoken transcript",
-      commandBody: "<media:audio>",
+      command: {
+        kind: "normal",
+        body: "<media:audio>",
+        authorized: false,
+      },
       msg: makeMsg({
         payload: {
           body: "<media:audio>",
@@ -444,11 +461,8 @@ describe("whatsapp inbound dispatch", () => {
   it("marks authorized text slash commands as text command turns", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "/status",
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
+      command: {
         kind: "text-slash",
-        source: "text",
         authorized: true,
         body: "/status",
       },
@@ -480,6 +494,34 @@ describe("whatsapp inbound dispatch", () => {
       Provider: "whatsapp",
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
+    });
+  });
+
+  it("keeps authorization metadata on normal command-fact turns", async () => {
+    const body = "please inspect `/tmp/foo`";
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: body,
+      command: {
+        kind: "normal",
+        authorized: true,
+        body,
+      },
+      msg: makeMsg({ payload: { body } }),
+      rawBody: body,
+      route: makeRoute(),
+      sender: { e164: "+1000" },
+    });
+
+    expectRecordFields(requireRecord(ctx, "normal command context"), {
+      CommandAuthorized: true,
+      CommandSource: undefined,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        commandName: undefined,
+        body,
+      },
     });
   });
 
@@ -1183,17 +1225,18 @@ describe("whatsapp inbound dispatch", () => {
   });
 
   it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
+    const context = finalizedContext({
+      Body: "/status",
+      ChatType: "group",
+      CommandAuthorized: true,
+      CommandSource: "text",
+    });
     await dispatchBufferedReply({
       cfg: {
         channels: { whatsapp: { streaming: { block: { enabled: true } } } },
         messages: { groupChat: { visibleReplies: "message_tool" } },
       } as never,
-      context: {
-        Body: "/status",
-        ChatType: "group",
-        CommandAuthorized: true,
-        CommandSource: "text",
-      },
+      context,
       msg: makeMsg({
         payload: { body: "/status" },
         admission: groupAdmission("120363000000000000@g.us"),
@@ -1205,6 +1248,7 @@ describe("whatsapp inbound dispatch", () => {
       disableBlockStreaming: false,
       suppressTyping: false,
     });
+    expect(sourceReplyDeliveryModeContexts).toEqual([context]);
   });
 
   it("honors automatic visible replies for WhatsApp groups", async () => {
@@ -1359,7 +1403,7 @@ describe("whatsapp inbound dispatch", () => {
       dispatchWhatsAppBufferedReply({
         cfg: { channels: { whatsapp: { streaming: { block: { enabled: true } } } } } as never,
         connectionId: "conn",
-        context: { Body: "hi" },
+        context: finalizedContext({ Body: "hi" }),
         deliverReply,
         groupHistories: new Map(),
         groupHistoryKey: "+1000",
@@ -1658,3 +1702,4 @@ describe("whatsapp inbound dispatch", () => {
     ).toBe("+15550003333");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

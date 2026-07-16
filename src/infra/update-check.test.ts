@@ -112,6 +112,31 @@ describe("resolveNpmChannelTag", () => {
     );
   });
 
+  it("normalizes npm 12 singleton-array metadata", async () => {
+    const npm12RunCommand = vi.fn(async () => ({
+      stdout: JSON.stringify([
+        {
+          version: "2026.7.1",
+          engines: { node: ">=22.22.3" },
+        },
+      ]),
+      stderr: "",
+      code: 0,
+    }));
+
+    await expect(
+      fetchNpmPackageTargetStatus({
+        target: "latest",
+        timeoutMs: 1000,
+        runCommand: npm12RunCommand,
+      }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: "2026.7.1",
+      nodeEngine: ">=22.22.3",
+    });
+  });
+
   it("uses npm global scope, user config auth, and ignores project npmrc for real metadata", async () => {
     await withTempDir({ prefix: "openclaw-update-check-npm-view-" }, async (base) => {
       const requests: Array<{ url: string; authorization?: string }> = [];

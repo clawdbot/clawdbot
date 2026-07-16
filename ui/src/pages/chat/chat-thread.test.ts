@@ -23,6 +23,7 @@ const SENDER_METADATA_BLOCK =
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
+    paneId: "pane-a",
     sessionKey: "main",
     runId: null,
     messages: [],
@@ -257,6 +258,284 @@ describe("collapseCompletedTurnWork", () => {
     expect(workGroups).toHaveLength(2);
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
+
+  it("collapses hidden-input runs independently without changing duration arithmetic", () => {
+    const items = collapsedItems({
+      messages: [
+        {
+          ...toolResult("call-1", 1_000),
+          __openclaw: { id: "work-1", seq: 1, turnBoundary: true },
+        },
+        {
+          role: "assistant",
+          content: "First run done.",
+          timestamp: 3_000,
+          __openclaw: { id: "reply-1", seq: 2 },
+        },
+        {
+          ...toolResult("call-2", 4_000),
+          __openclaw: { id: "work-2", seq: 3, turnBoundary: true },
+        },
+        {
+          role: "assistant",
+          content: "Second run done.",
+          timestamp: 9_000,
+          __openclaw: { id: "reply-2", seq: 4 },
+        },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["work-group", "group", "work-group", "group"]);
+    expect(requireWorkGroup(items[0]).durationMs).toBe(2_000);
+    expect(requireWorkGroup(items[2]).durationMs).toBe(5_000);
+  });
+
+  it("keeps a completed-work row keyed to its final reply as older work is prepended", () => {
+    resetChatThreadState();
+    const finalReply = {
+      __openclaw: { id: "final-reply", seq: 3 },
+      role: "assistant",
+      content: "Done.",
+      timestamp: 3_000,
+    };
+    const initial = collapsedItems({
+      messages: [toolResult("call-1", 2_000), finalReply],
+    });
+    const initialWork = requireWorkGroup(initial[0]);
+
+    const prepended = collapsedItems({
+      messages: [
+        {
+          __openclaw: { id: "older-commentary", seq: 1 },
+          role: "assistant",
+          content: "Checking.",
+          timestamp: 1_000,
+        },
+        toolResult("call-1", 2_000),
+        finalReply,
+      ],
+    });
+    const prependedWork = requireWorkGroup(prepended[0]);
+
+    expect(prependedWork.key).toBe(initialWork.key);
+    expect(prependedWork.durationMs).toBeGreaterThan(initialWork.durationMs ?? 0);
+  });
+});
+
+describe("buildCachedChatItems row identity", () => {
+  it("keeps a persistent message key across live-to-authoritative replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "terminal-message" },
+            role: "assistant",
+            content: "Draft reply",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "terminal-message", seq: 42 },
+            role: "assistant",
+            content: "Final reply",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
+  it("keeps a persistent tool message key when its projected content changes", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "tool-message" },
+            role: "assistant",
+            toolCallId: "call-1",
+            content: "Running",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "tool-message", seq: 43 },
+            role: "assistant",
+            toolCallId: "call-1",
+            content: "Finished",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
+  it("preserves a same-role group key as messages are prepended and appended", () => {
+    resetChatThreadState();
+    const first = {
+      __openclaw: { id: "assistant-1", seq: 2 },
+      role: "assistant",
+      content: "First",
+      timestamp: 2,
+    };
+    const second = {
+      __openclaw: { id: "assistant-2", seq: 3 },
+      role: "assistant",
+      content: "Second",
+      timestamp: 3,
+    };
+    const initial = groupAt(messageGroups({ messages: [first, second] }), 0);
+    const prepended = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "assistant-0", seq: 1 },
+            role: "assistant",
+            content: "Earlier",
+            timestamp: 1,
+          },
+          first,
+          second,
+        ],
+      }),
+      0,
+    );
+    const appended = groupAt(
+      messageGroups({
+        messages: [
+          ...prepended.messages.map((entry) => entry.message),
+          {
+            __openclaw: { id: "assistant-3", seq: 4 },
+            role: "assistant",
+            content: "Later",
+            timestamp: 4,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(prepended.key).toBe(initial.key);
+    expect(appended.key).toBe(initial.key);
+  });
+
+  it("splits otherwise mergeable same-role messages at a projected turn boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "assistant-1", seq: 1 },
+          role: "assistant",
+          content: "First run",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "assistant-2", seq: 2, turnBoundary: true },
+          role: "assistant",
+          content: "Second run",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(groupAt(groups, 1).messages).toHaveLength(1);
+  });
+
+  it("does not reclaim a group key naturally owned by another reordered group", () => {
+    resetChatThreadState();
+    const first = {
+      __openclaw: { id: "first", seq: 1 },
+      role: "user",
+      senderLabel: "same",
+      content: "First",
+      timestamp: 1,
+    };
+    const second = {
+      __openclaw: { id: "second", seq: 2 },
+      role: "user",
+      senderLabel: "same",
+      content: "Second",
+      timestamp: 2,
+    };
+    expect(messageGroups({ messages: [first, second] })).toHaveLength(1);
+
+    first.senderLabel = "different";
+    first.timestamp = 3;
+    const regrouped = messageGroups({ messages: [first, second] });
+
+    expect(regrouped).toHaveLength(2);
+    expect(new Set(regrouped.map((group) => group.key)).size).toBe(regrouped.length);
+  });
+
+  it("keeps a projected-sibling group stable after an unrelated prepend", () => {
+    resetChatThreadState();
+    const siblings = [
+      {
+        __openclaw: { seq: 2 },
+        role: "assistant",
+        content: "First projection",
+        timestamp: 2,
+      },
+      {
+        __openclaw: { seq: 2 },
+        role: "assistant",
+        content: "Second projection",
+        timestamp: 2,
+      },
+    ];
+    const initial = groupAt(messageGroups({ messages: siblings }), 0);
+    const prepended = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { id: "older-user", seq: 1 },
+            role: "user",
+            content: "Earlier",
+            timestamp: 1,
+          },
+          {
+            __openclaw: { seq: 2 },
+            role: "assistant",
+            content: "Earlier projection from the same record",
+            timestamp: 2,
+          },
+          ...siblings.map((message) => ({
+            __openclaw: { seq: message["__openclaw"].seq },
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp,
+          })),
+        ],
+      }),
+      1,
+    );
+
+    expect(new Set(initial.messages.map((entry) => entry.key)).size).toBe(2);
+    expect(prepended.key).toBe(initial.key);
+    expect(prepended.messages.slice(1).map((entry) => entry.key)).toEqual(
+      initial.messages.map((entry) => entry.key),
+    );
+  });
 });
 
 describe("buildCachedChatItems working spark", () => {
@@ -283,6 +562,28 @@ describe("buildCachedChatItems working spark", () => {
     ).find((item) => item.kind === "reading-indicator");
 
     expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: 42_000 });
+  });
+
+  it("keeps monotonic send timing out of wall-clock elapsed time", () => {
+    const submittedAt = 1_784_000_000_000;
+    const indicator = buildCachedChatItems(
+      createProps({
+        sessionKey: "agent:main:elapsed-clock-domain",
+        runWorking: true,
+        queue: [
+          {
+            id: "queued-send-1",
+            text: "keep working",
+            createdAt: submittedAt,
+            sendSubmittedAtMs: 5_000,
+            sendRequestStartedAtMs: 5_010,
+            sendState: "sending",
+          },
+        ],
+      }),
+    ).find((item) => item.kind === "reading-indicator");
+
+    expect(indicator).toMatchObject({ kind: "reading-indicator", startedAt: submittedAt });
   });
 
   it("keeps the elapsed start and trailing position after a tool flush", () => {
@@ -1473,7 +1774,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toStrictEqual([]);
   });
 
-  it("renders only the last 100 history messages and shows a hidden-count notice", () => {
+  it("renders all loaded history through one keyed row sequence", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: Array.from({ length: 105 }, (_, index) => ({
@@ -1486,57 +1787,12 @@ describe("buildCachedChatItems", () => {
 
     const groups = items.filter((item) => item.kind === "group");
 
-    const noticeGroup = requireGroup(items[0]);
-    expect(noticeGroup.messages).toHaveLength(1);
-    const noticeMessage = messageRecord(noticeGroup);
-    expect(noticeMessage.role).toBe("system");
-    expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
-    expect(groups).toHaveLength(101);
-    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 5");
-    expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
-  });
-
-  it("renders native history beyond the tail cap after scroll-back expands it", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        allowExpandedHistoryRenderLimit: true,
-        historyRenderLimit: 140,
-        messages: Array.from({ length: 140 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `message ${index}`,
-          timestamp: index,
-        })),
-      }),
-    );
-    const groups = items.filter((item) => item.kind === "group");
-
-    expect(groups).toHaveLength(140);
+    expect(groups).toHaveLength(105);
     expect(messageRecord(groupAt(groups, 0)).content).toBe("message 0");
-    expect(messageRecord(groupAt(groups, 139)).content).toBe("message 139");
-  });
-
-  it("honors a smaller history render window and preserves the hidden-count notice", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        historyRenderLimit: 30,
-        messages: Array.from({ length: 105 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `message ${index}`,
-          timestamp: index,
-        })),
-      }),
-    );
-
-    const groups = items.filter((item) => item.kind === "group");
-
-    const noticeGroup = requireGroup(items[0]);
-    expect(messageRecord(noticeGroup).content).toBe("Showing last 30 messages (75 hidden).");
-    expect(groups).toHaveLength(31);
-    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 75");
     expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
   });
 
-  it("budgets rendered history by tool-result content size", () => {
+  it("does not truncate loaded history by raw content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildCachedChatItems(
       createProps({
@@ -1553,14 +1809,12 @@ describe("buildCachedChatItems", () => {
         })),
       }),
     );
-
     const groups = items.filter((item) => item.kind === "group");
-    const noticeGroup = requireGroup(items[0]);
-    expect(messageRecord(noticeGroup).content).toBe("Showing last 2 messages (4 hidden).");
-    expect(groups).toHaveLength(2);
-    expect(groupAt(groups, 1).messages).toHaveLength(2);
-    expect(messageRecord(groupAt(groups, 1), 0).timestamp).toBe(4);
-    expect(messageRecord(groupAt(groups, 1), 1).timestamp).toBe(5);
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(6);
+    expect(messageRecord(groupAt(groups, 0), 0).timestamp).toBe(0);
+    expect(messageRecord(groupAt(groups, 0), 5).timestamp).toBe(5);
   });
 
   it("does not crash when history contains malformed entries", () => {
@@ -2125,43 +2379,6 @@ describe("buildCachedChatItems", () => {
     expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
   });
 
-  it("keeps a persisted App preview with its history-cutoff assistant", () => {
-    const groups = messageGroups({
-      messages: [
-        { role: "user", content: "Show the App", timestamp: 1_000 },
-        mcpAppResult("mcp-app-cutoff", "call-cutoff", 1_001),
-        { role: "assistant", content: "Done", timestamp: 1_002 },
-      ],
-      toolMessages: [],
-      showToolCalls: false,
-      historyRenderLimit: 1,
-    });
-
-    const assistant = groups.find((group) => group.role === "assistant");
-    expect(assistant).toBeDefined();
-    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
-  });
-
-  it("does not expand a persisted preview across a cutoff user turn", () => {
-    const firstResult = {
-      ...mcpAppResult("mcp-app-first", "call-first", 1_001),
-      timestamp: undefined,
-    };
-    const groups = messageGroups({
-      messages: [
-        { role: "user", content: "First request", timestamp: 1_000 },
-        firstResult,
-        { role: "user", content: "Second request", timestamp: 2_000 },
-        { role: "assistant", content: "Second response", timestamp: 2_001 },
-      ],
-      toolMessages: [{ ...firstResult }],
-      showToolCalls: false,
-      historyRenderLimit: 2,
-    });
-
-    expect(groups.flatMap((group) => canvasBlocksIn(group))).toStrictEqual([]);
-  });
-
   it("does not lift generic view handles from non-canvas payloads", () => {
     const groups = messageGroups({
       messages: [
@@ -2398,6 +2615,68 @@ describe("thread item cache", () => {
       }),
     ).not.toBe(first);
   });
+
+  it("updates the live stream without rescanning retained history", () => {
+    resetChatThreadState();
+    const reads = { count: 0 };
+    const messages = Array.from(
+      { length: 1_000 },
+      (_, index) =>
+        new Proxy(
+          { role: index % 2 === 0 ? "user" : "assistant", content: `message ${index}` },
+          {
+            get(target, property, receiver) {
+              reads.count += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const input = createProps({
+      messages,
+      stream: "partial reply",
+      streamStartedAt: 10,
+    });
+    const first = buildCachedChatItems(input);
+    reads.count = 0;
+
+    const updated = buildCachedChatItems({ ...input, stream: "complete reply" });
+
+    expect(updated).toBe(first);
+    expect(reads.count).toBe(0);
+    expect(updated).toContainEqual(
+      expect.objectContaining({
+        kind: "stream",
+        text: "complete reply",
+        isStreaming: true,
+      }),
+    );
+  });
+
+  it("keeps same-session render caches isolated between panes", () => {
+    resetChatThreadState();
+    const messages = [
+      { role: "assistant", content: "needle" },
+      { role: "user", content: "other" },
+    ];
+    const paneA = createProps({
+      paneId: "pane-a",
+      messages,
+      searchOpen: true,
+      searchQuery: "needle",
+    });
+    const paneB = createProps({ paneId: "pane-b", messages });
+
+    const paneAItems = buildCachedChatItems(paneA);
+    const paneBItems = buildCachedChatItems(paneB);
+
+    expect(buildCachedChatItems({ ...paneA })).toBe(paneAItems);
+    expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+
+    resetChatThreadState("pane-a");
+    expect(buildCachedChatItems({ ...paneA })).not.toBe(paneAItems);
+    expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+  });
 });
 
 function canvasBlocksIn(group: MessageGroup): unknown[] {
@@ -2591,3 +2870,4 @@ describe("tool turn outcome annotation (#89683)", () => {
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

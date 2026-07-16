@@ -110,6 +110,16 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: loadModelCatalogMock,
 }));
 
+vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-runtime.js")>();
+  return {
+    ...actual,
+    // These tests cover directive acknowledgements and persistence, not harness selection.
+    // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveEffectiveAgentRuntime: () => "openclaw",
+  };
+});
+
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
     resolveCommandSecretRefsViaGatewayMock(...args),

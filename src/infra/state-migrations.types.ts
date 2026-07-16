@@ -3,6 +3,11 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 
+export type LegacyRescuePendingDetection = {
+  sourcePaths: string[];
+  hasLegacy: boolean;
+};
+
 export type SessionStoreAliasPlan = {
   hasDistinctAliases: boolean;
   hasFinalSymlink: boolean;
@@ -87,6 +92,28 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  tuiLastSessions: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  commitments: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  managedOutgoingImages: {
+    sourceDir: string;
+    hasLegacy: boolean;
+  };
+  webPush: {
+    subscriptionsPath: string;
+    vapidKeysPath: string;
+    hasLegacy: boolean;
+  };
+  nodeHost: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   execApprovals: {
     sourcePath: string;

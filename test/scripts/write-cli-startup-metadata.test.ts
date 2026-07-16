@@ -592,4 +592,64 @@ describe("write-cli-startup-metadata", () => {
     expect(nodesRenderCount).toBe(3);
     expect(written.nodesHelpText).toContain("openclaw nodes 3");
   });
+
+  it("regenerates help when build version or commit changes", async () => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-build-identity-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    let renderCount = 0;
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const writeMetadata = async (): Promise<void> => {
+      await writeCliStartupMetadata({
+        distDir,
+        outputPath,
+        extensionsDir,
+        sourceRootDir: tempRoot,
+        renderBundledRootHelpText: async () => {
+          renderCount += 1;
+          return `Usage: openclaw ${renderCount}\n`;
+        },
+        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+        renderSourceSubcommandHelpTextRecord: () => ({
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
+        }),
+      });
+    };
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "a".repeat(40) }),
+    );
+    await writeMetadata();
+    await writeMetadata();
+    expect(renderCount).toBe(1);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.2", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(2);
+
+    writeFixtureFile(
+      distDir,
+      "build-info.json",
+      JSON.stringify({ version: "2026.7.3", commit: "b".repeat(40) }),
+    );
+    await writeMetadata();
+    expect(renderCount).toBe(3);
+  });
 });

@@ -683,6 +683,21 @@ final class MacNodeModeCoordinator: NSObject {
                 }
                 return await self.runtime.handleInvoke(req)
             },
+            onInvokeInput: { [weak self] input in
+                guard let self,
+                      await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
+                else { return }
+                await self.nodeHostWorker?.handleInput(
+                    invokeId: input.id,
+                    seq: input.seq,
+                    payloadJSON: input.payloadjson)
+            },
+            onInvokeCancel: { [weak self] invokeId in
+                guard let self,
+                      await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
+                else { return }
+                await self.nodeHostWorker?.cancel(invokeId: invokeId)
+            },
             onRouteInvalidated: { [weak self] in
                 await self?.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
             })

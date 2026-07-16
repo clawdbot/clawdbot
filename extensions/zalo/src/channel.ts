@@ -113,7 +113,7 @@ const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   sendMedia: sendZaloDelivery,
 });
 
-export const zaloMessageAdapter = defineChannelMessageAdapter({
+const zaloMessageAdapter = defineChannelMessageAdapter({
   id: "zalo",
   durableFinal: {
     capabilities: {

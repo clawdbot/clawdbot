@@ -377,6 +377,76 @@ describe("discord config schema", () => {
     expect(DiscordConfigSchema.safeParse(config).success).toBe(true);
   });
 
+  it("accepts guild online-presence event routing", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { presence: true },
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            users: ["345678901234567890"],
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.channelId).toBe(
+      "234567890123456789",
+    );
+  });
+
+  it("accepts online-presence throttling knobs", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { presence: true },
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            reconnectSuppressSeconds: 0,
+            burstLimit: 4,
+            burstWindowSeconds: 30,
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.burstLimit).toBe(4);
+  });
+
+  it("rejects invalid online-presence throttling values", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            reconnectSuppressSeconds: -1,
+            burstLimit: 0,
+            burstWindowSeconds: 0,
+          },
+        },
+      },
+    });
+
+    for (const field of ["reconnectSuppressSeconds", "burstLimit", "burstWindowSeconds"]) {
+      expect(issues.some((issue) => issue.path.join(".").endsWith(field))).toBe(true);
+    }
+  });
+
+  it("rejects mutable names in online-presence event routing", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        maintainers: {
+          presenceEvents: {
+            channelId: "maintainers",
+            users: ["alice"],
+          },
+        },
+      },
+    });
+
+    expect(issues.some((issue) => issue.path.join(".").includes("presenceEvents"))).toBe(true);
+  });
+
   it.each([
     {
       name: "streaming activity without url",

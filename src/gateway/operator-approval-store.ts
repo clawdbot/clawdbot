@@ -29,7 +29,7 @@ export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
 const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
 
-export type OperatorApprovalKind = "exec" | "plugin";
+export type OperatorApprovalKind = "exec" | "plugin" | "system-agent";
 export type OperatorApprovalStatus = "pending" | "allowed" | "denied" | "expired" | "cancelled";
 type OperatorApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type OperatorApprovalTerminalReason =
@@ -41,7 +41,6 @@ export type OperatorApprovalTerminalReason =
   | "gateway-restart"
   | "storage-corrupt";
 type OperatorApprovalResolverKind = "device" | "channel" | "runtime" | "system";
-
 type OperatorApprovalRequester = {
   deviceId: string | null;
   clientId: string | null;
@@ -148,7 +147,7 @@ const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
   "allow-always",
   "deny",
 ]);
-const OPERATOR_APPROVAL_KINDS = new Set<OperatorApprovalKind>(["exec", "plugin"]);
+const OPERATOR_APPROVAL_KINDS = new Set<OperatorApprovalKind>(["exec", "plugin", "system-agent"]);
 const OPERATOR_APPROVAL_STATUSES = new Set<OperatorApprovalStatus>([
   "pending",
   "allowed",
@@ -350,7 +349,8 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
     row.resolution_ref !==
       buildApprovalResolutionRef({ approvalId: row.approval_id, approvalKind: kind }) ||
     !hasValidLifecycleTuple({ row, status, decision, terminalReason, resolverKind }) ||
-    (status === "allowed" && (!decision || !presentation.allowedDecisions.includes(decision)))
+    (status === "allowed" &&
+      (!decision || !Array.prototype.includes.call(presentation.allowedDecisions, decision)))
   ) {
     return null;
   }
@@ -839,7 +839,7 @@ export function resolveOperatorApproval(params: {
       record = requireDecodedRecord(row);
       return { outcome: "expired", record };
     }
-    if (!record.presentation.allowedDecisions.includes(params.decision)) {
+    if (!Array.prototype.includes.call(record.presentation.allowedDecisions, params.decision)) {
       return { outcome: "decision-not-allowed", record };
     }
 
@@ -1220,3 +1220,4 @@ export function pruneTerminalOperatorApprovals(params: {
     return Number(result.numAffectedRows ?? 0n);
   }, params.databaseOptions);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

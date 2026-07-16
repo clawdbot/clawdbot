@@ -4,18 +4,19 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import {
-  implicitMentionKindWhen,
-  resolveInboundMentionDecision,
-} from "../channel-mention-gating.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
-} from "../testing.js";
-import type { PluginRuntime } from "../testing.js";
+} from "../../channels/ack-reactions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../channel-mention-gating.js";
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -142,6 +143,7 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const runtimeContexts = createChannelRuntimeContextRegistry();
   const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
     payloads: [],
     meta: {},
@@ -342,11 +344,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       Surface: params.surface ?? params.provider ?? params.channel,
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
-      CommandAuthorized: params.access?.commands
-        ? (params.access.commands.authorized ??
-          params.access.commands.authorizers?.some((entry) => entry.allowed) ??
-          false)
-        : false,
+      CommandAuthorized: params.access?.commands?.authorized ?? false,
       ...params.extra,
       UntrustedStructuredContext: untrustedStructuredContext,
     } as Awaited<BuildContextResult>;
@@ -659,6 +657,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             [],
           ) as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+        removeAllowFromStoreEntry: vi.fn().mockResolvedValue({
+          changed: false,
+          allowFrom: [],
+        }) as unknown as PluginRuntime["channel"]["pairing"]["removeAllowFromStoreEntry"],
         upsertPairingRequest: vi.fn().mockResolvedValue({
           code: "TESTCODE",
           created: true,
@@ -773,14 +775,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
       runtimeContexts: {
-        register: vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          const lease = { dispose: vi.fn() };
-          abortSignal?.addEventListener("abort", lease.dispose, { once: true });
-          return lease;
-        }) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
-        get: vi.fn() as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
-        watch: vi.fn(() =>
-          vi.fn(),
+        register: vi.fn(
+          runtimeContexts.register,
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
+        get: vi.fn(
+          runtimeContexts.get,
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
+        watch: vi.fn(
+          runtimeContexts.watch,
         ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
       },
       activity: {} as PluginRuntime["channel"]["activity"],
@@ -839,7 +841,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    sandbox: {
+      resolveWorkspaceAuthority: vi.fn(),
+      prepareWorkspaceAuthority: vi.fn(),
+    },
     worktrees: {
+      resolveCheckoutRoot: vi.fn(),
+      hasSelfContainedCheckoutMetadata: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
@@ -856,3 +864,4 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
 
   return mergeDeep(base, overrides);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

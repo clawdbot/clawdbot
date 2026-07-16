@@ -32,7 +32,8 @@ vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
 }));
 
-import { setupSkills, testing } from "./onboard-skills.js";
+import { setupSkills } from "./onboard-skills.js";
+import { testing } from "./onboard-skills.test-support.js";
 
 describe("skill onboarding text bounds", () => {
   it("keeps install failures and hints UTF-16 well-formed", () => {

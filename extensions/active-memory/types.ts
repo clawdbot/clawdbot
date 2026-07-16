@@ -132,6 +132,7 @@ type ActiveRecallPluginConfig = {
   allowedChatIds?: string[];
   deniedChatIds?: string[];
   thinking?: ActiveMemoryThinkingLevel;
+  fastMode?: ActiveMemoryFastMode;
   promptStyle?:
     | "balanced"
     | "strict"
@@ -173,6 +174,7 @@ type ResolvedActiveRecallPluginConfig = {
   allowedChatIds: string[];
   deniedChatIds: string[];
   thinking: ActiveMemoryThinkingLevel;
+  fastMode?: ActiveMemoryFastMode;
   promptStyle:
     | "balanced"
     | "strict"
@@ -308,6 +310,7 @@ type ActiveMemoryThinkingLevel =
   | "xhigh"
   | "adaptive"
   | "max";
+type ActiveMemoryFastMode = boolean | "auto";
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -378,6 +381,7 @@ export {
 
 export type {
   ActiveMemoryChatType,
+  ActiveMemoryFastMode,
   ActiveMemoryPartialTimeoutError,
   ActiveMemoryPromptStyle,
   ActiveMemoryQmdSearchMode,

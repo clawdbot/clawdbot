@@ -12,17 +12,16 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  CLICKCLACK_CHANNEL_ID,
+  clickClackConfigAdapter,
+  clickClackMeta,
   DEFAULT_ACCOUNT_ID,
-  listClickClackAccountIds,
-  resolveClickClackAccount,
-  resolveDefaultClickClackAccountId,
-} from "./accounts.js";
+} from "./channel-config.js";
 import { clickClackConfigSchema } from "./config-schema.js";
 import { startClickClackGatewayAccount } from "./gateway.js";
 import {
@@ -30,6 +29,9 @@ import {
   sendClickClackMedia,
   sendClickClackText,
 } from "./outbound.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { clickClackSetupAdapter } from "./setup-core.js";
+import { clickClackSetupWizard } from "./setup-surface.js";
 import {
   buildClickClackTarget,
   looksLikeClickClackTarget,
@@ -38,8 +40,7 @@ import {
 } from "./target.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
-const CHANNEL_ID = "clickclack" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+const CHANNEL_ID = CLICKCLACK_CHANNEL_ID;
 
 const clickClackMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
@@ -117,7 +118,7 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
 export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
-    meta,
+    meta: clickClackMeta,
     capabilities: {
       chatTypes: ["direct", "group"],
       threads: true,
@@ -125,16 +126,12 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     reload: { configPrefixes: ["channels.clickclack"] },
     configSchema: clickClackConfigSchema,
-    config: {
-      listAccountIds: (cfg) => listClickClackAccountIds(cfg as CoreConfig),
-      resolveAccount: (cfg, accountId) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultClickClackAccountId(cfg as CoreConfig),
-      isConfigured: (account) => account.configured,
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).allowFrom,
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).defaultTo,
+    config: clickClackConfigAdapter,
+    setup: clickClackSetupAdapter,
+    setupWizard: clickClackSetupWizard,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     messaging: {
       targetPrefixes: ["clickclack", "cc"],

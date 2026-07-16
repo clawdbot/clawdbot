@@ -1489,3 +1489,4 @@ describe("plugin-sdk subpath exports", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

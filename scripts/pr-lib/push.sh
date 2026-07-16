@@ -25,11 +25,33 @@ resolve_head_push_url() {
 # Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
 # File bytes are read from git objects (not the working tree) to avoid
 # symlink/special-file dereference risks from untrusted fork content.
+verify_prep_head_extends_hosted_head() {
+  local expected_oid="$1"
+  if ! git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+    echo "Prep sync cannot resolve hosted head $expected_oid locally; re-run prepare-init." >&2
+    return 1
+  fi
+  if ! git merge-base --is-ancestor "$expected_oid" HEAD; then
+    echo "Prep sync refused rewritten history: hosted head $expected_oid is not an ancestor of local HEAD." >&2
+    echo "Recreate the prep branch from the hosted PR head and replay only reviewed fixup commits." >&2
+    return 1
+  fi
+}
+
 graphql_push_to_fork() {
   local repo_nwo="$1"
   local branch="$2"
   local expected_oid="$3"
   local max_blob_bytes=$((5 * 1024 * 1024))
+
+  verify_prep_head_extends_hosted_head "$expected_oid" || return 1
+
+  local merge_commit
+  merge_commit=$(git rev-list --min-parents=2 --max-count=1 "$expected_oid"..HEAD)
+  if [ -n "$merge_commit" ]; then
+    echo "GraphQL push cannot preserve merge ancestry; publish the verified signed merge with git transport." >&2
+    return 1
+  fi
 
   local additions="[]"
   local deletions="[]"
@@ -91,6 +113,8 @@ graphql_push_to_fork() {
 
   local commit_headline
   commit_headline=$(git log -1 --format=%s HEAD)
+  local commit_body
+  commit_body=$(git log -1 --format=%b HEAD)
 
   local query
   query=$(cat <<'GRAPHQL'
@@ -114,11 +138,12 @@ GRAPHQL
     --arg branch "$branch" \
     --arg oid "$expected_oid" \
     --arg headline "$commit_headline" \
+    --arg body "$commit_body" \
     --slurpfile additions "$additions_file" \
     --slurpfile deletions "$deletions_file" \
     '{input: {
       branch: { repositoryNameWithOwner: $nwo, branchName: $branch },
-      message: { headline: $headline },
+      message: { headline: $headline, body: $body },
       fileChanges: { additions: $additions[0], deletions: $deletions[0] },
       expectedHeadOid: $oid
     }}')
@@ -218,24 +243,46 @@ resolve_prhead_remote_sha() {
   printf '%s\n' "$remote_sha"
 }
 
+verify_prep_first_parent_range_signed() {
+  local base_sha="$1"
+  local prep_head_sha="$2"
+
+  git merge-base --is-ancestor "$base_sha" "$prep_head_sha" || return 1
+
+  local commits
+  commits=$(git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  local commit
+  while IFS= read -r commit; do
+    [ -n "$commit" ] || continue
+    git verify-commit "$commit" >/dev/null 2>&1 || return 1
+  done <<< "$commits"
+}
+
 push_prep_head_once() {
   local pr_head="$1"
   local lease_sha="$2"
   local prep_head_sha="$3"
 
-  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ] && [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" != "git" ]; then
+  local push_mode="${OPENCLAW_PR_PUSH_MODE:-auto}"
+  if [ "$push_mode" = "auto" ] && verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha"; then
+    push_mode="git"
+  elif [ "$push_mode" = "auto" ]; then
+    push_mode="graphql"
+  fi
+
+  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ] && [ "$push_mode" != "git" ]; then
     echo "Pushing PR branch through GitHub createCommitOnBranch so the prepared commit is verified." >&2
     graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha"
     return $?
   fi
 
-  if [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
+  if ! verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha" && [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
     echo "Refusing git-protocol PR branch push because it can publish unsigned commits." >&2
-    echo "Use the default GitHub createCommitOnBranch path, or set OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 for an explicit manual override." >&2
+    echo "Sign the prep commit, use GitHub createCommitOnBranch, or set OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 for an explicit manual override." >&2
     return 2
   fi
 
-  git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head >&2
+  git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead "$prep_head_sha:refs/heads/$pr_head" >&2
   printf '%s\n' "$prep_head_sha"
 }
 

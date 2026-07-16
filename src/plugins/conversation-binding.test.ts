@@ -114,6 +114,7 @@ vi.mock("./runtime.js", async () => {
 });
 
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
+let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
 let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
@@ -176,6 +177,7 @@ beforeAll(async () => {
     requestPluginConversationBinding,
     resolvePluginConversationBindingApproval,
   } = await import("./conversation-binding.js"));
+  ({ bindPluginSessionConversation } = await import("./session-conversation-binding.js"));
   ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
     await import("../infra/outbound/session-binding-service.js"));
   ({ setActivePluginRegistry } = await import("./runtime.js"));
@@ -471,10 +473,90 @@ describe("plugin conversation binding approvals", () => {
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "isolated" });
     unregisterSessionBindingAdapter({ channel: "telegram", accountId: "default" });
+    unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default" });
     registerSessionBindingAdapter(createAdapter("discord", "default"));
     registerSessionBindingAdapter(createAdapter("discord", "work"));
     registerSessionBindingAdapter(createAdapter("discord", "isolated"));
     registerSessionBindingAdapter(createAdapter("telegram", "default"));
+    registerSessionBindingAdapter(createAdapter("webchat", "default"));
+  });
+
+  it("restores the prior Control UI binding when provider publication fails", async () => {
+    const previous: SessionBindingRecord = {
+      bindingId: "binding-prior",
+      targetSessionKey: "agent:main:adopted",
+      targetKind: "session",
+      conversation: {
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
+    };
+    sessionBindingState.setRecord(previous);
+
+    await expect(
+      bindPluginSessionConversation({
+        pluginId: "codex",
+        pluginRoot: "/codex",
+        sessionKey: "agent:main:adopted",
+        binding: { data: { kind: "codex-cli-node-session", version: 1 } },
+        afterBind: async () => {
+          throw new Error("publication failed");
+        },
+      }),
+    ).rejects.toThrow("publication failed");
+
+    expect(sessionBindingState.resolveByConversation(previous.conversation)).toMatchObject({
+      targetSessionKey: previous.targetSessionKey,
+      metadata: previous.metadata,
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(2);
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith({
+      bindingId: "binding-1",
+      reason: "plugin-session-bind-rollback",
+    });
+  });
+
+  it("does not roll back a newer successful Control UI binding", async () => {
+    let rejectFirst = (_error: Error) => {};
+    const firstPublication = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const first = bindPluginSessionConversation({
+      pluginId: "codex",
+      pluginRoot: "/codex",
+      sessionKey: "agent:main:adopted",
+      binding: { data: { kind: "remote-runtime", generation: 1 } },
+      afterBind: async () => await firstPublication,
+    });
+    await vi.waitFor(() => expect(sessionBindingState.bind).toHaveBeenCalledOnce());
+
+    // A concurrent Continue for the same session queues behind the failing
+    // attempt instead of interleaving with its rollback.
+    const second = bindPluginSessionConversation({
+      pluginId: "codex",
+      pluginRoot: "/codex",
+      sessionKey: "agent:main:adopted",
+      binding: { data: { kind: "remote-runtime", generation: 2 } },
+    });
+    rejectFirst(new Error("older publication failed"));
+    await expect(first).rejects.toThrow("older publication failed");
+    await second;
+
+    expect(
+      sessionBindingState.resolveByConversation({
+        channel: "webchat",
+        accountId: "default",
+        conversationId: "agent:main:adopted",
+      }),
+    ).toMatchObject({ metadata: { data: { kind: "remote-runtime", generation: 2 } } });
+    // Only the failed attempt rolled back its own binding.
+    expect(sessionBindingState.unbind).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "plugin-session-bind-rollback" }),
+    );
   });
 
   it("keeps Telegram bind approval callback_data within Telegram's limit", () => {
@@ -1079,3 +1161,4 @@ describe("plugin conversation binding approvals", () => {
     expect(binding.conversationId).toBe(expectedBinding.conversationId);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

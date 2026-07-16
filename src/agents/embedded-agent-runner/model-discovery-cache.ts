@@ -198,6 +198,11 @@ export function discoverCachedAgentStores(
 }
 
 /** Clears the process-local discovery cache between tests that mutate model/auth fixtures. */
-export function resetModelDiscoveryCacheForTest(): void {
+function resetModelDiscoveryCacheForTest(): void {
   DISCOVERY_STORE_CACHE.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelDiscoveryCacheTestApi")] =
+    { resetModelDiscoveryCacheForTest };
 }

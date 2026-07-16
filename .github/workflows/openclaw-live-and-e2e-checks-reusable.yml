@@ -47,6 +47,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to omit survivor scenarios absent from a canonical frozen target
+        required: false
+        default: false
+        type: boolean
       shared_image_policy:
         description: Shared Docker image transport
         required: true
@@ -185,6 +190,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to omit survivor scenarios absent from a canonical frozen target
+        required: false
+        default: false
+        type: boolean
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
@@ -389,6 +399,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+  OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
+  OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
 
 jobs:
   validate_selected_ref:
@@ -2262,15 +2274,6 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout trusted release harness
-        if: inputs.shared_image_policy == 'no-push-artifact'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
-          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
-          path: .release-harness
-          persist-credentials: false
-
       - name: Resolve shared live-test image tag
         id: image
         shell: bash
@@ -2339,6 +2342,17 @@ jobs:
           provenance: false
           load: true
           push: false
+
+      # Keep trusted tooling outside the target's Docker build context. A frozen
+      # target must not accidentally package the current checkout into its image.
+      - name: Checkout trusted release harness
+        if: inputs.shared_image_policy == 'no-push-artifact'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+          ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+          path: .release-harness
+          persist-credentials: false
 
       - name: Pack live-test image artifact
         id: image_artifact
@@ -3331,8 +3345,18 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Resolve frozen Codex live compatibility
+        id: codex_compat
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        env:
+          OPENCLAW_FROZEN_CODEX_SUITE_ID: ${{ matrix.suite_id }}
+          OPENCLAW_FROZEN_TARGET_ROOT: ${{ github.workspace }}
+          OPENCLAW_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          OPENCLAW_WORKFLOW_SHA: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+        run: node .release-harness/scripts/resolve-frozen-codex-live-suite.mjs
+
       - name: Validate live-test image artifact binding
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
         env:
           ARTIFACT_DIGEST: ${{ needs.prepare_live_test_image.outputs.image_artifact_digest }}
           ARTIFACT_ID: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
@@ -3349,7 +3373,7 @@ jobs:
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download live-test image artifact
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ needs.prepare_live_test_image.outputs.image_artifact_id }}
@@ -3358,7 +3382,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Verify and load live-test image artifact
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy == 'no-push-artifact'
         env:
           ARCHIVE_SHA256: ${{ needs.prepare_live_test_image.outputs.image_archive_sha256 }}
           LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
@@ -3374,25 +3398,25 @@ jobs:
             load .artifacts/live-test-image live-test "$TARGET_SHA" "$WORKFLOW_SHA" "$LIVE_IMAGE"
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy != 'no-push-artifact'
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group) && inputs.shared_image_policy != 'no-push-artifact'
         run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
         env:
           GHCR_USERNAME: ${{ github.actor }}
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         shell: bash
         run: |
           set -euo pipefail
@@ -3432,7 +3456,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        if: steps.codex_compat.outputs.run_lane != 'false' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}

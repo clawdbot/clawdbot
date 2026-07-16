@@ -185,7 +185,7 @@ function isImplicitFallbackClobber(model: unknown): boolean {
 }
 
 /** Collects warnings for agent model shapes that unintentionally drop default fallbacks. */
-export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   if (defaultFallbacks.length === 0) {
     return [];

@@ -8,11 +8,18 @@ import {
   type GatewayVoiceStateUpdateDispatchData,
 } from "discord-api-types/v10";
 
+export type DiscordGatewayVoiceStateTransition = {
+  current: APIVoiceState;
+  previous?: APIVoiceState;
+};
+
 export class DiscordGatewayVoiceStateCache {
   private readonly statesByGuild = new Map<string, Map<string, APIVoiceState>>();
+  private transitionsByState = new WeakMap<object, DiscordGatewayVoiceStateTransition>();
 
   clear(): void {
     this.statesByGuild.clear();
+    this.transitionsByState = new WeakMap();
   }
 
   listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
@@ -27,6 +34,18 @@ export class DiscordGatewayVoiceStateCache {
       }
     }
     return result;
+  }
+
+  takeTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    const transition = this.transitionsByState.get(state);
+    if (!transition) {
+      return null;
+    }
+    this.transitionsByState.delete(state);
+    return {
+      current: { ...transition.current },
+      ...(transition.previous ? { previous: { ...transition.previous } } : {}),
+    };
   }
 
   apply(payload: GatewayDispatchPayload): void {
@@ -58,8 +77,14 @@ export class DiscordGatewayVoiceStateCache {
         return;
       }
       const states = this.statesByGuild.get(guildId) ?? new Map<string, APIVoiceState>();
+      const previous = states.get(state.user_id);
+      const current = { ...state, guild_id: guildId };
+      this.transitionsByState.set(state, {
+        current,
+        ...(previous ? { previous: { ...previous } } : {}),
+      });
       if (state.channel_id) {
-        states.set(state.user_id, { ...state, guild_id: guildId });
+        states.set(state.user_id, current);
       } else {
         states.delete(state.user_id);
       }

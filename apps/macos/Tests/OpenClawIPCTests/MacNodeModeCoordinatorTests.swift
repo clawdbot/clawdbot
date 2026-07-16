@@ -111,6 +111,9 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         BridgeInvokeResponse(id: request.id, ok: false)
     }
 
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
     func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async { self.stopCount += 1 }

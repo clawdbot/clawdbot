@@ -1,9 +1,15 @@
 export type {
   SessionCatalogArchiveProviderParams,
   SessionCatalogContinueProviderParams,
+  SessionCatalogContinueProviderResult,
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
   SessionCatalogReadProviderParams,
+  SessionCatalogTerminalPlan,
+  SessionUpstreamActivity,
+  SessionUpstreamJsonValue,
+  SessionUpstreamKind,
+  SessionUpstreamProbe,
 } from "../plugins/session-catalog.js";
 export type {
   SessionCatalog,
@@ -21,3 +27,8 @@ export type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+export {
+  classifyClaudeCliHistoryMessage,
+  classifyClaudeCliHistoryLine,
+  type ClaudeCliHistoryLineClassification,
+} from "../gateway/cli-session-history.claude-activity.js";

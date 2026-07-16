@@ -12,14 +12,12 @@ import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
   hasPersistedIMessageEcho,
   rememberPersistedIMessageEcho,
-  resetPersistedIMessageEchoCacheForTest,
   resolveIMessageSentEchoEntryKey,
 } from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
-    resetPersistedIMessageEchoCacheForTest();
   });
 
   afterEach(() => {
@@ -149,7 +147,6 @@ describe("iMessage sent-message echo cache", () => {
     rememberPersistedIMessageEcho({ scope, text: "text-only" });
     rememberPersistedIMessageEcho({ scope, messageId: "id-only" });
 
-    resetPersistedIMessageEchoCacheForTest({ clearPersistent: false });
     const cache = createSentMessageCache();
 
     expect(cache.has(scope, { text: "text-only" })).toBe(true);

@@ -58,7 +58,10 @@ plugin activation succeeds. App Server availability is checked when
 supervision first connects. An explicit Codex plugin disable or policy block
 prevents opportunistic activation, and an existing explicit
 `supervision.enabled: false` disables agent-facing supervision tools; the
-operator catalog remains registered whenever the Codex plugin is active.
+operator catalog remains registered whenever the Codex plugin is active unless
+`sessionCatalog.enabled: false` disables it. This separate switch leaves the
+Codex provider, harness, and agent-facing supervision policy unchanged while
+also removing the paired-node catalog list/read commands from this host.
 Existing installations can enable the same capability manually:
 
 Enable the `codex` plugin and its supervision capability in `openclaw.json`:
@@ -96,6 +99,7 @@ Its private supervision binding uses the supervision connection for source
 reads, canonical branch creation, history injection, and every later turn. With
 the default local connection, that preserves the native user Codex home, auth,
 and provider configuration without changing the default for other sessions.
+Watched adopted Chats also participate in [session state awareness](/concepts/session-state).
 
 For the default local supervision connection, the store is shared with native
 Codex clients. OpenClaw does not assume that another client shares the same live
@@ -141,6 +145,13 @@ describes a host refresh; an unavailable host returns no fresh session rows and
 does not change a thread's native status to `offline`. Session rows use Codex
 statuses such as `idle`, `active`, `notLoaded`, or error. A failed host does not
 hide results from healthy hosts.
+
+The sidebar warning includes the catalog error code and the safe underlying
+Gateway error. Open **Settings > Automation > Plugins > Codex > Native Session
+Discovery** to disable discovery without disabling Codex. For
+`NODE_LIST_FAILED`, compare `openclaw nodes list` and **Settings > Devices**;
+the detailed cause identifies the pairing-store, node-registry, permission, or
+Gateway lifecycle failure that needs repair.
 
 ## Use the operator CLI
 
@@ -304,16 +315,19 @@ codex unarchive <thread-id>
 
 Paired nodes expose the versioned read-only
 `codex.appServer.threads.list.v1` and
-`codex.appServer.thread.turns.list.v1` commands. The Gateway receives normalized
+`codex.appServer.thread.turns.list.v1` commands. Native node hosts with the
+Codex CLI available also expose the allowlisted `codex.terminal.resume.v1`
+command. The Gateway receives normalized
 metadata and explicitly requested bounded transcript pages, never raw App Server
-endpoints. The current node invoke
-transport is request/response only, so it cannot carry the long-lived event,
-approval, and streaming lifecycle required by the Codex harness.
+endpoints. Opening a row in the operator terminal runs `codex resume <thread-id>`
+on the owning host and relays that command's PTY; it does not expose a general
+shell or gateway-supplied argv.
 
-For that reason, remote rows remain visible but do not offer **Continue** or
+The terminal relay does not provide the harness continuation or archive ownership
+contracts. Remote rows therefore remain visible but do not offer **Continue** or
 **Archive**, even when the remote thread is idle. Use Codex on that computer
-until a node-side streaming runner bridge exists for continuation and a safe
-runner-ownership boundary exists for archive.
+through **Open in terminal**, or use a future continuation flow with a safe
+runner-ownership boundary.
 
 ## Metadata and permissions
 

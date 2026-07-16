@@ -1,5 +1,5 @@
 // Music background tests cover task-run creation, progress recording, and
-// completion delivery through announcement agents or direct fallback sends.
+// completion delivery through the durable requester-agent handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
@@ -143,7 +143,7 @@ describe("music generate background helpers", () => {
     expectReplyInstructionContains("final-reply MEDIA lines");
   });
 
-  it("delivers failure completion notices directly", async () => {
+  it("keeps failed completion notices in the durable agent-loop handoff", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
@@ -156,18 +156,15 @@ describe("music generate background helpers", () => {
       result: "provider failed",
     });
 
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion,
-      status: "error",
-      statusLabel: "failed",
-    });
-
-    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "Music generation failed: provider failed",
-        idempotencyKey: "music_generate:task-123:error:direct",
+    await expect(
+      musicGenerationTaskLifecycle.wakeTaskCompletion({
+        ...completion,
+        status: "error",
+        statusLabel: "failed",
       }),
-    );
+    ).resolves.toEqual({ status: "permanent_failure" });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 

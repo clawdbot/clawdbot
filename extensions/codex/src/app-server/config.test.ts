@@ -124,6 +124,7 @@ describe("Codex app-server config", () => {
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
           codeModeOnly: true,
+          loopDetectionPreToolUseRelay: false,
           turnCompletionIdleTimeoutMs: 120_000,
           postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
@@ -141,6 +142,7 @@ describe("Codex app-server config", () => {
       approvalsReviewer: "guardian_subagent",
       serviceTier: "flex",
       codeModeOnly: true,
+      loopDetectionPreToolUseRelay: false,
       turnCompletionIdleTimeoutMs: 120_000,
       postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
@@ -149,6 +151,10 @@ describe("Codex app-server config", () => {
       url: "ws://127.0.0.1:39175",
       headers: { "X-Test": "yes" },
     });
+  });
+
+  it("keeps the Codex loop-detection PreToolUse relay enabled by default", () => {
+    expect(resolveRuntimeForTest().loopDetectionPreToolUseRelay).toBe(true);
   });
 
   it("builds Codex permissions-profile config for app-server network proxy", () => {
@@ -351,6 +357,12 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toStrictEqual({});
+  });
+
+  it("parses the native session discovery toggle", () => {
+    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+      enabled: false,
+    });
   });
 
   it("rejects unknown app-server fields", () => {
@@ -2854,7 +2866,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
-  it("does not schema-default mode-derived policy fields", async () => {
+  it("publishes stable defaults without schema-defaulting mode-derived policy fields", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
     ) as {
@@ -2873,5 +2885,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
+    expect(appServerProperties.loopDetectionPreToolUseRelay?.default).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

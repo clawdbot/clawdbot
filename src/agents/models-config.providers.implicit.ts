@@ -235,7 +235,7 @@ function appendNormalizedPluginMetadataOwners(
 }
 
 /** Resolve the plugin discovery filter used by implicit provider discovery tests. */
-export function resolveProviderDiscoveryFilterForTest(params: {
+function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
@@ -246,11 +246,20 @@ export function resolveProviderDiscoveryFilterForTest(params: {
 }
 
 /** Resolve provider owner plugin IDs from a preloaded metadata snapshot for tests. */
-export function resolvePluginMetadataProviderOwnersForTest(
+function resolvePluginMetadataProviderOwnersForTest(
   pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "owners"> | undefined,
   provider: string,
 ): readonly string[] | undefined {
   return resolvePluginMetadataProviderOwners(pluginMetadataSnapshot, provider);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.modelsConfigImplicitProvidersTestApi")
+  ] = {
+    resolvePluginMetadataProviderOwnersForTest,
+    resolveProviderDiscoveryFilterForTest,
+  };
 }
 
 function mergeImplicitProviderSet(

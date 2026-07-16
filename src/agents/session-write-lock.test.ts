@@ -10,10 +10,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { SessionWriteLockStaleError } from "./session-write-lock-error.js";
 
 const FAKE_STARTTIME = 12345;
-let testing: typeof import("./session-write-lock.js").testing;
+let testing: typeof import("./session-write-lock.test-support.js").testing;
 let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSessionWriteLock;
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
-let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
+let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.test-support.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 let resolveSessionWriteLockOptions: typeof import("./session-write-lock.js").resolveSessionWriteLockOptions;
@@ -163,14 +163,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 describe("acquireSessionWriteLock", () => {
   beforeAll(async () => {
     ({
-      testing,
       acquireSessionWriteLock,
       cleanStaleLockFiles,
-      resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
       resolveSessionWriteLockAcquireTimeoutMs,
       resolveSessionWriteLockOptions,
     } = await import("./session-write-lock.js"));
+    ({ testing, resetSessionWriteLockStateForTest } =
+      await import("./session-write-lock.test-support.js"));
   });
 
   afterEach(() => {
@@ -1507,3 +1507,4 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

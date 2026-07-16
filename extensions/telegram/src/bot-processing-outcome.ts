@@ -156,13 +156,6 @@ export async function runWithTelegramSpooledReplayUpdate<T>(
   }
 }
 
-export async function withTelegramSpooledReplayUpdate<T>(
-  update: object,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
-}
-
 export function isTelegramSpooledReplayUpdate(update: unknown): boolean {
   return (
     telegramSpooledReplayFrames.getStore() !== undefined ||

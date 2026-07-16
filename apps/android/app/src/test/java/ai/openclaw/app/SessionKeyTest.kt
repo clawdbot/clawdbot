@@ -22,6 +22,22 @@ class SessionKeyTest {
   }
 
   @Test
+  fun buildAndroidAppSessionLabelPreservesUtf16BoundariesAtDisplayNameLimit() {
+    val deviceId = "1234567890abcdef"
+    val splitPairPrefix = "a".repeat(95)
+    assertEquals(
+      "OpenClaw App · $splitPairPrefix · 1234567890ab",
+      buildAndroidAppSessionLabel("$splitPairPrefix😀tail", deviceId),
+    )
+
+    val completePairPrefix = "a".repeat(94)
+    assertEquals(
+      "OpenClaw App · $completePairPrefix😀 · 1234567890ab",
+      buildAndroidAppSessionLabel("$completePairPrefix😀tail", deviceId),
+    )
+  }
+
+  @Test
   fun resolveAgentIdFromMainSessionKeyParsesCanonicalAgentKey() {
     assertEquals("ops", resolveAgentIdFromMainSessionKey("agent:ops:main"))
     assertNull(resolveAgentIdFromMainSessionKey("global"))

@@ -25,11 +25,11 @@ import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.state.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
+import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   replyWithDiscordModelPickerProviders,
-  type DispatchDiscordCommandInteraction,
 } from "./native-command-ui.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
@@ -1234,3 +1234,4 @@ describe("Discord model picker interactions", () => {
     expect(payload).toContain(";pb=");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

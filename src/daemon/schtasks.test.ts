@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  parseSchtasksQuery,
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   resolveTaskScriptPath,
@@ -20,36 +19,6 @@ vi.mock("./schtasks-exec.js", () => ({
 
 beforeEach(() => {
   schtasksResponses.length = 0;
-});
-
-describe("schtasks runtime parsing", () => {
-  it.each(["Ready", "Running"])("parses %s status", (status) => {
-    const output = [
-      "TaskName: \\OpenClaw Gateway",
-      `Status: ${status}`,
-      "Last Run Time: 1/8/2026 1:23:45 AM",
-      "Last Run Result: 0x0",
-    ].join("\r\n");
-    expect(parseSchtasksQuery(output)).toEqual({
-      status,
-      lastRunTime: "1/8/2026 1:23:45 AM",
-      lastRunResult: "0x0",
-    });
-  });
-
-  it("parses 'Last Result' key variant (without 'Run') (#47726)", () => {
-    const output = [
-      "TaskName: \\OpenClaw Gateway",
-      "Status: Running",
-      "Last Run Time: 2026/3/16 8:34:15",
-      "Last Result: 267009",
-    ].join("\r\n");
-    expect(parseSchtasksQuery(output)).toEqual({
-      status: "Running",
-      lastRunTime: "2026/3/16 8:34:15",
-      lastRunResult: "267009",
-    });
-  });
 });
 
 describe("scheduled task runtime derivation", () => {
@@ -72,6 +41,39 @@ describe("scheduled task runtime derivation", () => {
       "",
     ].join("\r\n");
   }
+
+  it.each(["Ready", "Running"])("parses %s status metadata", async (status) => {
+    const runtime = await readRuntimeFromQueryOutput(
+      [
+        "TaskName: \\OpenClaw Gateway",
+        `Status: ${status}`,
+        "Last Run Time: 1/8/2026 1:23:45 AM",
+        "Last Run Result: 0x0",
+      ].join("\r\n"),
+    );
+    expect(runtime).toMatchObject({
+      state: status,
+      lastRunTime: "1/8/2026 1:23:45 AM",
+      lastRunResult: "0x0",
+    });
+  });
+
+  it("parses 'Last Result' key variant (without 'Run') (#47726)", async () => {
+    const runtime = await readRuntimeFromQueryOutput(
+      [
+        "TaskName: \\OpenClaw Gateway",
+        "Status: Running",
+        "Last Run Time: 2026/3/16 8:34:15",
+        "Last Result: 267009",
+      ].join("\r\n"),
+    );
+    expect(runtime).toMatchObject({
+      status: "running",
+      state: "Running",
+      lastRunTime: "2026/3/16 8:34:15",
+      lastRunResult: "267009",
+    });
+  });
 
   it("treats Running + 0x41301 as running", async () => {
     await expect(

@@ -335,6 +335,9 @@ select.settings-select:not([multiple]) {
 }
 
 wa-switch.settings-toggle {
+  /* Web Awesome defaults to brand blue; settings controls follow the active scene. */
+  --wa-form-control-activated-color: var(--accent);
+  --wa-color-focus: var(--ring);
   flex: none;
 }
 

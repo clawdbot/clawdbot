@@ -77,7 +77,8 @@ export function resolveWorkingStartedAt(
     streamStartedAt,
     ...queue
       .filter(shouldRenderQueuedSendInThread)
-      .map((item) => item.sendRequestStartedAtMs ?? item.sendSubmittedAtMs ?? item.createdAt),
+      // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
+      .map((item) => item.createdAt),
     ...streamSegments.map((segment) => segment.ts),
     ...toolMessages.map((message) => {
       const receivedAt = (message as Record<string, unknown> | null)?.[

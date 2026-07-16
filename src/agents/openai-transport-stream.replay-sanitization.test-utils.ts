@@ -1,7 +1,7 @@
 // Imported by openai-transport-stream.test.ts to keep its mocked suite in one Vitest module graph.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   openRouterModel,
   openRouterAnthropicModel,
@@ -20,6 +20,7 @@ import {
   buildReplayParams,
   customReasoningProxyModel,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
   it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(

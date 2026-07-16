@@ -119,7 +119,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (existsSync(filePath)) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -130,7 +130,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -1704,11 +1704,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     await new Promise<void>((resolvePromise) => {
       server.close(() => resolvePromise());
     });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    // Preserve the 500 ms close budget while detecting port release sooner.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       if (!(await canConnectToLoopbackPort(port, 100))) {
         return;
       }
-      await delay(25);
+      await delay(5);
     }
     expect(await canConnectToLoopbackPort(port, 100)).toBe(false);
   });

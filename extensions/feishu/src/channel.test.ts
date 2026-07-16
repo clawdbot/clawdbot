@@ -2359,3 +2359,4 @@ describe("looksLikeFeishuId", () => {
     expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

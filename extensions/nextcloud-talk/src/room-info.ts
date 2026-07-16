@@ -18,12 +18,6 @@ const roomCache = new Map<
   { kind?: "direct" | "group"; fetchedAt: number; error?: string }
 >();
 
-export const testing = {
-  resetRoomCache() {
-    roomCache.clear();
-  },
-};
-
 function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
   return `${params.accountId}:${params.roomToken}`;
 }
@@ -138,4 +132,3 @@ export async function resolveNextcloudTalkRoomKind(params: {
     return undefined;
   }
 }
-export { testing as __testing };

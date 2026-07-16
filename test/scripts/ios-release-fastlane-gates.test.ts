@@ -96,6 +96,18 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
+  it("preserves caller-pinned Swift tools in archive build PATH", () => {
+    const fastfile = readFastfile();
+    const pathBuilder = functionBody(fastfile, "xcodebuild_shell_join");
+    const callerPath = '*ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)';
+
+    expect(pathBuilder).toContain(callerPath);
+    expect(pathBuilder).toContain(".reject(&:empty?).uniq.join(File::PATH_SEPARATOR)");
+    expect(pathBuilder.indexOf(callerPath)).toBeLessThan(
+      pathBuilder.indexOf('"/opt/homebrew/bin"'),
+    );
+  });
+
   it("requires clean matching source before preparing and building release artifacts", () => {
     const fastfile = readFastfile();
     const verifier = functionBody(fastfile, "verify_apple_release_source!");

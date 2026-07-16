@@ -1,13 +1,8 @@
 // Irc tests cover channel plugin behavior.
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
-import { clearIrcRuntime } from "./runtime.js";
 
 describe("irc outbound chunking", () => {
-  afterEach(() => {
-    clearIrcRuntime();
-  });
-
   it("chunks outbound text without requiring IRC runtime initialization", () => {
     expect(ircOutboundBaseAdapter.chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
     expect(ircOutboundBaseAdapter.deliveryMode).toBe("direct");
@@ -17,10 +12,6 @@ describe("irc outbound chunking", () => {
 });
 
 describe("irc outbound sanitizeText", () => {
-  afterEach(() => {
-    clearIrcRuntime();
-  });
-
   it("strips internal tool-trace banners before outbound delivery", () => {
     const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
 

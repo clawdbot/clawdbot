@@ -13,13 +13,17 @@ export function requestUrl(url: string | URL | Request): string {
   return url.url;
 }
 
-export function createMattermostTestConfig(): OpenClawConfig {
+let testConfigSequence = 0;
+
+export function createMattermostTestConfig(
+  cacheKey = String(++testConfigSequence),
+): OpenClawConfig {
   return {
     channels: {
       mattermost: {
         enabled: true,
-        botToken: "test-token",
-        baseUrl: "https://chat.example.com",
+        botToken: `test-token-${cacheKey}`,
+        baseUrl: `https://${cacheKey}.chat.example.com`,
       },
     },
   };

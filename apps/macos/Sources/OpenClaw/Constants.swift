@@ -4,9 +4,12 @@ import Foundation
 // nix-openclaw writes app defaults into this suite to survive app bundle identifier churn.
 let launchdLabel = "ai.openclaw.mac"
 let gatewayLaunchdLabel = "ai.openclaw.gateway"
+let nodeLaunchdLabel = "ai.openclaw.node"
 let onboardingVersionKey = "openclaw.onboardingVersion"
 let onboardingSeenKey = "openclaw.onboardingSeen"
-let onboardingCrestodianPendingKey = "openclaw.onboardingCrestodianPending"
+let onboardingSystemAgentPendingKey = "openclaw.onboardingSystemAgentPending"
+// Pre-rename releases persisted pending activations under the Crestodian key.
+let onboardingSystemAgentPendingRetiredKey = "openclaw.onboardingCrestodianPending"
 let currentOnboardingVersion = 8
 let pauseDefaultsKey = "openclaw.pauseEnabled"
 let iconAnimationsEnabledKey = "openclaw.iconAnimationsEnabled"
@@ -43,6 +46,8 @@ let deepLinkKeyKey = "openclaw.deepLinkKey"
 let cliInstallPromptedVersionKey = "openclaw.cliInstallPromptedVersion"
 let cliInstallPolicyKey = "openclaw.cliInstallPolicy"
 let cliManagedRestartPendingKey = "openclaw.cliManagedRestartPending"
+let postAppUpdateReceiptKey = "openclaw.postAppUpdateReceipt"
+let lastLaunchedAppVersionKey = "openclaw.lastLaunchedAppVersion"
 let cliValidatedExecutableKey = "openclaw.cliValidatedExecutable"
 let cliValidatedVersionKey = "openclaw.cliValidatedVersion"
 let macNodeIdentityProfileKey = "openclaw.macNodeIdentityProfile"

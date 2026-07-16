@@ -352,48 +352,110 @@ describe("renderQuickSettings", () => {
     expect(systemSection?.querySelector(".config-host__address")).toBeNull();
   });
 
-  it("hides the pending changes bar when the config is clean", () => {
+  it("hides the restart banner while the config needs no apply", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".settings-group[aria-live='polite']")).toBeNull();
+    expect(container.querySelector(".config-apply-banner")).toBeNull();
+    expect(expectButtonByText.bind(null, container, "Save")).toThrow();
+    expect(expectButtonByText.bind(null, container, "Apply Now")).toThrow();
   });
 
-  it("renders pending config actions and calls their handlers", () => {
-    const onResetConfig = vi.fn();
-    const onSaveConfig = vi.fn();
+  it("renders the restart banner and wires it to apply", () => {
     const onApplyConfig = vi.fn();
     const container = document.createElement("div");
 
+    render(renderQuickSettings(createProps({ configNeedsApply: true, onApplyConfig })), container);
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("Saved to openclaw.json — restart the gateway to apply.");
+    const applyButton = expectButtonByText(container, "Restart & apply");
+    expect(applyButton.disabled).toBe(false);
+    applyButton.click();
+    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates the restart action while a raw draft is pending", () => {
+    const container = document.createElement("div");
+
+    // apply() always refuses while a raw draft is unsaved; an enabled button
+    // here would be a dead action with a misleading generic failure.
     render(
-      renderQuickSettings(
-        createProps({
-          configDirty: true,
-          configReady: true,
-          connected: true,
-          onResetConfig,
-          onSaveConfig,
-          onApplyConfig,
-        }),
-      ),
+      renderQuickSettings(createProps({ configNeedsApply: true, configRawDraftPending: true })),
       container,
     );
 
-    const pending = container.querySelector(".settings-group[aria-live='polite']");
-    expect(pending).not.toBeNull();
-    const discardButton = expectButtonByText(container, "Discard");
-    const saveButton = expectButtonByText(container, "Save");
-    const applyButton = expectButtonByText(container, "Apply Now");
-    expect(saveButton.disabled).toBe(false);
+    expect(expectButtonByText(container, "Restart & apply").disabled).toBe(true);
+  });
 
-    discardButton.click();
-    saveButton.click();
-    applyButton.click();
+  it("surfaces the shared autosave status with its recovery actions", () => {
+    const container = document.createElement("div");
 
-    expect(onResetConfig).toHaveBeenCalledTimes(1);
-    expect(onSaveConfig).toHaveBeenCalledTimes(1);
-    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+    render(renderQuickSettings(createProps()), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saving" })), container);
+    expect(container.querySelector(".config-toolbar__status")?.textContent?.trim()).toBe("Saving…");
+
+    const onRetrySaveConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "error", onRetrySaveConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Save failed",
+    );
+    expectButtonByText(container, "Retry").click();
+    expect(onRetrySaveConfig).toHaveBeenCalledTimes(1);
+
+    const onDiscardConfig = vi.fn();
+    render(
+      renderQuickSettings(createProps({ configAutoSaveStatus: "conflict", onDiscardConfig })),
+      container,
+    );
+    expect(container.querySelector(".config-toolbar__status")?.textContent).toContain(
+      "Settings changed elsewhere",
+    );
+    expectButtonByText(container, "Reload").click();
+    expect(onDiscardConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a busy restart banner while applying", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configApplying: true })),
+      container,
+    );
+
+    const banner = container.querySelector(".config-apply-banner");
+    expect(banner?.textContent).toContain("Applying…");
+    expect(banner?.querySelector("button")?.disabled).toBe(true);
+
+    // Other in-flight config writes gate the action too.
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configSaving: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configAutoSaveStatus: "saving" })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    render(
+      renderQuickSettings(createProps({ configNeedsApply: true, configUpdating: true })),
+      container,
+    );
+    expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   it("locks config-backed quick controls while a config operation is pending", () => {
@@ -410,7 +472,6 @@ describe("renderQuickSettings", () => {
       render(
         renderQuickSettings(
           createProps({
-            configDirty: true,
             onThinkingChange,
             onFastModeChange,
             onToolProfileChange,
@@ -440,23 +501,7 @@ describe("renderQuickSettings", () => {
       expect(onToolProfileChange).not.toHaveBeenCalled();
       const browserRow = expectRowByTitle(container, "Browser enabled");
       expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
-      const pendingRow = expectRowByTitle(container, "Unsaved changes");
-      expect(
-        [...pendingRow.querySelectorAll<HTMLButtonElement>("button")].every(
-          (button) => button.disabled,
-        ),
-      ).toBe(true);
     }
-  });
-
-  it("disables commit actions until the config is ready", () => {
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
-
-    expect(expectButtonByText(container, "Save").disabled).toBe(true);
-    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
-    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {

@@ -179,6 +179,12 @@ export function createApplicationGateway(
           lastErrorCode: null,
         });
       },
+      onRecoveryScopeChange: () => {
+        if (client !== nextClient || !snapshot.connected) {
+          return;
+        }
+        setSnapshot({ ...snapshot });
+      },
       onClose: ({ code, reason, error, willRetry }) => {
         if (client !== nextClient) {
           return;

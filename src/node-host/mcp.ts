@@ -58,7 +58,7 @@ type NodeHostMcpSession = {
   detachStderr?: () => void;
 };
 
-export type NodeHostMcpErrorCode =
+type NodeHostMcpErrorCode =
   | "MCP_SERVER_UNAVAILABLE"
   | "MCP_TOOL_UNAVAILABLE"
   | "MCP_TOOL_TIMEOUT"
@@ -150,7 +150,7 @@ function normalizeInputSchema(value: unknown): Record<string, unknown> {
 }
 
 /** Builds provider-safe MCP descriptors in stable server/tool order. */
-export function buildNodeMcpToolDescriptors(
+function buildNodeMcpToolDescriptors(
   listedTools: readonly ListedNodeMcpTool[],
 ): NodePluginToolDescriptor[] {
   const usedNames = new Set<string>();
@@ -452,10 +452,4 @@ function listEnabledNodeHostMcpServers(
     )
     .map(([serverName, config]) => [serverName, config as McpServerConfig] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
-}
-
-export function countConfiguredNodeHostMcpServers(
-  servers: Record<string, McpServerConfig> | undefined,
-): number {
-  return listEnabledNodeHostMcpServers(servers).length;
 }

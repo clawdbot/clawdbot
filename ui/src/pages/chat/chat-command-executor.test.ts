@@ -1273,6 +1273,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("try a different approach");
     expect(chatSend.payload.deliver).toBe(false);
+    expect(chatSend.payload.queueMode).toBe("steer");
   });
 
   it("uses canonical active-run state when the session row only reports hasActiveRun", async () => {
@@ -1740,3 +1741,4 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(result.content).toBe("Failed to redirect: Error: connection lost");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

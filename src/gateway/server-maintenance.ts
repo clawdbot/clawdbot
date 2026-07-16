@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
@@ -31,7 +32,6 @@ import {
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
-import { isManagedWorktreeOwnerActive } from "./worktree-owner-activity.js";
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -119,14 +119,16 @@ export function startGatewayMaintenanceTimers(params: {
 
   const runWorktreeGc =
     params.runWorktreeGc ??
-    (() =>
-      managedWorktrees.gc({
+    (() => {
+      const cfg = params.getRuntimeConfig();
+      return managedWorktrees.gc({
         // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
         // worktree activity so idle GC cannot remove a checkout still used by the session.
-        isOwnerActive: isManagedWorktreeOwnerActive,
+        shouldProtectOwner: createManagedWorktreeOwnerProtection(cfg),
         // Read limits per run so a config edit applies at the next hourly sweep.
-        limits: resolveWorktreeCleanupLimits(params.getRuntimeConfig().worktrees),
-      }));
+        limits: resolveWorktreeCleanupLimits(cfg.worktrees),
+      });
+    });
   const performWorktreeGc = () =>
     runWorktreeGc().catch((err: unknown) => {
       params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);

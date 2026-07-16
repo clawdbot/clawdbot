@@ -65,7 +65,10 @@ describe("createNodePluginTools", () => {
       },
     });
 
-    const tools = createNodePluginTools({ existingToolNames: new Set(["read"]) });
+    const tools = createNodePluginTools({
+      existingToolNames: new Set(["read"]),
+      agentSessionKey: "agent:main:canvas",
+    });
     const result = await expectDefined(tools[0], "tools[0] test invariant").execute("call-1", {
       text: "ping",
     });
@@ -88,6 +91,7 @@ describe("createNodePluginTools", () => {
         command: "remote.echo",
         params: { text: "ping" },
         idempotencyKey: "call-1",
+        sessionKey: "agent:main:canvas",
       },
       { scopes: ["operator.write"] },
     );

@@ -825,3 +825,4 @@ export function repairToolUseResultPairing(
     moved: changedOrMoved,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

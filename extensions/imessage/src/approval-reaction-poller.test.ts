@@ -1,9 +1,6 @@
 // Imessage tests cover approval reaction poller plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearIMessageApprovalReactionPollerStateForTest,
-  pollPendingIMessageApprovalReactions,
-} from "./approval-reaction-poller.js";
+import { pollPendingIMessageApprovalReactions } from "./approval-reaction-poller.js";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   registerIMessageApprovalReactionTarget as registerIMessageApprovalReactionTargetRaw,
@@ -30,9 +27,13 @@ function createClient(request: ReturnType<typeof vi.fn>): IMessageRpcClient {
 }
 
 describe("iMessage approval reaction poller", () => {
+  let accountSequence = 0;
+  let accountId = "";
+
   beforeEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
-    clearIMessageApprovalReactionPollerStateForTest();
+    accountSequence += 1;
+    accountId = `test-${accountSequence}`;
     resolverMocks.resolveIMessageApproval.mockReset();
     resolverMocks.resolveIMessageApproval.mockImplementation(
       async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
@@ -53,7 +54,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
     });
 
     expect(request).not.toHaveBeenCalled();
@@ -61,7 +62,7 @@ describe("iMessage approval reaction poller", () => {
 
   it("does not scan recent chats during fast polling for handle-only targets", async () => {
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { handle: "+15551230000" },
       messageId: "msg-1",
       approvalId: "exec-1",
@@ -72,7 +73,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
     });
 
     expect(request).not.toHaveBeenCalled();
@@ -119,7 +120,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     });
 
@@ -148,7 +149,7 @@ describe("iMessage approval reaction poller", () => {
     const pollParams = {
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     };
 
@@ -208,7 +209,7 @@ describe("iMessage approval reaction poller", () => {
     const pollParams = {
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     };
 
@@ -269,7 +270,7 @@ describe("iMessage approval reaction poller", () => {
       const pollParams = {
         client: createClient(request),
         cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-        accountId: "default",
+        accountId,
         allowRecentChatDiscovery: true,
       };
 
@@ -304,7 +305,7 @@ describe("iMessage approval reaction poller", () => {
     const pollParams = {
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     };
 
@@ -337,7 +338,7 @@ describe("iMessage approval reaction poller", () => {
     const pollParams = {
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     };
 
@@ -387,7 +388,7 @@ describe("iMessage approval reaction poller", () => {
       await pollPendingIMessageApprovalReactions({
         client: createClient(request),
         cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-        accountId: "default",
+        accountId,
         allowRecentChatDiscovery: true,
       });
     } finally {
@@ -399,14 +400,14 @@ describe("iMessage approval reaction poller", () => {
 
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { handle: "+15551230000" },
       messageId: "msg-1",
       approvalId: "exec-1",
       allowedDecisions: ["allow-once", "deny"],
     });
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { chatId: 42, chatGuid: "SMS;-;+15551230000" },
       messageId: "msg-1",
       approvalId: "exec-1",
@@ -422,7 +423,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
     });
 
     expect(request).toHaveBeenCalledTimes(1);
@@ -435,14 +436,14 @@ describe("iMessage approval reaction poller", () => {
 
   it("includes recent chats during discovery when scoped and unscoped targets are pending", async () => {
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { chatId: 42, chatGuid: "SMS;-;+15551230000" },
       messageId: "msg-scoped",
       approvalId: "exec-scoped",
       allowedDecisions: ["allow-once", "deny"],
     });
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { handle: "+15551239999" },
       messageId: "msg-handle",
       approvalId: "exec-handle",
@@ -486,7 +487,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551239999"] } } },
-      accountId: "default",
+      accountId,
       allowRecentChatDiscovery: true,
     });
 
@@ -513,7 +514,7 @@ describe("iMessage approval reaction poller", () => {
 
   it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",
       approvalId: "exec-1",
@@ -556,7 +557,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
     });
 
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
@@ -576,7 +577,7 @@ describe("iMessage approval reaction poller", () => {
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",
       approvalId: "exec-1",
@@ -619,7 +620,7 @@ describe("iMessage approval reaction poller", () => {
     const pollParams = {
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
       logVerboseMessage,
     };
 
@@ -637,7 +638,7 @@ describe("iMessage approval reaction poller", () => {
   it("stops scanning after an authorized resolver failure", async () => {
     resolverMocks.resolveIMessageApproval.mockRejectedValueOnce(new Error("gateway down"));
     registerIMessageApprovalReactionTarget({
-      accountId: "default",
+      accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
       messageId: "msg-1",
       approvalId: "exec-1",
@@ -680,7 +681,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions({
       client: createClient(request),
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-      accountId: "default",
+      accountId,
     });
 
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);

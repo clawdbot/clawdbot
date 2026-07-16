@@ -535,6 +535,116 @@ function buildProfileUsageMocks(baseTime: number) {
   };
 }
 
+/**
+ * Small but coherent config fixture so the schema-driven settings pages are
+ * demoable: `config.schema` covers a boolean, an enum, numbers, and strings
+ * across a few real section keys, and `config.get` returns a matching
+ * snapshot with the hash `config.set`/`config.apply` are guarded by.
+ */
+function buildConfigMocks() {
+  const config = {
+    logging: { level: "info", consoleTimestamps: true },
+    messages: { queueLimit: 5, responsePrefix: "" },
+    gateway: { port: 18789, bind: "127.0.0.1" },
+    agents: { defaults: { thinkingDefault: "medium" } },
+    models: { mode: "merge" },
+  };
+  const schema = {
+    type: "object",
+    title: "OpenClaw config",
+    properties: {
+      logging: {
+        type: "object",
+        title: "Logging",
+        properties: {
+          level: {
+            type: "string",
+            title: "Log level",
+            description: "Minimum severity written to the gateway log.",
+            enum: ["silent", "error", "warn", "info", "debug"],
+          },
+          consoleTimestamps: {
+            type: "boolean",
+            title: "Console timestamps",
+            description: "Prefix console log lines with a timestamp.",
+          },
+        },
+      },
+      messages: {
+        type: "object",
+        title: "Messages",
+        properties: {
+          queueLimit: {
+            type: "integer",
+            title: "Queue limit",
+            description: "Maximum queued inbound messages per session.",
+            minimum: 0,
+          },
+          responsePrefix: {
+            type: "string",
+            title: "Response prefix",
+            description: "Optional text prepended to outbound replies.",
+          },
+        },
+      },
+      gateway: {
+        type: "object",
+        title: "Gateway",
+        properties: {
+          port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
+          bind: { type: "string", title: "Bind address" },
+        },
+      },
+      agents: {
+        type: "object",
+        title: "Agents",
+        properties: {
+          defaults: {
+            type: "object",
+            title: "Defaults",
+            properties: {
+              thinkingDefault: {
+                type: "string",
+                title: "Default thinking level",
+                enum: ["off", "low", "medium", "high"],
+              },
+            },
+          },
+        },
+      },
+      models: {
+        type: "object",
+        title: "Models",
+        properties: {
+          mode: {
+            type: "string",
+            title: "Catalog mode",
+            enum: ["merge", "replace"],
+          },
+        },
+      },
+    },
+  };
+  return {
+    get: {
+      path: "~/.openclaw/openclaw.json",
+      exists: true,
+      raw: `${JSON.stringify(config, null, 2)}\n`,
+      hash: "mock-config-hash",
+      appliedConfigHash: "mock-config-hash",
+      valid: true,
+      config,
+      issues: [],
+    },
+    schema: {
+      schema,
+      uiHints: {},
+      version: "mock-config-schema",
+      generatedAt: new Date(0).toISOString(),
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -869,6 +979,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
+  const configMocks = buildConfigMocks();
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
@@ -877,6 +988,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      // config.set/config.apply are served statefully by the mock gateway
+      // (raw persists, hash advances) because config.get ships a raw fixture.
+      "config.get": configMocks.get,
+      "config.schema": configMocks.schema,
       "sessions.diff": buildSessionDiffMock(),
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),

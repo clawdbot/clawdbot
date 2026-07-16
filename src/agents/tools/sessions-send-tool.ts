@@ -510,6 +510,7 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -517,6 +518,16 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      // Fire-and-forget self-send remains a channel-delivery path. A synchronous
+      // self-send would wait behind its own active session lane until timeout.
+      if (timeoutSeconds !== 0 && requesterSessionKey === resolvedKey) {
+        return jsonResult({
+          runId,
+          status: "error",
+          error: "sessions_send cannot target the calling session; use your own reply instead",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       if (parseSessionThreadInfo(resolvedKey).threadId) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -557,7 +568,6 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
@@ -811,3 +821,4 @@ export function createSessionsSendTool(opts?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

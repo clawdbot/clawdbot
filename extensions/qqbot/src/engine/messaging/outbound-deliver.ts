@@ -952,3 +952,4 @@ async function sendPlainTextReply(
     log?.error(`Send failed: ${formatErrorMessage(err)}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,8 @@
 // OC Path tests cover parse plugin behavior.
 import { describe, expect, it } from "vitest";
-import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "../../jsonc/parse.js";
+import { parseJsonc } from "../../jsonc/parse.js";
+
+const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
 
 describe("parseJsonc — basic shapes", () => {
   it("parses an empty object", () => {
@@ -148,7 +150,7 @@ describe("parseJsonc — soft errors", () => {
     // full 16 MiB+ string in memory; `String#repeat` on a one-byte unit
     // is enough to push past the threshold without exercising the
     // expensive `parseTree` path (the cap fires before parse runs).
-    const oversized = "a".repeat(MAX_JSONC_INPUT_BYTES + 1);
+    const oversized = "a".repeat(JSONC_INPUT_LIMIT_BYTES + 1);
     const { ast, diagnostics } = parseJsonc(oversized);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.severity).toBe("error");

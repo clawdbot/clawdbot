@@ -39,6 +39,33 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
 }
 
 describe("bundled plugin assets", () => {
+  it("resolves the Discord SDK entry from the package that declares it", () => {
+    const script = fs.readFileSync(
+      path.join(process.cwd(), "scripts/build-discord-activity-sdk.mjs"),
+      "utf8",
+    );
+
+    expect(script).toContain('const discordDir = path.join(repoRoot, "extensions/discord")');
+    expect(script).toContain("absWorkingDir: discordDir");
+  });
+
+  it("discovers the Discord Embedded App SDK build hook", async () => {
+    const hooks = await readBundledPluginAssetHooks({
+      phase: "build",
+      plugins: ["discord"],
+      rootDir: process.cwd(),
+    });
+
+    expect(hooks).toMatchObject([
+      {
+        command: "node ../../scripts/build-discord-activity-sdk.mjs",
+        packageName: "@openclaw/discord",
+        phase: "build",
+        pluginId: "discord",
+      },
+    ]);
+  });
+
   it("discovers plugin-owned asset scripts by manifest id", async () => {
     await withPluginAssetFixture(async (rootDir) => {
       const hooks = await readBundledPluginAssetHooks({

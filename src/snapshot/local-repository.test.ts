@@ -1665,3 +1665,4 @@ describe("snapshot manifest parser", () => {
     await expect(readSnapshotManifest(snapshotDir, expectedId)).rejects.toThrow(error);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,11 +8,7 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  computeBackoff,
-  formatDurationPrecise,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { formatDurationPrecise, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -24,6 +20,11 @@ import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
+import {
+  createTelegramRestartBackoffState,
+  resetTelegramRestartBackoffState,
+  resolveTelegramRestartDelayMs,
+} from "./polling-session-restart-policy.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
@@ -33,23 +34,23 @@ import {
   resolveSpooledUpdateAttemptNumber,
   resolveSpooledUpdateRetryDelayMs,
   shouldDeadLetterRetryableSpooledUpdate,
-  TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
   TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
 } from "./spooled-update-retry-policy.js";
+import {
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
+  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+} from "./telegram-ingress-claim-owner.js";
 import {
   abandonTelegramSpooledUpdateClaim,
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
-  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
-  isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
   refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
-  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
@@ -62,66 +63,6 @@ import {
   buildTelegramReplyFenceLaneKey,
   supersedeTelegramReplyFenceLane,
 } from "./telegram-reply-fence.js";
-
-const TELEGRAM_POLL_RESTART_POLICY = {
-  initialMs: 30_000,
-  maxMs: 600_000,
-  factor: 2,
-  jitter: 0.2,
-};
-
-const TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY = {
-  initialMs: 120_000,
-  maxMs: 600_000,
-  factor: 2,
-  jitter: 0.2,
-};
-const TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT = 2;
-
-type TelegramRestartBackoffState = {
-  restartAttempts: number;
-  stopTimeoutBurst: number;
-  stopTimeoutCooldownAttempts: number;
-};
-
-function createTelegramRestartBackoffState(): TelegramRestartBackoffState {
-  return {
-    restartAttempts: 0,
-    stopTimeoutBurst: 0,
-    stopTimeoutCooldownAttempts: 0,
-  };
-}
-
-function resetTelegramRestartBackoffState(state: TelegramRestartBackoffState): void {
-  state.restartAttempts = 0;
-  state.stopTimeoutBurst = 0;
-  state.stopTimeoutCooldownAttempts = 0;
-}
-
-function resolveTelegramRestartDelayMs(
-  state: TelegramRestartBackoffState,
-  opts: { stopTimedOut?: boolean } = {},
-): { delayMs: number; stopTimeoutSuffix: string } {
-  state.restartAttempts += 1;
-  let delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, state.restartAttempts);
-  let stopTimeoutSuffix = "";
-  if (opts.stopTimedOut) {
-    state.stopTimeoutBurst += 1;
-    if (state.stopTimeoutBurst >= TELEGRAM_POLL_STOP_TIMEOUT_BURST_LIMIT) {
-      state.stopTimeoutCooldownAttempts += 1;
-      const cooldownMs = computeBackoff(
-        TELEGRAM_POLL_STOP_TIMEOUT_COOLDOWN_POLICY,
-        state.stopTimeoutCooldownAttempts,
-      );
-      delayMs = Math.max(delayMs, cooldownMs);
-      stopTimeoutSuffix = ` Stop timeout burst=${state.stopTimeoutBurst}; applying cooldown.`;
-    }
-  } else {
-    state.stopTimeoutBurst = 0;
-    state.stopTimeoutCooldownAttempts = 0;
-  }
-  return { delayMs, stopTimeoutSuffix };
-}
 
 // Surfaced in logs and channel status when getUpdates returns 409; the only
 // user-fixable causes are a second poller on the same token or a stale webhook.
@@ -283,12 +224,37 @@ type SpooledUpdateDrainResult = {
 
 // Account health restarts create a new session in the same process while an old
 // spooled handler may still be running after shutdown grace.
-const activeSpooledUpdateHandlersByLane = new Map<string, SpooledUpdateHandlerState>();
+const TELEGRAM_POLLING_SESSION_STATE_KEY = Symbol.for("openclaw.telegram.pollingSessionState");
 type SpooledUpdateDrainHealth = {
   lastCompletedAt: number;
 };
 
-const spooledUpdateDrainHealthBySpool = new Map<string, SpooledUpdateDrainHealth>();
+function getTelegramPollingSessionState(): {
+  activeHandlersByLane: Map<string, SpooledUpdateHandlerState>;
+  drainHealthBySpool: Map<string, SpooledUpdateDrainHealth>;
+} {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_POLLING_SESSION_STATE_KEY] as
+    | {
+        activeHandlersByLane: Map<string, SpooledUpdateHandlerState>;
+        drainHealthBySpool: Map<string, SpooledUpdateDrainHealth>;
+      }
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = {
+    activeHandlersByLane: new Map<string, SpooledUpdateHandlerState>(),
+    drainHealthBySpool: new Map<string, SpooledUpdateDrainHealth>(),
+  };
+  globalRecord[TELEGRAM_POLLING_SESSION_STATE_KEY] = created;
+  return created;
+}
+
+const {
+  activeHandlersByLane: activeSpooledUpdateHandlersByLane,
+  drainHealthBySpool: spooledUpdateDrainHealthBySpool,
+} = getTelegramPollingSessionState();
 
 function getSpooledUpdateDrainHealth(spoolDir: string): SpooledUpdateDrainHealth {
   const existing = spooledUpdateDrainHealthBySpool.get(spoolDir);
@@ -948,14 +914,10 @@ export class TelegramPollingSession {
       shouldRecover: (claim) =>
         !this.#isDeferredSpooledUpdateClaim(claim) &&
         !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
-        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
-        }),
+        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
       shouldRecoverCorrupt: (claim) =>
         !(claim.laneKey && activeLaneKeys.has(claim.laneKey)) &&
-        !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim, {
-          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
-        }),
+        !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim),
     });
     const claimedLaneKeys = new Set(
       (
@@ -1775,21 +1737,4 @@ const isGetUpdatesConflict = (err: unknown) => {
   return normalizedHaystack.includes("getupdates");
 };
 
-export const testing = {
-  resetActiveSpooledUpdateHandlersForTests: (): void => {
-    activeSpooledUpdateHandlersByLane.clear();
-    spooledUpdateDrainHealthBySpool.clear();
-  },
-  createTelegramRestartBackoffState,
-  resetTelegramRestartBackoffState,
-  resolveTelegramRestartDelayMs,
-  resolveSpooledUpdateRetryDelayMs,
-  shouldDeadLetterRetryableSpooledUpdate,
-  spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
-  spooledRetryDeadLetterMinAgeMs: TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  isolatedIngressBacklogStallMs: ISOLATED_INGRESS_BACKLOG_STALL_MS,
-  isolatedIngressAdoptionStallMs: ISOLATED_INGRESS_ADOPTION_STALL_MS,
-  spooledClaimRefreshIntervalMs: TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS,
-  resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
-    resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

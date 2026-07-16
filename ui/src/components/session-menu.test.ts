@@ -34,6 +34,7 @@ async function mountMenu(
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
     groups?: readonly string[];
     trigger?: HTMLElement | null;
@@ -61,6 +62,7 @@ async function mountMenu(
       .disabled=${false}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .canOpenChat=${options.canOpenChat ?? true}
       .work=${options.work ?? null}
@@ -131,6 +133,21 @@ describe("session menu", () => {
       "Archive 3",
       "Delete 3…",
     ]);
+  });
+
+  it("offers an explicit cloud worker stop action for a stoppable placement", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ cloudWorkerStopAllowed: true, onAction });
+
+    menuItem(menu, "Stop cloud worker…").click();
+
+    expect(onAction).toHaveBeenCalledWith({ kind: "stop-cloud-worker" });
+  });
+
+  it("hides cloud worker stop from batch actions", async () => {
+    const menu = await mountMenu({ cloudWorkerStopAllowed: true, selectionCount: 2 });
+
+    expect(menuItemLabels(menu)).not.toContain("Stop cloud worker…");
   });
 
   it("offers Mark N as read when every selected session is unread", async () => {

@@ -10,7 +10,6 @@ import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
-  testing,
   abortActiveReplyRuns,
   createReplyOperation,
   expireStaleReplyOperation,
@@ -29,6 +28,7 @@ import {
   resolveReplyRunPhaseForSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
+import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
@@ -1292,3 +1292,4 @@ describe("reply run registry", () => {
     operation.complete();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

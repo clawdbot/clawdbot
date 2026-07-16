@@ -1092,9 +1092,14 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   }
 }
 
-export const testing = {
+const testing = {
   normalizeGatewayHealthProbeHost,
   resolveGatewayLockErrorExitCode,
   resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.gatewayRunTestApi")] = testing;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

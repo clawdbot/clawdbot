@@ -18,7 +18,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_00
       throw new Error(`timed out waiting for ${label}`);
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
 }

@@ -41,9 +41,7 @@ const INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 10_000;
 const WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 90_000;
 
 /** Returns platform-specific health timing for managed daemon installs. */
-export function resolveInstallDaemonGatewayHealthTiming(
-  platform: NodeJS.Platform = process.platform,
-): {
+function resolveInstallDaemonGatewayHealthTiming(platform: NodeJS.Platform = process.platform): {
   deadlineMs: number;
   probeTimeoutMs: number;
   healthCommandTimeoutMs: number;
@@ -106,7 +104,7 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
 }
 
 /** Resolves the auth material used by the post-setup gateway health probe. */
-export async function resolveGatewayHealthProbeToken(
+async function resolveGatewayHealthProbeToken(
   nextConfig: OpenClawConfig,
 ): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
   if (nextConfig.gateway?.auth?.mode === "password") {
@@ -139,6 +137,15 @@ export async function resolveGatewayHealthProbeToken(
     probeAuth.unresolvedRefReason = resolved.unresolvedRefReason;
   }
   return probeAuth;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.onboardNonInteractiveLocalTestApi")
+  ] = {
+    resolveGatewayHealthProbeToken,
+    resolveInstallDaemonGatewayHealthTiming,
+  };
 }
 
 function formatGatewayHealthFailureDetail(params: {

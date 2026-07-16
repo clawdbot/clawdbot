@@ -2,7 +2,6 @@
 export {
   createChannelMessageReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,

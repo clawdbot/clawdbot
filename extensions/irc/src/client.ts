@@ -100,7 +100,7 @@ function toError(err: unknown): Error {
 
 let nickCollisionFallbackSeq = 0;
 
-export function buildFallbackNick(nick: string): string {
+function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
@@ -117,7 +117,7 @@ function normalizeIrcNick(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
   if (!options || options.enabled === false) {
     return [];
   }

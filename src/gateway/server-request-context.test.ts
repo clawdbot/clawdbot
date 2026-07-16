@@ -71,7 +71,7 @@ function makeContextParams(
     registerToolEventRecipient: vi.fn(),
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: vi.fn(() => null),
     purgeWizardSession: vi.fn(),
     getRuntimeSnapshot: vi.fn(() => ({}) as never),

@@ -26,8 +26,6 @@ import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-  EMPTY_RESPONSE_RETRY_INSTRUCTION,
-  REASONING_ONLY_RETRY_INSTRUCTION,
   resolveEmptyResponseRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText as resolveIncompleteTurnPayloadTextCore,
@@ -40,6 +38,11 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 
@@ -750,6 +753,140 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       result: "success",
       stage: "assistant",
     });
+  });
+
+  it("does not recover a stale prior assistant after the current prompt times out", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Stale answer from the prior attempt." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-stale-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.some((payload) => payload.text?.includes("timed out"))).toBe(true);
+    expect(result.payloads?.some((payload) => payload.text?.includes("Stale answer"))).toBe(false);
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+  });
+
+  it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText = "Completed answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: undefined as unknown as string[],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-no-assistant-texts",
+    });
+
+    expect(result.payloads).toEqual([{ text: finalText }]);
+  });
+
+  it("preserves tool media when prompt-timeout recovery replaces partial assistant text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const partialText = "Partial answer before the timeout race.";
+    const finalText = "Complete answer after the timeout race.";
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        toolMediaUrls: ["https://example.test/recovered-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-final-assistant-media",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        mediaUrl: "https://example.test/recovered-output.png",
+        mediaUrls: ["https://example.test/recovered-output.png"],
+        audioAsVoice: undefined,
+        trustedLocalMedia: undefined,
+      },
+      { text: finalText },
+    ]);
+  });
+
+  it("replaces the latest partial assistant payload after prompt-timeout recovery", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const completedText = "Completed answer block before the final response.";
+    const partialText = "Partial final response before the timeout race.";
+    const finalText = "Complete final response after the timeout race.";
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: completedText },
+      { text: partialText },
+    ]);
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: finalText }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [completedText, partialText],
+        timedOut: true,
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-latest-partial",
+    });
+
+    expect(result.payloads).toEqual([{ text: completedText }, { text: finalText }]);
   });
 
   it("records same-model rate-limit retries without a profile-rotation trace", async () => {
@@ -3933,3 +4070,4 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("planning");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

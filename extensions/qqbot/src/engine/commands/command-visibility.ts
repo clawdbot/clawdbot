@@ -32,7 +32,7 @@ const PRIVATE_ONLY_CORE_COMMANDS = new Set([
   "tools",
   "skill",
   "diagnostics",
-  "crestodian",
+  "openclaw",
   "tasks",
   "allowlist",
   "approve",

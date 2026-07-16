@@ -862,3 +862,4 @@ export async function createVerifiedSqliteSnapshot(
     await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

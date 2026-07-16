@@ -1083,3 +1083,4 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     isHealthMonitorEnabled,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

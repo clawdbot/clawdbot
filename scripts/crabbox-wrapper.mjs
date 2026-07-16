@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statfsSync,
   statSync,
@@ -32,6 +33,7 @@ import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpe
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
 // A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
 // exceed the snappy default probe timeout while it renders `run --help` or does
 // first-run init. Retry the metadata probes once with this generous timeout so a
@@ -2002,19 +2004,27 @@ function mergeBaseForChangedGate() {
 
 function remoteGitBootstrapForChangedGate(changedGateBase) {
   const quotedBase = shellQuote(changedGateBase);
+  const quotedBundleFile = shellQuote(REMOTE_CHANGED_GATE_BUNDLE_FILE);
   return [
-    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-" + quotedBase + "};",
+    `openclaw_changed_gate_base=${quotedBase};`,
     'if ! command -v git >/dev/null 2>&1; then echo "git is required for OpenClaw remote changed-gate sync" >&2; exit 2; fi;',
-    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)";',
-    'if ! git status --short >/dev/null 2>&1 || [ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]; then',
-    "rm -rf .git;",
-    "git init -q;",
-    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
-    'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main";',
-    "git reset --mixed --quiet refs/remotes/origin/main;",
-    "git add -A;",
-    "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
-    "fi",
+    `openclaw_changed_gate_bundle=${quotedBundleFile};`,
+    'if [ ! -f "$openclaw_changed_gate_bundle" ]; then echo "missing changed-gate bundle: $openclaw_changed_gate_bundle" >&2; exit 2; fi;',
+    'openclaw_changed_gate_bundle_tmp="$(mktemp /tmp/openclaw-changed-gate.XXXXXX)" || exit 2;',
+    "trap 'rm -f \"$openclaw_changed_gate_bundle_tmp\"' EXIT HUP INT TERM;",
+    'cp "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle_tmp" || exit 2;',
+    'rm -rf -- "$openclaw_changed_gate_bundle" || exit 2;',
+    "rm -rf .git || exit 2;",
+    "git init -q || exit 2;",
+    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git || exit 2;",
+    'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main" || exit 2;',
+    'if [ ! -f "$openclaw_changed_gate_bundle_tmp" ]; then echo "changed-gate bundle disappeared before import" >&2; exit 2; fi;',
+    "openclaw_changed_gate_target=refs/remotes/origin/main;",
+    'if [ -s "$openclaw_changed_gate_bundle_tmp" ]; then git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree || exit 2; openclaw_changed_gate_tree="$(git rev-parse refs/heads/openclaw-changed-gate-tree^{tree})" || exit 2; openclaw_changed_gate_head="$(git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main -m remote-changed-gate-tree)" || exit 2; git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head" || exit 2; openclaw_changed_gate_target=refs/heads/openclaw-changed-gate-head; fi;',
+    'rm -f "$openclaw_changed_gate_bundle_tmp" || exit 2;',
+    "trap - EXIT HUP INT TERM;",
+    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2;',
+    "git clean -fd -q || exit 2",
   ].join(" ");
 }
 
@@ -3054,6 +3064,7 @@ function prepareFullCheckoutForSync(options = {}) {
   assertFullCheckoutSyncDisk(syncRoot);
   const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
   let active = false;
+  let resolvedChangedGateBase = options.changedGateBase ?? "";
 
   function create() {
     const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
@@ -3071,11 +3082,82 @@ function prepareFullCheckoutForSync(options = {}) {
     }
 
     if (options.changedGateBase) {
+      const bundlePath = resolve(dir, REMOTE_CHANGED_GATE_BUNDLE_FILE);
+      let bundleTempDir;
+      try {
+        bundleTempDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-bundle-"));
+        const bundleTempPath = resolve(bundleTempDir, "changed-gate.bundle");
+        const head = gitOutput(["-C", dir, "rev-parse", "HEAD"]);
+        const base = gitOutput(["-C", dir, "rev-parse", options.changedGateBase]);
+        if (head.status !== 0 || base.status !== 0 || !head.stdout || !base.stdout) {
+          throw new Error(`git rev-parse failed: ${head.text || base.text}`);
+        }
+        resolvedChangedGateBase = base.stdout;
+        if (head.stdout === base.stdout) {
+          writeFileSync(bundleTempPath, "", "utf8");
+        } else {
+          const headTree = gitOutput(["-C", dir, "rev-parse", "HEAD^{tree}"]);
+          if (headTree.status !== 0 || !headTree.stdout) {
+            throw new Error(headTree.text || "git rev-parse HEAD tree failed");
+          }
+          // A parentless carrier makes the bundle self-contained while sending
+          // only the final tree. The remote attaches the fetched base as parent.
+          const transportCommit = gitOutput([
+            "-C",
+            dir,
+            "-c",
+            "user.name=OpenClaw",
+            "-c",
+            "user.email=ci@openclaw.local",
+            "commit-tree",
+            headTree.stdout,
+            "-m",
+            "remote-changed-gate-tree",
+          ]);
+          if (transportCommit.status !== 0 || !transportCommit.stdout) {
+            throw new Error(transportCommit.text || "git commit-tree failed");
+          }
+          const updateHead = gitOutput(["-C", dir, "update-ref", "HEAD", transportCommit.stdout]);
+          if (updateHead.status !== 0) {
+            throw new Error(updateHead.text || "git update-ref HEAD failed");
+          }
+          const bundle = gitOutput(["-C", dir, "bundle", "create", bundleTempPath, "HEAD"]);
+          if (bundle.status !== 0) {
+            throw new Error(bundle.text || `git bundle exited with status ${bundle.status}`);
+          }
+        }
+        // HEAD controls this checkout path and may make it a symlink. Remove the
+        // entry, then atomically install the private temp file without following it.
+        rmSync(bundlePath, { recursive: true, force: true });
+        renameSync(bundleTempPath, bundlePath);
+      } catch (error) {
+        cleanupFullCheckout(dir, active);
+        active = false;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`git bundle for changed-gate sync failed: ${message}`, { cause: error });
+      } finally {
+        if (bundleTempDir) {
+          rmSync(bundleTempDir, { recursive: true, force: true });
+        }
+      }
       const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
       if (reset.status !== 0) {
         cleanupFullCheckout(dir, active);
         active = false;
         throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
+      }
+      const stageBundle = gitOutput([
+        "-C",
+        dir,
+        "add",
+        "-f",
+        "--",
+        REMOTE_CHANGED_GATE_BUNDLE_FILE,
+      ]);
+      if (stageBundle.status !== 0) {
+        cleanupFullCheckout(dir, active);
+        active = false;
+        throw new Error(`git add for changed-gate bundle failed: ${stageBundle.text}`);
       }
     }
   }
@@ -3084,7 +3166,7 @@ function prepareFullCheckoutForSync(options = {}) {
 
   return {
     dir,
-    changedGateBase: options.changedGateBase ?? "",
+    changedGateBase: resolvedChangedGateBase,
     restoreIfMissing() {
       try {
         if (statSync(dir).isDirectory()) {

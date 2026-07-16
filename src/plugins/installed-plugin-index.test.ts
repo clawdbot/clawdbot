@@ -1158,3 +1158,4 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -22,12 +22,6 @@ export type SlackRelaySourceConfig = {
 
 export type SlackRelayIdentity = SlackSendIdentity;
 
-type OpenRelayWebSocket = {
-  ws: WebSocket;
-  bufferedMessages: RawData[];
-  detachBuffer: () => void;
-};
-
 type RelayConnectionState = {
   identity?: SlackRelayIdentity;
 };
@@ -50,7 +44,7 @@ export async function monitorSlackRelaySource(params: {
 }): Promise<void> {
   let reconnectAttempts = 0;
   while (!params.abortSignal?.aborted) {
-    let connection: OpenRelayWebSocket | undefined;
+    let connection: WebSocket | undefined;
     try {
       connection = await openRelayWebSocket(params.config, params.abortSignal);
       reconnectAttempts = 0;
@@ -90,7 +84,7 @@ export async function monitorSlackRelaySource(params: {
       );
       await sleepWithAbort(delayMs, params.abortSignal);
     } finally {
-      closeRelayWebSocket(connection?.ws);
+      closeRelayWebSocket(connection);
       params.setIdentity?.(undefined);
     }
   }
@@ -99,17 +93,13 @@ export async function monitorSlackRelaySource(params: {
 function openRelayWebSocket(
   config: SlackRelaySourceConfig,
   abortSignal?: AbortSignal,
-): Promise<OpenRelayWebSocket> {
+): Promise<WebSocket> {
   if (abortSignal?.aborted) {
     return Promise.reject(new Error("Slack relay websocket aborted before connect"));
   }
   return new Promise((resolve, reject) => {
     const url = buildRelayWebSocketUrl(config);
     const ws = new WebSocket(url, buildRelayWebSocketOptions(config.authToken));
-    const bufferedMessages: RawData[] = [];
-    const onEarlyMessage = (data: RawData) => bufferedMessages.push(data);
-    const detachBuffer = () => ws.off("message", onEarlyMessage);
-    ws.on("message", onEarlyMessage);
 
     const cleanup = () => {
       ws.off("open", onOpen);
@@ -118,22 +108,20 @@ function openRelayWebSocket(
       abortSignal?.removeEventListener("abort", onAbort);
     };
     const onOpen = () => {
+      ws.pause();
       cleanup();
-      resolve({ ws, bufferedMessages, detachBuffer });
+      resolve(ws);
     };
     const onError = (error: Error) => {
       cleanup();
-      detachBuffer();
       reject(error);
     };
     const onClose = (code: number, reason: Buffer) => {
       cleanup();
-      detachBuffer();
       reject(new Error(formatRelayClose(code, reason)));
     };
     const onAbort = () => {
       cleanup();
-      detachBuffer();
       closeRelayWebSocket(ws);
       reject(new Error("Slack relay websocket aborted during connect"));
     };
@@ -146,14 +134,14 @@ function openRelayWebSocket(
 }
 
 function runRelayWebSocket(params: {
-  connection: OpenRelayWebSocket;
+  connection: WebSocket;
   handleSlackMessage: SlackMessageHandler;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   setStatus?: (next: Record<string, unknown>) => void;
   setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
 }): Promise<void> {
-  const { ws } = params.connection;
+  const ws = params.connection;
   const relayState: RelayConnectionState = {};
   let pending = Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -205,14 +193,11 @@ function runRelayWebSocket(params: {
       settleResolve();
     };
 
-    params.connection.detachBuffer();
     ws.on("message", onMessage);
     ws.once("error", onError);
     ws.once("close", onClose);
     params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    for (const message of params.connection.bufferedMessages) {
-      onMessage(message);
-    }
+    ws.resume();
   });
 }
 

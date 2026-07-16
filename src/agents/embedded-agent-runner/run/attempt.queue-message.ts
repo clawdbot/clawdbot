@@ -95,7 +95,7 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
  * steering list. This targets the exact text so unrelated queued messages keep
  * their payloads and ordering.
  */
-export async function cancelQueuedSteeringMessage(
+async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
 ): Promise<boolean> {
@@ -127,7 +127,7 @@ export async function cancelQueuedSteeringMessage(
  * `message_end` event appears. If the run ends or times out first, the pending
  * queue entry is removed so an abandoned steer does not leak into a later turn.
  */
-export async function steerAndWaitForTranscriptCommit(
+async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,

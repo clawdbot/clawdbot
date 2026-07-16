@@ -44,7 +44,6 @@ import {
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
-import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -75,6 +74,7 @@ import {
   readQaScenarioPack,
   type QaRuntimeParityTier,
 } from "./scenario-catalog.js";
+import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
@@ -86,11 +86,7 @@ import {
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
-import {
-  resolveQaSuiteScenarioChannel,
-  resolveQaSuiteScenarioChannels,
-  scenarioMatchesQaProviderLane,
-} from "./suite-planning.js";
+import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -113,17 +109,14 @@ const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ETIMEDOUT",
   "UND_ERR_SOCKET",
 ]);
-
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
-
 export type QaLabSelfCheckCommandOptions = {
   repoRoot?: string;
   output?: string;
 };
-
 type QaScenarioProviderCommandOptions = {
   transportId?: string;
   providerMode?: QaProviderModeInput;
@@ -131,15 +124,14 @@ type QaScenarioProviderCommandOptions = {
   alternateModel?: string;
   fastMode?: boolean;
 };
-
 type QaScenarioRunCommandOptions = QaScenarioProviderCommandOptions & {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   concurrency?: number;
   allowFailures?: boolean;
+  failFast?: boolean;
 };
-
 export type QaProfileCommandOptions = QaScenarioRunCommandOptions & {
   profile: string;
   surface?: string;
@@ -164,6 +156,10 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   preflight?: boolean;
   runtimePair?: string;
   runtimeParityTier?: string[];
+  sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+  explicitScenarioSelection?: boolean;
 };
 
 function normalizeQaSuiteChannelDriver(
@@ -353,6 +349,7 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
       channelDriver: params.channelDriver,
+      channel: scenario.execution.channel,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );
@@ -796,6 +793,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       providerMode: normalizedProviderMode,
       primaryModel,
       channelDriver: profileReport.channelDriver,
+      channel: scenario.execution.channel,
     }),
   );
   if (scenarios.length === 0) {
@@ -818,6 +816,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       scenarioIds: scenarios.map((scenario) => scenario.id),
       concurrency: opts.concurrency,
       allowFailures: opts.allowFailures,
@@ -863,6 +862,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
       channelDriver: params.channelDriver,
+      channel: scenario.execution.channel,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );
@@ -1120,6 +1120,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             channelId: liveChannelId,
             adapterOptions: {
               repoRoot,
+              sutAccountId: opts.sutAccountId,
+              credentialSource: opts.credentialSource,
+              credentialRole: opts.credentialRole,
+              explicitScenarioSelection:
+                opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
             },
           }
         : {}),
@@ -1128,6 +1133,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       primaryModel,
       alternateModel,
       fastMode: opts.fastMode,
+      failFast: opts.failFast,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
       scenarioIds: liveChannelId ? liveScenarioIds : hostScenarioIds,
@@ -1362,9 +1368,7 @@ export async function runQaCoverageReportCommand(opts: {
         : renderQaScenarioMatchesMarkdownReport({ query, matches });
       outputLabel = "QA scenario match report";
     } else {
-      const inventory = buildQaCoverageInventory(scenarios, {
-        nonYamlScenarios: await loadNonYamlScenarioRefs(),
-      });
+      const inventory = buildQaCoverageInventory(scenarios);
       body = opts.json
         ? `${JSON.stringify(inventory, null, 2)}\n`
         : renderQaCoverageMarkdownReport(inventory);
@@ -1781,3 +1785,4 @@ export const testing = {
   resolveRepoRelativeOutputDir,
 };
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

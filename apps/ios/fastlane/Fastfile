@@ -1143,7 +1143,17 @@ def shell_join(parts)
 end
 
 def xcodebuild_shell_join(parts)
-  xcode_path = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+  # Keep caller-provided pinned Swift tools ahead of Homebrew. Replacing PATH
+  # here makes archive build phases bypass the versions verified by the caller.
+  xcode_path = [
+    *ENV.fetch("PATH", "").split(File::PATH_SEPARATOR),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ].reject(&:empty?).uniq.join(File::PATH_SEPARATOR)
   shell_join(["env", "PATH=#{xcode_path}", *parts])
 end
 

@@ -40,6 +40,15 @@ describe("registerChannelsCli", () => {
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
   });
 
+  it("registers workspace before an external channel plugin is installed", async () => {
+    process.argv = ["node", "openclaw", "channels", "add", "--help"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--workspace <workspace>");
+  });
+
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
     process.argv = ["node", "openclaw", "channels"];
 

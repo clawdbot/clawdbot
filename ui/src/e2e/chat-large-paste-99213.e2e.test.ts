@@ -234,6 +234,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await gateway.emitChatFinal({ runId, text: "Large screenshot paste proof received." });
       await recorded.page
+        .locator(".chat-thread-inner")
         .getByText("Large screenshot paste proof received.")
         .waitFor({ timeout: 10_000 });
       const sentScreenshot = path.join(artifactDir, "02-sent-large-image.png");

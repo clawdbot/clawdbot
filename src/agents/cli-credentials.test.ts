@@ -8,10 +8,10 @@ const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
-let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
-let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
+let readCodexAuth: typeof import("./cli-auth.test-support.js").readCodexAuth;
+let resetCliAuthCaches: typeof import("./cli-auth.test-support.js").resetCliAuthCaches;
 
 async function readCachedClaudeCliCredentials(allowKeychainPrompt: boolean) {
   return readClaudeCliCredentialsCached({
@@ -61,11 +61,10 @@ describe("cli credentials", () => {
     ({
       readClaudeCliCredentialsCached,
       readCodexCliCredentialsCached,
-      resetCliCredentialCachesForTest,
-      readCodexCliCredentials,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
     } = await import("./cli-credentials.js"));
+    ({ readCodexAuth, resetCliAuthCaches } = await import("./cli-auth.test-support.js"));
   });
 
   beforeEach(() => {
@@ -77,7 +76,7 @@ describe("cli credentials", () => {
     execSyncMock.mockClear().mockImplementation(() => undefined);
     delete process.env.CODEX_HOME;
     vi.unstubAllEnvs();
-    resetCliCredentialCachesForTest();
+    resetCliAuthCaches();
   });
 
   it("keeps external CLI credential files anchored to the OS home", () => {
@@ -410,7 +409,7 @@ describe("cli credentials", () => {
       });
     });
 
-    const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
+    const creds = readCodexAuth({ platform: "darwin", execSync: execSyncMock });
 
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
@@ -441,7 +440,7 @@ describe("cli credentials", () => {
       });
     });
 
-    const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
+    const creds = readCodexAuth({ platform: "darwin", execSync: execSyncMock });
 
     expectFields(creds, {
       refresh: "keychain-refresh",
@@ -468,7 +467,7 @@ describe("cli credentials", () => {
         });
       });
 
-      expect(readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock })).toBeNull();
+      expect(readCodexAuth({ platform: "darwin", execSync: execSyncMock })).toBeNull();
     } finally {
       dateNowSpy.mockRestore();
     }
@@ -496,7 +495,7 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    const creds = readCodexCliCredentials({ execSync: execSyncMock });
+    const creds = readCodexAuth({ execSync: execSyncMock });
 
     expectFields(creds, {
       access: createJwtWithExp(expSeconds),
@@ -530,7 +529,7 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+    expect(readCodexAuth({ platform: "linux", execSync: execSyncMock })).toBeNull();
   });
 
   it("treats an empty Codex auth.json API-key field as API-key mode", () => {
@@ -555,7 +554,7 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+    expect(readCodexAuth({ platform: "linux", execSync: execSyncMock })).toBeNull();
   });
 
   it("rejects Codex auth.json fallback expiry when stat and process clock are invalid", () => {
@@ -581,7 +580,7 @@ describe("cli credentials", () => {
     });
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
-      expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+      expect(readCodexAuth({ platform: "linux", execSync: execSyncMock })).toBeNull();
     } finally {
       dateNowSpy.mockRestore();
       statSyncSpy.mockRestore();
@@ -609,7 +608,7 @@ describe("cli credentials", () => {
     const mtimeMs = Date.parse("2026-03-24T10:00:00Z") + 0.75;
     const statSyncSpy = vi.spyOn(fs, "statSync").mockReturnValue({ mtimeMs } as fs.Stats);
     try {
-      const creds = readCodexCliCredentials({ platform: "linux", execSync: execSyncMock });
+      const creds = readCodexAuth({ platform: "linux", execSync: execSyncMock });
 
       expectFields(creds, {
         refresh: "file-refresh",

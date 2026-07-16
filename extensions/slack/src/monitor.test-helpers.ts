@@ -14,6 +14,7 @@ type SlackProviderMonitor = (params: {
   config?: Record<string, unknown>;
   channelRuntime?: ChannelRuntimeSurface;
   runtime?: RuntimeEnv;
+  setStatus?: (next: Record<string, unknown>) => void;
 }) => Promise<unknown>;
 
 type SlackTestState = {
@@ -155,6 +156,7 @@ export function startSlackMonitor(
     appToken?: string;
     channelRuntime?: ChannelRuntimeSurface;
     runtime?: RuntimeEnv;
+    setStatus?: (next: Record<string, unknown>) => void;
   },
 ) {
   const controller = new AbortController();
@@ -165,6 +167,7 @@ export function startSlackMonitor(
     config: slackTestState.config,
     channelRuntime: opts?.channelRuntime,
     runtime: opts?.runtime,
+    setStatus: opts?.setStatus,
   });
   return { controller, run };
 }

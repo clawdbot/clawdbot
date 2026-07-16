@@ -509,9 +509,12 @@
 html,
 body {
   height: 100%;
-  /* App shell: inner panes scroll, the root never should. Without this the
-     macOS WKWebView (Mac app) and Safari rubber-band the whole window, even
-     when nothing overflows. */
+  /* App shell: inner panes scroll, the root never does — in every host
+     (browser tab, PWA, Mac app WKWebView). WKWebView drag/rubber-band scrolls
+     the document even when nothing overflows, dragging the whole shell with
+     it; `clip` also blocks programmatic root scrolls (focus/scrollIntoView)
+     that `hidden` would let strand the shell off-screen. */
+  overflow: clip;
   overscroll-behavior: none;
   /* iOS WKWebView font boosting inflates rendered text without re-running
      layout, so labels spill out of fixed-size chrome (welcome chips, badges).
@@ -526,6 +529,10 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
+  /* App chrome behaves like native controls: dragging across labels, tiles,
+     and navigation must not create accidental text selections. Text-entry
+     surfaces and document-like content opt back in below or in route CSS. */
+  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -573,17 +580,10 @@ openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  min-height: 100vh;
+  height: 100%;
 }
 
 @media (display-mode: standalone) {
-  html,
-  body {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-  }
-
   @supports (height: 100dvh) {
     html,
     body {
@@ -598,14 +598,6 @@ openclaw-app {
     padding-right: var(--safe-area-right);
     padding-bottom: var(--safe-area-bottom);
     padding-left: var(--safe-area-left);
-  }
-
-  openclaw-app {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
   }
 }
 
@@ -631,15 +623,22 @@ select {
   color: inherit;
 }
 
+input,
+textarea,
+[contenteditable]:not([contenteditable="false"]) {
+  user-select: text;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
 
-/* Scrollbar styling - Minimal, barely visible */
+/* Main/document surfaces keep a normal scrollbar hit target. Dense sidebars
+   override this inherited size locally so their row actions retain room. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size, 12px);
+  height: var(--scrollbar-size, 12px);
 }
 
 ::-webkit-scrollbar-track {

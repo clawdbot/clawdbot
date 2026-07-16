@@ -62,8 +62,6 @@ const OMITTED_PLUGIN_SDK_TEST_FILES = new Set([
   "dist/plugin-sdk/test-fixtures.js",
   "dist/plugin-sdk/test-node-mocks.d.ts",
   "dist/plugin-sdk/test-node-mocks.js",
-  "dist/plugin-sdk/testing.d.ts",
-  "dist/plugin-sdk/testing.js",
 ]);
 const OMITTED_PLUGIN_SDK_TEST_PREFIXES = [
   "dist/plugin-sdk/src/agents/test-helpers/",

@@ -11879,8 +11879,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Alerts Off"
+            "state": "translated",
+            "value": "알림 꺼짐"
           }
         },
         "fr": {
@@ -18951,8 +18951,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Attachment"
+            "state": "translated",
+            "value": "첨부 파일"
           }
         },
         "fr": {
@@ -26975,8 +26975,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Chat transcript"
+            "state": "translated",
+            "value": "채팅 전사본"
           }
         },
         "fr": {
@@ -40303,8 +40303,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Copied"
+            "state": "translated",
+            "value": "복사됨"
           }
         },
         "fr": {
@@ -75119,8 +75119,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Image"
+            "state": "translated",
+            "value": "이미지"
           }
         },
         "fr": {
@@ -78791,8 +78791,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Just received your iOS share + request, working on it."
+            "state": "translated",
+            "value": "iOS 공유와 요청을 방금 받았습니다. 처리 중입니다."
           }
         },
         "fr": {
@@ -89943,8 +89943,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Message…"
+            "state": "translated",
+            "value": "메시지…"
           }
         },
         "fr": {
@@ -96743,8 +96743,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "No diary prose for this day."
+            "state": "translated",
+            "value": "이 날의 일기 본문이 없습니다."
           }
         },
         "fr": {
@@ -102727,8 +102727,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Not loaded"
+            "state": "translated",
+            "value": "로드되지 않음"
           }
         },
         "fr": {
@@ -110479,8 +110479,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Out-of-app approval alerts need notification permission."
+            "state": "translated",
+            "value": "앱 외부 승인 알림에는 알림 권한이 필요합니다."
           }
         },
         "fr": {
@@ -118367,8 +118367,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Reachable"
+            "state": "translated",
+            "value": "연결 가능"
           }
         },
         "fr": {
@@ -130743,8 +130743,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Review command below"
+            "state": "translated",
+            "value": "아래 명령어 검토"
           }
         },
         "fr": {
@@ -131967,8 +131967,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
+            "state": "translated",
+            "value": "이 휴대폰에서 라우팅됨"
           }
         },
         "fr": {
@@ -140399,8 +140399,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "See attached."
+            "state": "translated",
+            "value": "첨부 파일을 참조하세요."
           }
         },
         "fr": {
@@ -142167,8 +142167,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Sending decision..."
+            "state": "translated",
+            "value": "결정 전송 중..."
           }
         },
         "fr": {
@@ -156311,8 +156311,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Talk Config"
+            "state": "translated",
+            "value": "Talk 구성"
           }
         },
         "fr": {
@@ -156583,8 +156583,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Talk Voice"
+            "state": "translated",
+            "value": "Talk 음성"
           }
         },
         "fr": {
@@ -163655,8 +163655,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from this device to the voice provider."
+            "state": "translated",
+            "value": "이 기기에서 Talk가 실시간 음성을 사용하려면 게이트웨이 승인이 필요합니다. 오디오는 이 기기에서 음성 제공자로 직접 전송됩니다."
           }
         },
         "fr": {
@@ -166783,8 +166783,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "Try again after the gateway reconnects."
+            "state": "translated",
+            "value": "Gateway가 다시 연결된 후 다시 시도하세요."
           }
         },
         "fr": {
@@ -182151,8 +182151,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "gateway connect failed"
+            "state": "translated",
+            "value": "게이트웨이 연결 실패"
           }
         },
         "fr": {
@@ -188543,8 +188543,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "unknown relay error"
+            "state": "translated",
+            "value": "알 수 없는 릴레이 오류"
           }
         },
         "fr": {

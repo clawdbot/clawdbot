@@ -373,13 +373,24 @@ describe("GatewayPlugin", () => {
       "u2",
     ]);
 
+    const moveState = { guild_id: "g1", user_id: "u1", channel_id: "c2" };
     await handleDispatch({
       t: GatewayDispatchEvents.VoiceStateUpdate,
-      d: { guild_id: "g1", user_id: "u1", channel_id: "c2" },
+      d: moveState,
     });
+    const leaveState = { guild_id: "g1", user_id: "u2", channel_id: null };
     await handleDispatch({
       t: GatewayDispatchEvents.VoiceStateUpdate,
-      d: { guild_id: "g1", user_id: "u2", channel_id: null },
+      d: leaveState,
+    });
+    expect(gateway.takeVoiceStateTransition(moveState as never)).toEqual({
+      previous: { guild_id: "g1", user_id: "u1", channel_id: "c1" },
+      current: { guild_id: "g1", user_id: "u1", channel_id: "c2" },
+    });
+    expect(gateway.takeVoiceStateTransition(moveState as never)).toBeNull();
+    expect(gateway.takeVoiceStateTransition(leaveState as never)).toEqual({
+      previous: { guild_id: "g1", user_id: "u2", channel_id: "c1" },
+      current: { guild_id: "g1", user_id: "u2", channel_id: null },
     });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);

@@ -1113,22 +1113,29 @@ describe("clawhub helpers", () => {
   });
 
   it("times out and cancels stalled ClawHub error bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode("partial error"),
-      headers: { "content-type": "text/plain" },
-      status: 500,
-      statusText: "Server Error",
-    });
+    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       searchClawHubSkills({
         query: "calendar",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
+        fetchImpl: async () => {
+          const stalled = createStalledBodyResponse({
+            firstChunk: new TextEncoder().encode("partial error"),
+            headers: { "content-type": "text/plain", "retry-after": "0" },
+            status: 500,
+            statusText: "Server Error",
+          });
+          stalledResponses.push(stalled);
+          return stalled.response;
+        },
       }),
     ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    for (const stalled of stalledResponses) {
+      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    }
+    const finalResponse = stalledResponses.at(-1);
+    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
@@ -1171,7 +1178,8 @@ describe("clawhub helpers", () => {
     try {
       await searchClawHubSkills({
         query: "calendar",
-        fetchImpl: async () => new Response(oversized, { status: 500 }),
+        fetchImpl: async () =>
+          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
     } catch (caught) {
       error = caught;
@@ -1385,3 +1393,4 @@ describe("clawhub helpers", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

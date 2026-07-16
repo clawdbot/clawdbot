@@ -9,7 +9,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
+import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
@@ -27,13 +27,15 @@ import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
 } from "./normalize.js";
-import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
+import {
+  resolveNextcloudTalkGroupRequireMention,
+  resolveNextcloudTalkGroupToolPolicy,
+} from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
-import type { CoreConfig } from "./types.js";
 
 const meta = {
   id: "nextcloud-talk",
@@ -101,25 +103,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       approvalCapability: nextcloudTalkApprovalAuth,
       doctor: nextcloudTalkDoctor,
       groups: {
-        resolveRequireMention: ({ cfg, accountId, groupId }) => {
-          const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
-          const rooms = account.config.rooms;
-          if (!rooms || !groupId) {
-            return true;
-          }
-
-          const roomConfig = rooms[groupId];
-          if (roomConfig?.requireMention !== undefined) {
-            return roomConfig.requireMention;
-          }
-
-          const wildcardConfig = rooms["*"];
-          if (wildcardConfig?.requireMention !== undefined) {
-            return wildcardConfig.requireMention;
-          }
-
-          return true;
-        },
+        resolveRequireMention: resolveNextcloudTalkGroupRequireMention,
         resolveToolPolicy: resolveNextcloudTalkGroupToolPolicy,
       },
       messaging: {

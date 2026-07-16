@@ -1,10 +1,6 @@
 // Mattermost tests cover reactions plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  addMattermostReaction,
-  removeMattermostReaction,
-  resetMattermostReactionBotUserCacheForTests,
-} from "./reactions.js";
+import { addMattermostReaction, removeMattermostReaction } from "./reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
@@ -12,8 +8,11 @@ import {
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {
+  let cacheKeySequence = 0;
+  let cacheKey = "";
+
   beforeEach(() => {
-    resetMattermostReactionBotUserCacheForTests();
+    cacheKey = String(++cacheKeySequence);
   });
 
   afterEach(() => {
@@ -22,7 +21,7 @@ describe("mattermost reactions", () => {
 
   async function addReactionWithFetch(fetchMock: typeof fetch) {
     return addMattermostReaction({
-      cfg: createMattermostTestConfig(),
+      cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
       fetchImpl: fetchMock,
@@ -31,7 +30,7 @@ describe("mattermost reactions", () => {
 
   async function removeReactionWithFetch(fetchMock: typeof fetch) {
     return removeMattermostReaction({
-      cfg: createMattermostTestConfig(),
+      cfg: createMattermostTestConfig(cacheKey),
       postId: "POST1",
       emojiName: "thumbsup",
       fetchImpl: fetchMock,
@@ -88,7 +87,7 @@ describe("mattermost reactions", () => {
       emojiName: "thumbsup",
     });
 
-    const cfg = createMattermostTestConfig();
+    const cfg = createMattermostTestConfig(cacheKey);
     const addResult = await addMattermostReaction({
       cfg,
       postId: "POST1",
@@ -111,7 +110,7 @@ describe("mattermost reactions", () => {
   });
 
   it("does not reuse cached bot user ids while the process clock is invalid", async () => {
-    const cfg = createMattermostTestConfig();
+    const cfg = createMattermostTestConfig(cacheKey);
     const firstFetch = createMattermostReactionFetchMock({
       mode: "add",
       postId: "POST1",
@@ -170,7 +169,7 @@ describe("mattermost reactions", () => {
 
   it("does not cache bot user ids when cache expiry would exceed the Date range", async () => {
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const cfg = createMattermostTestConfig();
+    const cfg = createMattermostTestConfig(cacheKey);
     const fetchMock = createMattermostReactionFetchMock({
       mode: "both",
       postId: "POST1",

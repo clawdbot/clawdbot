@@ -1,5 +1,5 @@
 // Parallels Smoke Model tests cover parallels smoke model script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -73,6 +73,7 @@ const WRAPPERS = {
   npmUpdate: "scripts/e2e/parallels-npm-update-smoke.sh",
   windows: "scripts/e2e/parallels-windows-smoke.sh",
 };
+const WINDOWS_PREPARE_WRAPPER = "scripts/e2e/parallels-windows-prepare.sh";
 
 const TS_PATHS = {
   agentWorkspace: "scripts/e2e/parallels/agent-workspace.ts",
@@ -213,7 +214,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -270,6 +271,33 @@ describe("Parallels smoke model selection", () => {
       expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
       expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
+  });
+
+  it("owns the reusable Windows VM and OpenClaw baseline lifecycle", () => {
+    const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
+    expect(controller).toContain("ensure_wsl_features");
+    expect(controller).toContain("resolve_winget_manifest");
+    expect(controller).toContain("pre-openclaw-native-e2e-");
+    expect(controller).toContain('prlctl stop "$VM_NAME" --acpi');
+    expect(controller).toContain("HypervisorPresent");
+    expect(controller).toContain("git --version && node --version && npm --version");
+    expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
+    expect(controller).not.toContain("openclaw-windows-node");
+  });
+
+  it("preserves caller arguments when loaded as the Windows controller library", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -- run-tests --app-option; OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; printf "%s\\n" "$*"',
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("run-tests --app-option");
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
@@ -1229,6 +1257,40 @@ if (isPrlctl) {
     }
   });
 
+  it("rejects Parallels macOS guest session false-success output", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-session-unavailable-"));
+    tempDirs.push(tempDir);
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+printf '%s\n' 'Unable to open new session in this virtual machine.' >&2
+exit 0
+`,
+      "",
+    );
+
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const phases = {
+        append: () => undefined,
+        remainingTimeoutMs: (fallbackMs?: number) => fallbackMs ?? 30_000,
+      };
+      const macos = new MacosGuest(
+        {
+          getTransport: () => "current-user",
+          getUser: () => "runner",
+          path: "/usr/bin:/bin",
+          resolveDesktopHome: () => "/Users/runner",
+          vmName: "macOS VM",
+        },
+        phases as unknown as PhaseRunner,
+      );
+
+      expect(() => macos.exec(["true"])).toThrow(
+        "macOS guest command failed: Parallels guest session unavailable",
+      );
+    });
+  });
+
   it("streams full phase logs to disk while bounding the failure tail", async () => {
     const runDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-phase-"));
     const phaseRunner = new PhaseRunner(runDir, 128);
@@ -1303,6 +1365,14 @@ if (isPrlctl) {
     expect(macos.match(/curl -fsSL --connect-timeout 10 --max-time 120 --retry 2/g)).toHaveLength(
       2,
     );
+  });
+
+  it("retries failed aggregate fresh lanes once from a restored snapshot", () => {
+    const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
+
+    expect(script).toContain("retrying once from restored snapshot");
+    expect(script).toContain('attempt === 1 ? "" : `-retry-${attempt}`');
+    expect(script).toContain("failed after retry");
   });
 
   it("provisions portable Git before Windows dev update lanes", () => {
@@ -1471,6 +1541,27 @@ if (isPrlctl) {
     ).rejects.toThrow("ambiguous launch background launch failed");
 
     expect(calls).toBeLessThan(20);
+  });
+
+  it("fails fast when a Windows Parallels VM stops during background work", async () => {
+    const runCommand = vi.fn(() => ({
+      status: 1,
+      stderr:
+        'Unable to perform the operation because "Windows 11" is not started. This operation can be performed for running virtual machines only.',
+      stdout: "",
+    }));
+
+    await expect(
+      runWindowsBackgroundPowerShell({
+        label: "ref-onboard",
+        runCommand,
+        script: "Write-Output ok",
+        timeoutMs: 720_000,
+        vmName: "Windows 11",
+      }),
+    ).rejects.toThrow("ref-onboard failed: Parallels VM stopped");
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
   it("returns timed-out host command status when check is disabled", () => {

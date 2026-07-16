@@ -47,7 +47,7 @@ interface SharingLinkResult {
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
  */
-export async function uploadToSharePoint(params: {
+async function uploadToSharePoint(params: {
   buffer: Buffer;
   filename: string;
   contentType?: string;

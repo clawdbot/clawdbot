@@ -71,7 +71,7 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
-export function resolveDiscordComponentOriginatingTo(
+function resolveDiscordComponentOriginatingTo(
   interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
 ) {
   return resolveDiscordConversationIdentity({

@@ -35,7 +35,8 @@ vi.mock("../../agents/context.js", () => ({
 }));
 
 async function getComputeRequestCompactionContextUsage() {
-  return (await import("./agent-runner-execution.js")).computeRequestCompactionContextUsage;
+  return (await import("./agent-runner-post-compaction-release.js"))
+    .computeRequestCompactionContextUsage;
 }
 
 function makeEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {

@@ -68,7 +68,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
   return parseStrictNonNegativeInteger(raw);
 }
 
-export function isRetryableDiscordTransientError(err: unknown): boolean {
+function isRetryableDiscordTransientError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -97,7 +97,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordPreConnectError(err: unknown): boolean {
+function isRetryableDiscordPreConnectError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }

@@ -1,106 +1,258 @@
-// Zalouser tests cover zalo quote metadata plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing as zaloTesting } from "./zalo-js.js";
+// Zalouser tests cover inbound normalization and outbound bounds through public plugin paths.
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { API, Message } from "./zca-client.js";
+
+const createZaloMock = vi.hoisted(() => vi.fn());
+let sessionSequence = 0;
+
+vi.mock("./zca-client.js", () => ({
+  createZalo: createZaloMock,
+  TextStyle: { Indent: 9 },
+}));
+
+import { resolveZaloGroupContext, sendZaloTextMessage, startZaloListener } from "./zalo-js.js";
+
+type ListenerOn = ReturnType<typeof vi.fn>;
+
+function createMockApi(overrides: Partial<API> = {}): API {
+  return {
+    getContext: () => ({ imei: "test-imei", userAgent: "test-agent", language: "en" }),
+    getCookie: () => ({ toJSON: () => ({ cookies: [{ key: "zpsid", value: "test" }] }) }),
+    fetchAccountInfo: async () => ({
+      userId: "555444333",
+      username: "owner",
+      displayName: "Owner",
+      zaloName: "Owner",
+      avatar: "",
+    }),
+    listener: {
+      on: vi.fn(),
+      off: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    },
+    ...overrides,
+  } as unknown as API;
+}
+
+async function withStoredSession<T>(params: {
+  profile: string;
+  api: API;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-message-"));
+  const credentialFile = path.join(
+    stateDir,
+    "credentials",
+    "zalouser",
+    `credentials-${encodeURIComponent(params.profile)}.json`,
+  );
+  await mkdir(path.dirname(credentialFile), { recursive: true });
+  await writeFile(
+    credentialFile,
+    JSON.stringify({
+      imei: "test-imei",
+      cookie: [{ key: "zpsid", value: "test" }],
+      userAgent: "test-agent",
+    }),
+  );
+  createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => params.api) });
+  try {
+    return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, params.run);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+function findListener(listenerOn: ListenerOn, event: string): (message: Message) => void {
+  const callback = listenerOn.mock.calls.find(([name]) => name === event)?.[1];
+  if (typeof callback !== "function") {
+    throw new Error(`Missing ${event} listener`);
+  }
+  return callback as (message: Message) => void;
+}
+
+function createInboundMessage(data: Record<string, unknown>): Message {
+  return {
+    type: 0,
+    threadId: "123456789",
+    isSelf: false,
+    data: {
+      uidFrom: "123456789",
+      idTo: "987654321",
+      content: "plain message",
+      ...data,
+    },
+  };
+}
+
+beforeEach(() => {
+  createZaloMock.mockReset();
+});
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
-describe("Zalo quote metadata extraction (#86851)", () => {
-  it("extracts quote id, owner, and body from zca-js message data", () => {
-    const message = zaloTesting.toInboundMessage(
-      {
-        type: 0,
-        data: {
-          uidFrom: "123456789",
-          idTo: "987654321",
-          content: "ok",
-          ts: 1_764_000_000_000,
-          quote: {
-            globalMsgId: 987654321234,
-            ownerId: "555444333_2",
-            msg: "Previous bot message content",
-          },
-        },
-      } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0],
-      "555444333",
-    );
+describe("Zalo payload bounds", () => {
+  it("keeps the 2,000-code-unit transport payload UTF-16 well-formed", async () => {
+    const sendMessage = vi.fn(async () => ({ msgId: "message-1" }));
+    const api = createMockApi({ sendMessage } as Partial<API>);
 
-    expect(message?.quotedGlobalMsgId).toBe("987654321234");
-    expect(message?.quotedOwnerId).toBe("555444333");
-    expect(message?.quotedBody).toBe("Previous bot message content");
-    expect(message?.implicitMention).toBe(true);
+    await withStoredSession({
+      profile: "payload-bounds",
+      api,
+      run: async () => {
+        await expect(
+          sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
+            profile: "payload-bounds",
+          }),
+        ).resolves.toMatchObject({ ok: true });
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("x".repeat(1_999), "thread-1", expect.anything());
+  });
+});
+
+describe("Zalo inbound normalization", () => {
+  async function captureInbound(messages: Message[]): Promise<Array<Record<string, unknown>>> {
+    const profile = `listener-${sessionSequence++}`;
+    const listenerOn = vi.fn();
+    const api = createMockApi({
+      listener: {
+        on: listenerOn,
+        off: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      },
+    } as Partial<API>);
+    const received: Array<Record<string, unknown>> = [];
+
+    await withStoredSession({
+      profile,
+      api,
+      run: async () => {
+        const abortController = new AbortController();
+        const listener = await startZaloListener({
+          accountId: "default",
+          profile,
+          abortSignal: abortController.signal,
+          onMessage: (message) => received.push(message as unknown as Record<string, unknown>),
+          onError: vi.fn(),
+        });
+        const onMessage = findListener(listenerOn, "message");
+        for (const message of messages) {
+          onMessage(message);
+        }
+        listener.stop();
+      },
+    });
+
+    return received;
+  }
+
+  it("extracts quote metadata and implicit mentions", async () => {
+    const [message] = await captureInbound([
+      createInboundMessage({
+        content: "ok",
+        ts: 1_764_000_000_000,
+        quote: {
+          globalMsgId: 987654321234,
+          ownerId: "555444333_2",
+          msg: "Previous bot message content",
+        },
+      }),
+    ]);
+
+    expect(message).toMatchObject({
+      quotedGlobalMsgId: "987654321234",
+      quotedOwnerId: "555444333",
+      quotedBody: "Previous bot message content",
+      implicitMention: true,
+    });
   });
 
-  it("omits quote metadata when the zca-js quote object is absent", () => {
-    const message = zaloTesting.toInboundMessage({
-      type: 0,
-      data: {
-        uidFrom: "123456789",
-        idTo: "987654321",
-        content: "plain message",
-        ts: 1_764_000_000_000,
-      },
-    } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0]);
+  it("omits absent quote metadata", async () => {
+    const [message] = await captureInbound([createInboundMessage({ ts: 1_764_000_000_000 })]);
 
     expect(message?.quotedGlobalMsgId).toBeUndefined();
     expect(message?.quotedOwnerId).toBeUndefined();
     expect(message?.quotedBody).toBeUndefined();
   });
-});
 
-describe("Zalo inbound timestamp normalization", () => {
-  function inboundTimestamp(ts: unknown): number | undefined {
-    return zaloTesting.toInboundMessage({
-      type: 0,
-      data: {
-        uidFrom: "123456789",
-        idTo: "987654321",
-        content: "plain message",
-        ts,
-      },
-    } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0])?.timestampMs;
-  }
+  it("normalizes second and millisecond timestamps", async () => {
+    const messages = await captureInbound([
+      createInboundMessage({ ts: 1_764_000_000 }),
+      createInboundMessage({ ts: "1764000000.5" }),
+      createInboundMessage({ ts: 1_764_000_000_000 }),
+    ]);
 
-  it("normalizes second and millisecond timestamps", () => {
-    expect(inboundTimestamp(1_764_000_000)).toBe(1_764_000_000_000);
-    expect(inboundTimestamp("1764000000.5")).toBe(1_764_000_000_500);
-    expect(inboundTimestamp(1_764_000_000_000)).toBe(1_764_000_000_000);
+    expect(messages.map((message) => message.timestampMs)).toEqual([
+      1_764_000_000_000, 1_764_000_000_500, 1_764_000_000_000,
+    ]);
   });
 
-  it("falls back for partial or unsafe timestamps", () => {
+  it("falls back for partial or unsafe timestamps", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
+    const messages = await captureInbound([
+      createInboundMessage({ ts: "1764000000abc" }),
+      createInboundMessage({ ts: "9007199254740993" }),
+      createInboundMessage({ ts: 8_640_000_000_000_001 }),
+    ]);
 
-    expect(inboundTimestamp("1764000000abc")).toBe(1_700_000_000_000);
-    expect(inboundTimestamp("9007199254740993")).toBe(1_700_000_000_000);
-    expect(inboundTimestamp(8_640_000_000_000_001)).toBe(1_700_000_000_000);
+    expect(messages.map((message) => message.timestampMs)).toEqual([
+      1_700_000_000_000, 1_700_000_000_000, 1_700_000_000_000,
+    ]);
   });
 });
 
 describe("Zalo group context cache", () => {
-  afterEach(() => {
-    zaloTesting.clearCachedGroupContext("cache-profile");
-  });
+  function createGroupApi(getGroupInfo: ReturnType<typeof vi.fn>): API {
+    return createMockApi({ getGroupInfo } as Partial<API>);
+  }
 
-  it("drops cached group context when the current clock is invalid", () => {
-    zaloTesting.writeCachedGroupContext("cache-profile", {
-      groupId: "group-invalid-clock",
-      name: "Cached",
+  it("refetches group context when the current clock is invalid", async () => {
+    const getGroupInfo = vi.fn(async () => ({
+      gridInfoMap: { "group-invalid-clock": { groupId: "group-invalid-clock", name: "Group" } },
+    }));
+    const api = createGroupApi(getGroupInfo);
+
+    await withStoredSession({
+      profile: "cache-invalid-clock",
+      api,
+      run: async () => {
+        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
+        vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+        await resolveZaloGroupContext("cache-invalid-clock", "group-invalid-clock");
+      },
     });
-    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
 
-    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-invalid-clock")).toBeNull();
+    expect(getGroupInfo).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache group context when ttl expiry exceeds the Date range", () => {
+  it("does not cache group context when ttl expiry exceeds the Date range", async () => {
+    const getGroupInfo = vi.fn(async () => ({
+      gridInfoMap: { "group-overflow": { groupId: "group-overflow", name: "Overflow" } },
+    }));
+    const api = createGroupApi(getGroupInfo);
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
 
-    zaloTesting.writeCachedGroupContext("cache-profile", {
-      groupId: "group-overflow",
-      name: "Overflow",
+    await withStoredSession({
+      profile: "cache-overflow",
+      api,
+      run: async () => {
+        await resolveZaloGroupContext("cache-overflow", "group-overflow");
+        await resolveZaloGroupContext("cache-overflow", "group-overflow");
+      },
     });
 
-    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-overflow")).toBeNull();
+    expect(getGroupInfo).toHaveBeenCalledTimes(2);
   });
 });

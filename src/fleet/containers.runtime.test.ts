@@ -21,11 +21,10 @@ vi.mock("./cell-profile.js", () => profileMocks);
 
 import type { CellContainerProfile } from "./cell-profile.js";
 import { createRedactingStreamWriter } from "./containers.redaction.js";
-import {
-  createFleetContainerRuntime,
-  type FleetContainerCommandExecutor,
-  type FleetContainerStreamExecutor,
-} from "./containers.runtime.js";
+import { createFleetContainerRuntime } from "./containers.runtime.js";
+
+type FleetContainerCommandExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[0]>;
+type FleetContainerStreamExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[1]>;
 
 function successfulExecutor() {
   return vi.fn<FleetContainerCommandExecutor>(async () => ({

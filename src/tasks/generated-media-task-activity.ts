@@ -54,7 +54,13 @@ export function getLatestGeneratedMediaTaskAdmissionIdForSessionKey(
   return getLatestGeneratedMediaTaskAdmissions().get(sessionKey);
 }
 
-export function resetGeneratedMediaTaskActivityForTests(): void {
+function resetGeneratedMediaTaskActivityForTests(): void {
   getActiveGeneratedMediaTasks().clear();
   getLatestGeneratedMediaTaskAdmissions().clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.generatedMediaTaskActivityTestApi")
+  ] = { resetGeneratedMediaTaskActivityForTests };
 }

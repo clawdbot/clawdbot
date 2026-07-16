@@ -17,6 +17,7 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
@@ -36,7 +37,12 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
-import { refreshCodexUsageLimitPromptError } from "./usage-limit-error.js";
+import {
+  createCodexUsageLimitPromptError,
+  isCodexUsageLimitPromptError,
+  markCodexAuthProfileBlockedFromRateLimits,
+  refreshCodexUsageLimitPromptError,
+} from "./usage-limit-error.js";
 
 export async function finalizeCodexAttempt(
   resources: CodexAttemptResources,
@@ -72,6 +78,7 @@ export async function finalizeCodexAttempt(
     effectiveWorkspace,
     agentDir,
     attemptStartedAt,
+    startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
   const {
@@ -158,9 +165,11 @@ export async function finalizeCodexAttempt(
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
-      : finalPromptError
-        ? formatErrorMessage(finalPromptError)
-        : undefined;
+      : finalPromptError instanceof Error
+        ? finalPromptError.message
+        : finalPromptError
+          ? formatErrorMessage(finalPromptError)
+          : undefined;
   if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
     await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
       phase: "turn_completed",
@@ -197,7 +206,22 @@ export async function finalizeCodexAttempt(
     signal: runAbortController.signal,
   });
   if (refreshedUsageLimitPromptError) {
-    finalPromptError = refreshedUsageLimitPromptError;
+    await markCodexAuthProfileBlockedFromRateLimits({
+      params,
+      authProfileId: startupAuthProfileId,
+      rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
+    });
+    finalPromptError = createCodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+  } else if (
+    isCodexUsageLimitPromptError(finalPromptError) &&
+    state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
+    readCodexRateLimitsRevision(resourceState.client) > state.rateLimitsRevisionBeforeLastTurnStart
+  ) {
+    await markCodexAuthProfileBlockedFromRateLimits({
+      params,
+      authProfileId: startupAuthProfileId,
+      rateLimits: readRecentCodexRateLimits(resourceState.client),
+    });
   }
   const finalPromptErrorSource =
     effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
@@ -447,7 +471,11 @@ export async function finalizeCodexAttempt(
         }
       : {
           phase: "end",
-          ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+          ...buildLifecycleTerminalMeta({
+            aborted: finalAborted,
+            timedOut: effectiveTimedOut,
+            yielded: toolState.yieldDetected,
+          }),
         },
   );
   return {

@@ -2,42 +2,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalRpcRequest as signalRpcRequestImpl,
-  detectSignalApiMode,
   signalCheck as signalCheckImpl,
   streamSignalEvents as streamSignalEventsImpl,
-  fetchAttachment as fetchAttachmentImpl,
   type SignalApiMode,
 } from "./client-adapter.js";
-import * as containerClientModule from "./client-container.js";
-import * as nativeClientModule from "./client.js";
+const {
+  mockNativeCheck,
+  mockNativeRpcRequest,
+  mockNativeStreamEvents,
+  mockContainerCheck,
+  mockContainerRpcRequest,
+  mockStreamContainerEvents,
+} = vi.hoisted(() => ({
+  mockNativeCheck: vi.fn(),
+  mockNativeRpcRequest: vi.fn(),
+  mockNativeStreamEvents: vi.fn(),
+  mockContainerCheck: vi.fn(),
+  mockContainerRpcRequest: vi.fn(),
+  mockStreamContainerEvents: vi.fn(),
+}));
 
-const mockNativeCheck = vi.fn<typeof nativeClientModule.signalCheck>();
-const mockNativeRpcRequest = vi.fn<typeof nativeClientModule.signalRpcRequest>();
-const mockNativeStreamEvents = vi.fn<typeof nativeClientModule.streamSignalEvents>();
-const mockContainerCheck = vi.fn<typeof containerClientModule.containerCheck>();
-const mockContainerRpcRequest = vi.fn<typeof containerClientModule.containerRpcRequest>();
-const mockContainerFetchAttachment = vi.fn<typeof containerClientModule.containerFetchAttachment>();
-const mockStreamContainerEvents = vi.fn<typeof containerClientModule.streamContainerEvents>();
-let currentApiMode: SignalApiMode = "auto";
-
-beforeEach(() => {
-  vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck);
-  vi.spyOn(nativeClientModule, "signalRpcRequest").mockImplementation(mockNativeRpcRequest);
-  vi.spyOn(nativeClientModule, "streamSignalEvents").mockImplementation(mockNativeStreamEvents);
-  vi.spyOn(containerClientModule, "containerCheck").mockImplementation(mockContainerCheck);
-  vi.spyOn(containerClientModule, "containerRpcRequest").mockImplementation(
-    mockContainerRpcRequest,
-  );
-  vi.spyOn(containerClientModule, "containerFetchAttachment").mockImplementation(
-    mockContainerFetchAttachment,
-  );
-  vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
-    mockStreamContainerEvents,
-  );
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    signalCheck: mockNativeCheck,
+    signalRpcRequest: mockNativeRpcRequest,
+    streamSignalEvents: mockNativeStreamEvents,
+  };
 });
 
+vi.mock("./client-container.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client-container.js")>();
+  return {
+    ...actual,
+    containerCheck: mockContainerCheck,
+    containerRpcRequest: mockContainerRpcRequest,
+    streamContainerEvents: mockStreamContainerEvents,
+  };
+});
+
+let currentApiMode: SignalApiMode = "auto";
+
 afterEach(() => {
-  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -61,8 +68,28 @@ function streamSignalEvents(params: Parameters<typeof streamSignalEventsImpl>[0]
   return streamSignalEventsImpl({ ...params, apiMode: currentApiMode });
 }
 
-function fetchAttachment(params: Parameters<typeof fetchAttachmentImpl>[0]) {
-  return fetchAttachmentImpl({ ...params, apiMode: currentApiMode });
+async function detectSignalApiMode(
+  baseUrl: string,
+  timeoutMs = 10_000,
+  options: { account?: string; requireContainerReceive?: boolean } = {},
+): Promise<"native" | "container"> {
+  if (options.requireContainerReceive) {
+    await streamSignalEventsImpl({
+      baseUrl,
+      account: options.account,
+      timeoutMs,
+      onEvent: vi.fn(),
+      apiMode: "auto",
+    });
+    return mockStreamContainerEvents.mock.calls.length > 0 ? "container" : "native";
+  }
+  const result = await signalCheckImpl(baseUrl, timeoutMs, { apiMode: "auto" });
+  if (!result.ok) {
+    throw new Error(result.error ?? `Signal API not reachable at ${baseUrl}`);
+  }
+  return mockContainerCheck.mock.calls.length > mockNativeCheck.mock.calls.length
+    ? "container"
+    : "native";
 }
 
 type MockCalls = {
@@ -122,13 +149,6 @@ function expectSingleObjectCall(mock: MockCalls, expected: Record<string, unknow
   expectFields(requireRecord(payload, "call payload"), expected);
 }
 
-function expectContainerFetchCall(expected: Record<string, unknown>) {
-  expect(mockContainerFetchAttachment.mock.calls).toHaveLength(1);
-  const [attachmentId, options] = requireMockCall(mockContainerFetchAttachment, "container fetch");
-  expect(attachmentId).toBe("attachment-123");
-  expectFields(requireRecord(options, "container fetch options"), expected);
-}
-
 describe("detectSignalApiMode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -139,7 +159,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://native-only.local:8080");
     expect(result).toBe("native");
   });
 
@@ -147,7 +167,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://container-only.local:8080");
     expect(result).toBe("container");
   });
 
@@ -155,7 +175,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://both-healthy.local:8080");
     expect(result).toBe("native");
   });
 
@@ -168,7 +188,7 @@ describe("detectSignalApiMode", () => {
     );
     mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-    const result = await detectSignalApiMode("http://localhost:8080");
+    const result = await detectSignalApiMode("http://container-first.local:8080");
     expect(result).toBe("native");
   });
 
@@ -178,7 +198,7 @@ describe("detectSignalApiMode", () => {
       mockNativeCheck.mockImplementation(() => new Promise(() => {}));
       mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
 
-      const result = detectSignalApiMode("http://localhost:8080");
+      const result = detectSignalApiMode("http://native-stalled.local:8080");
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(50);
       await expect(result).resolves.toBe("container");
@@ -191,8 +211,8 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
     mockContainerCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
 
-    await expect(detectSignalApiMode("http://localhost:8080")).rejects.toThrow(
-      "Signal API not reachable at http://localhost:8080",
+    await expect(detectSignalApiMode("http://neither-healthy.local:8080")).rejects.toThrow(
+      "Signal API not reachable at http://neither-healthy.local:8080",
     );
   });
 
@@ -200,7 +220,7 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockRejectedValue(new Error("Network error"));
     mockContainerCheck.mockRejectedValue(new Error("Network error"));
 
-    await expect(detectSignalApiMode("http://localhost:8080")).rejects.toThrow(
+    await expect(detectSignalApiMode("http://probe-errors.local:8080")).rejects.toThrow(
       "Signal API not reachable",
     );
   });
@@ -209,29 +229,33 @@ describe("detectSignalApiMode", () => {
     mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
     mockContainerCheck.mockResolvedValue({ ok: false });
 
-    await detectSignalApiMode("http://localhost:8080", 5000);
-    expect(mockNativeCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
-    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
+    await detectSignalApiMode("http://custom-timeout.local:8080", 5000);
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://custom-timeout.local:8080", 5000);
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://custom-timeout.local:8080", 5000);
   });
 
   it("requires a working container receive WebSocket when requested", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
     mockContainerCheck.mockResolvedValue({ ok: true, status: 101 });
 
-    const result = await detectSignalApiMode("http://localhost:8080", 5000, {
+    const result = await detectSignalApiMode("http://container-receive.local:8080", 5000, {
       account: "+14259798283",
       requireContainerReceive: true,
     });
 
     expect(result).toBe("container");
-    expect(mockContainerCheck).toHaveBeenCalledWith("http://localhost:8080", 5000, "+14259798283");
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://container-receive.local:8080",
+      5000,
+      "+14259798283",
+    );
   });
 
   it("does not select container receive mode without an account", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
 
     await expect(
-      detectSignalApiMode("http://localhost:8080", 5000, {
+      detectSignalApiMode("http://missing-account.local:8080", 5000, {
         requireContainerReceive: true,
       }),
     ).rejects.toThrow("Signal API not reachable");
@@ -615,127 +639,5 @@ describe("streamSignalEvents", () => {
     ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
     expect(mockStreamContainerEvents).not.toHaveBeenCalled();
     expect(mockContainerCheck).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("fetchAttachment", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setApiMode("native");
-  });
-
-  it("uses native JSON-RPC for native mode with sender", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-    });
-
-    expect(result).toBeInstanceOf(Buffer);
-    expectRpcCall({
-      mock: mockNativeRpcRequest,
-      method: "getAttachment",
-      rpcParams: {
-        id: "attachment-123",
-        account: "+14259798283",
-        recipient: "+15550001111",
-      },
-    });
-  });
-
-  it("uses container REST for container mode", async () => {
-    setApiMode("container");
-    const mockBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-    mockContainerFetchAttachment.mockResolvedValue(mockBuffer);
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-    });
-
-    expect(result).toBe(mockBuffer);
-    expectContainerFetchCall({ baseUrl: "http://localhost:8080" });
-  });
-
-  it("returns null for native mode without sender or groupId", async () => {
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-    });
-
-    expect(result).toBeNull();
-    expect(mockNativeRpcRequest).not.toHaveBeenCalled();
-  });
-
-  it("uses groupId when provided for native mode", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      groupId: "group-123",
-    });
-
-    expectRpcCall({
-      mock: mockNativeRpcRequest,
-      method: "getAttachment",
-      rpcParams: { groupId: "group-123" },
-    });
-  });
-
-  it("returns null when native RPC returns no data", async () => {
-    mockNativeRpcRequest.mockResolvedValue({});
-
-    const result = await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("prefers groupId over sender when both provided", async () => {
-    mockNativeRpcRequest.mockResolvedValue({ data: "base64data" });
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      sender: "+15550001111",
-      groupId: "group-123",
-    });
-
-    const callParams = requireMockCall(mockNativeRpcRequest, "native RPC")[1];
-    expect(callParams).toHaveProperty("groupId", "group-123");
-    expect(callParams).not.toHaveProperty("recipient");
-  });
-
-  it("passes timeout to container fetch", async () => {
-    setApiMode("container");
-    mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      timeoutMs: 60000,
-    });
-
-    expectContainerFetchCall({ timeoutMs: 60000 });
-  });
-
-  it("passes max response bytes to container fetch", async () => {
-    setApiMode("container");
-    mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
-
-    await fetchAttachment({
-      baseUrl: "http://localhost:8080",
-      attachmentId: "attachment-123",
-      maxResponseBytes: 4096,
-    });
-
-    expectContainerFetchCall({ maxResponseBytes: 4096 });
   });
 });

@@ -16,6 +16,9 @@ export function collectHostedGateEvidence({
   sha,
   pr,
   recentSha,
+  pullRequestCommitShas,
+  pullRequestHeadBranch,
+  pullRequestHeadRepository,
   workflowRuns,
   changelogOnly,
   nowMs,
@@ -23,6 +26,9 @@ export function collectHostedGateEvidence({
   sha: string;
   pr?: number;
   recentSha?: string;
+  pullRequestCommitShas?: string[];
+  pullRequestHeadBranch?: string;
+  pullRequestHeadRepository?: string;
   workflowRuns: Array<Record<string, unknown>>;
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
@@ -47,6 +53,7 @@ export function collectHostedGateEvidence({
     reason: string;
   }[];
 };
+export function compareCommitPageCount(totalCommits: number): number;
 export function workflowRunQueryPaths(
   repo: string,
   {

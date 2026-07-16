@@ -40,6 +40,7 @@ type TestSessionsPage = HTMLElement & {
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
+  stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
   rememberCustomGroup: (name: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
@@ -569,6 +570,42 @@ describe("sessions page lifecycle", () => {
     expect(confirm).toHaveBeenCalledOnce();
     expect(sessions.deleteMany).toHaveBeenCalledWith([{ key, agentId: undefined }]);
     expect(page.result?.sessions).toEqual([]);
+  });
+
+  it("stops an active cloud worker and refreshes the session roster", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
+    const sessions = createSessions({ list });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const row = {
+      key: "agent:main:cloud",
+      label: "Cloud task",
+      placement: {
+        state: "active",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "0".repeat(64),
+        workspaceBaseManifestRef: "base-ref",
+        remoteWorkspaceDir: "/workspace",
+      },
+    } as GatewaySessionRow;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.stopCloudWorker(row);
+
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "Cloud task"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:cloud", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    expect(list).toHaveBeenCalledOnce();
+    expect(page.sessionMutationPending).toBe(false);
   });
 
   it("surfaces a rejected custom-group creation on the Sessions page", async () => {

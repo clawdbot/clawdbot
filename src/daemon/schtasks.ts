@@ -307,7 +307,7 @@ type ScheduledTaskInfo = {
   lastRunResult?: string;
 };
 
-export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
   const status = entries.status;
@@ -2060,3 +2060,4 @@ export async function readScheduledTaskRuntime(
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

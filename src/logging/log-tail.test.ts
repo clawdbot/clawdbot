@@ -1,11 +1,19 @@
 // Log tail tests cover reading, parsing, and limiting recent log entries.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
+type PositionalRead = (
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number | null,
+) => Promise<{ bytesRead: number; buffer: Buffer }>;
 
 const { redactSensitiveLinesMock, resolveRedactOptionsMock } = vi.hoisted(() => ({
   redactSensitiveLinesMock: vi.fn((lines: string[], options?: unknown) =>
@@ -28,6 +36,7 @@ vi.mock("./redact.js", async () => {
 
 describe("readConfiguredLogTail", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     resolveRedactOptionsMock.mockClear();
     redactSensitiveLinesMock.mockClear();
     resetLogger();
@@ -36,7 +45,7 @@ describe("readConfiguredLogTail", () => {
 
   it("applies redaction once per request across all returned lines", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-log-tail-"));
+    const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
 
     await fs.writeFile(file, "custom-secret-abcdefghijklmnopqrstuvwxyz\nsecond line\n");
@@ -51,7 +60,28 @@ describe("readConfiguredLogTail", () => {
       resolvedRedaction,
     );
     expect(result.lines).toEqual(["custom…wxyz", "second line"]);
+  });
 
-    await fs.rm(tempDir, { recursive: true, force: true });
+  it("fills short positional reads before splitting log lines", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle) as PositionalRead;
+      const shortRead = vi.fn<PositionalRead>((buffer, offset, length, position) =>
+        realRead(buffer, offset, Math.min(length, 4), position),
+      );
+      Object.defineProperty(handle, "read", { configurable: true, value: shortRead });
+      return handle;
+    });
+
+    await fs.writeFile(file, "old line\nrecent one\nrecent two\n");
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail();
+
+    expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 });

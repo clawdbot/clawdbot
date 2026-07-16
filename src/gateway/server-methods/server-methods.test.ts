@@ -16,11 +16,11 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEngineRuntimeQuarantine,
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -867,8 +867,29 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("redacts base64 audio content blocks from chat history", () => {
-    const data = Buffer.from("voice-bytes").toString("base64");
+  it("reports decoded byte size when omitting base64 images from chat history", () => {
+    const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data, mimeType: "image/png" }],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(data).toHaveLength(8);
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "image", mimeType: "image/png", omitted: true, bytes: 5 }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("reports decoded byte size when omitting base64 audio from chat history", () => {
+    const audio = Buffer.from("voice-bytes");
+    const data = audio.toString("base64");
     const result = sanitizeChatHistoryMessages([
       {
         role: "assistant",
@@ -898,7 +919,7 @@ describe("sanitizeChatHistoryMessages", () => {
               type: "base64",
               media_type: "audio/mp3",
               omitted: true,
-              bytes: Buffer.byteLength(data, "utf8"),
+              bytes: audio.byteLength,
             },
           },
         ],
@@ -1627,7 +1648,67 @@ describe("projectRecentChatDisplayMessages", () => {
           sourceSessionKey: "agent:main:webchat:source",
           sourceTool: "sessions_send",
         },
+        __openclaw: { turnBoundary: true },
         timestamp: 2,
+      },
+    ]);
+  });
+
+  it("marks only the first visible message after each hidden heartbeat input", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First run started." }],
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "First run finished." }],
+        __openclaw: { seq: 3 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+        __openclaw: { seq: 4 },
+      },
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        __openclaw: { kind: "compaction", seq: 5 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Second run finished." }],
+        __openclaw: { seq: 6 },
+      },
+    ]);
+
+    expect(
+      result.map((message) => ({
+        text: (message.content as Array<{ text?: string }> | undefined)?.[0]?.text,
+        metadata: message["__openclaw"],
+      })),
+    ).toEqual([
+      {
+        text: "First run started.",
+        metadata: { seq: 2, turnBoundary: true },
+      },
+      {
+        text: "First run finished.",
+        metadata: { seq: 3 },
+      },
+      {
+        text: "Compaction",
+        metadata: { kind: "compaction", seq: 5 },
+      },
+      {
+        text: "Second run finished.",
+        metadata: { seq: 6, turnBoundary: true },
       },
     ]);
   });
@@ -4783,14 +4864,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
     pricingState.clearGatewayModelPricingFailures();
     registerLegacyContextEngine();
     clearContextEnginesForOwner(contextEngineTestOwner);
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     pricingState.replaceGatewayModelPricingCache(new Map(), 0);
     pricingState.clearGatewayModelPricingFailures();
     clearContextEnginesForOwner(contextEngineTestOwner);
-    clearContextEngineRuntimeQuarantine();
+    resetContextEngineRuntimeQuarantineForTests();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -5401,3 +5482,4 @@ describe("logs.tail", () => {
     await fsPromises.rm(tempDir, { recursive: true, force: true });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,27 @@
+title: Matrix allowBots=mentions accepts mentioned configured bot messages
+scenario:
+  id: matrix-allowbots-mentions-mentioned-room
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-policy
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        allowBots: mentions
+        configuredBotRoles:
+          - observer
+        groupAllowRoles:
+          - driver
+          - observer
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsMentionsMentionedRoomScenario
+  args:
+    - expr: "scenarioContext"

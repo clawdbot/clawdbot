@@ -20,7 +20,7 @@ import {
 import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
-import { getActiveReef, getReefRuntime, setActiveReef } from "./runtime.js";
+import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
 import {
@@ -29,6 +29,7 @@ import {
   type WebSocketLike,
   abortableSleep,
 } from "./transport.js";
+import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
 function resolveAccount(cfg: unknown): ReefAccount {
@@ -39,6 +40,20 @@ function resolveAccount(cfg: unknown): ReefAccount {
     configured: Boolean(config.handle && config.email && config.guard),
     config,
   };
+}
+
+function listTrustedPeers(config: ReefAccount["config"]): string[] {
+  if (!config.handle) {
+    return [];
+  }
+  // Read-only setup, doctor, and audit discovery can load the channel shape
+  // without initializing the live plugin runtime.
+  const runtime = getOptionalReefRuntime();
+  return runtime
+    ? openReefTrustStore(runtime, config)
+        .list()
+        .map((entry) => entry.peer)
+    : [];
 }
 
 export const reefPlugin: ChannelPlugin<ReefAccount> = {
@@ -71,19 +86,25 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
     resolveAccount,
     isEnabled: (account) => account.enabled,
     isConfigured: (account) => account.configured,
-    resolveAllowFrom: ({ cfg }) => resolveReefConfig(cfg as ReefCoreConfig).allowFrom,
+    resolveAllowFrom: ({ cfg }) => {
+      const config = resolveReefConfig(cfg as ReefCoreConfig);
+      return listTrustedPeers(config);
+    },
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
-    describeAccount: (account) => ({
-      accountId: "default",
-      enabled: account.enabled,
-      configured: account.configured,
-      extra: {
-        handle: account.config.handle,
-        relayUrl: account.config.relayUrl,
-        friendCount: Object.keys(account.config.friends).length,
-      },
-    }),
+    describeAccount: (account) => {
+      const friendCount = listTrustedPeers(account.config).length;
+      return {
+        accountId: "default",
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          handle: account.config.handle,
+          relayUrl: account.config.relayUrl,
+          friendCount,
+        },
+      };
+    },
   },
   messaging: {
     targetPrefixes: ["reef"],
@@ -114,17 +135,23 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   outbound: reefOutboundAdapter,
   pairing: {
     idLabel: "reefHandle",
-    normalizeAllowEntry: (entry) => normalizeReefTarget(entry) ?? entry.trim().toLowerCase(),
+    normalizeAllowEntry: (entry) =>
+      isReefPairingApprovalToken(entry)
+        ? entry.trim()
+        : (normalizeReefTarget(entry) ?? entry.trim().toLowerCase()),
+    resolveApprovalStoreEntry: ({ meta }) => meta?.reefApproval ?? null,
     notifyApproval: async ({ id }) => {
-      await getActiveReef().flow.send(id, PAIRING_APPROVED_MESSAGE);
+      const active = getActiveReef();
+      await active.friends.reconcile();
+      await active.flow.send(id, PAIRING_APPROVED_MESSAGE);
     },
   },
   security: {
     resolveDmPolicy: ({ account }) => ({
       policy: "pairing",
-      allowFrom: account.config.allowFrom,
-      policyPath: "channels.reef.dmPolicy",
-      allowFromPath: "channels.reef.allowFrom",
+      allowFrom: listTrustedPeers(account.config),
+      policyPath: "Reef local peer trust",
+      allowFromPath: "Reef local peer trust",
       approveHint: "openclaw pairing approve reef <code>",
       normalizeEntry: (entry) => normalizeReefTarget(entry) ?? entry,
     }),
@@ -157,15 +184,20 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       );
       const stores = openStores(stateDir, keys);
       const reviews = new ReviewApprovalStore(stateDir);
-      const friends = new ReefFriendManager(ctx.account.config, transport, stateDir);
       const pairing = createChannelPairingController({
         core: runtime,
         channel: "reef",
         accountId: "default",
       });
+      const trust = openReefTrustStore(runtime, ctx.account.config);
+      const friends = new ReefFriendManager(transport, trust, {
+        list: pairing.readAllowFromStore,
+        remove: async (peer) => {
+          return (await pairing.removeAllowFromStoreEntry(peer)).changed;
+        },
+      });
       const onIngress = async (message: ReefIngressMessage) => {
-        const friend = ctx.account.config.friends[message.peer]!;
-        const budget = autonomyBudget(friend.autonomy);
+        const budget = autonomyBudget(message.autonomy);
         const loop = recordChannelBotPairLoopAndCheckSuppression({
           scopeId: "reef:default",
           conversationId: message.thread ?? message.id,
@@ -234,6 +266,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       };
       const flow: ReefMessageFlow = new ReefMessageFlow({
         config: ctx.account.config,
+        trust,
         keys,
         stateDir,
         transport,
@@ -247,30 +280,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       setActiveReef({ flow, friends, reviews });
 
       const reconcile = async () => {
-        await friends.surfacePending(async ({ peer, fingerprint }) => {
+        await friends.reconcile();
+        await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
           await pairing.issueChallenge({
             senderId: peer,
             senderIdLine: `Reef handle: @${peer}\nSafety fingerprint: ${fingerprint}`,
+            meta: { reefApproval: approvalToken },
             sendPairingReply: async () => {},
           });
         });
-        const allowFrom = await runtime.channel.pairing.readAllowFromStore({
-          channel: "reef",
-          accountId: "default",
-        });
-        const changed = await friends.reconcileApproved(allowFrom);
-        if (changed.length) {
-          const snapshot = structuredClone(ctx.account.config.friends);
-          await runtime.config.mutateConfigFile({
-            afterWrite: { mode: "auto" },
-            mutate(draft) {
-              const reef = draft.channels?.reef as { friends?: unknown } | undefined;
-              if (reef) {
-                reef.friends = snapshot;
-              }
-            },
-          });
-        }
       };
       await reconcile();
       ctx.setStatus({ accountId: "default", running: true, connected: false });

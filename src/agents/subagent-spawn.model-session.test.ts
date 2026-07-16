@@ -13,7 +13,7 @@ import {
 const callGatewayMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("spawnSubagentDirect runtime model persistence", () => {

@@ -10,6 +10,7 @@ export const SessionCatalogCapabilitiesSchema = closedObject({
   continueSession: Type.Boolean(),
   archive: Type.Boolean(),
   createSession: Type.Optional(closedObject({ model: NonEmptyString })),
+  openTerminal: Type.Optional(Type.Boolean()),
 });
 
 export const SessionCatalogDescriptorSchema = closedObject({
@@ -34,6 +35,7 @@ export const SessionCatalogSessionSchema = closedObject({
   openClawSessionKey: Type.Optional(NonEmptyString),
   canContinue: Type.Boolean(),
   canArchive: Type.Boolean(),
+  canOpenTerminal: Type.Optional(Type.Boolean()),
 });
 
 export const SessionCatalogHostSchema = closedObject({

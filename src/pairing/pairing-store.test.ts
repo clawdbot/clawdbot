@@ -245,6 +245,33 @@ describe("pairing store", () => {
     ).resolves.toEqual({ code: "", created: false });
   });
 
+  it("persists a channel-derived approval entry from request metadata", async () => {
+    const { env } = createTestEnv();
+    const request = await upsertChannelPairingRequest({
+      channel: "demo-a",
+      id: "alice",
+      accountId: DEFAULT_ACCOUNT_ID,
+      meta: { proofEntry: "fixture-entry" },
+      env,
+    });
+    const pairingAdapter = {
+      idLabel: "peer",
+      normalizeAllowEntry: (entry: string) => entry,
+      resolveApprovalStoreEntry: ({ meta }: { meta?: Record<string, string> }) =>
+        meta?.proofEntry ?? null,
+    };
+
+    await expect(
+      approveChannelPairingCode({
+        channel: "demo-a",
+        code: request.code,
+        env,
+        pairingAdapter,
+      }),
+    ).resolves.toMatchObject({ id: "alice" });
+    await expect(readChannelAllowFromStore("demo-a", env)).resolves.toEqual(["fixture-entry"]);
+  });
+
   it("regenerates colliding codes and reports exhaustion without leaking codes", async () => {
     const { env } = createTestEnv();
     await withMockRandomInt({

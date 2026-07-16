@@ -1232,3 +1232,4 @@ describe("openrouter provider hooks", () => {
     expect(payloads[1]?.reasoning).toEqual({ effort: "high" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

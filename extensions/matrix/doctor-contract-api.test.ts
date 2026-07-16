@@ -18,9 +18,10 @@ import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
 import {
+  MATRIX_RECOVERY_KEY_FILENAME,
   readMatrixIdbSnapshotJson,
-  readMatrixLegacyCryptoMigrationState,
-  readMatrixRecoveryKeyState,
+  readMatrixRecoveryKeyStateForPath,
+  scoreMatrixCryptoStateInStore,
 } from "./src/matrix/crypto-state-store.js";
 import { importNewestInboundDedupeMarkers } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import {
@@ -117,7 +118,51 @@ describe("matrix doctor contract state migrations", () => {
     expect(store.hasSavedSync()).toBe(true);
     expect(store.hasSavedSyncFromCleanShutdown()).toBe(true);
     await expect(store.getSavedSyncToken()).resolves.toBe("legacy-token");
-    expect(fs.existsSync(path.join(storageRootDir, "bot-storage.json"))).toBe(false);
+    const sourcePath = path.join(storageRootDir, "bot-storage.json");
+    const archivePath = `${sourcePath}.migrated`;
+    expect(fs.existsSync(sourcePath)).toBe(false);
+
+    fs.copyFileSync(archivePath, sourcePath);
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [`Removed already-archived Matrix sync cache legacy source ${sourcePath}`],
+      warnings: [],
+      notices: [
+        `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
+      ],
+    });
+
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        savedSync: {
+          nextBatch: "newer-legacy-token",
+          accountData: [],
+          roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+        },
+        cleanShutdown: true,
+      }),
+    );
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [`Archived Matrix sync cache legacy source -> ${sourcePath}.migrated.2`],
+      warnings: [],
+      notices: [
+        `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
+      ],
+    });
+    await expect(migration.migrateLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    fs.writeFileSync(sourcePath, `${fs.readFileSync(`${sourcePath}.migrated.2`, "utf8")} `, "utf8");
+    fs.mkdirSync(`${sourcePath}.migrated.3`);
+    const failedArchive = await migration.migrateLegacyState(createMigrationParams(stateDir));
+    expect(failedArchive.changes).toEqual([]);
+    expect(failedArchive.warnings).toEqual([
+      expect.stringContaining("Failed archiving Matrix sync cache legacy source"),
+    ]);
+    expect(failedArchive.notices).toBeUndefined();
   });
 
   it("migrates Matrix storage metadata JSON to SQLite plugin state", async () => {
@@ -226,7 +271,10 @@ describe("matrix doctor contract state migrations", () => {
       warnings: [],
     });
 
-    expect(readMatrixRecoveryKeyState(storageRootDir)?.keyId).toBe("SSSS");
+    expect(
+      readMatrixRecoveryKeyStateForPath(path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME))
+        ?.keyId,
+    ).toBe("SSSS");
     expect(fs.existsSync(path.join(storageRootDir, "recovery-key.json"))).toBe(false);
   });
 
@@ -320,7 +368,7 @@ describe("matrix doctor contract state migrations", () => {
       warnings: [],
     });
 
-    expect(readMatrixLegacyCryptoMigrationState(storageRootDir)?.restoreStatus).toBe("pending");
+    expect(scoreMatrixCryptoStateInStore(storageRootDir)).toBe(3);
     expect(fs.existsSync(path.join(storageRootDir, "legacy-crypto-migration.json"))).toBe(false);
   });
 

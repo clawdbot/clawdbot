@@ -9,10 +9,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
-  markDiagnosticToolStartedForTest,
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -23,9 +23,9 @@ import {
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
-  testing,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -458,7 +458,7 @@ describe("reply turn admission", () => {
       sessionId: "new-session",
       kind: "visible",
       resetTriggered: false,
-      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
 
     let settled = false;
@@ -469,11 +469,11 @@ describe("reply turn admission", () => {
       setImmediate(resolve);
     });
     expect(settled).toBe(false);
-    expect(waitChanges).toEqual([]);
+    expect(waitChanges).toEqual([true]);
 
     active.complete();
     const result = await admitted;
-    expect(waitChanges).toEqual([]);
+    expect(waitChanges).toEqual([true, false]);
 
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
@@ -566,7 +566,7 @@ describe("reply turn admission", () => {
       sessionId: "queued-session",
       kind: "queued_followup",
       resetTriggered: false,
-      onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
     let settled = false;
     void admitted.then(() => {
@@ -978,6 +978,7 @@ describe("reply turn admission", () => {
       active.setPhase("running");
       active.recordActivity();
       const abortController = new AbortController();
+      const waitChanges: boolean[] = [];
       let settled = false;
       const result = admitReplyTurn({
         sessionKey: "agent:main:telegram:topic:fresh-visible",
@@ -985,6 +986,7 @@ describe("reply turn admission", () => {
         kind: "visible",
         resetTriggered: false,
         upstreamAbortSignal: abortController.signal,
+        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
       }).then((admission) => {
         settled = true;
         return admission;
@@ -992,6 +994,7 @@ describe("reply turn admission", () => {
 
       await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
       expect(settled).toBe(false);
+      expect(waitChanges).toEqual([true]);
       expect(replyRunRegistry.get("agent:main:telegram:topic:fresh-visible")).toBe(active);
 
       abortController.abort();
@@ -1000,6 +1003,7 @@ describe("reply turn admission", () => {
         reason: "aborted",
         activeOperation: active,
       });
+      expect(waitChanges).toEqual([true, false]);
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
@@ -1278,3 +1282,4 @@ describe("reply turn admission", () => {
     reservation.complete();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

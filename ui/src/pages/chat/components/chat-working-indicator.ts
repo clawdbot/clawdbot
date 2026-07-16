@@ -12,7 +12,6 @@ const PUNCH_STANCES: Array<[stance: string, weight: number]> = [
   ["chat-reading-indicator--flurry", 12],
   ["chat-reading-indicator--haymaker", 6],
 ];
-
 function punchStanceClass(key: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {
@@ -42,12 +41,11 @@ export function renderChatWorkingIndicator(part: Extract<ChatItem, { kind: "read
         ${icons.claw}
       </div>
       <span class="chat-working-indicator__status">
+        <span class="agent-chat__sr-only">${t("common.working")}</span>
         <openclaw-elapsed-time
           class="chat-working-indicator__elapsed"
           .startMs=${part.startedAt}
         ></openclaw-elapsed-time>
-        <span aria-hidden="true">·</span>
-        <span>${t("common.working")}</span>
       </span>
     </div>
   `;

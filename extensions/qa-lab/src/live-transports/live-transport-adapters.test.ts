@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
-import { createQaTransportAdapterFactoryRegistry } from "../qa-transport-registry.js";
+import { createQaTransportAdapter } from "../qa-transport-registry.js";
 
 const { createSlack, createTelegram, createWhatsApp } = vi.hoisted(() => ({
   createSlack: vi.fn(),
@@ -69,15 +69,16 @@ describe("live transport adapter factories", () => {
       const state = createQaBusState();
       const adapter = createQaChannelTransport(state);
       create.mockResolvedValueOnce(adapter);
-      const registry = createQaTransportAdapterFactoryRegistry(factories);
-
-      const created = await registry.create({
-        channelId,
-        adapterOptions,
-        driver: "live",
-        outputDir: ".artifacts/qa-e2e",
-        state,
-      });
+      const created = await createQaTransportAdapter(
+        {
+          channelId,
+          adapterOptions,
+          driver: "live",
+          outputDir: ".artifacts/qa-e2e",
+          state,
+        },
+        factories,
+      );
 
       expect(created.adapter.id).toBe(adapter.id);
       expect(create).toHaveBeenCalledWith(

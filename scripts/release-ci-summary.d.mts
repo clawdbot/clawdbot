@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+export function githubRestArgs(pathSuffix: string, repository?: string): string[];
+export function artifactDownloadArgs(artifactId: string | number, repository?: string): string[];
 export function validateParentRunBinding(
   parentView: unknown,
   parentRest: unknown,

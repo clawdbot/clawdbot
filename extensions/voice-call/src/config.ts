@@ -264,10 +264,6 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     sources: ["memory", "sessions"],
     fallbackToConsult: false,
   });
-export type VoiceCallRealtimeFastContextConfig = z.infer<
-  typeof VoiceCallRealtimeFastContextConfigSchema
->;
-
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Inject a compact agent persona/context capsule into realtime voice instructions. */
@@ -518,7 +514,7 @@ type DeepPartial<T> = T extends SecretInput
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
-export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
+type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 // -----------------------------------------------------------------------------
@@ -557,7 +553,7 @@ function normalizePhoneRouteKey(phone: string | undefined): string {
   return phone?.replace(/\D/g, "") ?? "";
 }
 
-export function resolveVoiceCallNumberRouteKey(
+function resolveVoiceCallNumberRouteKey(
   config: Pick<VoiceCallConfig, "numbers">,
   phone: string | undefined,
 ): string | undefined {
@@ -750,7 +746,7 @@ export function resolveVoiceCallSessionKey(params: {
 }
 
 /** Resolve persisted or integration-provided keys into the configured agent namespace. */
-export function resolveVoiceCallAgentSessionKey(params: {
+function resolveVoiceCallAgentSessionKey(params: {
   config: Pick<VoiceCallConfig, "agentId">;
   sessionKey: string;
   coreSession?: VoiceCallCoreSessionConfig;

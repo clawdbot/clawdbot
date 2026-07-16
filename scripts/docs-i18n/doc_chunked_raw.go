@@ -4,11 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	textpkg "github.com/yuin/goldmark/text"
 )
 
 const defaultDocChunkMaxBytes = 12000
@@ -31,6 +37,9 @@ type docChunkStructure struct {
 	headingLevels         []int
 	listShapes            []markdownListShape
 	inlineCodeSpans       []string
+	linkDestinations      []string
+	protectedLinkLabels   []string
+	numericValues         []string
 	fencedPlaceholders    []string
 	fencedProtocolTokens  []string
 	fencedDirectiveTokens []string
@@ -88,6 +97,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
+	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
+		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
+	}
 	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
 		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
 	}
@@ -96,6 +108,15 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
 		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
+	}
+	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
+		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
+	}
+	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
+		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
+	}
+	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
+		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
 	}
 	return nil
 }
@@ -117,6 +138,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	}
 	if err == nil {
 		translated = sanitizeDocChunkProtocolWrappers(source, translated)
+		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 		translated = reapplyCommonIndent(translated, commonIndent)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
@@ -165,6 +187,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 		return "", err
 	}
 	translated = sanitizeDocChunkProtocolWrappers(source, translated)
+	translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
@@ -280,6 +303,15 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
 		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
 	}
+	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
+		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
+	}
+	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
+		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
+	}
+	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
+		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
+	}
 	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
 		return fmt.Errorf("component tag set mismatch")
 	}
@@ -336,6 +368,32 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 		return translated
 	}
 	return body
+}
+
+func preserveDocChunkBoundaryWhitespace(source, translated string) string {
+	prefixEnd := 0
+	for prefixEnd < len(source) && isDocChunkBoundaryWhitespace(source[prefixEnd]) {
+		prefixEnd++
+	}
+	suffixStart := len(source)
+	for suffixStart > prefixEnd && isDocChunkBoundaryWhitespace(source[suffixStart-1]) {
+		suffixStart--
+	}
+
+	translatedStart := 0
+	for translatedStart < len(translated) && isDocChunkBoundaryWhitespace(translated[translatedStart]) {
+		translatedStart++
+	}
+	translatedEnd := len(translated)
+	for translatedEnd > translatedStart && isDocChunkBoundaryWhitespace(translated[translatedEnd-1]) {
+		translatedEnd--
+	}
+
+	return source[:prefixEnd] + translated[translatedStart:translatedEnd] + source[suffixStart:]
+}
+
+func isDocChunkBoundaryWhitespace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func stripBodyOnlyWrapper(source, text string) (string, bool) {
@@ -440,10 +498,142 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
+		linkDestinations:      extractMarkdownLinkDestinations(text),
+		protectedLinkLabels:   extractProtectedMarkdownLinkLabels(text),
+		numericValues:         extractNumericValues(text),
 		fencedPlaceholders:    fencedPlaceholders,
 		fencedProtocolTokens:  fencedProtocolTokens,
 		fencedDirectiveTokens: fencedDirectiveTokens,
 	}
+}
+
+func extractMarkdownLinkDestinations(text string) []string {
+	// Validate inline Markdown destinations only. Reference-style links and GFM bare-autolink
+	// boundaries remain governed by the shared structural and exact-URL prompt rules.
+	source := []byte(normalizeDocComponentsForMarkdownParse(text))
+	doc := parseDocsMarkdown(source)
+	destinations := make([]string, 0)
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch link := node.(type) {
+		case *ast.Link:
+			if link.Reference == nil {
+				destinations = append(destinations, "link:"+string(link.Destination))
+			}
+		case *ast.Image:
+			if link.Reference == nil {
+				destinations = append(destinations, "image:"+string(link.Destination))
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return destinations
+}
+
+func extractProtectedMarkdownLinkLabels(text string) []string {
+	source := []byte(normalizeDocComponentsForMarkdownParse(text))
+	doc := parseDocsMarkdown(source)
+	labels := make([]string, 0)
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		kind := ""
+		destination := ""
+		switch link := node.(type) {
+		case *ast.Link:
+			kind = "link"
+			destination = string(link.Destination)
+		case *ast.Image:
+			kind = "image"
+			destination = string(link.Destination)
+		default:
+			return ast.WalkContinue, nil
+		}
+		label := strings.TrimSpace(string(node.Text(source)))
+		if isProtectedProductLinkLabel(label, destination) {
+			labels = append(labels, kind+":"+destination+":"+label)
+		}
+		return ast.WalkContinue, nil
+	})
+	return labels
+}
+
+func isProtectedProductLinkLabel(label, destination string) bool {
+	if isAlwaysProtectedProductName(label) {
+		return true
+	}
+	name, ok := contextualProtectedProductName(label)
+	return ok && destinationMentionsProductName(destination, name)
+}
+
+type contextualProductDestinationRule struct {
+	hosts  []string
+	routes []string
+}
+
+var contextualProductDestinations = map[string]contextualProductDestinationRule{
+	"Render":      {hosts: []string{"render.com"}, routes: []string{"/install/render"}},
+	"Matrix":      {hosts: []string{"matrix.org"}, routes: []string{"/channels/matrix"}},
+	"Raft":        {hosts: []string{"raft.build"}, routes: []string{"/channels/raft"}},
+	"Chutes":      {hosts: []string{"chutes.ai"}, routes: []string{"/providers/chutes"}},
+	"fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
+	"Fal":         {hosts: []string{"fal.ai"}, routes: []string{"/providers/fal", "/plugins/reference/fal"}},
+	"Fireworks":   {hosts: []string{"fireworks.ai"}, routes: []string{"/providers/fireworks", "/plugins/reference/fireworks"}},
+	"Inferrs":     {routes: []string{"/providers/inferrs", "/ericcurtin/inferrs"}},
+	"Meta":        {hosts: []string{"meta.ai", "meta.com"}, routes: []string{"/providers/meta", "/plugins/reference/meta"}},
+	"Runway":      {hosts: []string{"runwayml.com"}, routes: []string{"/providers/runway", "/plugins/reference/runway"}},
+	"Synthetic":   {hosts: []string{"synthetic.new"}, routes: []string{"/providers/synthetic"}},
+	"Upstash Box": {hosts: []string{"upstash.com"}, routes: []string{"/install/upstash", "/docs/box"}},
+	"Lobster":     {routes: []string{"/tools/lobster", "/openclaw/lobster"}},
+	"Mantis":      {routes: []string{"/concepts/mantis", "/openclaw/mantis"}},
+	"Tokenjuice":  {routes: []string{"/tools/tokenjuice", "/openclaw/tokenjuice"}},
+}
+
+func destinationMentionsProductName(destination, name string) bool {
+	rule, ok := contextualProductDestinations[name]
+	if !ok {
+		return false
+	}
+	parsed, err := url.Parse(destination)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, allowedHost := range rule.hosts {
+		if host == allowedHost || strings.HasSuffix(host, "."+allowedHost) {
+			return true
+		}
+	}
+	path := strings.ToLower(parsed.Path)
+	for _, route := range rule.routes {
+		if pathContainsRoute(path, route) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathContainsRoute(path, route string) bool {
+	pathParts := nonemptyPathParts(path)
+	routeParts := nonemptyPathParts(route)
+	for start := 0; start+len(routeParts) <= len(pathParts); start++ {
+		if slices.Equal(pathParts[start:start+len(routeParts)], routeParts) {
+			return true
+		}
+	}
+	return false
+}
+
+func nonemptyPathParts(value string) []string {
+	parts := strings.Split(value, "/")
+	return slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+}
+
+func parseDocsMarkdown(source []byte) ast.Node {
+	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
 }
 
 func countsWithoutFence(counts map[string]int) map[string]int {

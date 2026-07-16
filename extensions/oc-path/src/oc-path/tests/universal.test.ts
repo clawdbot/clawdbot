@@ -8,7 +8,7 @@ import { emitJsonl } from "../jsonl/emit.js";
 import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
-import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
+import { resolveOcPath, setOcPath } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
 function expectLeaf(
@@ -35,35 +35,6 @@ function expectInsertionPoint(match: ReturnType<typeof resolveOcPath>, container
     expect(match.container).toBe(container);
   }
 }
-
-describe("detectInsertion", () => {
-  it("returns null for plain paths", () => {
-    expect(detectInsertion(parseOcPath("oc://X.md/section/item/field"))).toBeNull();
-  });
-
-  it("detects bare `+` end-insertion at section", () => {
-    const info = detectInsertion(parseOcPath("oc://X.md/tools/+"));
-    expect(info?.marker).toBe("+");
-    expect(info?.parentPath.section).toBe("tools");
-    expect(info?.parentPath.item).toBeUndefined();
-  });
-
-  it("detects `+key` keyed insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://config/plugins/+gitlab"));
-    expect(info?.marker).toEqual({ kind: "keyed", key: "gitlab" });
-  });
-
-  it("detects `+nnn` indexed insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://config/items/+2"));
-    expect(info?.marker).toEqual({ kind: "indexed", index: 2 });
-  });
-
-  it("detects file-root insertion", () => {
-    const info = detectInsertion(parseOcPath("oc://session.jsonl/+"));
-    expect(info?.marker).toBe("+");
-    expect(info?.parentPath.section).toBeUndefined();
-  });
-});
 
 describe("resolveOcPath — md AST", () => {
   const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n").ast;

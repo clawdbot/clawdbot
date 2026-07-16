@@ -87,7 +87,7 @@ export async function main(argv = process.argv.slice(2)) {
       parallel: true,
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
-        { name: "TypeScript LOC ratchet", args: ["check:loc"] },
+        { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
         { name: "changelog attributions", args: ["check:changelog-attributions"] },
         { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
         {

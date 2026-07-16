@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
   isCompactionCheckpointTranscriptFileName,
+  isMigrationArchiveArtifactName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isSessionStoreTempArtifactName,
@@ -20,6 +21,14 @@ describe("session artifact helpers", () => {
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
     expect(isSessionArchiveArtifactName("keep.deleted.keep.jsonl")).toBe(false);
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("classifies migration archive file names", () => {
+    expect(isMigrationArchiveArtifactName("abc.jsonl.migrated")).toBe(true);
+    expect(isMigrationArchiveArtifactName("sessions.json.migrated.2")).toBe(true);
+    expect(isMigrationArchiveArtifactName("abc.jsonl.migrated.tmp")).toBe(false);
+    expect(isMigrationArchiveArtifactName("abc.migrated.jsonl")).toBe(false);
+    expect(isMigrationArchiveArtifactName("abc.jsonl.MIGRATED")).toBe(false);
   });
 
   it("classifies orphaned session store atomic-write temp files", () => {

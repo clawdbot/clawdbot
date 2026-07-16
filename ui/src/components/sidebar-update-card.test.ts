@@ -2,7 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
+import {
+  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+  NATIVE_UPDATE_DECLINED_EVENT,
+} from "../app/native-link-routing.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./sidebar-update-card.ts";
 
@@ -52,7 +55,7 @@ afterEach(() => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it("renders an available update and invokes the gateway action", async () => {
+  it("labels a direct Gateway update and invokes its action", async () => {
     const element = await mount({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
@@ -63,7 +66,7 @@ describe("SidebarUpdateCard", () => {
 
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
     expect(element.querySelector(".sidebar-update-card")?.getAttribute("role")).toBe("status");
-    expect(action?.textContent).toContain("Update available");
+    expect(action?.textContent).toContain("Update Gateway");
     expect(action?.textContent).toContain("v2.0.0");
     action?.click();
 
@@ -91,7 +94,7 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card")).toBeNull();
   });
 
-  it("routes updates to the native bridge when present", async () => {
+  it("labels and routes a coordinated Mac app and managed Gateway update", async () => {
     const postMessage = vi.fn();
     Object.defineProperty(window, "webkit", {
       configurable: true,
@@ -105,6 +108,52 @@ describe("SidebarUpdateCard", () => {
     const onUpdate = vi.fn();
     element.onUpdate = onUpdate;
 
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    expect(action?.textContent).toContain("Update Mac app + Gateway");
+    expect(action?.textContent).toContain("v2.0.0");
+    action?.click();
+
+    expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("updates the visible target when native ownership changes", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    expect(element.textContent).toContain("Update Gateway");
+
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage: vi.fn() } } },
+    });
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+    await element.updateComplete;
+    expect(element.textContent).toContain("Update Mac app + Gateway");
+
+    Reflect.deleteProperty(window, "webkit");
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+    await element.updateComplete;
+    expect(element.textContent).toContain("Update Gateway");
+  });
+
+  it("uses a newly installed native bridge before its availability event arrives", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    const postMessage = vi.fn();
+    element.onUpdate = onUpdate;
+    expect(element.textContent).toContain("Update Gateway");
+
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
+    });
     element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
 
     expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
@@ -135,6 +184,62 @@ describe("SidebarUpdateCard", () => {
     element.remove();
     window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps later clicks on the displayed Gateway route after a native decline", async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
+    });
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    await element.updateComplete;
+    expect(element.textContent).toContain("Update Gateway");
+
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+    await element.updateComplete;
+    expect(element.textContent).toContain("Update Mac app + Gateway");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a declined Gateway route consistent across reconnection", async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(window, "webkit", {
+      configurable: true,
+      value: { messageHandlers: { openclawUpdate: { postMessage } } },
+    });
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    await element.updateComplete;
+    element.remove();
+    document.body.append(element);
+    await element.updateComplete;
+
+    expect(element.textContent).toContain("Update Gateway");
+    element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   it("disables the action while updating", async () => {

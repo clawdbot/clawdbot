@@ -1,6 +1,8 @@
 // Media parse tests cover media reference parsing from text and payloads.
 import { describe, expect, it } from "vitest";
-import { splitMediaFromOutput, type SplitMediaFromOutputOptions } from "./parse.js";
+import { splitMediaFromOutput } from "./parse.js";
+
+type SplitMediaFromOutputOptions = NonNullable<Parameters<typeof splitMediaFromOutput>[1]>;
 
 describe("splitMediaFromOutput", () => {
   function expectParsedMediaOutputCase(

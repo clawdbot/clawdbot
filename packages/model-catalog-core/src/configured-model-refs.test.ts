@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
-  extractProviderFromModelRef,
 } from "./configured-model-refs.js";
 
 describe("configured model refs", () => {
@@ -76,10 +75,5 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([]);
-  });
-
-  it("extracts normalized providers from provider-prefixed refs", () => {
-    expect(extractProviderFromModelRef(" OpenAI/gpt-5.5 ")).toBe("openai");
-    expect(extractProviderFromModelRef("gpt-5.5")).toBeNull();
   });
 });

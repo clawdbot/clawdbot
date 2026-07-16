@@ -15,12 +15,14 @@ import {
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
+import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -203,28 +205,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   );
 }
 
-function addCollisionSuffix(filePath: string, suffix: number): string {
-  const ext = path.extname(filePath);
-  const baseName = path.basename(filePath, ext);
-  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
-}
-
-async function writeNewDefaultExportFile(filePath: string, html: string): Promise<string> {
-  for (let suffix = 1; suffix <= 100; suffix++) {
-    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
-    try {
-      await fsp.writeFile(candidate, html, { encoding: "utf-8", flag: "wx" });
-      return candidate;
-    } catch (error) {
-      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error(`Could not find an unused export filename near ${filePath}`);
-}
-
 function isSessionFileEntry(value: unknown): value is SessionFileEntry {
   if (!isRecord(value) || typeof value.type !== "string") {
     return false;
@@ -402,27 +382,21 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
-  let outputPath = args.outputPath
-    ? path.resolve(
-        args.outputPath.startsWith("~")
-          ? args.outputPath.replace("~", process.env.HOME ?? "")
-          : args.outputPath,
-      )
-    : path.join(params.workspaceDir, defaultFileName);
-
-  // Ensure directory exists
-  const outputDir = path.dirname(outputPath);
-  await fsp.mkdir(outputDir, { recursive: true });
-
-  // 7. Write file
-  if (args.outputPath) {
-    await fsp.writeFile(outputPath, html, "utf-8");
-  } else {
-    outputPath = await writeNewDefaultExportFile(outputPath, html);
+  let displayPath: string;
+  try {
+    const written = await writeSessionExportFile({
+      workspaceDir: params.workspaceDir,
+      requestedPath: args.outputPath,
+      defaultFileName,
+      contents: html,
+    });
+    displayPath = written.displayPath;
+  } catch (error) {
+    if (error instanceof FsSafeError && error.category === "policy") {
+      return { text: "❌ Output path must be a regular file inside the workspace." };
+    }
+    throw error;
   }
-
-  const relativePath = path.relative(params.workspaceDir, outputPath);
-  const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;
 
   return {
     text: [

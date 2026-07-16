@@ -158,10 +158,12 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   dispatchCronDelivery,
-  getCompletedDirectCronDeliveriesCountForTests,
   queueCronMessageToolDeliveryAwareness,
-  resetCompletedDirectCronDeliveriesForTests,
 } from "./delivery-dispatch.js";
+import {
+  getCompletedDirectCronDeliveriesCountForTests,
+  resetCompletedDirectCronDeliveriesForTests,
+} from "./delivery-dispatch.test-support.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
@@ -2745,3 +2747,4 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

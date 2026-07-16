@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type {
+  WorkboardBoardMetadata,
+  WorkboardChange,
+  WorkboardCard,
+  WorkboardLink,
+  WorkboardMetadata,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
+import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
+import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
   assertCanMutateClaimedCard,
   cardBoardId,
@@ -20,6 +29,7 @@ import {
   updateEvent,
   appendEvent,
 } from "./store-card-helpers.js";
+import { WorkboardChangeTracker } from "./store-change-tracker.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
 import type {
   WorkboardBoardInput,
@@ -56,31 +66,30 @@ import {
   syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
-import type {
-  WorkboardBoardMetadata,
-  WorkboardCard,
-  WorkboardLink,
-  WorkboardMetadata,
-  WorkboardStatus,
-} from "./types.js";
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private lastNotificationSequence = 0;
+  private readonly changes: WorkboardChangeTracker;
+  protected readonly store: WorkboardKeyedStore;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 
   constructor(
-    protected readonly store: WorkboardKeyedStore,
+    store: WorkboardKeyedStore,
     stores: {
       boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
       attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      dataVersion?: () => number;
     } = {},
   ) {
-    this.boardStore =
-      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>);
+    this.changes = new WorkboardChangeTracker(stores.dataVersion);
+    this.store = this.changes.track(store);
+    this.boardStore = this.changes.track(
+      stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
+    );
     this.subscriptionStore =
       stores.subscriptions ??
       (store as unknown as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>);
@@ -88,8 +97,21 @@ export class WorkboardCoreStore {
       stores.attachments ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardAttachment>);
   }
 
+  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
+    return this.changes.subscribe(listener);
+  }
+
+  announceChangeEpoch(): void {
+    this.changes.announceEpoch();
+  }
+
+  reconcileExternalChanges(): boolean {
+    return this.changes.reconcileExternalChanges();
+  }
+
   protected async enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const result = this.mutationQueue.then(run, run);
+    const runAndNotify = async () => await this.changes.runMutation(run);
+    const result = this.mutationQueue.then(runAndNotify, runAndNotify);
     this.mutationQueue = result.then(
       () => undefined,
       () => undefined,
@@ -299,17 +321,7 @@ export class WorkboardCoreStore {
     const requestedStatus = normalizeStatus(input.status, "todo");
     const cards = await this.list();
     const parents = normalizeStringList(input.parents, "parents", 120);
-    const automation = normalizeAutomation({
-      tenant: input.tenant,
-      boardId: input.boardId,
-      createdByCardId: input.createdByCardId,
-      idempotencyKey: input.idempotencyKey,
-      skills: input.skills,
-      workspace: input.workspace,
-      maxRuntimeSeconds: input.maxRuntimeSeconds,
-      maxRetries: input.maxRetries,
-      scheduledAt: input.scheduledAt,
-    });
+    const automation = normalizeCardAutomation(input);
     const heldBySchedule =
       Boolean(automation?.scheduledAt && automation.scheduledAt > now) &&
       requestedStatus !== "blocked";
@@ -521,6 +533,7 @@ export class WorkboardCoreStore {
       "idempotencyKey",
       "skills",
       "workspace",
+      "workspaceAccess",
       "maxRuntimeSeconds",
       "maxRetries",
       "scheduledAt",
@@ -532,7 +545,7 @@ export class WorkboardCoreStore {
     if (Object.keys(automationPatch).length > 0) {
       metadata = trimMetadataToBudget({
         ...metadata,
-        automation: normalizeAutomation(automationPatch, metadata.automation),
+        automation: normalizeAutomationPatch(automationPatch, metadata.automation),
       });
     }
     const next = removeUndefinedCardFields({
@@ -633,13 +646,6 @@ export class WorkboardCoreStore {
     if ((scheduledAt && scheduledAt > now) || (existing.status === "scheduled" && !scheduledAt)) {
       throw new Error("card is scheduled for later.");
     }
-  }
-
-  async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
-    return await this.update(id, {
-      status,
-      position,
-    });
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
@@ -896,18 +902,6 @@ export class WorkboardCoreStore {
     return next;
   }
 
-  protected async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
-    if (
-      card.status !== "triage" ||
-      card.metadata?.archivedAt ||
-      card.metadata?.workerProtocol?.state === "idle"
-    ) {
-      return false;
-    }
-    const board = await this.boardStore.lookup(cardBoardId(card));
-    return board?.version === 1 && board.board.orchestration?.autoDecompose === true;
-  }
-
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
     const card = await this.get(id);
     if (!card) {
@@ -919,17 +913,5 @@ export class WorkboardCoreStore {
     }
     return await this.updateCard(card.id, { status: target });
   }
-
-  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
-    return await this.enqueueMutation(async () => {
-      const promoted: WorkboardCard[] = [];
-      for (const card of await this.list()) {
-        const next = await this.promoteDependencyReady(card.id, now);
-        if (next.status !== card.status) {
-          promoted.push(next);
-        }
-      }
-      return { cards: promoted, count: promoted.length };
-    });
-  }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

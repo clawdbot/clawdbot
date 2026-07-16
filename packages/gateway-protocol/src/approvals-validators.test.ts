@@ -38,6 +38,15 @@ const pluginPresentation = {
   allowedDecisions: ["allow-once", "deny"],
 } as const;
 
+const systemAgentPresentation = {
+  kind: "system-agent",
+  title: "OpenClaw change",
+  description: "Set gateway.port to 19001",
+  proposalHash: "a".repeat(64),
+  agentId: "main",
+  allowedDecisions: ["allow-once", "deny"],
+} as const;
+
 const execRecord = {
   id: "approval:01JZ4K6M2X8YQW9N7R3T5V1C0B",
   urlPath: "/approve/approval%3A01JZ4K6M2X8YQW9N7R3T5V1C0B",
@@ -58,6 +67,7 @@ describe("unified approval protocol validators", () => {
   it("keeps approval kinds and decisions closed", () => {
     expect(validateApprovalKind("exec")).toBe(true);
     expect(validateApprovalKind("plugin")).toBe(true);
+    expect(validateApprovalKind("system-agent")).toBe(true);
     expect(validateApprovalKind("tool")).toBe(false);
     expect(validateApprovalDecision("deny")).toBe(true);
     expect(validateApprovalDecision("accept")).toBe(false);
@@ -79,11 +89,12 @@ describe("unified approval protocol validators", () => {
     expect(validatePluginApprovalSeverity("blocker")).toBe(false);
   });
 
-  it("accepts only reviewer-safe exec and plugin presentations", () => {
+  it("accepts only reviewer-safe approval presentations", () => {
     expect(validateExecApprovalPresentation(execPresentation)).toBe(true);
     expect(validatePluginApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
+    expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
 
     for (const forbiddenField of ["cwd", "env", "systemRunBinding", "systemRunPlan"] as const) {
       expect(

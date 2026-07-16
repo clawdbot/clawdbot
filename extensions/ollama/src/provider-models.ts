@@ -103,7 +103,7 @@ function hasCachedOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
   return typeof info.contextWindow === "number" || (info.capabilities?.length ?? 0) > 0;
 }
 
-export function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
+function parseOllamaNumCtxParameter(parameters: unknown): number | undefined {
   if (typeof parameters !== "string" || !parameters.trim()) {
     return undefined;
   }
@@ -356,8 +356,4 @@ export async function buildOllamaProvider(
       buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
     ),
   };
-}
-
-export function resetOllamaModelShowInfoCacheForTest(): void {
-  ollamaModelShowInfoCache.clear();
 }

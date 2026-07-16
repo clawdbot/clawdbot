@@ -617,7 +617,7 @@ type SystemdServiceInfo = {
   memoryCurrent?: number;
 };
 
-export function parseSystemdShow(output: string): SystemdServiceInfo {
+function parseSystemdShow(output: string): SystemdServiceInfo {
   const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
   const activeState = entries.activestate;
@@ -1548,3 +1548,4 @@ export async function uninstallLegacySystemdUnits({
 
   return units;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

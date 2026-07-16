@@ -3,9 +3,12 @@ import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
 type CompletionChatType = ChatType | "unknown";
+
+type DurableCompletionDeliveryMode = "automatic" | "host_owned";
 
 type CompletionDeliverySessionEntry = {
   chatType?: string | null;
@@ -56,6 +59,15 @@ export function completionRequiresMessageToolDelivery(params: {
       messageToolAvailable: params.messageToolAvailable,
     }) === "message_tool_only"
   );
+}
+
+/** Resolve transport authority for a durable, fixed-route agent completion. */
+export function resolveDurableCompletionDeliveryMode(
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode,
+): DurableCompletionDeliveryMode {
+  // Message-tool-only blocks ambient model replies. A durable completion is an
+  // explicit system send: the host fixes route/payload and withholds the message tool.
+  return sourceReplyDeliveryMode === "message_tool_only" ? "host_owned" : "automatic";
 }
 
 export function shouldRouteCompletionThroughRequesterSession(

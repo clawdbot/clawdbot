@@ -8,7 +8,7 @@ import {
   readConfiguredProviderCatalogEntries,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyArceeConfig,
   applyArceeOpenRouterConfig,
@@ -141,7 +141,7 @@ export default definePluginEntry({
             }
           : undefined;
       },
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     });
   },
 });

@@ -184,11 +184,3 @@ export async function tryHandleHostedZaloMediaRequest(
   await store.delete(id);
   return true;
 }
-
-export async function clearHostedZaloMediaForTest(): Promise<void> {
-  if (!hostedZaloMediaStore) {
-    return;
-  }
-  await hostedZaloMediaStore.clear();
-  hostedZaloMediaStore = undefined;
-}

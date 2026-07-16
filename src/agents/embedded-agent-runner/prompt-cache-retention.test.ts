@@ -63,6 +63,17 @@ describe("prompt cache retention", () => {
     ).toBe("none");
   });
 
+  it("keeps undocumented cacheRetention values outside the Bedrock runtime contract", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "standard" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.anthropic.claude-sonnet-4-6",
+      ),
+    ).toBeUndefined();
+  });
+
   it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
     // Providers that route via openai-completions but do not advertise prompt
     // caching must keep retention out of outgoing payloads.

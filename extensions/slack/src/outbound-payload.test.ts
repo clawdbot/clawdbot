@@ -1215,3 +1215,4 @@ describe("Slack outbound payload contract", () => {
     createHarness: createSlackOutboundPayloadHarness,
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

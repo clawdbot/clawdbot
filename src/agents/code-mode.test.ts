@@ -6,20 +6,21 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   clearCodeModeNamespacesForPlugin,
-  clearCodeModeNamespacesForTest,
   createCodeModeNamespaceTool,
-  type CodeModeNamespaceRegistration,
-  listCodeModeNamespaces,
   registerCodeModeNamespaceForPlugin,
 } from "./code-mode-namespaces.js";
+import {
+  clearCodeModeNamespacesForTest,
+  listCodeModeNamespaces,
+} from "./code-mode-namespaces.test-support.js";
 import {
   applyCodeModeCatalog,
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
   resolveCodeModeConfig,
-  testing,
 } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -28,6 +29,8 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+type CodeModeNamespaceRegistration = Parameters<typeof registerCodeModeNamespaceForPlugin>[1];
 
 function fakeTool(name: string, description: string): AnyAgentTool {
   // Minimal tool shape keeps Code Mode catalog tests runtime-free.
@@ -2441,3 +2444,4 @@ describe("Code Mode", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

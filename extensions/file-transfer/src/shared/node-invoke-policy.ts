@@ -964,7 +964,4 @@ export function createFileTransferNodeInvokePolicy(): OpenClawPluginNodeInvokePo
   };
 }
 
-export const testing = {
-  listDirFetchArchiveEntries,
-  readAuditSizeBytes,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

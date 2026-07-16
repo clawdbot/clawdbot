@@ -7,7 +7,6 @@ import {
   addWorkboardCardComment,
   archiveWorkboardCard,
   captureSessionToWorkboard,
-  configureWorkboardPolling,
   deleteWorkboardCard,
   dispatchWorkboard,
   filterWorkboardCardsForPreset,
@@ -20,7 +19,6 @@ import {
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
   stopWorkboardCard,
   summarizeWorkboardHealth,
   syncWorkboardLifecycle,
@@ -125,6 +123,62 @@ describe("workboard controller", () => {
       expect(secondState.query).toBe("");
     });
 
+    it("loads persisted board summaries with canonical cards", async () => {
+      const host = {};
+      const client = createClient({
+        "workboard.cards.list": {
+          cards: [sampleCard],
+          boards: [
+            {
+              id: "default",
+              name: "Inbox",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+            {
+              id: "archive",
+              total: 0,
+              active: 0,
+              archived: 0,
+              byStatus: {},
+              archivedAt: 7,
+            },
+            {
+              id: "__all__",
+              total: 1,
+              active: 1,
+              archived: 0,
+              byStatus: { todo: 1 },
+            },
+          ],
+          statuses: ["todo", "done"],
+        },
+      });
+
+      await loadWorkboard({ host, client: client as never, force: true });
+
+      expect(getWorkboardState(host).boards).toEqual([
+        {
+          id: "default",
+          name: "Inbox",
+          total: 1,
+          active: 1,
+          archived: 0,
+          byStatus: { todo: 1 },
+        },
+        {
+          id: "archive",
+          total: 0,
+          active: 0,
+          archived: 0,
+          byStatus: {},
+          archivedAt: 7,
+        },
+      ]);
+    });
+
     it("rejects an invalidated generation after its replacement loads", async () => {
       const host = {};
       const staleList = createDeferred<unknown>();
@@ -153,40 +207,6 @@ describe("workboard controller", () => {
 
       expect(listCalls).toBe(2);
       expect(getWorkboardState(host).cards).toEqual([currentCard]);
-    });
-
-    it("cleans up only the stopped host polling timer", async () => {
-      vi.useFakeTimers();
-      const stoppedHost = {};
-      const activeHost = {};
-      const stoppedClient = createClient({
-        "workboard.cards.list": { cards: [], statuses: ["todo", "done"] },
-      });
-      const activeClient = createClient({
-        "workboard.cards.list": { cards: [], statuses: ["todo", "done"] },
-      });
-      getWorkboardState(stoppedHost).autoRefreshIntervalMs = 5000;
-      getWorkboardState(activeHost).autoRefreshIntervalMs = 5000;
-
-      configureWorkboardPolling({
-        host: stoppedHost,
-        client: stoppedClient as never,
-        enabled: true,
-      });
-      configureWorkboardPolling({
-        host: activeHost,
-        client: activeClient as never,
-        enabled: true,
-      });
-      expect(vi.getTimerCount()).toBe(2);
-
-      stopWorkboardPolling(stoppedHost);
-      expect(vi.getTimerCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(5000);
-
-      expect(stoppedClient.request).not.toHaveBeenCalled();
-      expect(activeClient.request).toHaveBeenCalledWith("workboard.cards.list", {});
-      stopWorkboardPolling(activeHost);
     });
 
     it("tracks lifecycle writes until a same-host reload can proceed", async () => {
@@ -616,33 +636,27 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
 
-  it("records poll refresh state until the final reconciliation render", async () => {
+  it("records live refresh metadata after reconciliation", async () => {
     const host = {};
     const client = createClient({
       "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
       "tasks.list": { tasks: [] },
     });
-    const pollStates: boolean[] = [];
-
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
-      requestUpdate: () => pollStates.push(getWorkboardState(host).pollRefreshInProgress),
+      source: "live",
     });
 
     const state = getWorkboardState(host);
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    expect(pollStates.slice(0, -1).every(Boolean)).toBe(true);
-    expect(pollStates.at(-1)).toBe(false);
-    expect(state.pollRefreshInProgress).toBe(false);
-    expect(state.lastRefreshSource).toBe("poll");
+    expect(state.lastRefreshSource).toBe("live");
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
     expect(state.lastRefreshError).toBeNull();
     expect(state.lifecycleTasksPrepared).toBe(true);
   });
 
-  it("preserves mutation errors during successful passive poll refreshes", async () => {
+  it("preserves mutation errors during successful live refreshes", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.error = "move denied";
@@ -654,7 +668,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.error).toBe("move denied");
@@ -662,7 +676,7 @@ describe("workboard controller", () => {
     expect(state.lastRefreshAt).toEqual(expect.any(Number));
   });
 
-  it("clears a recovered load error during successful passive poll refreshes", async () => {
+  it("clears a recovered load error during successful live refreshes", async () => {
     const host = {};
     let cardsAvailable = false;
     const client = createClient((method) => {
@@ -691,7 +705,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.loaded).toBe(true);
@@ -726,7 +740,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.loaded).toBe(true);
@@ -735,7 +749,7 @@ describe("workboard controller", () => {
     expect(state.lastRefreshError).toBeNull();
   });
 
-  it("records passive poll failures without replacing mutation errors", async () => {
+  it("records live refresh failures without replacing mutation errors", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.error = "move denied";
@@ -746,7 +760,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.error).toBe("move denied");
@@ -885,7 +899,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
@@ -919,7 +933,7 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
@@ -932,13 +946,13 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: sampleTask.taskId });
   });
 
-  it("keeps canonical task unlinks during bounded poll refreshes", async () => {
+  it("keeps canonical task unlinks during bounded live refreshes", async () => {
     const host = {};
     const state = getWorkboardState(host);
     state.tasksByCardId.set(sampleCard.id, sampleTask);
@@ -949,15 +963,14 @@ describe("workboard controller", () => {
     await refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
 
     expect(state.cards[0]).not.toHaveProperty("taskId");
     expect(state.tasksByCardId.has(sampleCard.id)).toBe(false);
   });
 
-  it("polls through the read refresh path without write methods", async () => {
-    vi.useFakeTimers();
+  it("refreshes live state through the read path without write methods", async () => {
     const host = {};
     const linkedCard = {
       ...sampleCard,
@@ -994,16 +1007,14 @@ describe("workboard controller", () => {
       return {};
     });
     const state = getWorkboardState(host);
-    state.autoRefreshIntervalMs = 5000;
     state.tasksByCardId.set(sampleCard.id, sampleTask);
     state.tasksByCardId.set(olderCard.id, olderTask);
 
-    configureWorkboardPolling({
+    await refreshWorkboard({
       host,
       client: client as never,
-      enabled: true,
+      source: "live",
     });
-    await vi.advanceTimersByTimeAsync(5000);
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(client.request).not.toHaveBeenCalledWith(
@@ -1016,113 +1027,6 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: olderTask.taskId });
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(completedTask);
     expect(state.tasksByCardId.get(olderCard.id)).toEqual(olderTask);
-    vi.clearAllMocks();
-    stopWorkboardPolling(host);
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("does not rearm polling while a poll is in flight", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const listResponse = createDeferred<unknown>();
-    const client = createClient((method) => {
-      if (method === "workboard.cards.list") {
-        return listResponse.promise;
-      }
-      return {};
-    });
-    const state = getWorkboardState(host);
-    state.autoRefreshIntervalMs = 5000;
-    const configure = () =>
-      configureWorkboardPolling({
-        host,
-        client: client as never,
-        enabled: true,
-      });
-
-    configure();
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(state.pollRefreshInProgress).toBe(true);
-
-    configure();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-    ).toHaveLength(1);
-
-    stopWorkboardPolling(host);
-    listResponse.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
-    await Promise.resolve();
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-    ).toHaveLength(1);
-  });
-
-  it("rearms polling after teardown while the previous poll is still in flight", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const firstListResponse = createDeferred<unknown>();
-    const secondListResponse = createDeferred<unknown>();
-    const firstClient = createClient((method) => {
-      if (method === "workboard.cards.list") {
-        return firstListResponse.promise;
-      }
-      return {};
-    });
-    const secondClient = createClient((method) => {
-      if (method === "workboard.cards.list") {
-        return secondListResponse.promise;
-      }
-      return {};
-    });
-    const state = getWorkboardState(host);
-    state.autoRefreshIntervalMs = 5000;
-
-    configureWorkboardPolling({
-      host,
-      client: firstClient as never,
-      enabled: true,
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(state.pollRefreshInProgress).toBe(true);
-
-    stopWorkboardPolling(host);
-    expect(state.pollRefreshInProgress).toBe(false);
-    expect(state.loading).toBe(false);
-    expect(state.loadAttempted).toBe(false);
-
-    configureWorkboardPolling({
-      host,
-      client: secondClient as never,
-      enabled: true,
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(secondClient.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    expect(state.pollRefreshInProgress).toBe(true);
-
-    firstListResponse.resolve({
-      cards: [{ ...sampleCard, title: "Stale poll" }],
-      statuses: ["todo", "done"],
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(state.pollRefreshInProgress).toBe(true);
-
-    secondListResponse.resolve({
-      cards: [{ ...sampleCard, title: "Current poll" }],
-      statuses: ["todo", "done"],
-    });
-    await vi.waitFor(() => {
-      expect(state.pollRefreshInProgress).toBe(false);
-    });
-
-    expect(state.cards).toMatchObject([{ title: "Current poll" }]);
-    stopWorkboardPolling(host);
   });
 
   it("polls a canonical replacement task instead of a stale session-matched task", async () => {
@@ -1152,7 +1056,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: "task-2" });
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
@@ -1182,12 +1086,12 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
     const firstBatch = client.request.mock.calls
       .filter(([method]) => method === "tasks.get")
       .map(([, params]) => (params as { taskId: string }).taskId);
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
     const secondBatch = client.request.mock.calls
       .filter(([method]) => method === "tasks.get")
       .map(([, params]) => (params as { taskId: string }).taskId);
@@ -1224,7 +1128,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
     vi.clearAllMocks();
@@ -1265,7 +1169,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
     const firstDiscoveryCalls = client.request.mock.calls.filter(
       ([method]) => method === "tasks.list",
     );
@@ -1277,7 +1181,7 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).lifecycleTasksPrepared).toBe(false);
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
     const secondDiscoveryCalls = client.request.mock.calls.filter(
       ([method]) => method === "tasks.list",
     );
@@ -1305,7 +1209,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: sampleTask.taskId });
@@ -1350,7 +1254,7 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
     expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
@@ -1359,7 +1263,7 @@ describe("workboard controller", () => {
     expect(state.missingTaskIds).toEqual(new Set([missingTaskId]));
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(client.request).toHaveBeenCalledWith("tasks.get", { taskId: replacementTaskId });
     expect(client.request).not.toHaveBeenCalledWith("tasks.get", { taskId: missingTaskId });
@@ -1389,11 +1293,11 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
     expect(getWorkboardState(host).cards[0]).not.toHaveProperty("taskId");
 
     vi.clearAllMocks();
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     expect(client.request).toHaveBeenCalledWith("tasks.list", {
       limit: 500,
@@ -1422,9 +1326,9 @@ describe("workboard controller", () => {
       return {};
     });
 
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
-    await refreshWorkboard({ host, client: client as never, source: "poll" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
+    await refreshWorkboard({ host, client: client as never, source: "live" });
 
     const discoveryCalls = client.request.mock.calls.filter(([method]) => method === "tasks.list");
     expect(discoveryCalls.map(([, params]) => params)).toEqual([
@@ -1432,33 +1336,6 @@ describe("workboard controller", () => {
       { limit: 500, cursor: "500" },
       { limit: 500 },
     ]);
-  });
-
-  it("defers polling while a card is being dragged", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const client = createClient({
-      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
-      "tasks.list": { tasks: [] },
-    });
-    const state = getWorkboardState(host);
-    state.autoRefreshIntervalMs = 5000;
-    state.draggedCardId = sampleCard.id;
-
-    configureWorkboardPolling({
-      host,
-      client: client as never,
-      enabled: true,
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(client.request).not.toHaveBeenCalled();
-
-    state.draggedCardId = null;
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
-    stopWorkboardPolling(host);
   });
 
   it("discards an in-flight poll when a card drag starts", async () => {
@@ -1479,7 +1356,7 @@ describe("workboard controller", () => {
     const refresh = refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
     await Promise.resolve();
     state.draggedCardId = initialCard.id;
@@ -1509,7 +1386,7 @@ describe("workboard controller", () => {
     const refresh = refreshWorkboard({
       host,
       client: client as never,
-      source: "poll",
+      source: "live",
     });
     await Promise.resolve();
     state.draftOpen = true;
@@ -2782,7 +2659,7 @@ describe("workboard controller", () => {
     expect(state.tasksByCardId.has("card-1")).toBe(false);
   });
 
-  it("preserves automation metadata loaded from the plugin gateway method", async () => {
+  it("preserves contract-owned metadata loaded from the plugin gateway method", async () => {
     const host = {};
     const client = createClient({
       "workboard.cards.list": {
@@ -2793,10 +2670,60 @@ describe("workboard controller", () => {
               automation: {
                 tenant: "qa",
                 skills: ["testing"],
-                workspace: { kind: "scratch" },
+                workspace: {
+                  kind: "worktree",
+                  path: "/tmp/worktree",
+                  branch: "work/card-1",
+                  sourcePath: "/repo",
+                  sourceBranch: "main",
+                },
+                workspaceAccess: {
+                  unrestricted: false,
+                  roots: ["/repo"],
+                  writable: true,
+                },
                 dispatchCount: 2,
                 lastDispatchAt: 20,
               },
+              claim: {
+                ownerId: "agent:main",
+                token: "[redacted]",
+                claimedAt: 10,
+                lastHeartbeatAt: 11,
+              },
+              diagnostics: [
+                {
+                  kind: "missing_proof",
+                  severity: "warning",
+                  title: "Proof missing",
+                  detail: "Attach focused validation.",
+                  firstSeenAt: 12,
+                  lastSeenAt: 13,
+                  count: 1,
+                  actions: [{ kind: "add_proof", label: "Add proof" }],
+                },
+                { kind: "future_kind", title: "Invalid contract value" },
+                {
+                  kind: "missing_proof",
+                  severity: "future_severity",
+                  title: "Invalid severity value",
+                },
+              ],
+              notifications: [
+                {
+                  id: "notification-1",
+                  kind: "completed",
+                  createdAt: 14,
+                  sequence: 3,
+                  message: "Card completed",
+                },
+                {
+                  id: "notification-2",
+                  kind: "future_kind",
+                  createdAt: 15,
+                  message: "Invalid contract value",
+                },
+              ],
             },
           },
         ],
@@ -2806,13 +2733,29 @@ describe("workboard controller", () => {
 
     await loadWorkboard({ host, client: client as never, force: true });
 
-    expect(getWorkboardState(host).cards[0]?.metadata?.automation).toMatchObject({
-      tenant: "qa",
-      skills: ["testing"],
-      workspace: { kind: "scratch" },
-      dispatchCount: 2,
-      lastDispatchAt: 20,
+    expect(getWorkboardState(host).cards[0]?.metadata).toMatchObject({
+      automation: {
+        tenant: "qa",
+        skills: ["testing"],
+        workspace: {
+          kind: "worktree",
+          sourcePath: "/repo",
+          sourceBranch: "main",
+        },
+        workspaceAccess: {
+          unrestricted: false,
+          roots: ["/repo"],
+          writable: true,
+        },
+        dispatchCount: 2,
+        lastDispatchAt: 20,
+      },
+      claim: { token: "[redacted]" },
+      diagnostics: [{ actions: [{ kind: "add_proof", label: "Add proof" }] }],
+      notifications: [{ sequence: 3 }],
     });
+    expect(getWorkboardState(host).cards[0]?.metadata?.diagnostics).toHaveLength(1);
+    expect(getWorkboardState(host).cards[0]?.metadata?.notifications).toHaveLength(1);
   });
 
   it("updates cards from draft state when editing", async () => {
@@ -5528,12 +5471,6 @@ describe("workboard controller", () => {
     expect(state.lifecycleTasksPrepared).toBe(false);
 
     vi.clearAllMocks();
-    configureWorkboardPolling({
-      host,
-      client: client as never,
-      enabled: false,
-      requestUpdate,
-    });
     await vi.advanceTimersByTimeAsync(100);
     expect(requestUpdate).toHaveBeenCalledOnce();
     vi.clearAllMocks();
@@ -5594,7 +5531,7 @@ describe("workboard controller", () => {
 
     vi.clearAllMocks();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("stops bounded exact confirmations after a transient batch failure", async () => {
@@ -5840,7 +5777,6 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     state.tasksByCardId.set("card-1", sampleTask);
-    state.autoRefreshIntervalMs = 5000;
     state.lifecycleTasksPrepared = true;
     state.lifecycleTasksPreparedAt = Date.now();
     const completedTask = { ...sampleTask, status: "completed" as const };
@@ -5860,173 +5796,6 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
     expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
-  });
-
-  it("uses the selected auto-refresh interval for prepared lifecycle tasks", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const state = getWorkboardState(host);
-    const linked = {
-      ...sampleCard,
-      status: "running",
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-      taskId: "task-1",
-    } satisfies WorkboardCard;
-    state.loaded = true;
-    state.cards = [linked];
-    state.tasksByCardId.set("card-1", sampleTask);
-    state.autoRefreshIntervalMs = 15000;
-    state.lifecycleTasksPrepared = true;
-    state.lifecycleTasksPreparedAt = Date.now();
-    const completedTask = { ...sampleTask, status: "completed" as const };
-    const client = createClient({
-      "tasks.list": { tasks: [completedTask] },
-      "workboard.cards.update": { card: { ...linked, status: "review" } },
-    });
-    const requestUpdate = vi.fn();
-
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    await vi.advanceTimersByTimeAsync(5000);
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-
-    expect(requestUpdate).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(10000);
-    expect(requestUpdate).toHaveBeenCalledOnce();
-    vi.clearAllMocks();
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-
-    expect(client.request).toHaveBeenNthCalledWith(1, "tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", expect.anything());
-  });
-
-  it("does not refresh prepared task lifecycle state while auto-refresh is off", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const state = getWorkboardState(host);
-    const linked = {
-      ...sampleCard,
-      status: "running",
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-      taskId: "task-1",
-    } satisfies WorkboardCard;
-    state.loaded = true;
-    state.cards = [linked];
-    state.tasksByCardId.set("card-1", sampleTask);
-    state.lifecycleTasksPrepared = true;
-    state.lifecycleTasksPreparedAt = Date.now();
-    const client = createClient({
-      "tasks.list": { tasks: [{ ...sampleTask, status: "completed" }] },
-    });
-    const requestUpdate = vi.fn();
-
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    await vi.advanceTimersByTimeAsync(5000);
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-
-    expect(requestUpdate).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("cancels prepared task lifecycle refresh when auto-refresh is turned off", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const state = getWorkboardState(host);
-    const linked = {
-      ...sampleCard,
-      status: "running",
-      sessionKey: sampleTaskSessionKey,
-      runId: "run-1",
-      taskId: "task-1",
-    } satisfies WorkboardCard;
-    state.loaded = true;
-    state.cards = [linked];
-    state.tasksByCardId.set("card-1", sampleTask);
-    state.autoRefreshIntervalMs = 5000;
-    state.lifecycleTasksPrepared = true;
-    state.lifecycleTasksPreparedAt = Date.now();
-    const client = createClient({
-      "tasks.list": { tasks: [{ ...sampleTask, status: "completed" }] },
-    });
-    const requestUpdate = vi.fn();
-
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    state.autoRefreshIntervalMs = 0;
-    configureWorkboardPolling({
-      host,
-      client: client as never,
-      enabled: false,
-      requestUpdate,
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(requestUpdate).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("does not schedule failed task lifecycle retries while auto-refresh is off", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.cards = [
-      {
-        ...sampleCard,
-        status: "running",
-        sessionKey: sampleTaskSessionKey,
-        taskId: sampleTask.taskId,
-      },
-    ];
-    state.tasksByCardId.set(sampleCard.id, sampleTask);
-    const requestUpdate = vi.fn();
-    const client = createClient(() => {
-      throw new Error("tasks unavailable");
-    });
-
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    vi.clearAllMocks();
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(requestUpdate).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("cancels failed task lifecycle retries when auto-refresh is turned off", async () => {
-    vi.useFakeTimers();
-    const host = {};
-    const state = getWorkboardState(host);
-    state.loaded = true;
-    state.cards = [
-      {
-        ...sampleCard,
-        status: "running",
-        sessionKey: sampleTaskSessionKey,
-        taskId: sampleTask.taskId,
-      },
-    ];
-    state.tasksByCardId.set(sampleCard.id, sampleTask);
-    state.autoRefreshIntervalMs = 5000;
-    const requestUpdate = vi.fn();
-    const client = createClient(() => {
-      throw new Error("tasks unavailable");
-    });
-
-    await syncWorkboardLifecycle({ host, client: client as never, sessions: [], requestUpdate });
-    vi.clearAllMocks();
-    state.autoRefreshIntervalMs = 0;
-    configureWorkboardPolling({
-      host,
-      client: client as never,
-      enabled: false,
-      requestUpdate,
-    });
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(requestUpdate).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
   });
 
   it("retries a failed lifecycle task refresh after backoff", async () => {
@@ -6043,7 +5812,6 @@ describe("workboard controller", () => {
     state.loaded = true;
     state.cards = [linked];
     state.tasksByCardId.set("card-1", sampleTask);
-    state.autoRefreshIntervalMs = 5000;
     const requestUpdate = vi.fn();
     let tasksAvailable = false;
     const client = createClient((method) => {
@@ -7023,3 +6791,4 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([linked]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

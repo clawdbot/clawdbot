@@ -18,7 +18,7 @@ interface ShellConfig {
   args: string[];
 }
 
-export function resolvePowerShellPath(): string {
+function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
   const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
@@ -68,7 +68,7 @@ function isNonInteractiveShell(shellPath: string): boolean {
   return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
 }
 
-export function getPosixShellArgs(shellPath: string): string[] {
+function getPosixShellArgs(shellPath: string): string[] {
   switch (path.basename(shellPath)) {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
@@ -81,7 +81,7 @@ export function getPosixShellArgs(shellPath: string): string[] {
   }
 }
 
-export function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const candidates = [env.ProgramFiles, env["ProgramFiles(x86)"]]
     .filter((dir): dir is string => Boolean(dir?.trim()))
     .map((dir) => path.join(dir, "Git", "bin", "bash.exe"));
@@ -164,7 +164,7 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
   return { shell, args: getPosixShellArgs(shell) };
 }
 
-export function resolveShellFromPath(
+function resolveShellFromPath(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -185,7 +185,7 @@ export function resolveShellFromPath(
   return undefined;
 }
 
-export function resolveShellFromWhich(name: string): string | undefined {
+function resolveShellFromWhich(name: string): string | undefined {
   if (process.platform === "win32") {
     return undefined;
   }

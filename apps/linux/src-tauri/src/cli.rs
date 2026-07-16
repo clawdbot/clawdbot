@@ -122,8 +122,12 @@ impl OpenClawCli {
 }
 
 pub fn openclaw_home() -> Result<PathBuf, CliError> {
+    #[cfg(target_os = "windows")]
     let home = env::var_os("HOME")
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| CliError::Environment("HOME is not set".to_string()))?;
+        .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()));
+    #[cfg(not(target_os = "windows"))]
+    let home = env::var_os("HOME").filter(|value| !value.is_empty());
+    let home = home.ok_or_else(|| CliError::Environment("HOME is not set".to_string()))?;
     Ok(PathBuf::from(home).join(".openclaw"))
 }

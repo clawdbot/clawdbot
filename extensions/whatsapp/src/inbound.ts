@@ -2,7 +2,6 @@
 export { resetWebInboundDedupe } from "./inbound/dedupe.js";
 export {
   extractContactContext,
-  extractExternalAdReplyContext,
   extractLocationData,
   extractMediaPlaceholder,
   extractText,

@@ -2,9 +2,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectInstallPolicyHealthLines } from "./doctor-install-policy.js";
+import { noteInstallPolicyHealth } from "./doctor-install-policy.js";
+
+const noteMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
+
+async function collectInstallPolicyHealthLines(
+  cfg: OpenClawConfig,
+  options: { deep?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<string[]> {
+  noteMock.mockClear();
+  await noteInstallPolicyHealth(cfg, options);
+  const body = noteMock.mock.calls.at(-1)?.[0];
+  return typeof body === "string" ? body.split("\n") : [];
+}
 
 const tempDirs: string[] = [];
 

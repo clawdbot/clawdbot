@@ -310,7 +310,7 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
-  it("uses owner allowlist override from context when configured", () => {
+  it("uses context owner candidates for command authorization without granting owner status", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -341,8 +341,9 @@ describe("resolveCommandAuthorization", () => {
       commandAuthorized: true,
     });
 
-    expect(auth.senderIsOwner).toBe(true);
-    expect(auth.ownerList).toEqual(["123"]);
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.isAuthorizedSender).toBe(true);
   });
 
   it("suppresses inherited owner status when the context forbids it", () => {
@@ -510,8 +511,8 @@ describe("resolveCommandAuthorization", () => {
       commandAuthorized: true,
     });
 
-    expect(auth.ownerList).toEqual(["123"]);
-    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.ownerList).toEqual([]);
+    expect(auth.senderIsOwner).toBe(false);
     expect(auth.isAuthorizedSender).toBe(true);
   });
 
@@ -977,7 +978,8 @@ describe("resolveCommandAuthorization", () => {
         commandAuthorized: true,
       });
 
-      expect(auth.ownerList).toEqual(["123"]);
+      expect(auth.ownerList).toEqual([]);
+      expect(auth.senderIsOwner).toBe(false);
       expect(auth.isAuthorizedSender).toBe(true);
     });
 
@@ -1228,3 +1230,4 @@ describe("control command parsing", () => {
     expect(hasControlCommand(metaWrapped)).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

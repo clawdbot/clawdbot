@@ -807,3 +807,4 @@ export async function runCliTurnCompactionLifecycle(params: {
     })) ?? params.sessionEntry
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -31,7 +31,7 @@ type SandboxScriptInfo = {
   cwd: string;
 };
 
-export function resolveSandboxScript(
+function resolveSandboxScript(
   scriptRel: string,
   options: { argv1?: string; cwd?: string } = {},
 ): SandboxScriptInfo | null {
@@ -51,6 +51,12 @@ export function resolveSandboxScript(
     }
   }
   return null;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorSandboxTestApi")] = {
+    resolveSandboxScript,
+  };
 }
 
 async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {

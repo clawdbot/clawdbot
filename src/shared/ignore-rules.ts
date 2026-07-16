@@ -6,12 +6,10 @@ const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
 
-export function toPosixPath(pathValue: string): string {
-  return pathValue.split(sep).join("/");
-}
+export const toPosixPath = (pathValue: string) => pathValue.split(sep).join("/");
 
 /** Adds nested ignore-file rules to a matcher using paths relative to the scan root. */
-export function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
   const relativeDir = relative(rootDir, dir);
   const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
 
@@ -22,40 +20,25 @@ export function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string):
     }
     try {
       const content = readFileSync(ignorePath, "utf-8");
-      const patterns = content
-        .split(/\r?\n/)
-        .map((line) => prefixIgnorePattern(line, prefix))
-        .filter((line): line is string => Boolean(line));
-      if (patterns.length > 0) {
-        ig.add(patterns);
-      }
+      ig.add(content.split(/\r?\n/).map((line) => prefixIgnorePattern(line, prefix)));
     } catch {}
   }
+  return ig;
 }
 
-function prefixIgnorePattern(line: string, prefix: string): string | null {
+function prefixIgnorePattern(line: string, prefix: string): string {
   const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) {
-    return null;
+  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) {
+    return "";
   }
 
-  let pattern = line;
-  let negated = false;
-
-  if (pattern.startsWith("!")) {
-    negated = true;
-    pattern = pattern.slice(1);
-  } else if (pattern.startsWith("\\!")) {
-    pattern = pattern.slice(1);
-  }
-
-  if (pattern.startsWith("/")) {
-    pattern = pattern.slice(1);
-  }
-
-  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  const negated = line.startsWith("!");
+  const pattern = negated ? line.slice(1) : line;
+  const anchored = pattern.startsWith("/");
+  const normalized = anchored ? pattern.slice(1) : pattern;
+  // Git trims spaces only; escaped slashes still anchor rather than broaden nested rules.
+  const matchPattern = normalized.replace(/ +$/, "");
+  const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
+  const prefixed = `${prefix}${depthGlob}${normalized}`;
   return negated ? `!${prefixed}` : prefixed;
 }

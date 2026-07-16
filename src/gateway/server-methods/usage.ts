@@ -84,7 +84,7 @@ async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[
   return result.results;
 }
 
-type DateRange = { startMs: number; endMs: number };
+type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolean };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
@@ -488,7 +488,10 @@ const resolveDateRange = (
 
   const rangeDays = resolveRangeDays(params.range);
   if (rangeDays === "all") {
-    return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
+    return {
+      ok: true,
+      value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
+    };
   }
   if (rangeDays !== undefined) {
     return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
@@ -1146,7 +1149,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
     const config = context.getRuntimeConfig();
-    const { startMs, endMs } = dateRange.value;
+    const { startMs, endMs, includeUntimestamped } = dateRange.value;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
@@ -1415,6 +1418,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
+          includeUntimestamped,
           dayBucket,
         }),
       })),
@@ -1721,3 +1725,4 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, { logs: logs ?? [] }, undefined);
   },
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

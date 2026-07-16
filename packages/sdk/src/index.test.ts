@@ -1655,3 +1655,4 @@ describe("OpenClaw SDK", () => {
     expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

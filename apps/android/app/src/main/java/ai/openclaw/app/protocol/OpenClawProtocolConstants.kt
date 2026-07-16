@@ -17,6 +17,7 @@ enum class OpenClawCapability(
   Calendar("calendar"),
   Motion("motion"),
   CallLog("callLog"),
+  VoiceWake("voiceWake"),
 }
 
 enum class OpenClawCanvasCommand(

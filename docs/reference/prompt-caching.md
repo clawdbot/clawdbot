@@ -21,6 +21,7 @@ Provider references:
 ### `cacheRetention`
 
 Values: `"none" | "short" | "long"`. Configurable as a global default, per model, and per agent.
+`"standard"` is not an alias; use `"short"` for the provider's default cache window. Invalid values are ignored with a warning.
 
 ```yaml
 agents:

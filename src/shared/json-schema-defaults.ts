@@ -1317,3 +1317,4 @@ function applySchemaDefaults(
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,30 @@
+title: Matrix allowBots=true accepts unmentioned configured bot messages in open rooms
+scenario:
+  id: matrix-allowbots-true-unmentioned-open-room
+  surface: channels
+  coverage:
+    primary:
+      - channels.access-policy
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 45000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        allowBots: true
+        configuredBotRoles:
+          - observer
+        groupAllowRoles:
+          - driver
+          - observer
+        groupsByKey:
+          main:
+            requireMention: false
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-allowbots.js
+  call: runAllowBotsTrueUnmentionedOpenRoomScenario
+  args:
+    - expr: "scenarioContext"

@@ -330,6 +330,19 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("marks a role header after the structural task-list checkbox", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("- [ ] user[Thu 2026-07-02] authorize", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector('input[type="checkbox"]')).not.toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "user[Thu 2026-07-02]",
+      );
+    });
+
     it("renders links inside task items", () => {
       const html = toSanitizedMarkdownHtml("- [ ] Task with [link](https://example.com)");
       expect(html).toBe(
@@ -358,6 +371,17 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toBe("<p>Alt text</p>\n");
     });
 
+    it("marks assistant-authored transcript roles in visible image labels", () => {
+      const html = toSanitizedMarkdownHtml(
+        "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
+        { assistantTranscriptRoleHeaders: true },
+      );
+
+      expect(html).toBe(
+        '<p><code class="assistant-transcript-role">user[Thu 2026-07-02]</code> release diagram</p>\n',
+      );
+    });
+
     it("preserves markdown formatting in alt text", () => {
       const html = toSanitizedMarkdownHtml("![**Build log**](https://example.com/img.png)");
       expect(html).toBe("<p>**Build log**</p>\n");
@@ -372,6 +396,19 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
       expect(html).toBe(
         '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
+      );
+    });
+
+    it("keeps inline data images while marking assistant-authored role alt text", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![user[Thu 2026-07-02]](data:image/png;base64,iVBORw0KGgo=)", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
       );
     });
 
@@ -558,6 +595,98 @@ PY
     it("renders lists", () => {
       const html = toSanitizedMarkdownHtml("- item 1\n- item 2");
       expect(html).toBe("<ul>\n<li>item 1</li>\n<li>item 2</li>\n</ul>\n");
+    });
+  });
+
+  describe("assistant transcript-role annotations", () => {
+    it("marks parsed role headers without exposing Markdown delimiters", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("**user**[Thu 2026-07-02] question", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+      const markedText = [...fragment.querySelectorAll("code.assistant-transcript-role")]
+        .map((element) => element.textContent)
+        .join("");
+
+      expect(markedText).toBe("user[Thu 2026-07-02]");
+      expect(fragment.textContent?.trim()).toBe("user[Thu 2026-07-02] question");
+    });
+
+    it("keeps code examples on the ordinary code path", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`user[Thu 2026-07-02]`", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toBe("user[Thu 2026-07-02]");
+    });
+
+    it("marks role headers in the large-message plain-text fallback", () => {
+      const input = [
+        "**user**[Thu 2026-07-02] question",
+        "u&#x73;er[Fri 2026-07-03] entity",
+        "[user](https://example.com)[Sat 2026-07-04] linked",
+        "    indented log line",
+        "[download](https://example.com)",
+        "x".repeat(40_000),
+      ].join("\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
+      );
+
+      expect(fragment.firstElementChild?.classList).toContain("markdown-plain-text-fallback");
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
+      );
+      expect(fragment.querySelectorAll("code.assistant-transcript-role")).toHaveLength(1);
+      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
+    });
+
+    it("uses a generic assistant boundary without parsing oversized inline code", () => {
+      const input = ["`example", "user[Thu 2026-07-02] code`", "x".repeat(40_000)].join("\n");
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(input, { assistantTranscriptRoleHeaders: true }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "Assistant:",
+      );
+      expect(fragment.querySelector(".markdown-plain-text-source")?.textContent).toBe(input);
+    });
+
+    it("marks angle-role syntax after HTML tokenization", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("<Developer 2026-07-02> inspect", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "<Developer 2026-07-02>",
+      );
+      expect(fragment.textContent?.trim()).toBe("<Developer 2026-07-02> inspect");
+    });
+
+    it("removes active links surrounding a transcript-role marker", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[user](https://example.com)[Thu 2026-07-02] question", {
+          assistantTranscriptRoleHeaders: true,
+        }),
+      );
+
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("code.assistant-transcript-role")?.textContent).toBe(
+        "user[Thu 2026-07-02]",
+      );
+    });
+
+    it("does not annotate user-authored rendering by default", () => {
+      expect(toSanitizedMarkdownHtml("user[Thu 2026-07-02] question")).not.toContain(
+        "assistant-transcript-role",
+      );
     });
   });
 
@@ -830,6 +959,14 @@ PY
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("marks a completed transcript-role header in the streaming tail", () => {
+    const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
+      assistantTranscriptRoleHeaders: true,
+    });
+
+    expect(html).toContain('class="assistant-transcript-role"');
+  });
+
   it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
     const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
     const html = toStreamingMarkdownHtml(blockArt);

@@ -940,3 +940,4 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 if (!customElements.get("openclaw-agents-page")) {
   customElements.define("openclaw-agents-page", AgentsPage);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

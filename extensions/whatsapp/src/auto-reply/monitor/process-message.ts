@@ -4,10 +4,7 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
-import {
-  runChannelInboundEvent,
-  type CommandTurnContext,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -438,19 +435,6 @@ export async function processMessage(params: {
         authDir: account.authDir,
       })
     : undefined;
-  const commandTurn: CommandTurnContext = isTextCommand
-    ? {
-        kind: "text-slash",
-        source: "text",
-        authorized: Boolean(commandAuthorized),
-        body: commandBody,
-      }
-    : {
-        kind: "normal",
-        source: "message",
-        authorized: false,
-        body: commandBody,
-      };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -483,9 +467,11 @@ export async function processMessage(params: {
   const ctxPayload = await buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
-    commandBody,
-    commandAuthorized,
-    commandTurn,
+    command: {
+      kind: isTextCommand ? "text-slash" : "normal",
+      body: commandBody,
+      authorized: commandAuthorized,
+    },
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,

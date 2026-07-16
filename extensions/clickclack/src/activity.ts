@@ -42,7 +42,7 @@ type ClickClackActivityTarget = {
 };
 
 /** Client subset needed by the publisher (satisfied by `createClickClackClient`). */
-export type ClickClackActivityClient = {
+type ClickClackActivityClient = {
   createActivityMessage(params: {
     channelId?: string;
     conversationId?: string;

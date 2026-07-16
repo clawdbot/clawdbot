@@ -2,7 +2,8 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+
+let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -193,8 +194,9 @@ function runWrappedLmstudioStream(
 }
 
 describe("lmstudio stream wrapper", () => {
-  beforeEach(() => {
-    resetLmstudioPreloadCooldownForTest();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
   });
 
   afterEach(() => {
@@ -204,7 +206,6 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {

@@ -16,7 +16,7 @@ Local GGUF embeddings through node-llama-cpp.
 
 ## Surface
 
-contracts: embeddingProviders
+contracts: `embeddingProviders`
 
 ## Related docs
 

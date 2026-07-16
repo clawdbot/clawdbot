@@ -41,8 +41,6 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
-export { REQUIRED_PARAM_GROUPS } from "./agent-tools.params.js";
-
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
@@ -531,7 +529,7 @@ function mapContainerPathToRoot(params: {
 }
 
 /** Resolve a model-supplied file path against the host workspace root. */
-export function resolveToolPathAgainstWorkspaceRoot(params: {
+function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
@@ -1186,3 +1184,4 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   error.code = code;
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

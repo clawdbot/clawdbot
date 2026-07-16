@@ -200,27 +200,8 @@ function isTempDirHelperImportSpec(filePath, specifier) {
   return stripKnownExtension(resolvedPath) === stripKnownExtension(TEMP_DIR_HELPER_PATH);
 }
 
-function scriptKindForFile(filePath) {
-  if (/\.[cm]?tsx$/u.test(filePath)) {
-    return ts.ScriptKind.TSX;
-  }
-  if (/\.[cm]?jsx$/u.test(filePath)) {
-    return ts.ScriptKind.JSX;
-  }
-  if (/\.[cm]?js$/u.test(filePath)) {
-    return ts.ScriptKind.JS;
-  }
-  return ts.ScriptKind.TS;
-}
-
 function createSourceFile(filePath, sourceText) {
-  return ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindForFile(filePath),
-  );
+  return ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
 }
 
 function lineForNode(sourceFile, node) {

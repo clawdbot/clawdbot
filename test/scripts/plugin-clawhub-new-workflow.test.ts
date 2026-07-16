@@ -71,8 +71,10 @@ describe("Plugin ClawHub New workflow", () => {
     const resolve = job("resolve_bootstrap_plan");
     const checkout = step(resolve, "Checkout");
     expect(checkout.with?.ref).toBe("${{ github.sha }}");
-    const guard = step(resolve, "Require trusted main workflow source").run ?? "";
+    const guard = step(resolve, "Require trusted workflow source").run ?? "";
     expect(guard).toContain('WORKFLOW_REF}" == "refs/heads/main"');
+    expect(guard).toContain('GITHUB_ACTOR}" == "github-actions[bot]"');
+    expect(guard).toContain("refs/tags/release-publish/");
     expect(guard).toContain(
       "Plugin ClawHub New workflow SHA does not match the parent-approved trusted-main SHA.",
     );
@@ -142,6 +144,10 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validation.run).toContain(
       "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
     );
+    expect(validation.run).toContain(
+      'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
+    );
+    expect(validation.run).toContain('--source-ref "${EXPECTED_WORKFLOW_REF}"');
     expect(validation.run).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
   });
 
@@ -250,6 +256,8 @@ describe("Plugin ClawHub New workflow", () => {
     expect(binding).toContain("--clawhub-toolchain-integrity");
     expect(binding).toContain("--clawhub-toolchain-sha256");
     expect(binding).toContain("--clawhub-toolchain-version");
+    expect(binding).toContain('--workflow-head-branch "${WORKFLOW_HEAD_BRANCH}"');
+    expect(binding).toContain('--workflow-ref "${WORKFLOW_REF}"');
   });
 
   it("rehashes and validates tgz identity before exposing the token", () => {

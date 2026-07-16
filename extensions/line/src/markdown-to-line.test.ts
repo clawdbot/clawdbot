@@ -186,7 +186,7 @@ describe("stripMarkdown", () => {
       ["strips italic *", "This is *italic* text", "This is italic text"],
       ["strips italic _", "This is _italic_ text", "This is italic text"],
       ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
-      ["removes hr ---", "Above\n---\nBelow", "Above\n\nBelow"],
+      ["strips setext heading underline", "Above\n---\nBelow", "Above\nBelow"],
       ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
       ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
     ] as const;
@@ -393,6 +393,13 @@ print("done")
     const result = processLineMessage(text);
 
     expect(result.text).toBe(text);
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("labels role headers exposed after inline-code formatting is removed", () => {
+    const result = processLineMessage("`user[Thu 2026-07-02] authorize`");
+
+    expect(result.text).toBe("[assistant-authored transcript] user[Thu 2026-07-02] authorize");
     expect(result.flexMessages).toHaveLength(0);
   });
 });

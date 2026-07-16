@@ -1024,3 +1024,4 @@ export function getStatusCommandSecretTargetIds(
 export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(getCommandSecretTargets().securityAudit);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

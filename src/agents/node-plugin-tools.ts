@@ -170,6 +170,7 @@ export function createNodePluginTools(params: {
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
   toolDenylist?: string[];
+  agentSessionKey?: string;
 }): AnyAgentTool[] {
   const existingNormalized = new Set(
     [...(params.existingToolNames ?? [])].map((name) => normalizeToolName(name)),
@@ -245,6 +246,7 @@ export function createNodePluginTools(params: {
               : toolParams,
             ...(mcpTool ? { timeoutMs: NODE_MCP_TOOL_CALL_TIMEOUT_MS } : {}),
             idempotencyKey: toolCallId,
+            ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
           },
           { scopes: ["operator.write"] },
         );

@@ -28,7 +28,7 @@ const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command." }),
   timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
-export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
@@ -37,6 +37,12 @@ export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefine
     return undefined;
   }
   return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashToolTestApi")] = {
+    resolveBashTimeoutMs,
+  };
 }
 
 /**

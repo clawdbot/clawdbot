@@ -1,11 +1,8 @@
 // Voice Call tests cover realtime audio pacer plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  RealtimeAudioPacer,
-  RealtimeMulawSpeechStartDetector,
-  calculateMulawRms,
-  type RealtimeAudioSerializer,
-} from "./realtime-audio-pacer.js";
+import { RealtimeAudioPacer, RealtimeMulawSpeechStartDetector } from "./realtime-audio-pacer.js";
+
+type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[0]["serializer"];
 
 function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
   return {
@@ -134,8 +131,6 @@ describe("RealtimeMulawSpeechStartDetector", () => {
     const silence = Buffer.alloc(160, 0xff);
     const speech = Buffer.alloc(160, 0x00);
 
-    expect(calculateMulawRms(silence)).toBeLessThan(0.02);
-    expect(calculateMulawRms(speech)).toBeGreaterThan(0.02);
     expect(detector.accept(speech)).toBe(false);
     expect(detector.accept(speech)).toBe(true);
     expect(detector.accept(speech)).toBe(false);

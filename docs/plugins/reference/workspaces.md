@@ -16,4 +16,4 @@ Agent-composable Workspaces document and control-plane backend.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`

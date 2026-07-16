@@ -15,7 +15,8 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand, testing } from "./sessions.js";
+import { sessionsCommand } from "./sessions.js";
+import { testing } from "./sessions.test-support.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {

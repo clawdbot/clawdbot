@@ -1,0 +1,17 @@
+title: WhatsApp direct Gateway send delivers outbound media variants
+scenario:
+  id: whatsapp-outbound-media-matrix
+  surface: channels
+  coverage:
+    primary: [channels.group-messages]
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-outbound-media-matrix }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppOutboundMediaMatrixScenario
+  args: [{ expr: whatsappScenarioContext }]

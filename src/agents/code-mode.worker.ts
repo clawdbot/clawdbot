@@ -120,15 +120,7 @@ class CodeModeGuestError extends Error {
 }
 
 function isQuickJsInterruptedError(error: unknown): boolean {
-  if (error instanceof CodeModeGuestError) {
-    return false;
-  }
-  // Match on the raw QuickJS message, not the formatted errorMessage() string,
-  // which now leads with the error name and appends backtrace frames.
-  if (error instanceof JSException) {
-    return error.message === "interrupted";
-  }
-  return errorMessage(error) === "interrupted";
+  return error instanceof JSException && error.message === "interrupted";
 }
 
 type VmRun = {
@@ -437,37 +429,23 @@ async function createVm(params: {
       return timedOut;
     },
   });
-  const catalogHandle = vm.hostToHandle(params.catalog);
-  try {
-    vm.setProp(vm.global, "__openclawCatalog", catalogHandle);
-  } finally {
-    catalogHandle.dispose();
-  }
-  const namespacesHandle = vm.hostToHandle(params.namespaces);
-  try {
-    vm.setProp(vm.global, "__openclawNamespaces", namespacesHandle);
-  } finally {
-    namespacesHandle.dispose();
-  }
-  const apiFilesHandle = vm.hostToHandle(params.apiFiles);
-  try {
-    vm.setProp(vm.global, "__openclawApiFiles", apiFilesHandle);
-  } finally {
-    apiFilesHandle.dispose();
-  }
-  const hostRequest = vm.newFunction(
+  vm.hostToHandle(params.catalog).consume((handle) =>
+    vm.global.setProp("__openclawCatalog", handle),
+  );
+  vm.hostToHandle(params.namespaces).consume((handle) =>
+    vm.global.setProp("__openclawNamespaces", handle),
+  );
+  vm.hostToHandle(params.apiFiles).consume((handle) =>
+    vm.global.setProp("__openclawApiFiles", handle),
+  );
+  vm.newFunction(
     "__openclawHostRequest",
     createHostRequestHandler({
       vm,
       pendingRequests: params.pendingRequests,
       config: params.config,
     }),
-  );
-  try {
-    vm.setProp(vm.global, "__openclawHostRequest", hostRequest);
-  } finally {
-    hostRequest.dispose();
-  }
+  ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
@@ -502,18 +480,12 @@ async function restoreVm(params: {
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
-  const take = vm.global.getProp("__openclawTakeOutput");
-  try {
-    const output = vm.callFunction(take, vm.undefined);
-    try {
+  return vm.global.getProp("__openclawTakeOutput").consume((take) =>
+    vm.callFunction(take, vm.undefined).consume((output) => {
       const dumped = vm.dump(output);
       return Array.isArray(dumped) ? (dumped as unknown[]) : [];
-    } finally {
-      output.dispose();
-    }
-  } finally {
-    take.dispose();
-  }
+    }),
+  );
 }
 
 function takeOutputSafely(vm: QuickJS): unknown[] {
@@ -565,25 +537,19 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
-    try {
+    return settled.error.consume((error) => {
       // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
-      const dumped = vm.dump(settled.error);
+      const dumped = vm.dump(error);
       const text =
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
       throw new CodeModeGuestError(text);
-    } finally {
-      settled.error.dispose();
-    }
+    });
   }
-  try {
-    return toJsonSafe(vm.dump(settled.value));
-  } finally {
-    settled.value.dispose();
-  }
+  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
 }
 
 function waitingResult(params: {
@@ -688,8 +654,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     pendingRequests,
     config: input.config,
     prepare: () => {
-      const settle = vm.global.getProp("__openclawSettleBridge");
-      try {
+      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
         for (const request of input.settledRequests) {
           const id = vm.newString(request.id);
           const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
@@ -706,9 +671,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
             payload.dispose();
           }
         }
-      } finally {
-        settle.dispose();
-      }
+      });
     },
   });
 }

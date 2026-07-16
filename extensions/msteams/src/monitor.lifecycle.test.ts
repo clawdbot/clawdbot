@@ -92,23 +92,23 @@ vi.mock("express", () => {
     const app = vi.fn() as MockExpressApp;
     app.use = vi.fn();
     app.post = vi.fn();
-    app.listen = vi.fn((_port: number) => {
+    app.listen = vi.fn((_port: number, callback?: (error?: Error) => void) => {
       const server = new EventEmitter() as FakeServer;
       server.setTimeout = vi.fn((_msecs: number) => server);
       server.requestTimeout = 0;
       server.headersTimeout = 0;
-      server.close = (callback?: (err?: Error | null) => void) => {
+      server.close = (closeCallback?: (err?: Error | null) => void) => {
         queueMicrotask(() => {
           server.emit("close");
-          callback?.(null);
+          closeCallback?.(null);
         });
       };
       queueMicrotask(() => {
         if (expressControl.mode.value === "error") {
-          server.emit("error", new Error("listen EADDRINUSE"));
+          callback?.(new Error("listen EADDRINUSE"));
           return;
         }
-        server.emit("listening");
+        callback?.();
       });
       return server;
     });

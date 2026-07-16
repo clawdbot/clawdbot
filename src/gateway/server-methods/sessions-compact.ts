@@ -1,0 +1,611 @@
+// Manual transcript trimming and model-backed session compaction.
+import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  validateSessionsCompactParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  resolveSessionWorkStartError,
+  SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+} from "../../config/sessions.js";
+import {
+  applySessionPatchProjection,
+  loadTranscriptEvents,
+  preflightSessionTranscriptForManualCompact,
+  trimSessionTranscriptForManualCompact,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  interruptSessionWorkAdmissions,
+  runExclusiveSessionLifecycleMutation,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionCompacted } from "../../sessions/session-state-events.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { migrateAndPruneGatewaySessionStoreKey, resolveSessionModelRef } from "../session-utils.js";
+import { emitSessionsChanged } from "./session-change-event.js";
+import { runGatewaySessionCompaction } from "./sessions-compaction-runner.js";
+import { interruptSessionRunIfActive } from "./sessions-messaging.js";
+import {
+  emitSessionOperation,
+  loadAccessorSessionEntryForGatewayTarget,
+  rejectWebchatSessionMutation,
+  requireSessionKey,
+  resolveGatewaySessionTargetFromKey,
+} from "./sessions-shared.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
+
+const log = createSubsystemLogger("gateway/sessions");
+
+function buildManualCompactionReleaseFollowupRun(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): FollowupRun {
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const cwd = normalizeOptionalString(params.entry.spawnedCwd);
+  return {
+    prompt: "",
+    enqueuedAt: Date.now(),
+    ...(deliveryContext?.channel ? { originatingChannel: deliveryContext.channel } : {}),
+    ...(deliveryContext?.to ? { originatingTo: deliveryContext.to } : {}),
+    ...(deliveryContext?.accountId ? { originatingAccountId: deliveryContext.accountId } : {}),
+    ...(deliveryContext?.threadId !== undefined
+      ? { originatingThreadId: deliveryContext.threadId }
+      : {}),
+    run: {
+      agentId: params.targetAgentId,
+      agentDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      ...(cwd ? { cwd } : {}),
+      config: params.cfg,
+      provider: params.model.provider,
+      model: params.model.model,
+      ...(deliveryContext?.channel ? { messageProvider: deliveryContext.channel } : {}),
+      ...(deliveryContext?.accountId ? { agentAccountId: deliveryContext.accountId } : {}),
+      timeoutMs: 0,
+      blockReplyBreak: "message_end",
+    },
+  };
+}
+
+function sessionHasPostCompactionDelegates(params: {
+  entry?: SessionEntry;
+  sessionKey: string;
+}): boolean {
+  return (
+    stagedPostCompactionDelegateCount(params.sessionKey) > 0 ||
+    (params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0
+  );
+}
+
+async function releaseManualPostCompactionDelegatesIfNeeded(params: {
+  cfg: OpenClawConfig;
+  compactionCount: number | undefined;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): Promise<void> {
+  if (!sessionHasPostCompactionDelegates(params)) {
+    return;
+  }
+  try {
+    const { releasePostCompactionDelegatesAfterCompaction } =
+      await import("../../auto-reply/reply/agent-runner-post-compaction-release.js");
+    await releasePostCompactionDelegatesAfterCompaction({
+      activeSessionStore: params.store,
+      compactionCount: params.compactionCount,
+      followupRun: buildManualCompactionReleaseFollowupRun(params),
+      sessionEntry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  } catch (error) {
+    log.warn(
+      `[sessions.compact:post-compaction-release-failed] session=${params.sessionKey} reason=${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+export const sessionCompactHandlers: GatewayRequestHandlers = {
+  "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
+      return;
+    }
+
+    const maxLines =
+      typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
+        ? Math.max(1, Math.floor(p.maxLines))
+        : undefined;
+
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+      agentId: requestedAgentId,
+    });
+    // Lock + read in a short critical section; transcript work happens outside.
+    // The projection resolver re-runs gateway key migration on the writer
+    // snapshot so alias promotion/pruning persists through the accessor.
+    let compactPrimaryKey = target.canonicalKey;
+    const compactRead = await applySessionPatchProjection({
+      agentId: target.agentId,
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const snapshot = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store: snapshot,
+          agentId: requestedAgentId,
+        });
+        compactPrimaryKey = primaryKey;
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      // Read-only projection: persist the resolved row unchanged so the alias
+      // migration above is saved even when compaction bails out below.
+      project: ({ existingEntry }) =>
+        existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
+    });
+    const compactTarget = {
+      entry: compactRead.ok ? compactRead.entry : undefined,
+      primaryKey: compactPrimaryKey,
+    };
+    const entry = compactTarget.entry;
+    const sessionId = entry?.sessionId;
+    if (!sessionId) {
+      respond(
+        true,
+        {
+          ok: true,
+          key: target.canonicalKey,
+          compacted: false,
+          reason: "no sessionId",
+        },
+        undefined,
+      );
+      return;
+    }
+
+    if (maxLines !== undefined) {
+      const trimPreflight = await preflightSessionTranscriptForManualCompact(
+        {
+          sessionId,
+          storePath,
+          sessionKey: compactTarget.primaryKey,
+          agentId: target.agentId,
+        },
+        { maxLines, sessionFile: entry.sessionFile },
+      );
+      if (!trimPreflight.compacted) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            ...("kept" in trimPreflight
+              ? { kept: trimPreflight.kept }
+              : { reason: "no transcript" }),
+          },
+          undefined,
+        );
+        return;
+      }
+    } else {
+      const transcriptEvents = await loadTranscriptEvents({
+        agentId: target.agentId,
+        sessionId,
+        sessionKey: compactTarget.primaryKey,
+        storePath,
+      }).catch(() => []);
+      if (transcriptEvents.length === 0) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+        return;
+      }
+    }
+
+    const lifecycleRevision = entry.lifecycleRevision;
+    const lifecycleIdentities = [
+      key,
+      target.canonicalKey,
+      compactTarget.primaryKey,
+      sessionId,
+      lifecycleRevision,
+    ];
+    let sessionStillCurrent = true;
+    let admittedWorkReleased = true;
+    try {
+      await runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: lifecycleIdentities,
+        kind: "compaction",
+        prepare: async () => {
+          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
+            key,
+            cfg,
+            agentId: requestedAgentId,
+          }).entry;
+          sessionStillCurrent = Boolean(
+            latestEntry &&
+            latestEntry.sessionId === sessionId &&
+            latestEntry.lifecycleRevision === lifecycleRevision &&
+            !resolveSessionWorkStartError(target.canonicalKey, latestEntry),
+          );
+          if (!sessionStillCurrent) {
+            return;
+          }
+          // Drop work queued against the pre-compaction transcript before its
+          // active admission drains and no longer exposes queue cleanup.
+          clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
+          admittedWorkReleased = await interruptSessionWorkAdmissions({
+            scope: storePath,
+            identities: lifecycleIdentities,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          });
+        },
+        run: async () => {
+          if (!sessionStillCurrent) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} changed before compaction. Retry.`,
+                { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+              ),
+            );
+            return;
+          }
+          if (!admittedWorkReleased) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
+            );
+            return;
+          }
+
+          const latestEntry = loadAccessorSessionEntryForGatewayTarget({
+            key,
+            cfg,
+            agentId: requestedAgentId,
+          }).entry;
+          if (
+            !latestEntry ||
+            latestEntry.sessionId !== sessionId ||
+            latestEntry.lifecycleRevision !== lifecycleRevision ||
+            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
+          ) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} changed before compaction. Retry.`,
+                { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+              ),
+            );
+            return;
+          }
+
+          const interruptResult = await interruptSessionRunIfActive({
+            req,
+            context,
+            client,
+            isWebchatConnect,
+            requestedKey: key,
+            canonicalKey: target.canonicalKey,
+            agentId: requestedAgentId,
+            sessionId,
+          });
+          if (interruptResult.error) {
+            respond(false, undefined, interruptResult.error);
+            return;
+          }
+
+          const operationId = randomUUID();
+          if (maxLines !== undefined) {
+            const trimResult = await trimSessionTranscriptForManualCompact(
+              {
+                sessionId,
+                storePath,
+                sessionKey: compactTarget.primaryKey,
+                agentId: target.agentId,
+              },
+              { maxLines, sessionFile: latestEntry.sessionFile },
+            );
+            respond(
+              true,
+              {
+                ok: true,
+                key: target.canonicalKey,
+                compacted: trimResult.compacted,
+                ...(trimResult.compacted
+                  ? { archived: trimResult.archived, kept: trimResult.kept }
+                  : "kept" in trimResult
+                    ? { kept: trimResult.kept }
+                    : { reason: "no transcript" }),
+              },
+              undefined,
+            );
+            if (trimResult.compacted) {
+              const loadedAfterTrim = loadAccessorSessionEntryForGatewayTarget({
+                key,
+                cfg,
+                agentId: requestedAgentId,
+              });
+              const entryAfterTrim = loadedAfterTrim.entry ?? latestEntry;
+              const targetAgentId = target.agentId ?? requestedAgentId;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: entryAfterTrim.compactionCount ?? 0,
+                entry: entryAfterTrim,
+                model: resolveSessionModelRef(cfg, entryAfterTrim, targetAgentId),
+                sessionFile:
+                  entryAfterTrim.sessionFile ??
+                  formatSqliteSessionFileMarker({
+                    agentId: targetAgentId,
+                    sessionId: entryAfterTrim.sessionId ?? sessionId,
+                    storePath,
+                  }),
+                sessionId: entryAfterTrim.sessionId ?? sessionId,
+                sessionKey: target.canonicalKey,
+                store: loadedAfterTrim.target.store,
+                storePath,
+                targetAgentId,
+                workspaceDir:
+                  normalizeOptionalString(entryAfterTrim.spawnedWorkspaceDir) ??
+                  resolveAgentWorkspaceDir(cfg, targetAgentId),
+              });
+              recordSessionCompacted({
+                sessionKey: target.canonicalKey,
+                operationId,
+                sessionId,
+                agentId: target.agentId ?? requestedAgentId,
+              });
+              emitSessionsChanged(context, {
+                sessionKey: target.canonicalKey,
+                ...(target.canonicalKey === "global" && target.agentId
+                  ? { agentId: target.agentId }
+                  : {}),
+                reason: "compact",
+                compacted: true,
+              });
+            }
+            return;
+          }
+
+          const transcriptEvents = await loadTranscriptEvents({
+            agentId: target.agentId,
+            sessionId,
+            sessionKey: compactTarget.primaryKey,
+            storePath,
+          }).catch(() => []);
+          if (transcriptEvents.length === 0) {
+            respond(
+              true,
+              {
+                ok: true,
+                key: target.canonicalKey,
+                compacted: false,
+                reason: "no transcript",
+              },
+              undefined,
+            );
+            return;
+          }
+          emitSessionOperation(context, {
+            operationId,
+            operation: "compact",
+            phase: "start",
+            sessionKey: target.canonicalKey,
+            ...(target.canonicalKey === "global" && target.agentId
+              ? { agentId: target.agentId }
+              : {}),
+          });
+          const emitCompactionEnd = (completed: boolean, reason?: string) =>
+            emitSessionOperation(context, {
+              operationId,
+              operation: "compact",
+              phase: "end",
+              sessionKey: target.canonicalKey,
+              ...(target.canonicalKey === "global" && target.agentId
+                ? { agentId: target.agentId }
+                : {}),
+              completed,
+              reason,
+            });
+          let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
+          try {
+            result = await runGatewaySessionCompaction({
+              cfg,
+              entry: latestEntry,
+              agentId: target.agentId,
+              sessionId,
+              sessionKey: target.canonicalKey,
+              sessionStoreKey: compactTarget.primaryKey,
+              storePath,
+            });
+          } catch (err) {
+            emitCompactionEnd(false, formatErrorMessage(err));
+            throw err;
+          }
+          if (result.ok && result.compacted) {
+            let persisted: boolean;
+            let releaseSessionEntry: SessionEntry | undefined;
+            let releaseSessionStore: Record<string, SessionEntry> | undefined;
+            try {
+              // Guarded terminal persist: skip when session ownership rotated
+              // while compaction ran (sessionId/lifecycleRevision/work-start).
+              const persistProjection = await applySessionPatchProjection({
+                agentId: target.agentId,
+                storePath,
+                resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
+                project: ({ existingEntry }) => {
+                  if (
+                    !existingEntry ||
+                    existingEntry.sessionId !== sessionId ||
+                    existingEntry.lifecycleRevision !== lifecycleRevision ||
+                    resolveSessionWorkStartError(target.canonicalKey, existingEntry)
+                  ) {
+                    return { ok: false };
+                  }
+                  const entryToUpdate = existingEntry;
+                  entryToUpdate.updatedAt = Date.now();
+                  entryToUpdate.compactionCount =
+                    Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                  if (
+                    result.result?.sessionId &&
+                    result.result.sessionId !== entryToUpdate.sessionId
+                  ) {
+                    entryToUpdate.sessionId = result.result.sessionId;
+                  }
+                  delete entryToUpdate.inputTokens;
+                  delete entryToUpdate.outputTokens;
+                  delete entryToUpdate.contextBudgetStatus;
+                  if (
+                    typeof result.result?.tokensAfter === "number" &&
+                    Number.isFinite(result.result.tokensAfter)
+                  ) {
+                    entryToUpdate.totalTokens = result.result.tokensAfter;
+                    entryToUpdate.totalTokensFresh = true;
+                  } else {
+                    delete entryToUpdate.totalTokens;
+                    delete entryToUpdate.totalTokensFresh;
+                  }
+                  return { ok: true, entry: entryToUpdate };
+                },
+              });
+              persisted = persistProjection.ok;
+              if (persistProjection.ok) {
+                releaseSessionEntry = persistProjection.entry;
+                releaseSessionStore = { [target.canonicalKey]: persistProjection.entry };
+              }
+            } catch (err) {
+              emitCompactionEnd(false, formatErrorMessage(err));
+              throw err;
+            }
+            if (!persisted) {
+              const reason = `Session ${key} changed before compaction completed. Retry.`;
+              emitCompactionEnd(false, reason);
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.INVALID_REQUEST, reason, {
+                  details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+                }),
+              );
+              return;
+            }
+            if (releaseSessionEntry && releaseSessionStore) {
+              const targetAgentId = target.agentId ?? requestedAgentId;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: releaseSessionEntry.compactionCount ?? 0,
+                entry: releaseSessionEntry,
+                model: resolveSessionModelRef(cfg, releaseSessionEntry, targetAgentId),
+                sessionFile:
+                  releaseSessionEntry.sessionFile ??
+                  formatSqliteSessionFileMarker({
+                    agentId: targetAgentId,
+                    sessionId:
+                      releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
+                    storePath,
+                  }),
+                sessionId: releaseSessionEntry.sessionId ?? result.result?.sessionId ?? sessionId,
+                sessionKey: target.canonicalKey,
+                store: releaseSessionStore,
+                storePath,
+                targetAgentId,
+                workspaceDir:
+                  normalizeOptionalString(releaseSessionEntry.spawnedWorkspaceDir) ??
+                  resolveAgentWorkspaceDir(cfg, targetAgentId),
+              });
+            }
+            recordSessionCompacted({
+              sessionKey: target.canonicalKey,
+              operationId,
+              sessionId: result.result?.sessionId ?? sessionId,
+              agentId: target.agentId ?? requestedAgentId,
+            });
+          }
+
+          emitCompactionEnd(result.ok && result.compacted, result.reason);
+          respond(
+            true,
+            {
+              ok: result.ok,
+              key: target.canonicalKey,
+              compacted: result.compacted,
+              reason: result.reason,
+              result: result.result,
+            },
+            undefined,
+          );
+          if (result.ok) {
+            emitSessionsChanged(context, {
+              sessionKey: target.canonicalKey,
+              ...(target.canonicalKey === "global" && target.agentId
+                ? { agentId: target.agentId }
+                : {}),
+              reason: "compact",
+              compacted: result.compacted,
+            });
+          }
+        },
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+};

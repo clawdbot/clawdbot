@@ -112,7 +112,7 @@ const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const BAILEYS_MESSAGE_TTL_MS = 10 * 60 * 1000;
 const INBOUND_CLOSE_DRAIN_TIMEOUT_MS = 5_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
+const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
@@ -1859,3 +1859,4 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     baileysGroupMetaCache,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1961,3 +1961,4 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

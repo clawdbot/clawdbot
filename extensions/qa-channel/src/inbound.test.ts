@@ -3,7 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
-import { handleQaInbound, isHttpMediaUrl } from "./inbound.js";
+import { handleQaInbound } from "./inbound.js";
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -65,16 +65,6 @@ function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeM
   }
   return call[0];
 }
-
-describe("isHttpMediaUrl", () => {
-  it("accepts only http and https urls", () => {
-    expect(isHttpMediaUrl("https://example.com/image.png")).toBe(true);
-    expect(isHttpMediaUrl("http://example.com/image.png")).toBe(true);
-    expect(isHttpMediaUrl("file:///etc/passwd")).toBe(false);
-    expect(isHttpMediaUrl("/etc/passwd")).toBe(false);
-    expect(isHttpMediaUrl("data:text/plain;base64,SGVsbG8=")).toBe(false);
-  });
-});
 
 describe("handleQaInbound", () => {
   beforeEach(() => {
@@ -361,6 +351,43 @@ describe("handleQaInbound", () => {
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload.MediaPath).toBeUndefined();
     expect(ctxPayload.MediaPaths).toBeUndefined();
+  });
+
+  it("rejects non-http attachment URLs without dropping the message", async () => {
+    const runtime = createPluginRuntimeMock();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setQaChannelRuntime(runtime);
+
+    try {
+      await handleQaInbound(
+        createQaInboundParams({
+          message: {
+            attachments: [
+              {
+                id: "attachment-1",
+                kind: "image",
+                mimeType: "image/png",
+                url: "file:///etc/passwd",
+              },
+              {
+                id: "attachment-2",
+                kind: "file",
+                mimeType: "text/plain",
+                url: "data:text/plain;base64,SGVsbG8=",
+              },
+            ],
+          },
+        }),
+      );
+
+      expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+      const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
+      expect(ctxPayload.MediaPath).toBeUndefined();
+      expect(ctxPayload.MediaPaths).toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {

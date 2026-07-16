@@ -234,7 +234,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
  * reflected in `effectiveModel.contextWindow` so auto-compaction uses the same
  * limit as the guard.
  */
-export function resolveEffectiveRuntimeModel(params: {
+function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   contextConfigProvider?: string;

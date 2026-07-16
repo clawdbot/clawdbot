@@ -64,12 +64,6 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   }
 }
 
-/** Clears cached workspace-template directory resolution for tests or package moves. */
-export function resetWorkspaceTemplateDirCache() {
-  cachedTemplateDir = undefined;
-  resolvingTemplateDir = undefined;
-}
-
 function buildTemplateDirCandidates(params: {
   packageRoot?: string | null;
   cwd?: string;

@@ -7,12 +7,11 @@ import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
+import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorHealthContribution,
-  resolveDoctorContributionHealthChecks,
   resolveDoctorHealthContributions,
-  shouldSkipLegacyUpdateDoctorConfigWrite,
-} from "./doctor-health-contributions.js";
+} from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -1448,6 +1447,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.detectLegacyStateMigrations).toHaveBeenCalledWith({
       cfg,
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
     expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith({
@@ -1472,6 +1472,7 @@ describe("doctor health contributions", () => {
     await contribution.run(directRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1485,6 +1486,7 @@ describe("doctor health contributions", () => {
     });
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: true,
     });
 
@@ -1495,6 +1497,7 @@ describe("doctor health contributions", () => {
     await contribution.run(automatedRepairContext);
     expect(mocks.detectLegacyStateMigrations).toHaveBeenLastCalledWith({
       cfg: {},
+      doctorOnlyStateMigrations: true,
       crossStateDirImports: false,
     });
   });
@@ -2951,43 +2954,6 @@ describe("doctor health contributions", () => {
     },
   );
 
-  it("skips doctor config writes under legacy update parents", () => {
-    expect(
-      shouldSkipLegacyUpdateDoctorConfigWrite({
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps doctor writes outside legacy update writable", () => {
-    expect(
-      shouldSkipLegacyUpdateDoctorConfigWrite({
-        env: {},
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps current update parents writable", () => {
-    expect(
-      shouldSkipLegacyUpdateDoctorConfigWrite({
-        env: {
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("treats falsey update env values as normal writes", () => {
-    expect(
-      shouldSkipLegacyUpdateDoctorConfigWrite({
-        env: {
-          OPENCLAW_UPDATE_IN_PROGRESS: "0",
-        },
-      }),
-    ).toBe(false);
-  });
-
   describe("write-config lint findings", () => {
     const writeConfigContribution = requireDoctorContribution("doctor:write-config");
     const check = writeConfigContribution.healthChecks[0] as HealthCheck & {
@@ -3346,6 +3312,41 @@ describe("doctor health contributions", () => {
       (entry) => entry.id === "doctor:write-config",
     )!;
 
+    it.each([
+      {
+        name: "legacy update parents",
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+        shouldWrite: false,
+      },
+      { name: "ordinary doctor runs", env: {}, shouldWrite: true },
+      {
+        name: "current update parents",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+        shouldWrite: true,
+      },
+      {
+        name: "falsey update env values",
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
+        shouldWrite: true,
+      },
+    ])("handles config writes for $name", async ({ env, shouldWrite }) => {
+      const ctx = buildWriteConfigCtx(env);
+
+      await writeConfigContribution.run(ctx);
+
+      if (shouldWrite) {
+        expect(mocks.replaceConfigFile).toHaveBeenCalled();
+      } else {
+        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+        expect(ctx.runtime.log).toHaveBeenCalledWith(
+          "Skipping doctor config write during legacy update handoff.",
+        );
+      }
+    });
+
     it("allows config size drops when OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
       const ctx = buildWriteConfigCtx({
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -3494,3 +3495,4 @@ describe("doctor health contributions", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

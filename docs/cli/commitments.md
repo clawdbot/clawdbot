@@ -74,7 +74,7 @@ openclaw commitments --all --json
 
 ## Output
 
-Text output prints the commitment count, the store path, any active filters,
+Text output prints the commitment count, the shared SQLite database path, any active filters,
 and one row per commitment:
 
 - commitment id
@@ -85,7 +85,7 @@ and one row per commitment:
 - suggested check-in text
 
 JSON output includes the count, the active status and agent filters, the
-commitment store path, and the full stored records.
+shared SQLite database path, and the full stored records.
 
 ## Related
 

@@ -41,6 +41,7 @@ export async function executeNodeCommandAction(params: {
   action: NodeCommandAction;
   input: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
+  agentSessionKey?: string;
   allowMediaInvokeCommands?: boolean;
   mediaInvokeActions: Record<string, string>;
 }): Promise<
@@ -184,6 +185,7 @@ export async function executeNodeCommandAction(params: {
         params: invokeParams,
         timeoutMs: invokeTimeoutMs,
         idempotencyKey: crypto.randomUUID(),
+        ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
       });
       return jsonResult(raw ?? {});
     }

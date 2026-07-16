@@ -165,7 +165,7 @@ function isIMessagePluginPayloadAttachment(attachment: {
   );
 }
 
-export function resolveIMessageInboundMediaInput(params: {
+function resolveIMessageInboundMediaInput(params: {
   messageText: string;
   attachments: IMessageAttachment[];
   effectiveAttachmentRoots: readonly string[];
@@ -208,7 +208,7 @@ export function resolveIMessageInboundMediaInput(params: {
   };
 }
 
-export function formatIMessageInboundMediaBody(params: {
+function formatIMessageInboundMediaBody(params: {
   messageText: string;
   optimisticPlaceholder: string;
   mediaAttachments: Array<{ contentType?: string }>;
@@ -360,11 +360,11 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
 ]);
 const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
 
-export function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
+function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
   return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
 }
 
-export function describeIMessageInboundDropDiagnostic(params: {
+function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
@@ -1876,3 +1876,4 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await activeClient.stop();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

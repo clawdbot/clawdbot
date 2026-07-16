@@ -934,3 +934,4 @@ export async function runPluginMarketplaceListCommand(
     defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

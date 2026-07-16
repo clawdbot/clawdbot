@@ -32,7 +32,11 @@ import {
 } from "./composer-persistence.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
-import { readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = Omit<ChatHost, "settings"> & {
@@ -49,6 +53,26 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
   settings?: Partial<UiSettings>;
 };
+
+function requireChatMessageCache(host: ChatHost): ChatMessageCache {
+  if (!host.chatMessagesBySession) {
+    throw new Error("Expected chat message cache");
+  }
+  return host.chatMessagesBySession;
+}
+
+function cacheChatMessages(
+  cache: ChatMessageCache,
+  host: Parameters<typeof cacheChatSessionSnapshot>[1],
+  target: Parameters<typeof cacheChatSessionSnapshot>[2],
+  messages: unknown[],
+): void {
+  cacheChatSessionSnapshot(cache, host, target, {
+    messages,
+    pagination: { hasMore: false },
+    sessionId: null,
+  });
+}
 
 const executeSlashCommandMock = vi.hoisted(() => vi.fn());
 
@@ -317,7 +341,6 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
     chatScrollGuardFrame: null,
-    chatScrollTimeout: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -3208,6 +3231,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "queued while busy",
       chatRunId: "run-1",
+      settings: { chatFollowUpMode: "queue" },
     });
 
     await handleSendChat(host);
@@ -3221,6 +3245,57 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("queued while busy");
+  });
+
+  it("auto-steers messages sent during an active run with the default steer setting", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "tighten the plan",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      sessionKey: "agent:main:main",
+      settings: { chatFollowUpMode: "steer" },
+    });
+
+    await handleSendChat(host);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          message: "tighten the plan",
+          deliver: false,
+          queueMode: "steer",
+        }),
+      ),
+    );
+    expect(host.chatRunId).toBe("run-1");
+    await vi.waitFor(() => expect(host.chatQueue[0]?.kind).toBe("steered"));
+    expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("keeps busy sends queued in steer mode while disconnected", async () => {
+    const host = makeHost({
+      client: null,
+      connected: false,
+      chatMessage: "queued while offline",
+      chatRunId: "run-1",
+      settings: { chatFollowUpMode: "steer" },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue).toHaveLength(1);
+    expect(host.chatQueue[0]?.text).toBe("queued while offline");
+    expect(host.chatQueue[0]?.sendState).toBe("waiting-reconnect");
+    expect(host.chatQueue[0]?.kind).not.toBe("steered");
   });
 
   it("requires durable admission for offline input queued behind an active run", async () => {
@@ -3894,7 +3969,7 @@ describe("handleSendChat", () => {
     });
     for (const host of [visible, inactive]) {
       Object.assign(host, {
-        chatMessagesBySession: new Map<string, unknown[]>(),
+        chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
         requestUpdate: vi.fn(),
@@ -3991,7 +4066,7 @@ describe("handleSendChat", () => {
     });
     for (const host of [visible, inactive]) {
       Object.assign(host, {
-        chatMessagesBySession: new Map<string, unknown[]>(),
+        chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
         requestUpdate: vi.fn(),
@@ -6413,11 +6488,15 @@ describe("handleSendChat", () => {
       agentsList: { defaultId: "main" },
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
-      chatMessagesBySession: new Map([
-        ["agent:work:main", [{ role: "assistant", content: "work history" }]],
-        ["agent:main:main", [{ role: "assistant", content: "main history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "work" }, [
+      { role: "assistant", content: "work history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: "global", agentId: "main" }, [
+      { role: "assistant", content: "main history" },
+    ]);
 
     await handleSendChat(host);
 
@@ -6449,13 +6528,17 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "source history" }],
-      chatMessagesBySession: new Map([
-        [sourceSessionKey, [{ role: "user", content: "source history" }]],
-        [visibleSessionKey, [{ role: "user", content: "visible history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
       chatRunId: null,
       sessionKey: sourceSessionKey,
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
+      { role: "user", content: "source history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
+      { role: "user", content: "visible history" },
+    ]);
 
     const clearing = handleSendChat(host);
     await vi.waitFor(() =>
@@ -6472,9 +6555,11 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
     expect(host.chatRunId).toBe("visible-run");
     expect(host.chatMessagesBySession?.has(sourceSessionKey)).toBe(false);
-    expect(host.chatMessagesBySession?.get(visibleSessionKey)).toEqual([
-      { role: "user", content: "visible history" },
-    ]);
+    expect(
+      readChatMessagesFromCache(host.chatMessagesBySession ?? new Map(), host, {
+        sessionKey: visibleSessionKey,
+      }),
+    ).toEqual([{ role: "user", content: "visible history" }]);
     expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(0);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);
   });
@@ -6493,12 +6578,16 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "source history" }],
-      chatMessagesBySession: new Map([
-        [sourceSessionKey, [{ role: "user", content: "cached source history" }]],
-        [visibleSessionKey, [{ role: "user", content: "cached visible history" }]],
-      ]),
+      chatMessagesBySession: new Map(),
       sessionKey: sourceSessionKey,
     });
+    const cache = requireChatMessageCache(host);
+    cacheChatMessages(cache, host, { sessionKey: sourceSessionKey }, [
+      { role: "user", content: "cached source history" },
+    ]);
+    cacheChatMessages(cache, host, { sessionKey: visibleSessionKey }, [
+      { role: "user", content: "cached visible history" },
+    ]);
 
     const clearing = handleSendChat(host);
     await vi.waitFor(() =>
@@ -6512,9 +6601,11 @@ describe("handleSendChat", () => {
     await clearing;
 
     expect(host.chatMessagesBySession?.has(sourceSessionKey)).toBe(false);
-    expect(host.chatMessagesBySession?.get(visibleSessionKey)).toEqual([
-      { role: "user", content: "cached visible history" },
-    ]);
+    expect(
+      readChatMessagesFromCache(host.chatMessagesBySession ?? new Map(), host, {
+        sessionKey: visibleSessionKey,
+      }),
+    ).toEqual([{ role: "user", content: "cached visible history" }]);
     expect(host.chatMessages).toEqual([{ role: "user", content: "visible history" }]);
     expect(host.lastError).toContain("clear request may have completed");
     expect(host.lastError).toContain("could not be refreshed");
@@ -6675,6 +6766,7 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
+      queueMode: "steer",
       idempotencyKey,
       attachments: undefined,
     });
@@ -6684,6 +6776,39 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+  });
+
+  it("steers a queued message when only the session row reports an active run", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "steer-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [original],
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, original.id);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        message: "tighten the plan",
+        deliver: false,
+      }),
+    );
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatQueue).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
   });
 
   it("does not steer a queued message without a durable claim", async () => {
@@ -7513,3 +7638,4 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("draft");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

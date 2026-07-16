@@ -23,13 +23,8 @@ type McpServerRow = {
 
 type McpViewProps = {
   configObject: Record<string, unknown>;
-  configDirty: boolean;
-  configSaving: boolean;
-  configApplying: boolean;
-  connected: boolean;
   pluginsHref: string;
-  onSaveConfig: () => void;
-  onApplyConfig: () => void;
+  /** Embedded schema editor; it owns autosave status and the restart banner. */
   editor: TemplateResult;
 };
 
@@ -102,8 +97,6 @@ export function renderMcp(props: McpViewProps) {
   const enabledCount = rows.filter((row) => row.enabled).length;
   const oauthCount = rows.filter((row) => row.auth === "oauth").length;
   const filteredCount = rows.filter((row) => row.toolFilter).length;
-  const saveDisabled =
-    !props.configDirty || !props.connected || props.configApplying || props.configSaving;
   return html`
     <section class="mcp-page">
       <div class="settings-page">
@@ -151,21 +144,6 @@ export function renderMcp(props: McpViewProps) {
         <section class="settings-section mcp-server-list">
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("mcpPage.configuredServers")}</h2>
-            <div class="settings-section__actions">
-              <button class="btn btn--sm" ?disabled=${saveDisabled} @click=${props.onSaveConfig}>
-                ${t("common.save")}
-              </button>
-              <button
-                class="btn btn--sm primary"
-                ?disabled=${!props.configDirty ||
-                !props.connected ||
-                props.configApplying ||
-                props.configSaving}
-                @click=${props.onApplyConfig}
-              >
-                ${props.configApplying ? t("mcpPage.publishing") : t("common.saveAndPublish")}
-              </button>
-            </div>
           </div>
           <p class="settings-section__desc">
             ${t("mcpPage.runtimeHint")}

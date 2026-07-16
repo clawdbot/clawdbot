@@ -1069,3 +1069,4 @@ function buildCompactionContextEngineRuntimeContext(params: {
     currentTokenCount: params.params.currentTokenCount,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

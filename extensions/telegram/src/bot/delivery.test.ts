@@ -90,7 +90,12 @@ function createBot(api: Record<string, unknown> = {}): Bot {
     sendRichMessage: vi.fn(
       (params: {
         chat_id: string | number;
-        rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+        rich_message: {
+          blocks?: unknown[];
+          markdown?: string;
+          html?: string;
+          skip_entity_detection?: boolean;
+        };
         [key: string]: unknown;
       }) => {
         const sendMessage = api.sendMessage;
@@ -103,7 +108,14 @@ function createBot(api: Record<string, unknown> = {}): Bot {
           ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
           ...richParams,
         };
-        const text = rich_message.markdown ?? rich_message.html ?? "";
+        const text = Array.isArray(rich_message.blocks)
+          ? rich_message.blocks
+              .map((block) => {
+                const blockText = (block as { text?: unknown }).text;
+                return typeof blockText === "string" ? blockText : "";
+              })
+              .join("\n")
+          : (rich_message.markdown ?? rich_message.html ?? "");
         const replyParameters = sendParams.reply_parameters;
         if (
           replyParameters &&
@@ -1407,7 +1419,7 @@ describe("deliverReplies", () => {
     };
     const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
     expect(richMessage).toEqual({
-      html: oauthProfileText,
+      blocks: [{ type: "paragraph", text: oauthProfileText }],
       skip_entity_detection: true,
     });
   });
@@ -2149,3 +2161,4 @@ describe("deliverReplies", () => {
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

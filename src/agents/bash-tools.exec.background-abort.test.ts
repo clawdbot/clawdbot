@@ -99,7 +99,7 @@ const TEST_EXEC_DEFAULTS = {
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
 
 const createTestExecTool = (
@@ -108,8 +108,8 @@ const createTestExecTool = (
 
 beforeAll(async () => {
   ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ getFinishedSession, getSession, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
+  ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
 });
 
 beforeEach(() => {

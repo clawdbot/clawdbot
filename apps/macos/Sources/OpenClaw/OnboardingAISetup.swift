@@ -6,7 +6,7 @@ import OpenClawProtocol
 
 /// Structured "Connect your AI" onboarding step.
 ///
-/// Drives the gateway's `crestodian.setup.detect` / `crestodian.setup.activate`
+/// Drives the gateway's `openclaw.setup.detect` / `openclaw.setup.activate`
 /// RPCs: detect reusable AI access (Claude Code, Codex, Gemini logins, API
 /// keys), live-test candidates in the detected order, and automatically fall
 /// through when one fails. Config is only written server-side after a
@@ -85,7 +85,7 @@ final class OnboardingAISetupModel {
     }
 
     /// Once setup starts changing inference, its successful result belongs to
-    /// Crestodian rather than the existing-Gateway onboarding bypass.
+    /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
         (self.phase == .detecting && !self.configuredGatewayProbeUnavailable) ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
@@ -104,7 +104,7 @@ final class OnboardingAISetupModel {
     private var started = false
     private var attemptToken = UUID()
     @ObservationIgnored private var pendingVerification: PendingVerification?
-    @ObservationIgnored private var pendingActivationOwner: OnboardingCrestodianResumeStore.ActivationOwner?
+    @ObservationIgnored private var pendingActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     @ObservationIgnored private var completedHandoff: CompletedHandoff?
     @ObservationIgnored private var pendingActivationRequiresFreshActivation = false
     @ObservationIgnored private var serverLease: GatewayConnection.ServerLease?
@@ -131,14 +131,14 @@ final class OnboardingAISetupModel {
 
     private struct CompletedHandoff {
         let routeIdentity: String
-        let activationOwner: OnboardingCrestodianResumeStore.ActivationOwner?
+        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
     }
 
     init(
         gateway: GatewayConnection = .shared,
         defaults: UserDefaults = .standard,
         routeIdentityProvider: @escaping @MainActor () -> String? = {
-            OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            OnboardingSystemAgentResumeStore.selectedRouteIdentity()
         })
     {
         self.gateway = gateway
@@ -254,11 +254,11 @@ final class OnboardingAISetupModel {
         // repeatedly. Keep the first attempt and let every caller await it.
         guard !self.ownsInferenceTransition else { return }
         let routeIdentity = self.routeIdentityProvider()
-        let pendingState = OnboardingCrestodianResumeStore.pendingState(
+        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: self.defaults)
         let inMemoryOwner = self.pendingActivationOwner
-        let restoredOwner = OnboardingCrestodianResumeStore.activationOwner(
+        let restoredOwner = OnboardingSystemAgentResumeStore.activationOwner(
             for: routeIdentity,
             defaults: self.defaults)
         let activationOwner = inMemoryOwner ?? restoredOwner
@@ -338,7 +338,7 @@ final class OnboardingAISetupModel {
                 return .notConnected
             }
             guard activationOwner.routeFingerprint == currentFingerprint else {
-                switch OnboardingCrestodianResumeStore.pendingState(
+                switch OnboardingSystemAgentResumeStore.pendingState(
                     for: context.routeIdentity,
                     defaults: self.defaults)
                 {
@@ -353,7 +353,7 @@ final class OnboardingAISetupModel {
                 case .activationExpired, .completed, .none:
                     // No live mutation remains to overlap. Retire only this
                     // owner, then let the replacement credentials start fresh.
-                    OnboardingCrestodianResumeStore.clear(
+                    OnboardingSystemAgentResumeStore.clear(
                         ifOwnedBy: context.routeIdentity,
                         activationOwner: activationOwner,
                         defaults: self.defaults)
@@ -367,7 +367,7 @@ final class OnboardingAISetupModel {
         }
         do {
             let data = try await gateway.request(
-                method: "crestodian.setup.verify",
+                method: "openclaw.setup.verify",
                 params: [:],
                 timeoutMs: 150_000,
                 ifCurrentServerLease: lease)
@@ -377,14 +377,14 @@ final class OnboardingAISetupModel {
             else { return .superseded }
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             if result.ok, let modelRef = result.modelRef {
-                let pendingState = OnboardingCrestodianResumeStore.pendingState(
+                let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                     for: context.routeIdentity,
                     defaults: self.defaults)
                 switch pendingState {
                 case let .activating(deadline), let .verified(deadline):
                     // This proves inference works, but not that the dropped
                     // activation stopped mutating. Preserve its deadline.
-                    OnboardingCrestodianResumeStore.markVerified(
+                    OnboardingSystemAgentResumeStore.markVerified(
                         ifOwnedBy: context.routeIdentity,
                         activationOwner: self.pendingActivationOwner,
                         defaults: self.defaults)
@@ -438,7 +438,7 @@ final class OnboardingAISetupModel {
     private func pendingVerificationFailureOutcome(
         context: AttemptContext) -> PendingVerificationOutcome
     {
-        switch OnboardingCrestodianResumeStore.pendingState(
+        switch OnboardingSystemAgentResumeStore.pendingState(
             for: context.routeIdentity,
             defaults: self.defaults)
         {
@@ -446,7 +446,7 @@ final class OnboardingAISetupModel {
             // The dropped activation may still be writing config or credentials.
             // Verification may repeat, but mutation stays blocked until its lease ends.
             if let activationOwner = pendingActivationOwner,
-               !OnboardingCrestodianResumeStore.isOwned(
+               !OnboardingSystemAgentResumeStore.isOwned(
                    by: activationOwner,
                    for: context.routeIdentity,
                    defaults: defaults)
@@ -472,7 +472,7 @@ final class OnboardingAISetupModel {
     }
 
     private func retainCompletedReceiptForRetry(context: AttemptContext) {
-        self.pendingActivationOwner = OnboardingCrestodianResumeStore.activationOwner(
+        self.pendingActivationOwner = OnboardingSystemAgentResumeStore.activationOwner(
             for: context.routeIdentity,
             defaults: self.defaults)
         self.pendingActivationRequiresFreshActivation = true
@@ -480,7 +480,7 @@ final class OnboardingAISetupModel {
     }
 
     private func activePendingActivationDeadline(for routeIdentity: String) -> Date? {
-        switch OnboardingCrestodianResumeStore.pendingState(
+        switch OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
             defaults: self.defaults)
         {
@@ -502,17 +502,17 @@ final class OnboardingAISetupModel {
 
     private func retainAmbiguousActivation(
         ifOwnedBy context: AttemptContext,
-        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         activationDeadline: Date)
     {
         guard isCurrentAttempt(context) else { return }
         self.pendingActivationVerification = true
-        switch OnboardingCrestodianResumeStore.pendingState(
+        switch OnboardingSystemAgentResumeStore.pendingState(
             for: context.routeIdentity,
             defaults: self.defaults)
         {
         case let .activating(deadline), let .verified(deadline):
-            guard OnboardingCrestodianResumeStore.isOwned(
+            guard OnboardingSystemAgentResumeStore.isOwned(
                 by: activationOwner,
                 for: context.routeIdentity,
                 defaults: self.defaults)
@@ -532,7 +532,7 @@ final class OnboardingAISetupModel {
             // A concurrent read-only probe can clear the marker while the
             // dispatched handler is still returning. Restore route ownership
             // before probing so failure or relaunch cannot start a duplicate.
-            OnboardingCrestodianResumeStore.restorePending(
+            OnboardingSystemAgentResumeStore.restorePending(
                 routeIdentity: context.routeIdentity,
                 activationOwner: activationOwner,
                 deadline: activationDeadline,
@@ -571,7 +571,7 @@ final class OnboardingAISetupModel {
     /// A replacement activation on the same route retains its own receipt.
     func clearCompletedHandoffIfOwned() {
         guard let completedHandoff else { return }
-        OnboardingCrestodianResumeStore.clear(
+        OnboardingSystemAgentResumeStore.clear(
             ifOwnedBy: completedHandoff.routeIdentity,
             activationOwner: completedHandoff.activationOwner,
             defaults: self.defaults)
@@ -583,7 +583,7 @@ final class OnboardingAISetupModel {
         let authSessionToCancel = self.authSessionID
         let authServerLease = self.serverLease
         if clearPendingHandoff, let routeIdentity = routeIdentityProvider() {
-            OnboardingCrestodianResumeStore.clear(
+            OnboardingSystemAgentResumeStore.clear(
                 ifOwnedBy: routeIdentity,
                 activationOwner: self.pendingActivationOwner,
                 defaults: self.defaults)
@@ -662,7 +662,7 @@ extension OnboardingAISetupModel {
             let lease = try await gateway.acquireServerLease()
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             let data = try await gateway.request(
-                method: "crestodian.setup.detect",
+                method: "openclaw.setup.detect",
                 params: [:],
                 timeoutMs: 20000,
                 ifCurrentServerLease: lease)
@@ -748,10 +748,10 @@ extension OnboardingAISetupModel {
 
     private func clearPendingHandoff(
         ifOwnedBy context: AttemptContext,
-        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner? = nil)
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil)
     {
         guard self.isCurrentAttempt(context) else { return }
-        OnboardingCrestodianResumeStore.clear(
+        OnboardingSystemAgentResumeStore.clear(
             ifOwnedBy: context.routeIdentity,
             activationOwner: activationOwner ?? self.pendingActivationOwner,
             defaults: self.defaults)
@@ -822,7 +822,7 @@ extension OnboardingAISetupModel {
         self.phase = .testing
         self.statuses[kind] = .testing
         guard let supportsExactModel = await gateway.supportsServerCapability(
-            .crestodianSetupModelRef,
+            .systemAgentSetupModelRef,
             ifCurrentServerLease: lease),
             isCurrentAttempt(context),
             !Task.isCancelled
@@ -844,14 +844,14 @@ extension OnboardingAISetupModel {
             kind: kind,
             modelRef: candidate.modelRef,
             supportsExactModel: supportsExactModel)
-        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: UUID().uuidString,
             routeFingerprint: routeFingerprint)
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
         // whole ambiguous window so relaunch can inspect the actual Gateway state.
-        guard let activationDeadline = OnboardingCrestodianResumeStore.markPending(
+        guard let activationDeadline = OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: context.routeIdentity,
             activationOwner: activationOwner,
             activationTimeoutMs: requestTimeoutMs,
@@ -869,7 +869,7 @@ extension OnboardingAISetupModel {
         }
         do {
             let data = try await gateway.request(
-                method: "crestodian.setup.activate",
+                method: "openclaw.setup.activate",
                 params: params,
                 timeoutMs: requestTimeoutMs,
                 ifCurrentServerLease: lease)
@@ -877,7 +877,7 @@ extension OnboardingAISetupModel {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             guard await self.gateway.isCurrentServerLease(lease) else {
                 if result.ok,
-                   OnboardingCrestodianResumeStore.markCompleted(
+                   OnboardingSystemAgentResumeStore.markCompleted(
                        ifOwnedBy: context.routeIdentity,
                        activationOwner: activationOwner,
                        defaults: self.defaults)
@@ -948,7 +948,7 @@ extension OnboardingAISetupModel {
     private func reconcileActivationAfterGatewayRestart(
         kind: String,
         context: AttemptContext,
-        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
         originalServerLease: GatewayConnection.ServerLease) async -> Bool
     {
@@ -997,7 +997,7 @@ extension OnboardingAISetupModel {
     private func reconcilePersistedActivation(
         kind: String,
         context: AttemptContext,
-        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
         serverLease: GatewayConnection.ServerLease,
         timeoutMs: Int) async -> Bool
@@ -1006,7 +1006,7 @@ extension OnboardingAISetupModel {
               let expectedModel = candidates.first(where: { $0.kind == kind })?.modelRef,
               isCurrentAttempt(context),
               !Task.isCancelled,
-              OnboardingCrestodianResumeStore.isOwned(
+              OnboardingSystemAgentResumeStore.isOwned(
                   by: activationOwner,
                   for: context.routeIdentity,
                   defaults: defaults),
@@ -1014,7 +1014,7 @@ extension OnboardingAISetupModel {
               activationOwner.routeFingerprint
         else { return false }
         guard let detectData = try? await gateway.request(
-            method: "crestodian.setup.detect",
+            method: "openclaw.setup.detect",
             params: [:],
             timeoutMs: Double(timeoutMs),
             ifCurrentServerLease: serverLease),
@@ -1028,7 +1028,7 @@ extension OnboardingAISetupModel {
                 after: detection.persistedActivationState)
         else { return false }
         guard let verifyData = try? await gateway.request(
-            method: "crestodian.setup.verify",
+            method: "openclaw.setup.verify",
             params: [:],
             timeoutMs: Double(timeoutMs),
             ifCurrentServerLease: serverLease),
@@ -1074,7 +1074,7 @@ extension OnboardingAISetupModel {
         Task {
             do {
                 let data = try await self.gateway.request(
-                    method: "crestodian.setup.auth.start",
+                    method: "openclaw.setup.auth.start",
                     params: [
                         "sessionId": AnyCodable(authSessionID),
                         "authChoice": AnyCodable(option.id),
@@ -1298,7 +1298,7 @@ extension OnboardingAISetupModel {
             lease = replacement
         }
         guard let data = try? await gateway.request(
-            method: "crestodian.setup.detect",
+            method: "openclaw.setup.detect",
             params: [:],
             timeoutMs: 10000,
             ifCurrentServerLease: lease),
@@ -1394,14 +1394,14 @@ extension OnboardingAISetupModel {
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
-        let activationOwner = OnboardingCrestodianResumeStore.ActivationOwner(
+        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
             id: UUID().uuidString,
             routeFingerprint: routeFingerprint)
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as
         // detected candidates, so relaunch must inspect exact Gateway truth.
-        guard let activationDeadline = OnboardingCrestodianResumeStore.markPending(
+        guard let activationDeadline = OnboardingSystemAgentResumeStore.markPending(
             routeIdentity: context.routeIdentity,
             activationOwner: activationOwner,
             activationTimeoutMs: requestTimeoutMs,
@@ -1417,7 +1417,7 @@ extension OnboardingAISetupModel {
         }
         do {
             let data = try await gateway.request(
-                method: "crestodian.setup.activate",
+                method: "openclaw.setup.activate",
                 params: [
                     "kind": AnyCodable("api-key"),
                     "authChoice": AnyCodable(provider.id),
@@ -1429,7 +1429,7 @@ extension OnboardingAISetupModel {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             guard await self.gateway.isCurrentServerLease(lease) else {
                 if result.ok,
-                   OnboardingCrestodianResumeStore.markCompleted(
+                   OnboardingSystemAgentResumeStore.markCompleted(
                        ifOwnedBy: context.routeIdentity,
                        activationOwner: activationOwner,
                        defaults: self.defaults)
@@ -1493,11 +1493,11 @@ extension OnboardingAISetupModel {
     private func finishConnected(
         kind: String,
         result: ActivateResult,
-        activationOwner: OnboardingCrestodianResumeStore.ActivationOwner? = nil,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
         requireExistingReceipt: Bool = false)
     {
         let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let completedReceipt = OnboardingCrestodianResumeStore.markCompleted(
+        let completedReceipt = OnboardingSystemAgentResumeStore.markCompleted(
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: self.defaults)

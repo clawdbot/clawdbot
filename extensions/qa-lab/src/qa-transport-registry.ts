@@ -67,7 +67,7 @@ function requireQaTransportFactory(
   return factory;
 }
 
-export function createQaTransportAdapterFactoryRegistry(
+function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
   return {

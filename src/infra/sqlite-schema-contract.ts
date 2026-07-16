@@ -63,6 +63,17 @@ export type SqliteSchemaCompatibility = {
    * requires a temporary default that the clean schema does not retain.
    */
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * Exact owner-defined trigger groups that may be absent when their derived
+   * schema is disabled, but must be complete and canonical when present.
+   */
+  optionalCanonicalTriggerGroups?: readonly {
+    tableName: string;
+    triggers: readonly {
+      name: string;
+      sql: string;
+    }[];
+  }[];
 };
 
 const schemaContractCache = new Map<string, SqliteSchemaContract>();
@@ -119,9 +130,34 @@ export function assertSqliteSchemaContains(
         mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
       }
     }
+    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
+      compatibility,
+      tableName,
+    );
+    for (const triggerGroup of optionalCanonicalTriggerGroups) {
+      const isPresent = actualTable.triggers.some((actualTrigger) =>
+        triggerGroup.some((canonicalTrigger) => actualTrigger.name === canonicalTrigger.name),
+      );
+      if (!isPresent) {
+        continue;
+      }
+      for (const canonicalTrigger of triggerGroup) {
+        if (
+          !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
+        ) {
+          mismatches.push(`missing or drifted trigger ${canonicalTrigger.name}`);
+        }
+      }
+    }
+    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flat();
     for (const actualTrigger of actualTable.triggers) {
       if (
-        !expectedTable.triggers.some((expectedTrigger) => isEqual(actualTrigger, expectedTrigger))
+        !expectedTable.triggers.some((expectedTrigger) =>
+          isEqual(actualTrigger, expectedTrigger),
+        ) &&
+        !optionalCanonicalTriggers.some((canonicalTrigger) =>
+          isEqual(actualTrigger, canonicalTrigger),
+        )
       ) {
         mismatches.push(`unexpected trigger ${actualTrigger.name}`);
       }
@@ -146,6 +182,25 @@ export function assertSqliteSchemaContains(
       `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
     );
   }
+}
+
+function collectOptionalCanonicalTriggerGroups(
+  compatibility: SqliteSchemaCompatibility,
+  tableName: string,
+): Array<Array<{ name: string; sql: string | null }>> {
+  return (compatibility.optionalCanonicalTriggerGroups ?? [])
+    .filter((group) => group.tableName === tableName)
+    .map((group) =>
+      group.triggers.map((trigger) => ({
+        name: trigger.name,
+        sql: normalizeOptionalCanonicalTriggerSql(trigger.sql),
+      })),
+    );
+}
+
+function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
+  // sqlite_schema stores main-schema trigger names without the schema qualifier.
+  return normalizeSchemaSql(sql)?.replace(/^(CREATE TRIGGER) main\./iu, "$1 ") ?? null;
 }
 
 function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {

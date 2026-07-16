@@ -22,7 +22,8 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
-import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -1732,17 +1733,14 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("keeps image tool available when primary model supports images (for explicit requests)", async () => {
-    // When the primary model supports images, we still keep the tool available
-    // because images are auto-injected into prompts. The tool description is
-    // adjusted via modelHasVision to discourage redundant usage.
-    vi.stubEnv("OPENAI_API_KEY", "test-key");
+  it("loads images directly for native-vision models without resolving an image model", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             model: { primary: "acme/vision-1" },
-            imageModel: { primary: "openai/gpt-5.4-mini" },
+            imageModel: { primary: "moondream" },
+            imageMaxDimensionPx: 32,
           },
         },
         models: {
@@ -1751,16 +1749,50 @@ describe("image tool implicit imageModel config", () => {
               baseUrl: "https://example.com",
               models: [makeModelDefinition("vision-1", ["text", "image"])],
             },
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
           },
         },
       };
-      // Tool should still be available for explicit image analysis requests
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5.4-mini",
+      const describeImageWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
       });
-      const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(typeof tool?.execute).toBe("function");
-      expect(tool?.description).toContain("use only for images not provided");
+      const describeImagesWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
+      });
+      testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
+
+      const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
+      expect(tool.label).toBe("View Image");
+      expect(tool.catalogMode).toBe("direct-only");
+      expect(tool.description).toContain("direct visual inspection");
+
+      const result = await tool.execute("native-image", {
+        prompt: "Read the screenshot error.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      const content = (
+        result as {
+          content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          details?: Record<string, unknown>;
+        }
+      ).content;
+
+      expect(content).toEqual([
+        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
+      ]);
+      expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
+        transport: "native",
+      });
+      expect(describeImageWithModel).not.toHaveBeenCalled();
+      expect(describeImagesWithModel).not.toHaveBeenCalled();
     });
   });
 
@@ -3190,3 +3222,4 @@ describe("image compression policy", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

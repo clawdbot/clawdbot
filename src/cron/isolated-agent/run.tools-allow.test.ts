@@ -1,6 +1,5 @@
 // Tool allowlist tests cover tool availability for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE } from "../run-diagnostics.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
   listWebSearchProvidersMock,
@@ -13,6 +12,9 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
+
+const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 
 const RUN_TOOLS_ALLOW_TIMEOUT_MS = 300_000;
 

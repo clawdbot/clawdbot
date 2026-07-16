@@ -481,36 +481,29 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   return metadata.length > 0 ? metadata.join("; ") : "none";
 }
 
+function uniqueScenarioValues(values: (string | undefined)[]) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  const requiredDrivers = [
-    ...new Set(
-      matches
-        .map((match) => match.requiredChannelDriver)
-        .filter((driver): driver is string => Boolean(driver)),
-    ),
-  ];
+  const requiredDrivers = uniqueScenarioValues(matches.map((match) => match.requiredChannelDriver));
+  const channels = uniqueScenarioValues(matches.map((match) => match.channel));
+  const selectedDriver =
+    requiredDrivers.length === 1 ? requiredDrivers[0] : channels.length === 1 ? "live" : undefined;
   const driverArg =
-    requiredDrivers.length === 1 && requiredDrivers[0] !== "qa-channel"
-      ? ` --channel-driver ${requiredDrivers[0]}`
-      : "";
-  const channels = [
-    ...new Set(
-      matches
-        .map((match) => match.channel)
-        .filter((channel): channel is string => Boolean(channel)),
-    ),
-  ];
+    selectedDriver && selectedDriver !== "qa-channel" ? ` --channel-driver ${selectedDriver}` : "";
   const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
   return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
-  const groups = new Map<QaScenarioSearchMatch["executionKind"], QaScenarioSearchMatch[]>();
+  const groups = new Map<string, QaScenarioSearchMatch[]>();
   for (const match of matches) {
-    const group = groups.get(match.executionKind) ?? [];
+    const key = JSON.stringify([match.executionKind, match.channel, match.requiredChannelDriver]);
+    const group = groups.get(key) ?? [];
     group.push(match);
-    groups.set(match.executionKind, group);
+    groups.set(key, group);
   }
   const executionOrder: QaScenarioSearchMatch["executionKind"][] = [
     "flow",
@@ -518,10 +511,13 @@ function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
     "vitest",
     "playwright",
   ];
-  return executionOrder.flatMap((executionKind) => {
-    const group = groups.get(executionKind);
-    return group && group.length > 0 ? [{ executionKind, matches: group }] : [];
-  });
+  return [...groups.values()]
+    .toSorted(
+      (left, right) =>
+        executionOrder.indexOf(left[0]!.executionKind) -
+        executionOrder.indexOf(right[0]!.executionKind),
+    )
+    .map((group) => ({ executionKind: group[0]!.executionKind, matches: group }));
 }
 
 export function renderQaScenarioMatchesMarkdownReport(params: {

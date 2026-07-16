@@ -84,7 +84,7 @@ extension OnboardingAISetupModel {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
         kind == "codex-cli"
-            ? OnboardingCrestodianResumeStore.maximumActivationTimeoutMs
+            ? OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs
             : 150_000
     }
 
@@ -97,7 +97,7 @@ extension OnboardingAISetupModel {
             return code == "UNKNOWN_METHOD" ||
                 (code == "INVALID_REQUEST" &&
                     (message.contains("unknown method") ||
-                        message.contains("invalid crestodian.setup.activate params")))
+                        message.contains("invalid openclaw.setup.activate params")))
         }
         return error is GatewayConnectAuthError ||
             error is GatewayTLSValidationError ||

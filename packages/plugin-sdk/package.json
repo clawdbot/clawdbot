@@ -236,10 +236,6 @@
       "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
       "default": "./src/tts-runtime.ts"
     },
-    "./testing": {
-      "types": "./dist/src/plugin-sdk/testing.d.ts",
-      "default": "./src/testing.ts"
-    },
     "./text-runtime": {
       "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
       "default": "./src/text-runtime.ts"

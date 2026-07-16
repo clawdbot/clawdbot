@@ -101,7 +101,6 @@ type RoomHistoryTracker = {
 
   /**
    * Advance the agent's watermark to the snapshot index returned by prepareTrigger
-   * (or the lower-level recordTrigger helper used in tests).
    * Only messages appended after that snapshot remain visible on the next trigger.
    */
   consumeHistory: (
@@ -111,27 +110,6 @@ type RoomHistoryTracker = {
     messageId?: string,
     threadRootId?: string,
   ) => void;
-};
-
-type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
-  /**
-   * Test-only helper for inspecting pending room history directly.
-   */
-  getPendingHistory: (
-    agentId: string,
-    roomId: string,
-    limit: number,
-    threadRootId?: string,
-  ) => HistoryEntry[];
-
-  /**
-   * Test-only helper for manually appending a trigger entry and snapshot index.
-   */
-  recordTrigger: (
-    roomId: string,
-    entry: HistoryEntry,
-    threadRootId?: string,
-  ) => HistorySnapshotToken;
 };
 
 type HistoryQueue = {
@@ -151,7 +129,7 @@ function createRoomHistoryTrackerInternal(
   maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
   maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
   maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
-): RoomHistoryTrackerTestApi {
+): RoomHistoryTracker {
   const roomQueues = new Map<string, RoomQueue>();
   /** Maps `{agentId, roomId, scope}` → absolute consumed-up-to index */
   const agentWatermarks = new Map<string, number>();
@@ -425,27 +403,6 @@ function createRoomHistoryTrackerInternal(
       };
     },
 
-    getPendingHistory(agentId, roomId, limit, threadRootId) {
-      const queue = findScopedQueue(roomId, threadRootId);
-      if (!queue) {
-        return [];
-      }
-      return computePendingHistory(
-        queue,
-        agentId,
-        roomId,
-        limit,
-        undefined,
-        undefined,
-        threadRootId,
-      );
-    },
-
-    recordTrigger(roomId, entry, threadRootId) {
-      const queue = getScopedQueue(roomId, threadRootId);
-      return appendToQueue(queue, entry);
-    },
-
     prepareTrigger(agentId, roomId, limit, entry, threadRootId) {
       return prepareTriggerInternal(agentId, roomId, limit, entry, threadRootId);
     },
@@ -547,18 +504,4 @@ export function createRoomHistoryTracker(
     prepareReservedTrigger: tracker.prepareReservedTrigger,
     consumeHistory: tracker.consumeHistory,
   };
-}
-
-export function createRoomHistoryTrackerForTests(
-  maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
-  maxRoomQueues = DEFAULT_MAX_ROOM_QUEUES,
-  maxWatermarkEntries = MAX_WATERMARK_ENTRIES,
-  maxPreparedTriggerEntries = MAX_PREPARED_TRIGGER_ENTRIES,
-): RoomHistoryTrackerTestApi {
-  return createRoomHistoryTrackerInternal(
-    maxQueueSize,
-    maxRoomQueues,
-    maxWatermarkEntries,
-    maxPreparedTriggerEntries,
-  );
 }

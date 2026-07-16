@@ -186,7 +186,7 @@ export function isGoogleMeetLikelyAssistantEchoTranscript(params: {
   });
 }
 
-export function extendGoogleMeetOutputEchoSuppression(params: {
+function extendGoogleMeetOutputEchoSuppression(params: {
   audio: Buffer;
   audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
   nowMs: number;
@@ -1353,3 +1353,4 @@ export async function startCommandRealtimeAudioBridge(params: {
     stop,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

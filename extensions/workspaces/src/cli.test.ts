@@ -4,7 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerWorkspaceCli, parseWorkspaceBindingShorthand } from "./cli.js";
+import { registerWorkspaceCli } from "./cli.js";
 import { registerWorkspaceGatewayMethods } from "./gateway.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -95,25 +95,6 @@ describe("workspace CLI", () => {
     gatewayRuntime.callGatewayFromCli.mockReset();
   });
 
-  it("parses binding shorthand sources and rejects malformed values", () => {
-    expect(parseWorkspaceBindingShorthand("value=file:q3.json#/revenue")).toEqual([
-      "value",
-      { source: "file", path: "q3.json", pointer: "/revenue" },
-    ]);
-    expect(parseWorkspaceBindingShorthand("rows=rpc:sessions.list")).toEqual([
-      "rows",
-      { source: "rpc", method: "sessions.list" },
-    ]);
-    expect(parseWorkspaceBindingShorthand('value=static:{"ok":true}')).toEqual([
-      "value",
-      { source: "static", value: { ok: true } },
-    ]);
-
-    expect(() => parseWorkspaceBindingShorthand("file:q3.json")).toThrow("binding must be");
-    expect(() => parseWorkspaceBindingShorthand("value=static:{bad")).toThrow("invalid static");
-    expect(() => parseWorkspaceBindingShorthand("value=command:date")).toThrow("binding source");
-  });
-
   it("round-trips tabs and widgets through the L1 gateway methods", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
@@ -140,6 +121,10 @@ describe("workspace CLI", () => {
             "Q3 Revenue",
             "--binding",
             "value=file:q3.json#/revenue",
+            "--binding",
+            "rows=rpc:sessions.list",
+            "--binding",
+            'summary=static:{"ok":true}',
             "--props",
             '{"format":"usd"}',
           ],
@@ -157,7 +142,11 @@ describe("workspace CLI", () => {
           {
             title: "Q3 Revenue",
             grid: { x: 0, y: 0, w: 4, h: 2 },
-            bindings: { value: { source: "file", path: "q3.json", pointer: "/revenue" } },
+            bindings: {
+              value: { source: "file", path: "q3.json", pointer: "/revenue" },
+              rows: { source: "rpc", method: "sessions.list" },
+              summary: { source: "static", value: { ok: true } },
+            },
             props: { format: "usd" },
           },
         ],
@@ -173,6 +162,25 @@ describe("workspace CLI", () => {
         changedTabSlug: "finance",
         actor: "user",
       });
+
+      for (const binding of ["file:q3.json", "value=static:{bad", "value=command:date"]) {
+        await expect(
+          program.parseAsync(
+            [
+              "workspaces",
+              "widgets",
+              "add",
+              "--tab",
+              "finance",
+              "--kind",
+              "builtin:stat-card",
+              "--binding",
+              binding,
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toThrow();
+      }
     });
   });
 
@@ -340,6 +348,34 @@ describe("workspace CLI", () => {
         program.parseAsync(["workspaces", "widget-scaffold", "."], { from: "user" }),
       ).rejects.toThrow("widget name is invalid");
     });
+  });
+
+  it.each([
+    ["0x1,0,4,2", "hex"],
+    ["1e0,0,4,2", "exponent"],
+    ["0o1,0,4,2", "octal literal"],
+    ["0b1,0,4,2", "binary literal"],
+    [",0,4,2", "empty segment"],
+  ])("rejects %s (%s) --grid input", async (grid, _label) => {
+    const program = createProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "workspaces",
+          "widgets",
+          "add",
+          "--tab",
+          "ops",
+          "--kind",
+          "builtin:markdown",
+          "--grid",
+          grid,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("grid must be x,y,w,h");
+    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it("scaffolds operator widgets as pending and approves them through the approvals method", async () => {

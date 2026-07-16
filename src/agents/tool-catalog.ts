@@ -152,6 +152,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "sessions",
+    label: "sessions",
+    description: "Session settings and groups",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_list",
     label: "sessions_list",
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -202,7 +210,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "subagents",
     label: "subagents",
-    description: "Manage sub-agents",
+    description: "Background work: subagents, media gen, cron runs. list/cancel.",
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -273,7 +281,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "gateway",
     label: "gateway",
-    description: "Gateway control",
+    description: "Read Gateway config and schema",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,

@@ -47,13 +47,13 @@ vi.mock("./refresh-state.js", () => ({
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
 
-const { resolveReusableWorkspaceSkillSnapshot, resetResolvedSkillsCacheForTests } =
-  await import("./session-snapshot.js");
+let resolveReusableWorkspaceSkillSnapshot: typeof import("./session-snapshot.js").resolveReusableWorkspaceSkillSnapshot;
 
 describe("resolveReusableWorkspaceSkillSnapshot", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js"));
     vi.clearAllMocks();
-    resetResolvedSkillsCacheForTests();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     ensureSkillsWatcherMock.mockImplementation(() => undefined);
     getSkillsSnapshotVersionMock.mockReturnValue(1);

@@ -17,7 +17,7 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
-import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
@@ -952,3 +952,4 @@ export async function warmRunOverflowCompactionHarness(
     runId: params?.runId ?? "run-overflow-compaction-harness-warmup",
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

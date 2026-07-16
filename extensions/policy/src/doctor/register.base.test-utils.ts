@@ -2029,3 +2029,4 @@ describe("registerPolicyDoctorChecks", () => {
     expect(cfg.tools?.deny).toEqual(["read"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -108,15 +108,15 @@ const testing = {
   filterCodexDynamicTools,
   resolveCodexDynamicToolDirectNames(
     params: EmbeddedRunAttemptParams,
-    hostCrestodianActive = false,
+    hostSystemAgentActive = false,
   ): string[] {
     const names: string[] = [];
     if (
-      hostCrestodianActive &&
+      hostSystemAgentActive &&
       params.toolsAllow?.length === 1 &&
-      params.toolsAllow[0] === "crestodian"
+      params.toolsAllow[0] === "openclaw"
     ) {
-      names.push("crestodian");
+      names.push("openclaw");
     }
     if (params.sourceReplyDeliveryMode === "message_tool_only") {
       names.push("message");
@@ -266,6 +266,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -419,14 +420,14 @@ function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
   registeredTools: RuntimeDynamicToolForTest[] = tools,
-  hostCrestodianActive = false,
+  hostSystemAgentActive = false,
 ) {
   const signal = new AbortController().signal;
   return createCodexDynamicToolBridge({
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostCrestodianActive),
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostSystemAgentActive),
   });
 }
 
@@ -6532,3 +6533,4 @@ describe("runCodexAppServerAttempt", () => {
     expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

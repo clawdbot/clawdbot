@@ -80,7 +80,7 @@ function classifyDaemonHintText(text: string): DaemonHintKind {
 }
 
 /** Classify plain-text hints for JSON daemon responses. */
-export function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
+function buildDaemonHintItems(hints: string[] | undefined): DaemonHintItem[] | undefined {
   if (!hints?.length) {
     return undefined;
   }

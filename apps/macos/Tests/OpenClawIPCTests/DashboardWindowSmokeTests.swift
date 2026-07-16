@@ -68,7 +68,119 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
+        #expect(controller.window?.frameAutosaveName == DashboardWindowLayout.windowFrameAutosaveName)
         controller.closeDashboard()
+    }
+
+    @Test func `dashboard context menu removes browser items and collapses separators`() {
+        let hiddenIdentifiers = [
+            "WKMenuItemIdentifierReload",
+            "WKMenuItemIdentifierOpenLinkInNewWindow",
+            "WKMenuItemIdentifierOpenImageInNewWindow",
+            "WKMenuItemIdentifierOpenMediaInNewWindow",
+            "WKMenuItemIdentifierOpenFrameInNewWindow",
+            "WKMenuItemIdentifierDownloadLinkedFile",
+            "WKMenuItemIdentifierDownloadImage",
+            "WKMenuItemIdentifierDownloadMedia",
+        ]
+        let hiddenItems = hiddenIdentifiers.map { identifier in
+            let item = NSMenuItem(title: identifier, action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            return item
+        }
+        let copy = NSMenuItem(title: "Copy", action: nil, keyEquivalent: "")
+        let inspect = NSMenuItem(title: "Inspect Element", action: nil, keyEquivalent: "")
+        let filtered = DashboardWebView.filteredContextMenuItems([
+            .separator(),
+            hiddenItems[0],
+            .separator(),
+            copy,
+            .separator(),
+            .separator(),
+            hiddenItems[1],
+            hiddenItems[2],
+            hiddenItems[3],
+            hiddenItems[4],
+            hiddenItems[5],
+            hiddenItems[6],
+            hiddenItems[7],
+            .separator(),
+            inspect,
+            .separator(),
+        ])
+
+        #expect(filtered.map(\.title) == ["Copy", "", "Inspect Element"])
+        #expect(filtered[1].isSeparatorItem)
+        #expect(!filtered.contains { hiddenIdentifiers.contains($0.identifier?.rawValue ?? "") })
+    }
+
+    @Test func `dashboard reload decision preserves live same URL content`() throws {
+        let current = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let replacement = try #require(URL(string: "http://127.0.0.1:18790/control/"))
+        let auth = DashboardWindowAuth(
+            gatewayUrl: "ws://127.0.0.1:18789/control/",
+            token: nil,
+            password: "secret")
+        let rotatedAuth = DashboardWindowAuth(
+            gatewayUrl: "ws://127.0.0.1:18789/control/",
+            token: nil,
+            password: "rotated")
+
+        #expect(!DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasUsableDocument: false,
+            isShowingFailurePage: false))
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: replacement,
+            currentAuth: auth,
+            newAuth: auth,
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
+        // Password-only auth keeps the URL identical; rotation must reload.
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: rotatedAuth,
+            hasUsableDocument: true,
+            isShowingFailurePage: false))
+        // An in-flight failure page is never a usable document to keep.
+        #expect(DashboardWindowController.shouldReloadDashboard(
+            currentURL: current,
+            newURL: current,
+            currentAuth: auth,
+            newAuth: auth,
+            hasUsableDocument: true,
+            isShowingFailurePage: true))
+    }
+
+    @Test func `dashboard native command queues before page load`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeCommand(.commandPalette)
+        controller.dispatchNativeCommand(.commandPalette)
+
+        #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
+
+        // A terminal failure drops moment-bound intent instead of replaying it
+        // after a later recovery reload.
+        controller.showFailure(title: "Dashboard unavailable", message: "offline")
+        #expect(controller._testPendingNativeCommands.isEmpty)
     }
 
     @Test func `dashboard navigation stays on same endpoint`() throws {
@@ -314,7 +426,9 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
-        #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         let urlA = try #require(URL(string: "http://127.0.0.1:1/a"))
         let urlB = try #require(URL(string: "http://127.0.0.1:1/b"))
@@ -325,10 +439,18 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         controller._testOpenLinkBrowser(urlB)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
+        #expect(!controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == DashboardWindowLayout.linkBrowserTabBarHeight)
+        #expect(
+            controller._testLinkBrowserToolbarHeight ==
+                DashboardWindowLayout.linkBrowserToolbarWithTabsHeight)
         controller._testOpenLinkBrowser(urlA)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 0)
@@ -341,6 +463,9 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlA])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
         controller._testLinkBrowserCloseTab(at: 0)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
         controller._testLinkBrowserCloseTab(at: 0)
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
@@ -361,6 +486,80 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
         #expect(controller._testLinkBrowserRepresentedURL == nil)
+    }
+
+    @Test func `dashboard link browser opens half width and remembers resizable pane width`() throws {
+        #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
+        #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
+        #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: nil) == 620)
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: 400) == 400)
+
+        let defaults = UserDefaults.standard
+        let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
+        let originalValue = defaults.object(forKey: key)
+        defaults.removeObject(forKey: key)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let link = try #require(URL(string: "http://127.0.0.1:1/half-width"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.show()
+        defer { controller.closeDashboard() }
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+
+        controller._testOpenLinkBrowser(link)
+        let openedSplitWidth = controller._testLinkBrowserSplitWidth
+        let dividerThickness = controller._testLinkBrowserDividerThickness
+        let openedLinkBrowserWidth = controller._testLinkBrowserWidth
+        let expectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: openedSplitWidth,
+            dividerThickness: dividerThickness,
+            persistedWidth: nil)
+        #expect(abs(openedLinkBrowserWidth - expectedWidth) < 1)
+        #expect(
+            openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
+                DashboardWindowLayout.mainBrowserMinWidth)
+        #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
+
+        defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
+        controller._testCompleteLinkBrowserDividerDrag()
+        let resizedWidth = controller._testLinkBrowserWidth
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
+        controller._testOpenLinkBrowser(link)
+        let compactExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - compactExpectedWidth) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+        controller._testOpenLinkBrowser(link)
+        let restoredExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() throws {
@@ -686,6 +885,7 @@ struct DashboardWindowSmokeTests {
             detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(!controller.canDeliverNativeCommands)
         controller.closeDashboard()
     }
 

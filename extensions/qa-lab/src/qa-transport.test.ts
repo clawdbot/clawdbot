@@ -22,6 +22,7 @@ describe("createQaStateBackedTransportAdapter", () => {
       label: "Live",
       accountId: "sut",
       requiredPluginIds: [],
+      prepareFlow: vi.fn(),
       supportedActions: [],
       resetTransport,
       sendInbound: async (input) => state.addInboundMessage(input),
@@ -40,6 +41,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     await adapter.reset();
 
     expect(resetTransport).toHaveBeenCalledOnce();
+    expect(adapter.prepareFlow).toBeTypeOf("function");
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 });

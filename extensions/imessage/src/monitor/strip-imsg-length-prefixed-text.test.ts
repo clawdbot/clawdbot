@@ -1,9 +1,6 @@
 // Imessage tests cover strip imsg length prefixed text plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  stripImessageLengthPrefixedUtf8Text,
-  tryStripImessageLengthPrefixedUtf8Buffer,
-} from "./strip-imsg-length-prefixed-text.js";
+import { stripImessageLengthPrefixedUtf8Text } from "./strip-imsg-length-prefixed-text.js";
 
 describe("stripImessageLengthPrefixedUtf8Text", () => {
   it("removes a length-delimited field wrapper from text", () => {
@@ -15,18 +12,6 @@ describe("stripImessageLengthPrefixedUtf8Text", () => {
     const inner = "Mrrrrow! 🐱 Ich bin wach und bereit!";
     const raw = `${String.fromCharCode(0x0a, Buffer.byteLength(inner, "utf8"))}${inner}`;
     expect(stripImessageLengthPrefixedUtf8Text(raw)).toBe(inner);
-  });
-
-  it("removes a payload behind a two-byte varint length (raw buffer)", () => {
-    const inner = "a".repeat(128);
-    const buf = Buffer.allocUnsafe(3 + Buffer.byteLength(inner, "utf8"));
-    buf.writeUInt8(0x0a, 0);
-    buf.writeUInt8(0x80, 1);
-    buf.writeUInt8(0x01, 2);
-    buf.write(inner, 3, "utf8");
-    expect(Buffer.from(tryStripImessageLengthPrefixedUtf8Buffer(buf) ?? []).toString("utf8")).toBe(
-      inner,
-    );
   });
 
   it("does not strip plain text whose first bytes can mimic a naked length prefix", () => {

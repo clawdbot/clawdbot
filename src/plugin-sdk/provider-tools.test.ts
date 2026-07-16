@@ -269,6 +269,58 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toStrictEqual([]);
   });
 
+  it("repairs null and inferred OpenAI tool schema types", () => {
+    expect(
+      normalizeOpenAIParameters({
+        type: null,
+        description: null,
+        default: null,
+        properties: {
+          payload: {
+            properties: { value: { type: "string", format: null } },
+          },
+          tags: {
+            items: { type: "string" },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    });
+  });
+
+  it("keeps unrepairable null schema constraints for downstream quarantine", () => {
+    // Null constraint keywords must not be silently dropped into a wider
+    // schema; only annotation nulls are repairable. An uninferable type: null
+    // is restored so projection rejects the tool instead of accepting
+    // undeclared arguments.
+    expect(
+      normalizeOpenAIParameters({
+        type: "object",
+        properties: {
+          payload: { type: null, description: "no shape hints" },
+          config: { type: "object", properties: {}, additionalProperties: null },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: { type: null, description: "no shape hints" },
+        config: { type: "object", properties: {}, required: [], additionalProperties: null },
+      },
+    });
+  });
+
   it("preserves explicit empty properties maps when normalizing strict openai schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const parameters = {

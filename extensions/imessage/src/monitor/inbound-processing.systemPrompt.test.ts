@@ -141,6 +141,7 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
           "*": { systemPrompt: "Wildcard." },
           "7": { requireMention: true },
         }),
+        opts: { requireMention: false },
       }),
     );
     expect(decision.kind).toBe("dispatch");
@@ -148,6 +149,7 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       return;
     }
     expect(decision.groupSystemPrompt).toBe("Wildcard.");
+    expect(decision.groupRequireMention).toBe(false);
   });
 
   it("does not set groupSystemPrompt on true DM decisions", async () => {

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
-  runCrestodianWithInference: vi.fn(),
+  runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -49,8 +49,8 @@ vi.mock("../../commands/onboard.js", () => ({
   setupWizardCommand: mocks.setupWizardCommandMock,
 }));
 
-vi.mock("../../commands/crestodian-with-inference.js", () => ({
-  runCrestodianWithInference: mocks.runCrestodianWithInference,
+vi.mock("../../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: mocks.runSystemAgentWithInference,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -75,7 +75,7 @@ describe("registerOnboardCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.runCrestodianWithInference.mockResolvedValue(undefined);
+    mocks.runSystemAgentWithInference.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
 
@@ -164,10 +164,10 @@ describe("registerOnboardCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("routes --modern through the inference-gated Crestodian entrypoint", async () => {
+  it("routes --modern through the inference-gated OpenClaw entrypoint", async () => {
     await runCli(["onboard", "--modern", "--json"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       {
         yes: false,
         json: true,
@@ -183,7 +183,7 @@ describe("registerOnboardCommand", () => {
   it("uses the single-output noninteractive overview behind the inference gate", async () => {
     await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       {
         yes: false,
         json: false,
@@ -199,7 +199,7 @@ describe("registerOnboardCommand", () => {
   it("preserves guided fallback context for --modern", async () => {
     await runCli(["onboard", "--modern", "--workspace", "/tmp/work", "--accept-risk"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       expect.objectContaining({
         welcomeVariant: "onboarding",
         setupWorkspace: "/tmp/work",
@@ -218,7 +218,7 @@ describe("registerOnboardCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--accept-risk"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("onboard --modern"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -236,14 +236,14 @@ describe("registerOnboardCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
   it("keeps noninteractive JSON modern onboarding to one overview request", async () => {
     await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk", "--json"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+    expect(mocks.runSystemAgentWithInference).toHaveBeenCalledWith(
       expect.objectContaining({
         json: true,
         interactive: false,
@@ -252,6 +252,6 @@ describe("registerOnboardCommand", () => {
       runtime,
       { acceptRisk: true },
     );
-    expect(mocks.runCrestodianWithInference.mock.calls[0]?.[0]).not.toHaveProperty("message");
+    expect(mocks.runSystemAgentWithInference.mock.calls[0]?.[0]).not.toHaveProperty("message");
   });
 });

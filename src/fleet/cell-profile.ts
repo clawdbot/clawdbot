@@ -4,11 +4,11 @@ import path from "node:path";
 export type FleetContainerRuntimeName = "docker" | "podman";
 
 export const DEFAULT_FLEET_IMAGE = "ghcr.io/openclaw/openclaw:latest";
-export const FLEET_BASE_PORT = 19_100;
+const FLEET_BASE_PORT = 19_100;
 export const FLEET_GATEWAY_PORT = 18_789;
 const FLEET_CONTAINER_HOME = "/home/node";
-export const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
-export const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
+const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
+const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
 export const FLEET_TENANT_LABEL = "openclaw.fleet.tenant";
 export const FLEET_OWNER_LABEL = "openclaw.fleet.owner";
 export const FLEET_ATTEMPT_LABEL = "openclaw.fleet.attempt";

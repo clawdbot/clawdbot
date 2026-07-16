@@ -6,7 +6,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { AuditRow, StandingGrant } from "./src/broker.js";
+import type { AuditRow, PendingAuthorization, StandingGrant } from "./src/broker.js";
 import { OnePasswordBroker } from "./src/broker.js";
 import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./src/config.js";
 import { OpClient } from "./src/op-client.js";
@@ -54,6 +54,11 @@ export default definePluginEntry({
       maxEntries: MAX_AUDIT_ROWS,
       overflowPolicy: "evict-oldest",
     });
+    const pending = api.runtime.state.openSyncKeyedStore<PendingAuthorization>({
+      namespace: "pending",
+      maxEntries: 512,
+      overflowPolicy: "evict-oldest",
+    });
     const tokenFile = path.join(
       api.runtime.state.resolveStateDir(process.env),
       "credentials",
@@ -82,7 +87,7 @@ export default definePluginEntry({
           opClient: {
             getItem: (params) => resolveCurrentOpClient().getItem(params),
           },
-          stores: { audit, grants },
+          stores: { audit, grants, pending },
         })
       : undefined;
 

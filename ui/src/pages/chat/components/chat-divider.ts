@@ -6,7 +6,7 @@ export function renderChatDivider(
   onOpenSessionCheckpoints?: () => void | Promise<void>,
 ) {
   return html`
-    <div class="chat-divider" data-ts=${String(item.timestamp)}>
+    <div class="chat-divider" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
       <div
         class="chat-divider__rule"
         role="separator"

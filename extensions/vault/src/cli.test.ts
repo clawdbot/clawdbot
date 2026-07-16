@@ -1,147 +1,162 @@
-import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { testing } from "./cli.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { Command } from "commander";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerVaultCommands } from "./cli.js";
+
+type VaultPlan = {
+  providerUpserts: Record<string, unknown>;
+  targets: Array<Record<string, unknown>>;
+};
+
+function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
+
+function createProgram(config: Record<string, unknown> = {}): Command {
+  const program = new Command();
+  program.exitOverride();
+  registerVaultCommands({ program, config: config as never });
+  return program;
+}
+
+async function createSetupPlan(args: string[]): Promise<VaultPlan> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-cli-"));
+  const planPath = path.join(dir, "plan.json");
+  const stdout = captureStdout();
+  try {
+    await createProgram().parseAsync(["vault", "setup", "--plan-out", planPath, ...args], {
+      from: "user",
+    });
+    return JSON.parse(await fs.readFile(planPath, "utf8")) as VaultPlan;
+  } finally {
+    stdout.restore();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function runStatus(
+  config: Record<string, unknown>,
+  args: string[] = [],
+): Promise<Record<string, unknown>> {
+  const stdout = captureStdout();
+  try {
+    await createProgram(config).parseAsync(["vault", "status", "--json", ...args], {
+      from: "user",
+    });
+    return JSON.parse(stdout.output()) as Record<string, unknown>;
+  } finally {
+    stdout.restore();
+  }
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("vault CLI setup plan", () => {
-  it("generates plugin-managed provider config and model api key targets", () => {
-    const providerConfig = testing.buildProviderConfig();
-    const providerSecrets = testing.collectProviderSecrets({
-      openaiId: "providers/openai/apiKey",
-      anthropicId: "providers/anthropic/apiKey",
-      providerKey: ["local-openai=providers/local-openai/apiKey"],
-    });
-    const plan = testing.buildPlan({
-      providerAlias: "vault",
-      providerConfig,
-      providerSecrets,
-    });
+  it("generates plugin-managed provider config and model API-key targets", async () => {
+    const plan = await createSetupPlan([
+      "--openai-id",
+      "providers/openai/apiKey",
+      "--anthropic-id",
+      "providers/anthropic/apiKey",
+      "--provider-key",
+      "local-openai=providers/local-openai/apiKey",
+    ]);
 
     expect(plan.providerUpserts).toEqual({
       vault: {
         source: "exec",
-        pluginIntegration: {
-          pluginId: "vault",
-          integrationId: "vault",
-        },
+        pluginIntegration: { pluginId: "vault", integrationId: "vault" },
       },
     });
     expect(plan.targets).toEqual([
-      {
+      expect.objectContaining({
         type: "models.providers.apiKey",
         path: "models.providers.openai.apiKey",
-        pathSegments: ["models", "providers", "openai", "apiKey"],
         providerId: "openai",
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "providers/openai/apiKey",
-        },
-      },
-      {
+        ref: { source: "exec", provider: "vault", id: "providers/openai/apiKey" },
+      }),
+      expect.objectContaining({
         type: "models.providers.apiKey",
         path: "models.providers.anthropic.apiKey",
-        pathSegments: ["models", "providers", "anthropic", "apiKey"],
         providerId: "anthropic",
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "providers/anthropic/apiKey",
-        },
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "models.providers.apiKey",
         path: "models.providers.local-openai.apiKey",
-        pathSegments: ["models", "providers", "local-openai", "apiKey"],
         providerId: "local-openai",
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "providers/local-openai/apiKey",
-        },
-      },
+      }),
     ]);
   });
 
-  it("generates targets for arbitrary known openclaw secret targets", () => {
-    const plan = testing.buildPlan({
-      providerAlias: "vault",
-      providerConfig: testing.buildProviderConfig(),
-      providerSecrets: [],
-      configTargetSecrets: testing.parseConfigTargetMappings([
-        "channels.telegram.botToken=channels/telegram/botToken",
-        "models.providers.openai.headers.x-api-key=providers/openai/proxyKey",
-        "auth-profiles:main:profiles.openai:default.key=providers/openai/apiKey",
-      ]),
-    });
+  it("generates arbitrary known OpenClaw and auth-profile targets", async () => {
+    const plan = await createSetupPlan([
+      "--target",
+      "channels.telegram.botToken=channels/telegram/botToken",
+      "--target",
+      "models.providers.openai.headers.x-api-key=providers/openai/proxyKey",
+      "--target",
+      "auth-profiles:main:profiles.openai:default.key=providers/openai/apiKey",
+    ]);
 
     expect(plan.targets).toEqual([
-      {
+      expect.objectContaining({
         type: "channels.telegram.botToken",
         path: "channels.telegram.botToken",
         pathSegments: ["channels", "telegram", "botToken"],
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "channels/telegram/botToken",
-        },
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "models.providers.headers",
         path: "models.providers.openai.headers.x-api-key",
-        pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
         providerId: "openai",
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "providers/openai/proxyKey",
-        },
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "auth-profiles.api_key.key",
         path: "profiles.openai:default.key",
-        pathSegments: ["profiles", "openai:default", "key"],
         agentId: "main",
-        ref: {
-          source: "exec",
-          provider: "vault",
-          id: "providers/openai/apiKey",
-        },
-      },
-    ]);
-  });
-
-  it("parses config target mappings", () => {
-    expect(
-      testing.parseConfigTargetMappings([
-        "channels.telegram.botToken=channels/telegram/botToken",
-        "auth-profiles:main:profiles.openai:default.key=providers/openai/apiKey",
-      ]),
-    ).toEqual([
-      {
-        path: "channels.telegram.botToken",
-        secretId: "channels/telegram/botToken",
-      },
-      {
-        path: "profiles.openai:default.key",
-        agentId: "main",
-        secretId: "providers/openai/apiKey",
-      },
-    ]);
-  });
-
-  it("rejects duplicate model provider targets", () => {
-    expect(() =>
-      testing.collectProviderSecrets({
-        openaiId: "providers/openai/apiKey",
-        providerKey: ["OpenAI=providers/openai/other"],
       }),
-    ).toThrow("Duplicate model provider id in Vault setup: OpenAI");
+    ]);
   });
 
-  it("rejects traversal segments in Vault secret ids", () => {
-    expect(() => testing.parseProviderKeyMappings(["openai=providers/../openai/apiKey"])).toThrow(
+  it.each([
+    [
+      "duplicate providers",
+      ["--openai-id", "providers/openai/apiKey", "--provider-key", "OpenAI=providers/openai/other"],
+      "Duplicate model provider id",
+    ],
+    [
+      "traversal secret ids",
+      ["--provider-key", "openai=providers/../openai/apiKey"],
       "Invalid --provider-key openai Vault secret id",
-    );
+    ],
+    [
+      "unsupported targets",
+      ["--target", "secrets.github_pat=github/pat"],
+      "Unknown or unsupported Vault setup target path",
+    ],
+    [
+      "duplicate target paths",
+      [
+        "--openai-id",
+        "providers/openai/apiKey",
+        "--target",
+        "models.providers.openai.apiKey=providers/openai/other",
+      ],
+      "Duplicate secret target path",
+    ],
+  ])("rejects %s", async (_label, args, message) => {
+    await expect(createSetupPlan(args)).rejects.toThrow(message);
   });
 
   it.each([
@@ -149,95 +164,56 @@ describe("vault CLI setup plan", () => {
     "/providers/openai/apiKey",
     "providers//openai/apiKey",
     "apiKey",
-  ])("rejects non-canonical Vault secret id %s", (secretId) => {
-    expect(() => testing.parseProviderKeyMappings([`openai=${secretId}`])).toThrow(
+  ])("rejects non-canonical Vault secret id %s", async (secretId) => {
+    await expect(createSetupPlan(["--provider-key", `openai=${secretId}`])).rejects.toThrow(
       "Invalid --provider-key openai Vault secret id",
     );
   });
+});
 
-  it("rejects unsupported config target paths", () => {
-    expect(() =>
-      testing.createConfigSecretTarget({
-        providerAlias: "vault",
-        path: "secrets.github_pat",
-        secretId: "github/pat",
-      }),
-    ).toThrow("Unknown or unsupported Vault setup target path: secrets.github_pat");
-  });
-
-  it("rejects duplicate config target paths", () => {
-    expect(() =>
-      testing.buildPlan({
-        providerAlias: "vault",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [
-          {
-            providerId: "openai",
-            secretId: "providers/openai/apiKey",
-          },
-        ],
-        configTargetSecrets: [
-          {
-            path: "models.providers.openai.apiKey",
-            secretId: "providers/openai/other",
-          },
-        ],
-      }),
-    ).toThrow("Duplicate secret target path in Vault setup: models.providers.openai.apiKey");
-  });
-
-  it("discovers a configured custom Vault provider alias for status", () => {
-    expect(
-      testing.resolveStatusProviderAlias({
-        secrets: {
-          providers: {
-            "corp-vault": {
-              source: "exec",
-              pluginIntegration: {
-                pluginId: "vault",
-                integrationId: "vault",
-              },
-            },
-          },
-        },
-      }),
-    ).toBe("corp-vault");
-  });
-
-  it("requires an explicit status alias when multiple Vault providers are configured", () => {
-    const config = {
+describe("vault CLI status", () => {
+  it("discovers a configured custom Vault provider alias", async () => {
+    const result = await runStatus({
       secrets: {
         providers: {
           "corp-vault": {
-            source: "exec" as const,
-            pluginIntegration: {
-              pluginId: "vault",
-              integrationId: "vault",
-            },
-          },
-          "prod-vault": {
-            source: "exec" as const,
-            pluginIntegration: {
-              pluginId: "vault",
-              integrationId: "vault",
-            },
+            source: "exec",
+            pluginIntegration: { pluginId: "vault", integrationId: "vault" },
           },
         },
       },
-    };
-
-    expect(() => testing.resolveStatusProviderAlias(config)).toThrow(
-      "Multiple Vault provider aliases are configured (corp-vault, prod-vault)",
-    );
-    expect(testing.resolveStatusProviderAlias(config, "prod-vault")).toBe("prod-vault");
+    });
+    expect(result.providerAlias).toBe("corp-vault");
   });
 
-  it("reports the packaged resolver path when the CLI is bundled", async () => {
-    const baseUrl = pathToFileURL("/app/dist/index.js").href;
-    const [, bundledPath] = testing.resolverScriptPathCandidates(baseUrl);
+  it("requires an explicit alias when multiple Vault providers are configured", async () => {
+    const config = {
+      secrets: {
+        providers: Object.fromEntries(
+          ["corp-vault", "prod-vault"].map((alias) => [
+            alias,
+            {
+              source: "exec",
+              pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+            },
+          ]),
+        ),
+      },
+    };
+    await expect(runStatus(config)).rejects.toThrow("Multiple Vault provider aliases");
+    expect((await runStatus(config, ["--provider-alias", "prod-vault"])).providerAlias).toBe(
+      "prod-vault",
+    );
+  });
 
-    await expect(
-      testing.resolveResolverScriptPath(baseUrl, async (filePath) => filePath === bundledPath),
-    ).resolves.toBe(bundledPath);
+  it("reports the packaged resolver fallback through the status command", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (filePath) => {
+      if (String(filePath).includes("extensions/vault/vault-secret-ref-resolver.js")) {
+        return;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    const result = await runStatus({});
+    expect(result.resolverScript).toMatch(/extensions\/vault\/vault-secret-ref-resolver\.js$/u);
   });
 });

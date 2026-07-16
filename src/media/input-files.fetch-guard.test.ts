@@ -28,12 +28,11 @@ async function waitForMicrotaskTurn(): Promise<void> {
   });
 }
 
-let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
+  ({ extractImageContentFromSource, extractFileContentFromSource } =
     await import("./input-files.js"));
 });
 
@@ -241,7 +240,7 @@ describe("HEIC input image normalization", () => {
   });
 });
 
-describe("fetchWithGuard", () => {
+describe("guarded input file URL fetches", () => {
   it("cancels ignored HTTP error bodies", async () => {
     let canceled = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -263,11 +262,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Failed to fetch: 503 Service Unavailable");
 
@@ -296,11 +296,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("Content too large: 2048 bytes");
 
@@ -329,11 +330,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 1024,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 1024,
+        },
       }),
     ).rejects.toThrow("invalid content-length header: 1e9");
 
@@ -371,11 +373,12 @@ describe("fetchWithGuard", () => {
     });
 
     await expect(
-      fetchWithGuard({
-        url: "https://example.com/file.bin",
-        maxBytes: 6,
-        timeoutMs: 1000,
-        maxRedirects: 0,
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/file.bin" },
+        limits: {
+          ...createFileSourceLimits(["application/octet-stream"], true),
+          maxBytes: 6,
+        },
       }),
     ).rejects.toThrow("Content too large");
 

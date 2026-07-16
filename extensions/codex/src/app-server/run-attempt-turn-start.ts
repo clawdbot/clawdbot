@@ -29,6 +29,7 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
+  createCodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
@@ -262,6 +263,7 @@ export async function startCodexAttemptTurn(
           result: buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
+            promptError: createCodexUsageLimitPromptError(usageLimitError.message),
             messagesSnapshot,
             systemPromptReport,
           }),

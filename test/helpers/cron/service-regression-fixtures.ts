@@ -12,10 +12,8 @@ import {
 import type { CronServiceDeps } from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
-import {
-  resetCommandQueueStateForTest,
-  waitForActiveTasks,
-} from "../../../src/process/command-queue.js";
+import { waitForActiveTasks } from "../../../src/process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;

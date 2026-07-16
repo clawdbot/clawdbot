@@ -2278,3 +2278,4 @@ describe("openai image generation provider", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,15 +2,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
-  currentWorkboardPollingGeneration,
-  clearWorkboardLifecycleTaskPreparedTimer,
-  clearWorkboardLifecycleTaskRetryTimer,
   getWorkboardRuntime,
   getWorkboardState,
   isCurrentWorkboardLoadGeneration,
-  isCurrentWorkboardPollingGeneration,
   nextWorkboardLoadGeneration,
-  nextWorkboardPollingGeneration,
   resetWorkboardLifecycleTaskConfirmations,
   setWorkboardLifecycleTaskRefreshFailed,
   setWorkboardLifecycleTasksPrepared,
@@ -217,7 +212,7 @@ async function loadWorkboardInternal(
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
-      if (params.taskRefresh === "linked" && shouldDeferWorkboardPoll(state)) {
+      if (params.taskRefresh === "linked" && shouldDeferWorkboardLiveRefresh(state)) {
         return false;
       }
       if (nextUnfilteredCursor !== undefined) {
@@ -228,6 +223,7 @@ async function loadWorkboardInternal(
         }
       }
       state.cards = taskLinkState.cards;
+      state.boards = normalized.boards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = taskLinkState.tasksByCardId;
       state.missingTaskIds = taskLinkState.missingTaskIds;
@@ -308,75 +304,44 @@ export async function refreshWorkboard(params: {
   requestUpdate?: () => void;
   source: WorkboardRefreshSource;
   refreshDiagnostics?: boolean;
-  pollGeneration?: number;
-}) {
+}): Promise<boolean> {
   const state = getWorkboardState(params.host);
-  const pollGeneration =
-    params.source === "poll"
-      ? (params.pollGeneration ?? currentWorkboardPollingGeneration(params.host))
-      : null;
-  if (
-    pollGeneration !== null &&
-    !isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
-  ) {
-    return;
-  }
+  const passive = params.source === "live";
   if (state.dispatching || workboardHasActiveWrites(state)) {
-    return;
+    return false;
   }
   const startedAt = Date.now();
   state.lastRefreshStartedAt = startedAt;
   state.lastRefreshSource = params.source;
-  if (params.source !== "poll" || !state.lifecycleTaskRefreshFailed) {
+  if (!passive || !state.lifecycleTaskRefreshFailed) {
     state.lastRefreshError = null;
-  }
-  if (params.source === "poll") {
-    state.pollRefreshInProgress = true;
   }
   params.requestUpdate?.();
   if (!params.client) {
     state.lastRefreshError = "Gateway client unavailable";
-    if (
-      pollGeneration !== null &&
-      isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
-    ) {
-      state.pollRefreshInProgress = false;
-    }
     params.requestUpdate?.();
-    return;
+    return false;
   }
-  try {
-    const refreshed = await loadWorkboard({
-      host: params.host,
-      client: params.client,
-      requestUpdate: params.requestUpdate,
-      force: true,
-      refreshDiagnostics: params.refreshDiagnostics,
-      taskRefresh: params.source === "poll" ? "linked" : "all",
-      preserveError: params.source === "poll",
-    });
-    state.lastRefreshSource = params.source;
-    if (params.source !== "poll" && state.error) {
-      state.lastRefreshError = state.error;
-    } else if (refreshed) {
-      state.lastRefreshAt = Date.now();
-    }
-  } finally {
-    if (
-      pollGeneration !== null &&
-      isCurrentWorkboardPollingGeneration(params.host, pollGeneration)
-    ) {
-      state.pollRefreshInProgress = false;
-    }
-    params.requestUpdate?.();
+  const refreshed = await loadWorkboard({
+    host: params.host,
+    client: params.client,
+    requestUpdate: params.requestUpdate,
+    force: true,
+    refreshDiagnostics: params.refreshDiagnostics,
+    taskRefresh: passive ? "linked" : "all",
+    preserveError: passive,
+  });
+  state.lastRefreshSource = params.source;
+  if (!passive && state.error) {
+    state.lastRefreshError = state.error;
+  } else if (refreshed) {
+    state.lastRefreshAt = Date.now();
   }
+  params.requestUpdate?.();
+  return refreshed;
 }
 
-function workboardDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
-
-function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
+export function shouldDeferWorkboardLiveRefresh(state: WorkboardUiState): boolean {
   return Boolean(
     state.draftOpen ||
     state.editingCardId ||
@@ -386,103 +351,4 @@ function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
     state.detailCommentBody.trim() ||
     state.draftCommentBody.trim(),
   );
-}
-
-function clearWorkboardPolling(host: WorkboardHost) {
-  const runtime = getWorkboardRuntime(host);
-  const timer = runtime.pollingTimer;
-  if (timer) {
-    clearTimeout(timer);
-    delete runtime.pollingTimer;
-  }
-}
-
-function scheduleWorkboardPoll(host: WorkboardHost) {
-  clearWorkboardPolling(host);
-  const runtime = getWorkboardRuntime(host);
-  const entry = runtime.pollingEntry;
-  if (!entry?.enabled || !entry.client || entry.intervalMs <= 0) {
-    return;
-  }
-  const pollingGeneration = currentWorkboardPollingGeneration(host);
-  const timer = setTimeout(() => {
-    delete runtime.pollingTimer;
-    if (!isCurrentWorkboardPollingGeneration(host, pollingGeneration)) {
-      return;
-    }
-    const current = runtime.pollingEntry;
-    const state = getWorkboardState(host);
-    if (!current?.enabled || !current.client || current.intervalMs <= 0) {
-      return;
-    }
-    const run = async () => {
-      if (!workboardDocumentHidden() && !shouldDeferWorkboardPoll(state)) {
-        await refreshWorkboard({
-          host,
-          client: current.client,
-          requestUpdate: current.requestUpdate,
-          source: "poll",
-          pollGeneration: pollingGeneration,
-        });
-      }
-    };
-    void run().finally(() => {
-      if (isCurrentWorkboardPollingGeneration(host, pollingGeneration)) {
-        scheduleWorkboardPoll(host);
-      }
-    });
-  }, entry.intervalMs);
-  runtime.pollingTimer = timer;
-}
-
-export function configureWorkboardPolling(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  enabled: boolean;
-  requestUpdate?: () => void;
-}) {
-  const runtime = getWorkboardRuntime(params.host);
-  const state = getWorkboardState(params.host);
-  const intervalMs = state.autoRefreshIntervalMs;
-  const previous = runtime.pollingEntry;
-  const enabled = params.enabled && intervalMs > 0;
-  runtime.pollingEntry = {
-    client: params.client,
-    enabled,
-    intervalMs,
-    requestUpdate: params.requestUpdate,
-  };
-  if (!enabled) {
-    clearWorkboardPolling(params.host);
-    clearWorkboardLifecycleTaskPreparedTimer(params.host);
-    clearWorkboardLifecycleTaskRetryTimer(params.host);
-    return;
-  }
-  const configChanged =
-    !previous ||
-    previous.enabled !== enabled ||
-    previous.intervalMs !== intervalMs ||
-    previous.client !== params.client;
-  if (!state.pollRefreshInProgress && (configChanged || !runtime.pollingTimer)) {
-    scheduleWorkboardPoll(params.host);
-  }
-}
-
-export function stopWorkboardPolling(host: WorkboardHost) {
-  const runtime = getWorkboardRuntime(host);
-  nextWorkboardPollingGeneration(host);
-  clearWorkboardPolling(host);
-  delete runtime.pollingEntry;
-  const state = runtime.state;
-  if (!state?.pollRefreshInProgress) {
-    return;
-  }
-  state.pollRefreshInProgress = false;
-  state.loading = false;
-  if (!state.loaded) {
-    state.loadAttempted = false;
-  }
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
 }

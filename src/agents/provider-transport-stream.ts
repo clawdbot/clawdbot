@@ -105,7 +105,7 @@ function hasOpenClawTransportRequirement(model: Model): boolean {
 }
 
 /** Returns whether OpenClaw has a managed transport implementation for this API. */
-export function isTransportAwareApiSupported(api: Api): boolean {
+function isTransportAwareApiSupported(api: Api): boolean {
   return SUPPORTED_TRANSPORT_APIS.has(api);
 }
 

@@ -1623,3 +1623,4 @@ export async function modelsStatusCommand(
     cleanupPluginMetadataSnapshot();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,8 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
+  completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -158,6 +160,65 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       deleteDeliveryQueueEntry(QUEUE, "rt-3", stateDir);
       expect(loadDeliveryQueueEntry(QUEUE, "rt-3", stateDir)).toBeNull();
+    });
+
+    it("complete retains an idempotency tombstone outside pending reads", () => {
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-expired-completed",
+          enqueuedAt: Date.now() - 31 * 24 * 60 * 60_000,
+          retryCount: 0,
+        },
+        status: "completed",
+        stateDir,
+      });
+      upsertDeliveryQueueEntry({
+        queueName: QUEUE,
+        entry: {
+          id: "rt-completed",
+          enqueuedAt: 1000,
+          retryCount: 3,
+          lastError: "must not persist",
+        },
+        metadata: {
+          sessionKey: "agent:main:main",
+          channel: "discord",
+          target: "channel:123",
+          accountId: "default",
+        },
+        stateDir,
+      });
+
+      completeDeliveryQueueEntry(QUEUE, "rt-completed", stateDir);
+
+      expect(loadDeliveryQueueEntry(QUEUE, "rt-completed", stateDir)).toBeNull();
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-completed", stateDir)).toBe("completed");
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBeUndefined();
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const row = db
+        .prepare(
+          `SELECT entry_json, session_key, channel, target, account_id, retry_count, last_error
+             FROM delivery_queue_entries
+            WHERE queue_name = ? AND id = ?`,
+        )
+        .get(QUEUE, "rt-completed") as Record<string, unknown>;
+      expect(JSON.parse(String(row.entry_json))).toEqual({
+        id: "rt-completed",
+        enqueuedAt: expect.any(Number),
+        retryCount: 0,
+        acknowledgedAt: expect.any(Number),
+      });
+      expect(row).toMatchObject({
+        session_key: null,
+        channel: null,
+        target: null,
+        account_id: null,
+        retry_count: 0,
+        last_error: null,
+      });
     });
   });
 });

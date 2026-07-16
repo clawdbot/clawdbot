@@ -1,7 +1,6 @@
 /**
  * Startup orchestration for Codex app-server attempts, including shared-client
- * leasing, plugin thread config, sandbox execution environment, and thread
- * lifecycle binding.
+ * leasing, plugin thread config, sandbox environment, and thread lifecycle binding.
  */
 import {
   embeddedAgentLog,
@@ -11,7 +10,6 @@ import {
   type EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -25,14 +23,12 @@ import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
-  resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import {
-  disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexSandboxEnvironmentSelection,
@@ -43,10 +39,12 @@ import {
   buildCodexPluginAppCacheKey,
 } from "./plugin-app-cache-key.js";
 import {
-  buildCodexPluginThreadConfig,
+  createCodexPluginThreadConfigStartupProvider,
+  resolveCodexPluginThreadConfigStartupPolicy,
+} from "./plugin-thread-config-deadline.js";
+import {
   buildCodexPluginThreadConfigInputFingerprint,
   mergeCodexThreadConfigs,
-  shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import type {
   CodexDynamicToolSpec,
@@ -125,6 +123,7 @@ export async function startCodexAttemptThread(params: {
   pluginConfig: CodexPluginConfig;
   computerUseConfig: ResolvedCodexComputerUseConfig;
   startupAuthProfileId: string | null | undefined;
+  startupAuthRequirement?: CodexAppServerClientOptions["authRequirement"];
   startupAuthBindingFingerprint: string | undefined;
   runtimeArtifactRequest?: Readonly<{
     expected?: AgentHarnessRuntimeArtifactBinding;
@@ -188,26 +187,19 @@ export async function startCodexAttemptThread(params: {
         const threadConfig = mergeCodexThreadConfigs(
           params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
         );
-        const nativeToolSurfaceRestricted = !params.nativeToolSurfaceEnabled;
-        const pluginThreadConfigRequired =
-          nativeToolSurfaceRestricted || shouldBuildCodexPluginThreadConfig(params.pluginConfig);
-        // Restricted runs still need a plugin thread config so thread/start
-        // carries the explicit apps._default denial patch without app/list.
-        const pluginThreadConfigPluginConfig = params.nativeToolSurfaceEnabled
-          ? params.pluginConfig
-          : disableCodexPluginThreadConfig(params.pluginConfig);
-        const resolvedPluginPolicy = pluginThreadConfigRequired
-          ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
-          : undefined;
+        const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
+          pluginConfig: params.pluginConfig,
+          nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+        });
+        const {
+          pluginThreadConfigRequired,
+          pluginThreadConfigPluginConfig,
+          resolvedPluginPolicy,
+          enabledPluginConfigKeys,
+        } = pluginStartupPolicy;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
           resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
-        const enabledPluginConfigKeys = resolvedPluginPolicy
-          ? resolvedPluginPolicy.pluginPolicies
-              .filter((plugin) => plugin.enabled)
-              .map((plugin) => plugin.configKey)
-              .toSorted()
-          : undefined;
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,
@@ -228,6 +220,7 @@ export async function startCodexAttemptThread(params: {
               ...(params.startupPreparedAuth
                 ? { preparedAuth: params.startupPreparedAuth }
                 : { authProfileId: params.startupAuthProfileId }),
+              authRequirement: params.startupAuthRequirement,
               authProfileStore: attemptParams.authProfileStore,
               authBindingFingerprint: params.startupAuthBindingFingerprint,
               ...(params.runtimeArtifactRequest
@@ -465,23 +458,17 @@ export async function startCodexAttemptThread(params: {
                 contextEngineProjection: params.contextEngineProjection,
                 signal,
                 pluginThreadConfig: pluginThreadConfigRequired
-                  ? {
-                      enabled: true,
+                  ? createCodexPluginThreadConfigStartupProvider({
                       inputFingerprint: pluginThreadConfigInputFingerprint,
                       enabledPluginConfigKeys,
-                      build: () =>
-                        buildCodexPluginThreadConfig({
-                          pluginConfig: pluginThreadConfigPluginConfig,
-                          request: (method, requestParams) =>
-                            activeStartupClient.request(method, requestParams, {
-                              timeoutMs: params.appServer.requestTimeoutMs,
-                              signal,
-                            }),
-                          configCwd: startupExecutionCwd,
-                          appCache: defaultCodexAppInventoryCache,
-                          appCacheKey: pluginAppCacheKey,
-                        }),
-                    }
+                      policy: resolvedPluginPolicy,
+                      requestTimeoutMs: params.appServer.requestTimeoutMs,
+                      signal,
+                      pluginConfig: pluginThreadConfigPluginConfig,
+                      client: activeStartupClient,
+                      configCwd: startupExecutionCwd,
+                      appCacheKey: pluginAppCacheKey,
+                    })
                   : undefined,
               }) satisfies Parameters<typeof startOrResumeThread>[0];
             try {

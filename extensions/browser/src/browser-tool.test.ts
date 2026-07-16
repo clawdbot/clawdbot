@@ -2530,3 +2530,4 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
     ).rejects.toThrow("path outside allowed directories");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

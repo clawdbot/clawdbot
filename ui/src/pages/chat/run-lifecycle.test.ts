@@ -57,6 +57,39 @@ function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
   }
 }
 
+describe("reconcileChatRunLifecycle yielded parent", () => {
+  it("clears the completed model run without publishing terminal task state", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "Waiting for child completion.",
+      chatRunStatus: {
+        phase: "done",
+        runId: "older-run",
+        sessionKey: "s1",
+        occurredAt: 1,
+      },
+    });
+
+    reconcileChatRunLifecycle(host, {
+      yielded: true,
+      runId: "r1",
+      sessionKey: "s1",
+      clearLocalRun: true,
+      clearChatStream: true,
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatRunStatus).toBeNull();
+    expect(host.lastLocalTerminalReconcile).toBeNull();
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      activeRunIds: [],
+      hasActiveRun: false,
+      status: "running",
+    });
+  });
+});
+
 describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875)", () => {
   it("keeps a local run active when the gateway registry overrides a terminal snapshot", () => {
     const host = makeHost({

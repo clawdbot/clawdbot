@@ -813,7 +813,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       delivery.outcome = "success";
     }
   };
-  const deliveryTracker = createSlackEventDeliveryTracker();
+  let deliveryTracker = createSlackEventDeliveryTracker();
   const markPreviewPayloadDelivered = (params: {
     kind: ReplyDispatchKind;
     payload: ReplyPayload;
@@ -1869,6 +1869,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       label: "Reasoning",
     });
   };
+  const resetDraftDeliveryState = () => {
+    hasStreamedMessage = false;
+    appendRenderedText = "";
+    appendSourceText = "";
+    statusUpdateCount = 0;
+  };
+  const resetDraftProgressState = () => {
+    reasoningProgressRawText = "";
+    previewToolProgressSuppressed = false;
+    previewToolProgressLines = [];
+  };
   const onDraftBoundary = !shouldUseDraftStream
     ? undefined
     : async () => {
@@ -1877,14 +1888,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         // posts a new draft instead of editing the existing preview.
         if (hasStreamedMessage && streamMode !== "status_final") {
           draftStream?.forceNewMessage();
-          hasStreamedMessage = false;
-          appendRenderedText = "";
-          appendSourceText = "";
-          statusUpdateCount = 0;
+          resetDraftDeliveryState();
         }
-        reasoningProgressRawText = "";
-        previewToolProgressSuppressed = false;
-        previewToolProgressLines = [];
+        resetDraftProgressState();
+      };
+
+  const onQueuedFollowupAdmitted = !shouldUseDraftStream
+    ? undefined
+    : async () => {
+        // A queued input is a new visible reply even though it drains through
+        // this turn's callbacks. Do not let it edit or dedupe against this run.
+        await draftStream?.flush();
+        draftStream?.forceNewMessage();
+        draftPreviewCommitted = false;
+        observedFinalReplyDelivery = false;
+        deliveryTracker = createSlackEventDeliveryTracker();
+        resetDraftDeliveryState();
+        resetDraftProgressState();
       };
 
   let dispatchError: unknown;
@@ -1942,6 +1962,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               },
         onAssistantMessageStart: onDraftBoundary,
         onReasoningEnd: onDraftBoundary,
+        onQueuedFollowupAdmitted,
         onReasoningStream:
           statusReactionsEnabled || previewToolProgressEnabled
             ? async (payload) => {
@@ -2240,3 +2261,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

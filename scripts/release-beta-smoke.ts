@@ -449,7 +449,7 @@ async function main(): Promise<void> {
   if (telegramRunId) {
     await pollRun(options.repo, telegramRunId);
     const artifactDir = downloadTelegramArtifact(options.repo, telegramRunId);
-    const report = findFile(artifactDir, "telegram-qa-report.md");
+    const report = findFile(artifactDir, "qa-suite-report.md");
     if (report && existsSync(report)) {
       console.log(`\nTelegram report: ${report}\n`);
       console.log(readFileSync(report, "utf8"));

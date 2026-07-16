@@ -2,12 +2,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GenerateMusicParams } from "./runtime-types.js";
-import {
-  generateMusic,
-  listRuntimeMusicGenerationProviders,
-  type MusicGenerationRuntimeDeps,
-} from "./runtime.js";
+import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
+
+type MusicGenerationRuntimeDeps = NonNullable<Parameters<typeof generateMusic>[1]>;
 
 let providers: MusicGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];

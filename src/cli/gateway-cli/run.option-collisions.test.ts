@@ -1720,3 +1720,4 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors[0]).toContain("Use either --password or --password-file.");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

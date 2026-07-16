@@ -53,18 +53,6 @@ function nextPaneId(layout: ChatSplitLayout): string {
   return `p${max + 1}`;
 }
 
-export function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
-  return {
-    columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-}
-
-export function createSplitLayout(sessionKey: string): ChatSplitLayout {
-  return insertPane(createSinglePaneLayout(sessionKey), "p1", sessionKey, "right");
-}
-
 export function findPane(
   layout: ChatSplitLayout,
   paneId: string,

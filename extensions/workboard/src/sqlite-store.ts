@@ -1,16 +1,6 @@
-// Workboard plugin module implements sqlite store behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
 import type {
   WorkboardArtifact,
   WorkboardAttachment,
@@ -25,21 +15,28 @@ import type {
   WorkboardProof,
   WorkboardRunAttempt,
   WorkboardWorkerLog,
-} from "./types.js";
-
+} from "@openclaw/workboard-contract";
+import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 2;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
-
 type Row = Record<string, unknown>;
-
 type WorkboardSqliteStores = {
   cards: WorkboardKeyedStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+  dataVersion: () => number;
   close: () => void;
 };
 
@@ -1422,9 +1419,13 @@ export function createWorkboardSqliteStores(
     boards: new WorkboardSqliteBoardStore(db),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
+    // This connection-local primitive changes only after another connection commits.
+    dataVersion: () =>
+      requiredNumber(db.prepare("PRAGMA data_version").get() as Row, "data_version"),
     close: () => {
       maintenance.close();
       db.close();
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

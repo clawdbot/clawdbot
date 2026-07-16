@@ -111,7 +111,7 @@ const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 const verifySetupInference = vi.hoisted(() =>
-  vi.fn<() => Promise<import("../crestodian/setup-inference.js").VerifySetupInferenceResult>>(
+  vi.fn<() => Promise<import("../system-agent/setup-inference.js").VerifySetupInferenceResult>>(
     async () => ({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 250 }),
   ),
 );
@@ -288,7 +288,7 @@ vi.mock("./setup.migration-import.js", () => ({
   runSetupMigrationImport,
 }));
 
-vi.mock("../crestodian/setup-inference.js", () => ({
+vi.mock("../system-agent/setup-inference.js", () => ({
   verifySetupInference,
 }));
 
@@ -1828,3 +1828,4 @@ describe("runSetupWizard", () => {
     expect(verifySetupInference).toHaveBeenCalledTimes(2);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

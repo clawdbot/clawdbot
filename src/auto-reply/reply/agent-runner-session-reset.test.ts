@@ -10,10 +10,8 @@ import {
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
-import {
-  resetReplyRunSession,
-  setAgentRunnerSessionResetTestDeps,
-} from "./agent-runner-session-reset.js";
+import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const refreshQueuedFollowupSessionMock = vi.fn();

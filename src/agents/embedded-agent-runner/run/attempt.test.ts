@@ -7,8 +7,9 @@ vi.mock("../context-engine-capabilities.js", () => ({
 }));
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
+import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -3619,3 +3620,4 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy.currentMessageId).toBe("msg-42");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -92,6 +92,12 @@ import {
   appendMessageToolReadHint,
   appendMessageToolVisibleReplyHint,
 } from "./message-tool-description.js";
+import {
+  buildMessageToolQuerySchemaProperties,
+  buildMessageToolSchemaFromActions,
+  MESSAGE_TOOL_SEND_TEXT_DESCRIPTION,
+  type MessageToolSchemaBuilders,
+} from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
@@ -646,7 +652,7 @@ function buildSendSchema(options: {
   includeBestEffort: boolean;
 }) {
   const props: Record<string, TSchema> = {
-    message: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String({ description: MESSAGE_TOOL_SEND_TEXT_DESCRIPTION })),
     effectId: Type.Optional(
       Type.String({
         description: "sendWithEffect id/name.",
@@ -878,7 +884,6 @@ function buildThreadSchema() {
 
 function buildEventSchema() {
   return {
-    query: Type.Optional(Type.String()),
     eventName: Type.Optional(Type.String()),
     eventType: Type.Optional(Type.String()),
     startTime: Type.Optional(Type.String()),
@@ -886,8 +891,6 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: optionalNonNegativeIntegerSchema(),
-    until: Type.Optional(Type.String()),
   };
 }
 
@@ -895,6 +898,8 @@ function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
     deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: Type.Optional(Type.String()),
   };
 }
 
@@ -964,6 +969,7 @@ function buildMessageToolSchemaProps(options: {
     ...buildSendSchema(options),
     ...buildReactionSchema(),
     ...buildFetchSchema(),
+    ...buildMessageToolQuerySchemaProperties(),
     ...buildPollSchema(),
     ...buildChannelTargetSchema(),
     ...buildStickerSchema(),
@@ -977,48 +983,37 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
-function isSendOnlyActions(actions: readonly string[]): boolean {
-  const uniqueActions = new Set(actions);
-  return uniqueActions.size === 1 && uniqueActions.has("send");
-}
-
-function buildSendOnlyMessageToolSchemaProps(options: {
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-  extraProperties?: Record<string, TSchema>;
-}) {
-  return {
+const MESSAGE_TOOL_SCHEMA_BUILDERS = {
+  full: buildMessageToolSchemaProps,
+  base: (options) => ({
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
     ...buildGatewaySchema(),
-    ...options.extraProperties,
-  };
-}
-
-function buildMessageToolSchemaFromActions(
-  actions: readonly string[],
-  options: {
-    includePresentation: boolean;
-    includeDeliveryPin: boolean;
-    includeBestEffort: boolean;
-    extraProperties?: Record<string, TSchema>;
+  }),
+  groups: {
+    reaction: buildReactionSchema,
+    fetch: buildFetchSchema,
+    query: buildMessageToolQuerySchemaProperties,
+    poll: buildPollSchema,
+    channelTarget: buildChannelTargetSchema,
+    sticker: buildStickerSchema,
+    thread: buildThreadSchema,
+    event: buildEventSchema,
+    moderation: buildModerationSchema,
+    channelManagement: buildChannelManagementSchema,
+    presence: buildPresenceSchema,
   },
-) {
-  const props = isSendOnlyActions(actions)
-    ? buildSendOnlyMessageToolSchemaProps(options)
-    : buildMessageToolSchemaProps(options);
-  return Type.Object({
-    action: stringEnum(actions),
-    ...props,
-  });
-}
+} satisfies MessageToolSchemaBuilders;
 
-const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
-  includePresentation: true,
-  includeDeliveryPin: true,
-  includeBestEffort: false,
-});
+const MessageToolSchema = buildMessageToolSchemaFromActions(
+  AllMessageActions,
+  {
+    includePresentation: true,
+    includeDeliveryPin: true,
+    includeBestEffort: false,
+  },
+  MESSAGE_TOOL_SCHEMA_BUILDERS,
+);
 
 type MessageToolOptions = {
   agentAccountId?: string;
@@ -1080,11 +1075,9 @@ type InferredSessionDelivery = {
   to: string;
 };
 
-const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
-
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
   return (peerKind === "direct" || peerKind === "dm") &&
-    USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
+    getChannelPlugin(channel)?.messaging?.directTargetStyle === "user-prefixed"
     ? `user:${to}`
     : to;
 }
@@ -1267,12 +1260,17 @@ function buildMessageToolSchema(params: MessageToolDiscoveryParams) {
       normalizeMessageChannel(params.currentChannelProvider) ?? undefined,
     ),
   );
-  return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
-    includePresentation,
-    includeDeliveryPin,
-    includeBestEffort,
-    extraProperties,
-  });
+  return buildMessageToolSchemaFromActions(
+    actions.length > 0 ? actions : ["send"],
+    {
+      includePresentation,
+      includeDeliveryPin,
+      includeBestEffort,
+      scopeToActions: normalizeMessageChannel(params.currentChannelProvider) !== undefined,
+      extraProperties,
+    },
+    MESSAGE_TOOL_SCHEMA_BUILDERS,
+  );
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -1731,3 +1729,4 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

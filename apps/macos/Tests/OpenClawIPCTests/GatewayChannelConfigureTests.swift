@@ -89,13 +89,13 @@ struct GatewayConnectionTests {
     }
 
     @Test func `first connection admits hello capabilities before lease readiness`() async throws {
-        let session = self.makeSession(serverCapabilities: ["crestodian-setup-model-ref"])
+        let session = self.makeSession(serverCapabilities: ["openclaw-setup-model-ref"])
         let (conn, _) = try makeConnection(session: session)
 
         let lease = try await conn.acquireServerLease()
 
         #expect(await conn.supportsServerCapability(
-            .crestodianSetupModelRef,
+            .systemAgentSetupModelRef,
             ifCurrentServerLease: lease) == true)
         #expect(await conn.cachedGatewayVersion() == "test")
         #expect(session.snapshotMakeCount() == 1)
@@ -105,14 +105,14 @@ struct GatewayConnectionTests {
     }
 
     @Test func `disconnected server lease rejects before dispatch`() async throws {
-        let session = self.makeSession(serverCapabilities: ["crestodian-setup-model-ref"])
+        let session = self.makeSession(serverCapabilities: ["openclaw-setup-model-ref"])
         let (conn, _) = try makeConnection(session: session)
         let lease = try await conn.acquireServerLease()
 
         await conn._test_handleDisconnect(socketGeneration: 1)
         do {
             _ = try await conn.request(
-                method: "crestodian.setup.detect",
+                method: "openclaw.setup.detect",
                 params: [:],
                 ifCurrentServerLease: lease)
             Issue.record("expected disconnected server lease rejection")
@@ -146,14 +146,14 @@ struct GatewayConnectionTests {
                         let id = task.snapshotConnectRequestID() ?? "connect"
                         return .data(Self.connectOkData(
                             id: id,
-                            capabilities: ["crestodian-setup-model-ref"]))
+                            capabilities: ["openclaw-setup-model-ref"]))
                     })
             })
         let (conn, _) = try makeConnection(session: session)
         let lease = try await conn.acquireServerLease()
         let request = Task {
             try await conn.request(
-                method: "crestodian.setup.activate",
+                method: "openclaw.setup.activate",
                 params: [:],
                 timeoutMs: 5000,
                 ifCurrentServerLease: lease)

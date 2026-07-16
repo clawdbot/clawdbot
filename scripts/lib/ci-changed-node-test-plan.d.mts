@@ -4,10 +4,14 @@ export type ChangedNodeTestShard = {
   requiresDist: boolean;
   runner: string;
   shardName: string;
-  targets: string[];
+  targets?: string[];
 };
 
 export function createChangedNodeTestShards(
   changedPaths: string[],
   options?: { cwd?: string },
 ): ChangedNodeTestShard[] | null;
+
+export function hasBuildArtifactAffectingChange(changedPaths: string[]): boolean;
+
+export function hasQaSmokeAffectingChange(changedPaths: string[]): boolean;

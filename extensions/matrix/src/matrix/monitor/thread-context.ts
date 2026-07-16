@@ -21,7 +21,7 @@ function truncateThreadStarterBody(value: string): string {
   return `${sliceUtf16Safe(value, 0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
 }
 
-export function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
+function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
   const body = summarizeMatrixMessageContextEvent(event);
   if (body) {
     return truncateThreadStarterBody(body);

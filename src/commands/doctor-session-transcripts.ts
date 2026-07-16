@@ -16,6 +16,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -279,7 +280,7 @@ async function writeTranscriptEntries(params: {
 }
 
 /** Repairs one transcript file by keeping the active branch and backing up the original file. */
-export async function repairBrokenSessionTranscriptFile(params: {
+async function repairBrokenSessionTranscriptFile(params: {
   filePath: string;
   shouldRepair: boolean;
 }): Promise<TranscriptRepairResult> {
@@ -433,6 +434,7 @@ export function sessionTranscriptIssueToRepairEffect(
 
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sessionSqlite?: boolean;
   shouldRepair?: boolean;
@@ -484,6 +486,7 @@ export async function noteSessionTranscriptHealth(params?: {
 
   if (params?.sessionDirs === undefined || params.sessionSqlite === true) {
     await noteSessionSqliteMigrationHealth({
+      cfg: params?.cfg,
       env: params?.env ?? process.env,
       shouldRepair,
     });
@@ -491,6 +494,7 @@ export async function noteSessionTranscriptHealth(params?: {
 }
 
 async function noteSessionSqliteMigrationHealth(params: {
+  cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<void> {
@@ -500,6 +504,7 @@ async function noteSessionSqliteMigrationHealth(params: {
   const runSessionSqlite = async () =>
     await runDoctorSessionSqlite({
       allAgents: true,
+      ...(params.cfg ? { cfg: params.cfg } : {}),
       env: params.env,
       mode: params.shouldRepair ? "import" : "dry-run",
     });

@@ -2,8 +2,10 @@
 import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./rest-errors.js";
-import { RestScheduler, type RestSchedulerOptions } from "./rest-scheduler.js";
+import { RestScheduler } from "./rest-scheduler.js";
 import { createJsonResponse } from "./test-builders.test-support.js";
+
+type RestSchedulerOptions = ConstructorParameters<typeof RestScheduler>[0];
 
 function createOptions(overrides: Partial<RestSchedulerOptions> = {}): RestSchedulerOptions {
   return {

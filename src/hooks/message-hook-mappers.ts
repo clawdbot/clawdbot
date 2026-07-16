@@ -16,6 +16,8 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
+import { internalSessionConversationId } from "../utils/message-channel-constants.js";
+import { stripChannelPrefix } from "../utils/string-readers.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -136,7 +138,11 @@ export function deriveInboundMessageHookContext(
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );
-  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+  const conversationId =
+    ctx.OriginatingTo ??
+    ctx.To ??
+    ctx.From ??
+    internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
   const mediaPaths = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths.filter(
@@ -301,20 +307,6 @@ export function toPluginMessageContext(
     context.callDepth = canonical.callDepth;
   }
   return context;
-}
-
-function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const genericPrefixes = ["channel:", "chat:", "user:"];
-  for (const prefix of genericPrefixes) {
-    if (value.startsWith(prefix)) {
-      return value.slice(prefix.length);
-    }
-  }
-  const prefix = `${channelId}:`;
-  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
 }
 
 function resolveInboundConversation(canonical: CanonicalInboundMessageHookContext): {

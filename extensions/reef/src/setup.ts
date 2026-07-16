@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
-import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
+import {
+  parseReefRelayUrl,
+  ReefChannelConfigSchema,
+  type ReefChannelConfig,
+} from "./config-schema.js";
 import { generateAndStoreKeys, resolveStateDir } from "./state.js";
 import { ReefTransportClient } from "./transport.js";
 
@@ -33,7 +37,7 @@ export const reefSetupAdapter = {
       ...cfg,
       channels: {
         ...cfg.channels,
-        reef: { ...(cfg.channels?.reef as object), ...input, dmPolicy: "pairing" },
+        reef: { ...(cfg.channels?.reef as object), ...input },
       },
     }) as OpenClawConfig,
 };
@@ -53,10 +57,18 @@ export const reefSetupWizard = {
   },
   configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg }),
   configureInteractive: async ({ cfg, prompter }: { cfg: OpenClawConfig; prompter: Prompt }) => {
-    const relayUrl = await prompter.text({
-      message: "Reef relay URL",
+    const rawRelayUrl = await prompter.text({
+      message: "Reef relay origin URL",
       initialValue: "https://reefwire.ai",
+      validate: (value) => {
+        const parsed = ReefChannelConfigSchema.safeParse({ relayUrl: value });
+        return parsed.success
+          ? undefined
+          : (parsed.error.issues.find((issue) => issue.path[0] === "relayUrl")?.message ??
+              "Valid Reef relay origin required");
+      },
     });
+    const relayUrl = parseReefRelayUrl(rawRelayUrl);
     const email = await prompter.text({
       message: "Email",
       validate: (value) => (value.includes("@") ? undefined : "Valid email required"),
@@ -131,9 +143,6 @@ export const reefSetupWizard = {
       email,
       requestPolicy,
       stateDir,
-      friends: {},
-      dmPolicy: "pairing",
-      allowFrom: [],
       guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
     });
     await prompter.note(

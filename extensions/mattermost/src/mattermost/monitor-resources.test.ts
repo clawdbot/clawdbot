@@ -21,16 +21,10 @@ vi.mock("./interactions.js", () => ({
 describe("mattermost monitor resources", () => {
   let createMattermostMonitorResources: typeof import("./monitor-resources.js").createMattermostMonitorResources;
   let formatMattermostInboundMediaText: typeof import("./monitor-resources.js").formatMattermostInboundMediaText;
-  let MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS;
-  let MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS: typeof import("./monitor-resources.js").MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS;
 
   beforeAll(async () => {
-    ({
-      createMattermostMonitorResources,
-      formatMattermostInboundMediaText,
-      MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-      MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
-    } = await import("./monitor-resources.js"));
+    ({ createMattermostMonitorResources, formatMattermostInboundMediaText } =
+      await import("./monitor-resources.js"));
   });
 
   it("keeps media-only download failures visible to the agent", () => {
@@ -105,8 +99,8 @@ describe("mattermost monitor resources", () => {
       filePathHint: "file-1",
       maxBytes: 1024,
       ssrfPolicy: { allowedHostnames: ["chat.example.com"] },
-      responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
-      readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
+      responseHeaderTimeoutMs: 120_000,
+      readIdleTimeoutMs: 30_000,
     });
   });
 
@@ -134,7 +128,7 @@ describe("mattermost monitor resources", () => {
         saveRemoteMedia({
           ...params,
           responseHeaderTimeoutMs: headerTimeoutMs,
-          readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
+          readIdleTimeoutMs: 30_000,
           ssrfPolicy: { ...params.ssrfPolicy, dangerouslyAllowPrivateNetwork: true },
         });
 

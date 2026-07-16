@@ -2,7 +2,7 @@
 // wake delivery, and direct media fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/generated-media-task-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../../tasks/task-status-access.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -292,7 +292,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     ).toHaveBeenCalledWith(sessionKey);
   });
 
-  it("cleans a stale exact cron continuation after generated-media direct fallback", async () => {
+  it("records a blocked stale cron completion without raw media fallback", async () => {
     const sessionKey = "agent:main:cron:one-shot:run:run-123";
     const scheduled: Array<() => Promise<void>> = [];
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
@@ -301,7 +301,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       reason: "completion_handoff_unavailable",
       error: "cron run continuation owner was lost during gateway restart",
     });
-    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
     const lifecycle = createImageMediaLifecycle();
     const handle = lifecycle.createTaskRun({
       sessionKey,
@@ -330,8 +329,11 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrls: ["/tmp/proof.png"] }),
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(detachedTaskRuntimeMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: "blocked",
+      }),
     );
     expect(
       cronContinuationCleanupMocks.removeCronRunContinuationSessionIfIdle,
@@ -626,7 +628,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
   });
 
-  it("records normal success when direct recovery handles a completion wake throw", async () => {
+  it("records a blocked completion when the agent-loop wake throws", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const wakeError = new Error("requester wake failed");
     const lifecycle = {
@@ -636,7 +638,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       failTaskRun: vi.fn(),
       wakeTaskCompletion: vi.fn().mockRejectedValueOnce(wakeError),
     };
-    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
 
     scheduleMediaGenerationTaskCompletion({
       lifecycle,
@@ -668,15 +669,10 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 
     await scheduled[0]?.();
 
-    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "Image generation completed.",
-        mediaUrls: ["/tmp/proof.png"],
-      }),
-    );
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        terminalResult: undefined,
+        terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
       }),
     );
     expect(lifecycle.failTaskRun).not.toHaveBeenCalled();
@@ -995,14 +991,13 @@ describe("createMediaGenerationTaskLifecycle", () => {
   });
 
   it.each(["completion_handoff_unavailable", "generated_media_missing"] as const)(
-    "direct-delivers generated media after %s",
+    "does not bypass the agent loop after %s",
     async (reason) => {
       subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
         delivered: false,
         reason,
         error: "completion agent did not deliver generated media",
       });
-      taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
       const lifecycle = createImageMediaLifecycle();
 
       await expect(
@@ -1022,17 +1017,9 @@ describe("createMediaGenerationTaskLifecycle", () => {
           result: "generated",
           mediaUrls: ["/tmp/proof.png"],
         }),
-      ).resolves.toEqual({ status: "delivered" });
+      ).resolves.toEqual({ status: "permanent_failure" });
 
-      expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "discord",
-          to: "channel:123",
-          content: "Image generation completed.",
-          mediaUrls: ["/tmp/proof.png"],
-          idempotencyKey: "image_generate:task-image-direct:ok:direct",
-        }),
-      );
+      expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     },
   );
 
@@ -1091,6 +1078,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
         },
         sourceTool: "music_generate",
         bestEffortDeliver: true,
+        durableGeneratedMediaHandoff: true,
       }),
     );
     const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
@@ -1172,3 +1160,4 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

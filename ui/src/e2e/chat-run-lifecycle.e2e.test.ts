@@ -71,7 +71,15 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    await currentPage.getByText("Working…", { exact: true }).waitFor();
+    const workingLabel = currentPage.locator(
+      ".chat-working-indicator__status > .agent-chat__sr-only",
+    );
+    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
+        .count(),
+    ).toBe(0);
   });
 
   it("clears shared session activity when chat final arrives first", async () => {
@@ -125,7 +133,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await mainSession.locator(".session-run-spinner").waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
-    await currentPage.getByText("Run complete.", { exact: true }).waitFor();
+    await currentPage.locator(".chat-bubble").getByText("Run complete.", { exact: true }).waitFor();
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     const staleActiveLabel = "Main stale active snapshot";
     await gateway.resolveDeferred("sessions.list", {
@@ -216,6 +224,76 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await gateway.resolveDeferred("sessions.list");
+  });
+
+  it("does not announce Done when a yielded parent is waiting for continuation", async () => {
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for yielded lifecycle verification.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage
+      .getByText("Ready for yielded lifecycle verification.")
+      .waitFor({ timeout: 10_000 });
+    await gateway.waitForRequest("sessions.list");
+    await currentPage.locator(".agent-chat__input textarea").fill("restart and continue");
+    await currentPage.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const params = send.params as { idempotencyKey?: unknown };
+    expect(typeof params.idempotencyKey).toBe("string");
+    const runId = params.idempotencyKey as string;
+
+    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    await mainSession.waitFor({ state: "visible" });
+    const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
+    await gateway.deferNext("sessions.list");
+    await gateway.emitGatewayEvent("sessions.changed", {
+      activeRunIds: [runId],
+      hasActiveRun: true,
+      key: "main",
+      kind: "direct",
+      reason: "lifecycle",
+      startedAt: Date.now() - 1_000,
+      status: "running",
+      updatedAt: Date.now(),
+    });
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(sessionListsBeforeActive);
+    await mainSession.locator(".session-run-spinner").waitFor();
+
+    const finalText = "The gateway will restart; I will resume verification afterward.";
+    await gateway.emitGatewayEvent("chat", {
+      message: {
+        content: [{ text: finalText, type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+      runId,
+      sessionKey: "main",
+      state: "final",
+      stopReason: "end_turn",
+      yielded: true,
+    });
+
+    await currentPage.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
+    expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect
+      .poll(() => currentPage.locator(".agent-chat__run-status-announcement").textContent())
+      .toBe("");
     await gateway.resolveDeferred("sessions.list");
   });
 });

@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
-  testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
@@ -32,11 +32,8 @@ import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import {
-  createReplyOperation,
-  testing as replyRunRegistryTesting,
-  replyRunRegistry,
-} from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -53,7 +50,27 @@ function createCliBackendTestConfig() {
 }
 
 function registerCliBackendsForTest(): void {
+  const backends = [
+    {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      pluginId: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+    {
+      id: "google-gemini-cli",
+      modelProvider: "google",
+      pluginId: "google",
+      config: { command: "gemini" },
+      bundleMcp: false,
+    },
+  ] as const;
   cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: ({ backend }) => {
+      const resolved = backends.find((entry) => entry.id === backend);
+      return resolved ? { pluginId: resolved.pluginId, backend: resolved } : undefined;
+    },
     resolvePluginSetupRegistry: () => ({
       providers: [],
       cliBackends: [],
@@ -61,22 +78,7 @@ function registerCliBackendsForTest(): void {
       autoEnableProbes: [],
       diagnostics: [],
     }),
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-      {
-        id: "google-gemini-cli",
-        modelProvider: "google",
-        pluginId: "google",
-        config: { command: "gemini" },
-        bundleMcp: false,
-      },
-    ],
+    resolveRuntimeCliBackends: () => [...backends],
   });
 }
 
@@ -145,6 +147,17 @@ vi.mock("../../agents/model-selection.js", async () => {
         Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
       );
     },
+  };
+});
+
+vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/thinking-runtime.js")>();
+  return {
+    ...actual,
+    resolveCandidateThinkingLevel: (
+      params: Parameters<typeof actual.resolveCandidateThinkingLevel>[0],
+    ) => params.level,
+    resolveEffectiveAgentRuntime: () => "openclaw",
   };
 });
 
@@ -370,7 +383,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
-        thinkLevel: "low",
         reasoningLevel: "on",
         verboseLevel: "off",
         elevatedLevel: "off",
@@ -523,17 +535,6 @@ describe("runReplyAgent auto-compaction token update", () => {
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
-
-  beforeAll(async () => {
-    setupAgentRunnerMocks();
-    await runBaseReplyWithAgentMeta({
-      tmpPrefix: "openclaw-usage-warm-",
-      agentMeta: {
-        usage: { input: 10, output: 5, total: 15 },
-        lastCallUsage: { input: 8, output: 2, total: 10 },
-      },
-    });
-  });
 
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
     const { sessionKey, stored } = await runBaseReplyWithAgentMeta({
@@ -2800,7 +2801,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
-        thinkLevel: "low",
         verboseLevel: "off",
         elevatedLevel: "off",
         bashElevated: {
@@ -3844,3 +3844,4 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

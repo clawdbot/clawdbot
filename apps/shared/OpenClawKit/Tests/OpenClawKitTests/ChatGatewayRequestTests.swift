@@ -68,11 +68,11 @@ struct ChatGatewayRequestTests {
         #expect(request.params["archived"] == nil)
     }
 
-    @Test func `model patch request encodes default model as null`() {
-        let request = OpenClawChatGatewayRequests.patchSessionModel(
+    @Test func `settings patch request encodes default model as null`() {
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: "agent:main:main",
             agentID: nil,
-            model: nil)
+            model: .some(nil))
 
         #expect(request.params["model"]?.value is NSNull)
         #expect(request.params["agentId"] == nil)

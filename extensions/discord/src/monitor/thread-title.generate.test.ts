@@ -83,6 +83,30 @@ beforeEach(() => {
 });
 
 describe("generateThreadTitle", () => {
+  it.each([
+    [' "Weekly Release Summary"\nExtra text', "Weekly Release Summary"],
+    ['\n\n "Weekly Release Summary"\nExtra text', "Weekly Release Summary"],
+    ["```markdown\nWeekly Release Summary\n```", "Weekly Release Summary"],
+    ["**Scaling ArcherScore Development Roadmap**", "Scaling ArcherScore Development Roadmap"],
+    ['"__Weekly Release Summary__"', "Weekly Release Summary"],
+    ["*Plan* for *project*", "*Plan* for *project*"],
+    ["**Bold** vs **Strong**", "**Bold** vs **Strong**"],
+    ["_intro_ and _outro_", "_intro_ and _outro_"],
+    ["**Release *plan***", "Release *plan*"],
+    ["***Release plan***", "Release plan"],
+    ["__Release _plan___", "Release _plan_"],
+  ])("normalizes generated title %j", async (generated, expected) => {
+    extractAssistantTextMock.mockReturnValueOnce(generated);
+
+    await expect(
+      generateThreadTitle({
+        cfg: EMPTY_DISCORD_TEST_CONFIG,
+        agentId: "main",
+        messageText: "Need a generated title.",
+      }),
+    ).resolves.toBe(expected);
+  });
+
   it("calls shared one-shot model prep with aws-sdk allowance", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       selection: {

@@ -2,6 +2,7 @@
 // contracts for agent model authentication.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // auth-storage.ts persists via the named import `writeFileSync` from node:fs,
@@ -35,12 +36,13 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const fs = await import("node:fs");
-const { AuthStorage } = await import("./auth-storage.js");
+const { AuthStorage, FileAuthStorageBackend } = await import("./auth-storage.js");
 
-describe("auth-storage survives an interrupted write during persist (atomic write)", () => {
+describe("file auth storage", () => {
   let tmpDir: string | undefined;
 
   afterEach(() => {
+    vi.restoreAllMocks();
     writeFailHook.fn = undefined;
     if (tmpDir) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -115,5 +117,14 @@ describe("auth-storage survives an interrupted write during persist (atomic writ
 
     expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o755);
     expect(fs.statSync(authPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("propagates async lock release failures", async () => {
+    tmpDir = fs.mkdtempSync(join(tmpdir(), "auth-releasefail-"));
+    const error = new Error("simulated lock release failure");
+    vi.spyOn(lockfile, "lock").mockResolvedValueOnce(() => Promise.reject(error));
+    const storage = new FileAuthStorageBackend(join(tmpDir, "auth.json"));
+
+    await expect(storage.withLockAsync(async () => ({ result: undefined }))).rejects.toBe(error);
   });
 });

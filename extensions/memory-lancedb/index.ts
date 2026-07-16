@@ -1600,12 +1600,7 @@ export default definePluginEntry({
             minimum: 0,
             maximum: 1,
           }),
-          category: Type.Optional(
-            Type.Unsafe<MemoryCategory>({
-              type: "string",
-              enum: [...MEMORY_CATEGORIES],
-            }),
-          ),
+          category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
         }),
         async execute(_toolCallId, params) {
           const { text, category = "other" } = params as {
@@ -2024,3 +2019,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

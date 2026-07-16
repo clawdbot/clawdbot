@@ -137,6 +137,41 @@ describe("sendLineReplyChunks", () => {
     expect(createTextMessageWithQuickReplies).not.toHaveBeenCalled();
   });
 
+  it("does not replay a successful reply batch when a later push fails", async () => {
+    const {
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+    } = createReplyChunksHarness();
+    const pushError = new Error("later push failed");
+    const onReplyError = vi.fn();
+    pushMessageLine.mockRejectedValueOnce(pushError);
+
+    await expect(
+      sendLineReplyChunks({
+        to: "line:group:1",
+        chunks: ["1", "2", "3", "4", "5", "6"],
+        replyToken: "token",
+        replyTokenUsed: false,
+        cfg: LINE_TEST_CFG,
+        replyMessageLine,
+        pushMessageLine,
+        pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies,
+        onReplyError,
+      }),
+    ).rejects.toBe(pushError);
+
+    expect(replyMessageLine).toHaveBeenCalledTimes(1);
+    expect(pushMessageLine).toHaveBeenCalledTimes(1);
+    expect(pushMessageLine).toHaveBeenCalledWith("line:group:1", "6", {
+      cfg: LINE_TEST_CFG,
+      accountId: undefined,
+    });
+    expect(onReplyError).not.toHaveBeenCalled();
+  });
+
   it("falls back to push flow when replying fails", async () => {
     const {
       replyMessageLine,

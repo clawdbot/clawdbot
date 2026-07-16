@@ -19,11 +19,23 @@ export function execPlainGh(
 export function execPlainGh(
   args: readonly string[],
   options?: ExecFileSyncOptionsWithBufferEncoding,
-): NonSharedBuffer;
+): Uint8Array<ArrayBuffer>;
 export function execPlainGh(
   args: readonly string[],
   options?: ExecFileSyncOptions,
-): string | NonSharedBuffer;
+): string | Uint8Array<ArrayBuffer>;
+export function execGhApiRead(
+  endpoint: string,
+  options: ExecFileSyncOptionsWithStringEncoding,
+): string;
+export function execGhApiRead(
+  endpoint: string,
+  options?: ExecFileSyncOptionsWithBufferEncoding,
+): Uint8Array<ArrayBuffer>;
+export function execGhApiRead(
+  endpoint: string,
+  options?: ExecFileSyncOptions,
+): string | Uint8Array<ArrayBuffer>;
 export function spawnPlainGh(
   args: readonly string[],
   options: SpawnSyncOptionsWithStringEncoding,
@@ -31,9 +43,9 @@ export function spawnPlainGh(
 export function spawnPlainGh(
   args: readonly string[],
   options?: SpawnSyncOptionsWithBufferEncoding,
-): SpawnSyncReturns<NonSharedBuffer>;
+): SpawnSyncReturns<Uint8Array<ArrayBuffer>>;
 export function spawnPlainGh(
   args: readonly string[],
   options?: SpawnSyncOptions,
-): SpawnSyncReturns<string | NonSharedBuffer>;
+): SpawnSyncReturns<string | Uint8Array<ArrayBuffer>>;
 export const PLAIN_GH_SYSTEM_CANDIDATES: string[];

@@ -15,11 +15,13 @@ import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "./diagnostic-run-activity.js";
+import {
   markDiagnosticModelStartedForTest,
   markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "./diagnostic-run-activity.js";
+} from "./diagnostic-run-activity.test-support.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   requestStuckSessionRecovery,
@@ -3315,3 +3317,4 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(activity.activeToolName).toBe("ReplyTool");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

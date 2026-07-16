@@ -92,7 +92,7 @@ export function pickSummaryFromOutput(text: string | undefined) {
 }
 
 /** Picks the last non-error payload text suitable for cron run summaries. */
-export function pickSummaryFromPayloads(
+function pickSummaryFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
@@ -162,7 +162,7 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
 }
 
 /** Picks the last payload with deliverable outbound content, preferring non-error payloads. */
-export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
+function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     if (payloads[i]?.isError) {
       continue;
@@ -180,7 +180,7 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
 }
 
 /** Selects deliverable cron payloads while preserving multi-payload successful responses. */
-export function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
+function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[] {
   const successfulDeliverablePayloads = payloads.filter(
     (payload) => payload != null && payload.isError !== true && isDeliverablePayload(payload),
   );

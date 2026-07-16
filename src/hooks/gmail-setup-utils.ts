@@ -13,10 +13,6 @@ let cachedPythonPath: string | null | undefined;
 let gcloudBin: string | undefined;
 const MAX_OUTPUT_CHARS = 800;
 
-export function resetGmailSetupUtilsCachesForTest(): void {
-  cachedPythonPath = undefined;
-}
-
 function trimOutput(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -120,7 +116,7 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<string | undefined> {
+async function resolvePythonExecutablePath(): Promise<string | undefined> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }
@@ -151,9 +147,9 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
 
 async function gcloudEnv(): Promise<NodeJS.ProcessEnv> {
   const pythonPath = await resolvePythonExecutablePath();
-  // Always override inherited CLOUDSDK_PYTHON so gcloud cannot select a
-  // workspace-controlled interpreter.
-  return { CLOUDSDK_PYTHON: pythonPath };
+  // Always override inherited gcloud Python controls so the launcher cannot
+  // select a workspace-controlled interpreter or word-split injected args.
+  return { CLOUDSDK_PYTHON: pythonPath, CLOUDSDK_PYTHON_ARGS: undefined };
 }
 
 async function runGcloudCommand(

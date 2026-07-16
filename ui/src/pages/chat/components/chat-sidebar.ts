@@ -1284,3 +1284,4 @@ class ChatDetailPanel extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-chat-detail-panel")) {
   customElements.define("openclaw-chat-detail-panel", ChatDetailPanel);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

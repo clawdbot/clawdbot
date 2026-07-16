@@ -4,7 +4,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
-  WhatsAppSocketOperationTimeoutError,
   createWhatsAppSocketOperationTimeoutAdapter,
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
@@ -79,21 +78,6 @@ describe("resolveWhatsAppSocketTiming", () => {
     ).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
-  it("marks operation timeout errors as unknown delivery state", () => {
-    const error = new WhatsAppSocketOperationTimeoutError(
-      "sendMessage",
-      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
-    );
-
-    expect(error).toMatchObject({
-      name: "WhatsAppSocketOperationTimeoutError",
-      operation: "sendMessage",
-      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
-      deliveryState: "unknown",
-    });
-    expect(isWhatsAppSocketOperationTimeoutError(error)).toBe(true);
-  });
-
   it("clamps oversized operation timeouts before scheduling timers", async () => {
     expect(resolveWhatsAppSocketOperationTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
@@ -115,14 +99,16 @@ describe("withWhatsAppSocketOperationTimeout", () => {
       stalled,
       DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
     );
-    const rejection = expect(bounded).rejects.toMatchObject({
+    const failurePromise = bounded.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+    const failure = await failurePromise;
+    expect(failure).toMatchObject({
       name: "WhatsAppSocketOperationTimeoutError",
       operation: "readMessages",
       timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
       deliveryState: "unknown",
     });
-    await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
-    await rejection;
+    expect(isWhatsAppSocketOperationTimeoutError(failure)).toBe(true);
     // The bounding timer is cleared once the operation settles.
     expect(vi.getTimerCount()).toBe(0);
   });

@@ -32,7 +32,7 @@ type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
 };
 
 /** Resolves all config-derived system prompt fields for an agent. */
-export function resolveAgentSystemPromptConfig(params: {
+function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
 }): ResolvedAgentSystemPromptConfig {

@@ -29,6 +29,7 @@ export {
   type QaBusReactToMessageInput,
   type QaBusReadMessageInput,
   type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
   type QaBusStateSnapshot,
   type QaBusThread,
   type QaBusWaitForInput,

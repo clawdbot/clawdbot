@@ -23,11 +23,13 @@ OpenClaw appends a typed event to the shared state database (`session_state_even
 | Kind                   | Recorded when                                            | Notifies watchers |
 | ---------------------- | -------------------------------------------------------- | ----------------- |
 | `human_direct_message` | A human sends a turn directly to a watched session       | Yes               |
+| `upstream_missing`     | An adopted session's upstream source disappears          | Yes               |
 | `goal_changed`         | The session's goal state is created, updated, or cleared | Yes               |
 | `child_spawned`        | A sub-agent or ACP child session is created              | No (seeds cursor) |
 | `run_completed`        | A child run ends successfully                            | No (log only)     |
 | `run_failed`           | A child run fails, times out, or is cancelled            | No (log only)     |
 | `compacted`            | The session's history is compacted                       | No (log only)     |
+| `adopted`              | A catalog session is adopted into OpenClaw               | No (log only)     |
 
 Each event names its actor (`human`, `agent`, or `system`). Cancelled and timed-out child runs are recorded as failures with the precise outcome (`cancelled`, `timeout`, or `error`) preserved in the event payload.
 
@@ -45,6 +47,10 @@ A watcher is a session that holds a cursor (`session_watch_cursors`) on a target
 Watcher identity must be an agent-qualified session key. Under `session.scope="global"` the shared `global` key is ambiguous across agents, so such sessions get the durable log and `changesSince` but no proactive notices.
 
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are deleted with either session. There is no unwatch verb in v1.
+
+Watched sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Detected activity enters the same signal log and watcher flow as other direct human turns.
+
+If an adopted session's upstream source is deleted externally, three consecutive missing checks (about three monitor ticks) produce one `upstream_missing` signal for its watchers and remove the upstream link. Continuing the catalog session again creates a fresh link.
 
 ## Notices: one, not many
 
@@ -97,6 +103,13 @@ Current limits:
 - Notice delivery assumes one gateway process owns the shared state database. Multiple gateways share the durable log and `changesSince`, but v1 does not push notices across processes.
 - Compaction events cover the embedded runtime's compaction owners; native-harness-only compaction is not fully logged.
 - Cancelled-outcome payload detail is currently produced by ACP child runs; native sub-agent cancellations surface as generic failures.
+- Upstream self-echo detection compares normalized user text. An external prompt matching one of the session's 10 most recent OpenClaw-side user messages is treated as self-echo.
+- A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
+- Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
+- Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
+- Catalog sessions that have not been adopted remain outside the awareness layer in v1.
+- Sessions adopted before this feature carry no upstream link; continue them from the catalog once to start upstream monitoring.
+- Upstream links assume each adopted session key maps to one owning agent (adoption uses the default store agent). Multi-agent adoption of the same external thread is not monitored in v1.
 
 ## Related
 

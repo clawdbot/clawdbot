@@ -10,8 +10,8 @@ import {
   type QaProviderMode,
 } from "../../../../extensions/qa-lab/api.js";
 import { readLoggingConfig } from "../../../../src/logging/config.js";
-import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact-internal.js";
 import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
+import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact.test-support.js";
 import { DEFAULT_CHILD_OUTPUT_TAIL_BYTES } from "../../../helpers/bounded-child-output.js";
 
 export const DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES = 32 * 1024;

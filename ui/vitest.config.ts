@@ -59,6 +59,10 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
   },
   {
+    find: "@openclaw/workboard-contract",
+    replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
+  },
+  {
     find: /^@openclaw\/net-policy\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
   },

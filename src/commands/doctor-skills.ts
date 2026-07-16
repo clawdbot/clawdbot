@@ -16,15 +16,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   collectUnavailableAgentSkills,
   disableUnavailableSkillsInConfig,
-  formatMissingSkillSummary,
 } from "./doctor-skills-core.js";
-
-function formatInstallHints(skill: SkillStatusEntry): string[] {
-  if (skill.install.length === 0) {
-    return [];
-  }
-  return skill.install.slice(0, 2).map((entry) => `  install option: ${entry.label}`);
-}
 
 function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
   return {
@@ -40,7 +32,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
 }
 
 /** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
-export function describeGhConfigDirHintFromDiscovery(
+function describeGhConfigDirHintFromDiscovery(
   skills: SkillStatusEntry[],
   discoveryInput: GhConfigDiscoveryInput,
 ): string[] {
@@ -64,14 +56,15 @@ export function describeGhConfigDirHintFromDiscovery(
 }
 
 /** Formats doctor note lines for skills that are allowed but unavailable. */
-export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
-  const lines: string[] = [
-    "Some skills are allowed for this agent but are not usable in the current runtime environment.",
+function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
+  const count = skills.length;
+  const lines = [
+    `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
+    `- ${skills
+      .map((skill) => skill.name)
+      .toSorted((a, b) => a.localeCompare(b))
+      .join(", ")}`,
   ];
-  for (const skill of skills) {
-    lines.push(`- ${skill.name}: ${formatMissingSkillSummary(skill)}`);
-    lines.push(...formatInstallHints(skill));
-  }
   lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
   lines.push(
     `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,

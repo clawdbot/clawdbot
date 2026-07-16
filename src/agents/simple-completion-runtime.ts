@@ -40,10 +40,7 @@ import {
 } from "./model-selection.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
@@ -181,29 +178,6 @@ async function setRuntimeApiKeyForCompletion(params: {
   workspaceDir?: string;
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
-  if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
-    const copilotToken = await resolveCopilotApiToken({
-      githubToken: unwrapSecretSentinelsForProviderEgress(
-        params.apiKey,
-        "GitHub Copilot runtime auth exchange",
-      ),
-      config: params.cfg,
-    });
-    const protectedAuth = protectPreparedProviderRuntimeAuth({
-      provider: params.model.provider,
-      preparedAuth: {
-        apiKey: copilotToken.token,
-        baseUrl: copilotToken.baseUrl,
-      },
-    });
-    const runtimeApiKey = protectedAuth?.apiKey ?? copilotToken.token;
-    params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
-    return {
-      apiKey: runtimeApiKey,
-      model: { ...params.model, baseUrl: copilotToken.baseUrl },
-    };
-  }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
@@ -218,10 +192,7 @@ async function setRuntimeApiKeyForCompletion(params: {
         provider: params.model.provider,
         modelId: params.model.id,
         model: params.model,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          params.apiKey,
-          "provider runtime auth exchange",
-        ),
+        apiKey: params.apiKey,
         authMode: params.authMode,
         profileId: params.profileId,
       },

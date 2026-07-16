@@ -288,6 +288,17 @@ describe("LINE send helpers", () => {
     });
   });
 
+  it("preserves literal internal-looking text in low-level sends", async () => {
+    const text = "⚠️ 🛠️ `search repos (agent)` failed";
+
+    await sendModule.sendMessageLine("line:user:U123", text, { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [{ type: "text", text }],
+    });
+  });
+
   it("sends video with explicit image preview URL", async () => {
     await sendModule.sendMessageLine("line:user:U100", "Video", {
       cfg: LINE_TEST_CFG,

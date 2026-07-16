@@ -394,7 +394,7 @@ export class GatewayChatClient implements TuiBackend {
  * deliberately ignores global config and Gateway env overrides, including
  * credentials, while still applying the normal remote URL safety policy.
  */
-export function resolveBoundGatewayConnection(
+function resolveBoundGatewayConnection(
   opts: GatewayConnectionOptions & { config: OpenClawConfig; url: string },
 ): ResolvedGatewayConnection {
   const url = buildGatewayConnectionDetails({
@@ -413,7 +413,7 @@ export function resolveBoundGatewayConnection(
   };
 }
 
-export async function resolveGatewayConnection(
+async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
   const config = getRuntimeConfig();

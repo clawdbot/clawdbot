@@ -21,7 +21,8 @@ import {
 } from "../../plugin-sdk/test-env.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import { isLiveAuthDrift } from "../live-test-provider-drift.js";
-import { createImageTool, testing } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { testing } from "./image-tool.test-support.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";

@@ -262,7 +262,7 @@ export const en = {
       invalidConfigUnknown: "- The config could not be parsed.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
-        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsWithoutAi:
         "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
       nextStepsTitle: "Next steps",
@@ -638,6 +638,27 @@ export const en = {
       helpBotMember: "Tip: the bot must be a member of any channel you want it to monitor.",
       helpCreateBot: "2) Create a bot + copy its token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
+    },
+    clickclack: {
+      baseUrlPrompt: "ClickClack server URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "Enter ClickClack bot token",
+      botTokenKeep: "ClickClack bot token already configured. Keep it?",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed:
+        "Connection check failed: {error}. Setup was saved; fix the connection and rerun setup.",
+      connectionTitle: "ClickClack connection",
+      connected: "Connected as @{handle} — workspace {workspace} resolved.",
+      envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
+      helpCreateToken:
+        "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+      invalidToken:
+        "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
+      validationWarningTitle: "ClickClack connection check",
+      workspaceHelp: "Use a wsp_… id, workspace slug, or display name.",
+      workspaceNotFound:
+        'Workspace "{workspace}" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+      workspacePrompt: "Workspace (id, slug, or name)",
     },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom (user id)",

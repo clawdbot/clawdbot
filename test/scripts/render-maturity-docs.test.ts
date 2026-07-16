@@ -254,9 +254,16 @@ describe("maturity docs renderer CLI", () => {
 
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
     expect(scorecard).toContain("1 passed, 1 skipped");
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
+    expect(taxonomy).toMatch(
+      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {8}<\/div>/,
+    );
+    expect(taxonomy).not.toMatch(
+      /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
+    );
   });
 
   it("renders the maturity score from quality and completeness without coverage", () => {

@@ -15,9 +15,8 @@ import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
-import { clearLineRuntime, setLineRuntime } from "./runtime.js";
+import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
-import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMockLocal = vi.fn();
@@ -318,7 +317,6 @@ describe("probeLineBot", () => {
   });
 
   afterEach(() => {
-    clearLineRuntime();
     vi.useRealTimers();
     getBotInfoMock.mockClear();
   });
@@ -352,6 +350,8 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    vi.resetModules();
+    const { lineStatusAdapter } = await import("./status.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
@@ -374,8 +374,6 @@ describe("linePlugin status.probeAccount", () => {
       } as ResolvedLineAccount,
       timeoutMs: 50,
     };
-
-    clearLineRuntime();
 
     await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
       await probeLineBot("token", 50),

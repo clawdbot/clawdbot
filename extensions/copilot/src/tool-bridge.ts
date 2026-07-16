@@ -69,7 +69,7 @@ type CopilotToolCompletion = {
   startedAt: number;
 };
 
-export interface CopilotToolBridgeInput {
+interface CopilotToolBridgeInput {
   allowModelTools?: boolean;
   /** Invalidates screenshot-bound computer actions after context compaction. */
   computerContextEpoch?: {
@@ -152,7 +152,7 @@ const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
 
-export function supportsModelTools(modelProvider: string): boolean {
+function supportsModelTools(modelProvider: string): boolean {
   return SUPPORTED_TOOL_PROVIDERS.has(modelProvider);
 }
 
@@ -452,7 +452,7 @@ function buildOpenClawCodingToolsOptions(
   };
 }
 
-export function convertOpenClawToolToSdkTool(
+function convertOpenClawToolToSdkTool(
   sourceTool: AnyAgentTool,
   ctx: {
     abortSignal?: AbortSignal;

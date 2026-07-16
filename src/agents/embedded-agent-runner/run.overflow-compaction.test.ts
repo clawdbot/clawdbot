@@ -1663,6 +1663,90 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("binds a harness-owned SecretRef to its exact runtime when auth stays opaque", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const runtimeArtifact = {
+      id: "codex-app-server:test",
+      fingerprint: "codex-runtime-fingerprint",
+    };
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({
+        assistantTexts: ["ok"],
+        runtimeArtifact,
+      }),
+    );
+    const codexAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "openai:work": {
+          type: "api_key" as const,
+          provider: "openai",
+          keyRef: { source: "env" as const, provider: "default", id: "OPENAI_WORK_KEY" },
+        },
+      },
+    };
+    const onSuccessfulAuthBinding = vi.fn();
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: codexHarnessSupportsKnownProviders,
+      authBootstrap: "harness",
+      runtimeArtifact: { validate: vi.fn(async () => true) },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedEnsureAuthProfileStore.mockReturnValueOnce(codexAuthStore);
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "gpt-5.4",
+        provider: "openai",
+        contextWindow: 200000,
+        api: "openai-chatgpt-responses",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    });
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.4",
+        config: {
+          agents: { defaults: { agentRuntime: { id: "codex" } } },
+          auth: {
+            profiles: {
+              "openai:work": { provider: "openai", mode: "api_key" },
+            },
+          },
+        },
+        authProfileId: "openai:work",
+        authProfileIdSource: "user",
+        runId: "harness-secretref-runtime-owner-binding",
+        onSuccessfulAuthBinding,
+      } as RunEmbeddedAgentParams & {
+        onSuccessfulAuthBinding: typeof onSuccessfulAuthBinding;
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(pluginRunAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ captureRuntimeArtifact: true }),
+    );
+    expect(onSuccessfulAuthBinding).toHaveBeenCalledWith({
+      authProfileId: "openai:work",
+      agentHarnessId: "codex",
+      runtimeOwnerFingerprint: expect.any(String),
+      runtimeOwnerKind: "plugin-harness",
+      runtimeOwnerId: "codex",
+      runtimeArtifactId: runtimeArtifact.id,
+      runtimeArtifactFingerprint: runtimeArtifact.fingerprint,
+    });
+  });
+
   it("bootstraps OAuth credentials for forced openai/* Codex response runs", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
@@ -3988,3 +4072,4 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

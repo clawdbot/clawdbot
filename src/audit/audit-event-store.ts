@@ -693,11 +693,3 @@ export function pruneExpiredAuditEvents(
     auditEventRowCounts.delete(db);
   }, params.database);
 }
-
-export const auditEventStoreLimits = {
-  maxRows: AUDIT_EVENT_MAX_ROWS,
-  pruneBatchRows: AUDIT_EVENT_PRUNE_BATCH_ROWS,
-  retentionMs: AUDIT_EVENT_RETENTION_MS,
-} as const;
-
-export const testApi = { pruneAuditEventsAfterInsert };

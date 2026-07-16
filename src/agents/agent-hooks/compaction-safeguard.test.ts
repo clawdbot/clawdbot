@@ -21,7 +21,8 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension from "./compaction-safeguard.js";
+import { testing } from "./compaction-safeguard.test-support.js";
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
@@ -310,7 +311,7 @@ describe("compaction-safeguard tool failures", () => {
     ];
 
     const failures = collectToolFailures(messages);
-    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+    expect(failures.map((failure: { toolCallId: string }) => failure.toolCallId)).toEqual([
       "call-spawn-error",
       "call-spawn-forbidden",
     ]);
@@ -358,7 +359,7 @@ describe("compaction-safeguard tool failures", () => {
     ];
 
     const failures = collectToolFailures(messages);
-    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+    expect(failures.map((failure: { toolCallId: string }) => failure.toolCallId)).toEqual([
       "call-exec-failed",
       "call-other-lookalike",
     ]);
@@ -848,7 +849,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       recentTurnsPreserve: 1,
     });
 
-    expect(split.preservedMessages.map((msg) => msg.role)).toEqual([
+    expect(split.preservedMessages.map((msg: AgentMessage) => msg.role)).toEqual([
       "user",
       "assistant",
       "toolResult",
@@ -856,13 +857,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ]);
     expect(
       split.preservedMessages.some(
-        (msg) => msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
+        (msg: AgentMessage) =>
+          msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
       ),
     ).toBe(true);
 
     const summarizableToolResultIds = split.summarizableMessages
-      .filter((msg) => msg.role === "toolResult")
-      .map((msg) => (msg as { toolCallId?: unknown }).toolCallId);
+      .filter((msg: AgentMessage) => msg.role === "toolResult")
+      .map((msg: AgentMessage) => (msg as { toolCallId?: unknown }).toolCallId);
     expect(summarizableToolResultIds).toContain("call_old");
     expect(summarizableToolResultIds).not.toContain("call_recent");
   });
@@ -1016,7 +1018,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(split.preservedMessages).toHaveLength(6);
     expect(
       split.preservedMessages.some(
-        (msg) =>
+        (msg: AgentMessage) =>
           msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
       ),
     ).toBe(true);
@@ -1080,7 +1082,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
     );
     expect(
-      identifiers.reduce((count, id) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), 0), // pragma: allowlist secret
+      identifiers.reduce(
+        (count: number, id: string) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), // pragma: allowlist secret
+        0,
+      ),
     ).toBe(1);
   });
 
@@ -2822,3 +2827,4 @@ describe("readWorkspaceContextForSummary", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

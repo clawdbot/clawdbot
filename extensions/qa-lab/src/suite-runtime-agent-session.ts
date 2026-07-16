@@ -43,11 +43,6 @@ type QaSessionTranscriptSeedParams = {
 };
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
-let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
-
-function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
-  return sessionStoreLockRetryDelaysMsForTests ?? SESSION_STORE_LOCK_RETRY_DELAYS_MS;
-}
 
 type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
@@ -156,7 +151,7 @@ async function callGatewayWithSessionStoreLockRetry<T>(
   params: Record<string, unknown>,
   options: { timeoutMs: number },
 ) {
-  const retryDelaysMs = resolveSessionStoreLockRetryDelaysMs();
+  const retryDelaysMs = SESSION_STORE_LOCK_RETRY_DELAYS_MS;
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
       return (await env.gateway.call(method, params, options)) as T;
@@ -333,7 +328,3 @@ export {
   readSkillStatus,
   seedQaSessionTranscript,
 };
-
-export function setSessionStoreLockRetryDelaysMsForTests(delays?: readonly number[]): void {
-  sessionStoreLockRetryDelaysMsForTests = delays;
-}

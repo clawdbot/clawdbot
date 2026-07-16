@@ -1,7 +1,7 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -128,7 +128,9 @@ describe("qa scenario catalog", () => {
     const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
     expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+      resolveQaParityPackScenarioIds({ parityPack: "agentic" }).filter(
+        (scenarioId) => !scenarioIds.includes(scenarioId),
+      ),
     ).toStrictEqual([]);
   });
 
@@ -430,6 +432,21 @@ describe("qa scenario catalog", () => {
     expect(config?.fixtureFile).toBe("LEGACY_READ_TOOL_FIXTURE.txt");
     expect(config?.expectedMarker).toBe("LEGACY_READ_TOOL_OK");
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+  });
+
+  it("loads Matrix flow provider overrides", () => {
+    expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      timeoutMs: 75_000,
+    });
+    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "live-frontier",
+      retryCount: 0,
+      timeoutMs: 180_000,
+    });
   });
 
   it("loads live gateway sentinel scenarios for harness self-health", () => {

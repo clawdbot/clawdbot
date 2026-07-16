@@ -31,10 +31,8 @@ import {
   usesFoundryResponsesByDefault,
 } from "./shared.js";
 
-type RunExec = (typeof import("openclaw/plugin-sdk/process-runtime"))["runExec"];
-
+const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
-const runExecMock = vi.hoisted(() => vi.fn<RunExec>());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -49,13 +47,11 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/process-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
-    "openclaw/plugin-sdk/process-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    runExec: runExecMock,
+    runExec: execFileMock,
   };
 });
 
@@ -256,9 +252,11 @@ function buildFoundryRuntimeAuthContext(
 }
 
 function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; delayMs?: number }) {
-  runExecMock.mockImplementationOnce(async () => {
+  execFileMock.mockImplementationOnce(async () => {
     if (params.delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, params.delayMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, params.delayMs);
+      });
     }
     return {
       stdout: JSON.stringify({
@@ -271,26 +269,25 @@ function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; d
 }
 
 function mockAzureCliTokenRaw(stdout: string) {
-  runExecMock.mockResolvedValueOnce({ stdout, stderr: "" });
+  execFileMock.mockResolvedValueOnce({ stdout, stderr: "" });
 }
 
 function mockAzureCliLoginFailure(delayMs?: number) {
-  runExecMock.mockImplementationOnce(async () => {
+  execFileMock.mockImplementationOnce(async () => {
     if (delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
     }
-    throw Object.assign(new Error("az failed"), {
-      stdout: "",
-      stderr: defaultAzureCliLoginError,
-    });
+    throw Object.assign(new Error("az failed"), { stderr: defaultAzureCliLoginError, stdout: "" });
   });
 }
 
 describe("microsoft-foundry plugin", () => {
   beforeEach(() => {
     resetFoundryRuntimeAuthCaches();
+    execFileMock.mockReset();
     execFileSyncMock.mockReset();
-    runExecMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
   });
@@ -379,7 +376,7 @@ describe("microsoft-foundry plugin", () => {
 
     await getAccessTokenResultAsync({ scope: FOUNDRY_ANTHROPIC_SCOPE });
 
-    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
+    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -437,7 +434,7 @@ describe("microsoft-foundry plugin", () => {
   it("preserves the model-derived base URL for Entra runtime auth refresh", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -447,9 +444,9 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
-    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
+    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
     );
   });
@@ -457,7 +454,7 @@ describe("microsoft-foundry plugin", () => {
   it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
 
     const prepared = requireRuntimeAuthResult(
@@ -472,7 +469,7 @@ describe("microsoft-foundry plugin", () => {
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
     expect(prepared.request?.auth).toEqual({
       mode: "authorization-bearer",
-      token: "test-token",
+      token: "test-token-placeholder",
     });
   });
 
@@ -499,13 +496,13 @@ describe("microsoft-foundry plugin", () => {
         auth: { mode: "header", headerName, value: "profile-api-key" },
       },
     });
-    expect(runExecMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("uses active model routing when Entra metadata points at another deployment", async () => {
     const provider = registerProvider();
     const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce(
       buildEntraProfileStore({
         endpoint: "https://example.services.ai.azure.com",
@@ -530,7 +527,7 @@ describe("microsoft-foundry plugin", () => {
     );
 
     expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/anthropic");
-    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
+    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -578,11 +575,11 @@ describe("microsoft-foundry plugin", () => {
 
     expect(gptPrepared.apiKey).toBe("gpt-token");
     expect(claudePrepared.apiKey).toBe("claude-token");
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-    expect(runExecMock.mock.calls[0]?.[1]).toEqual(
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
     );
-    expect(runExecMock.mock.calls[1]?.[1]).toEqual(
+    expect(execFileMock.mock.calls[1]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
@@ -600,7 +597,7 @@ describe("microsoft-foundry plugin", () => {
 
     const prepared = requireRuntimeAuthResult(await prepareRuntimeAuth(runtimeContext));
     expect(prepared.apiKey).toBe("retry-token");
-    expect(runExecMock).toHaveBeenCalledTimes(2);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("dedupes concurrent Entra token refreshes for the same profile", async () => {
@@ -616,7 +613,7 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
     ]);
 
-    expect(runExecMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(requireRuntimeAuthResult(first).apiKey).toBe("deduped-token");
     expect(requireRuntimeAuthResult(second).apiKey).toBe("deduped-token");
   });
@@ -635,13 +632,13 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
     ]);
     expect(failed.every((result) => result.status === "rejected")).toBe(true);
-    expect(runExecMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
 
     const [first, second] = await Promise.all([
       prepareRuntimeAuth(runtimeContext),
       prepareRuntimeAuth(runtimeContext),
     ]);
-    expect(runExecMock).toHaveBeenCalledTimes(2);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(requireRuntimeAuthResult(first).apiKey).toBe("recovered-token");
     expect(requireRuntimeAuthResult(second).apiKey).toBe("recovered-token");
   });
@@ -658,7 +655,7 @@ describe("microsoft-foundry plugin", () => {
     expect(first.apiKey).toBe("soon-expiring-token");
     const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
     expect(second.apiKey).toBe("fresh-token");
-    expect(runExecMock).toHaveBeenCalledTimes(2);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("bounds Entra token fallback expiry when the process clock is invalid", async () => {
@@ -694,7 +691,7 @@ describe("microsoft-foundry plugin", () => {
     const second = requireRuntimeAuthResult(await provider.prepareRuntimeAuth?.(runtimeContext));
 
     expect(second.apiKey).toBe("refreshed-token");
-    expect(runExecMock).toHaveBeenCalledTimes(2);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
@@ -1768,7 +1765,7 @@ describe("microsoft-foundry plugin", () => {
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
     const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    mockAzureCliToken({ accessToken: "test-token-placeholder", expiresInMs: 60_000 });
     ensureAuthProfileStoreMock.mockReturnValueOnce({ profiles: {} });
 
     const prepared = await provider.prepareRuntimeAuth?.(
@@ -1832,8 +1829,8 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps bounded Azure CLI error details UTF-16 safe", async () => {
     const prefix = "x".repeat(299);
-    runExecMock.mockRejectedValueOnce(
-      Object.assign(new Error("az failed"), { stdout: "", stderr: `${prefix}😀tail` }),
+    execFileMock.mockRejectedValueOnce(
+      Object.assign(new Error("az failed"), { stderr: `${prefix}😀tail`, stdout: "" }),
     );
 
     await expect(getAccessTokenResultAsync()).rejects.toMatchObject({
@@ -2042,3 +2039,4 @@ describe("isAnthropicFoundryDeployment", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

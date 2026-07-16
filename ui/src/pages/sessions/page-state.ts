@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
@@ -16,6 +17,5 @@ export function saveStoredGroupBy(mode: SessionsGroupBy): void {
 }
 
 export function parseFilterInteger(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  return parseStrictPositiveInteger(value);
 }

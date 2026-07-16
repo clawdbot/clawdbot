@@ -889,3 +889,4 @@ function serializeSelfCheck(result: QaSelfCheckResult) {
     scenario: result.scenarioResult,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

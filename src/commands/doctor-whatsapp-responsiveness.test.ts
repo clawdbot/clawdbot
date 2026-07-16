@@ -16,12 +16,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 
-const {
-  collectWhatsappResponsivenessHealthFindings,
-  listLocalTuiProcesses,
-  noteWhatsappResponsivenessHealth,
-  terminateLocalTuiProcesses,
-} = await import("./doctor-whatsapp-responsiveness.js");
+const { collectWhatsappResponsivenessHealthFindings, noteWhatsappResponsivenessHealth } =
+  await import("./doctor-whatsapp-responsiveness.js");
+const { listLocalTuiProcesses, terminateLocalTuiProcesses } =
+  await import("./doctor-whatsapp-responsiveness.test-support.js");
 
 describe("doctor WhatsApp responsiveness", () => {
   beforeEach(() => {

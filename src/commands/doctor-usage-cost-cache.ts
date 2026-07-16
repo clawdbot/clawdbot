@@ -89,10 +89,46 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   );
 }
 
+async function maybeRemoveLegacySkillUploadTree(params: {
+  shouldRepair: boolean;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): Promise<void> {
+  const stateDir = resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir);
+  const uploadRoot = path.join(stateDir, "tmp", "skill-uploads");
+  const stats = await fs.lstat(uploadRoot).catch(() => null);
+  if (!stats) {
+    return;
+  }
+  if (!params.shouldRepair) {
+    note(
+      "Legacy skill-upload staging remains. Run `openclaw doctor --fix` to discard it; active uploads now live in SQLite and must be retried.",
+      "Skill uploads",
+    );
+    return;
+  }
+  try {
+    // Removing a symlink removes only the fixed legacy entry, never its target.
+    if (stats.isSymbolicLink()) {
+      await fs.unlink(uploadRoot);
+    } else {
+      await fs.rm(uploadRoot, { recursive: true, force: true });
+    }
+  } catch (error) {
+    note(`Failed removing legacy skill-upload staging: ${String(error)}`, "Skill uploads");
+    return;
+  }
+  note(
+    "Removed legacy skill-upload staging; unfinished transient uploads must be retried.",
+    "Skill uploads",
+  );
+}
+
 export async function maybeRepairLegacyRuntimeFiles(
   shouldRepair: boolean,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   await maybeScrubConfigAuditLog({ shouldRepair, env });
   await maybeRemoveLegacyUsageCostCacheFiles({ shouldRepair, env });
+  await maybeRemoveLegacySkillUploadTree({ shouldRepair, env });
 }

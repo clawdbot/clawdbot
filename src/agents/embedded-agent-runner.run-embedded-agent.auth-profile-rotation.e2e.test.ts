@@ -90,7 +90,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let authProfileUsageTesting: typeof import("./auth-profiles/usage.js").testing;
+let authProfileUsageTesting: typeof import("./auth-profiles/usage.test-support.js").testing;
 let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
@@ -101,7 +101,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ testing: authProfileUsageTesting } = await import("./auth-profiles/usage.js"));
+  ({ testing: authProfileUsageTesting } = await import("./auth-profiles/usage.test-support.js"));
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
     await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
@@ -1622,3 +1622,4 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

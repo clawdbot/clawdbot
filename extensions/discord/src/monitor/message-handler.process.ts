@@ -1089,6 +1089,8 @@ async function processDiscordMessageInner(
         commentaryProgressEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
+        progressPreambleEnabled:
+          draftPreview.draftStream && draftPreview.isProgressMode ? true : undefined,
         commentaryPayloadsEnabled: draftPreview.isProgressMode
           ? draftPreview.commentaryProgressEnabled
           : undefined,
@@ -1103,6 +1105,12 @@ async function processDiscordMessageInner(
               }
               await draftPreview.pushNarrationProgress(payload.text);
             }
+          : undefined,
+        onProgressNarratorLifecycle: draftPreview.narrationProgressEnabled
+          ? (lifecycle) => draftPreview.setProgressNarratorLifecycle(lifecycle)
+          : undefined,
+        isProgressDraftVisible: draftPreview.narrationProgressEnabled
+          ? () => draftPreview.isProgressDraftVisible
           : undefined,
         narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
         onReasoningStream: async (payload) => {
@@ -1158,14 +1166,7 @@ async function processDiscordMessageInner(
             if (shouldYieldDraftProgress()) {
               return undefined;
             }
-            if (draftPreview.commentaryProgressEnabled && payload.progressText) {
-              // Count only commentary that actually streams to the window draft.
-              noteWindowCommentary(payload.itemId, payload.progressText);
-              await draftPreview.pushCommentaryProgress(payload.progressText, {
-                itemId: payload.itemId,
-              });
-            }
-            return undefined;
+            return await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
           }
           if (shouldYieldDraftProgress()) {
             return undefined;
@@ -1185,7 +1186,6 @@ async function processDiscordMessageInner(
               meta: payload.meta,
             }),
           );
-          return undefined;
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {
@@ -1357,3 +1357,4 @@ async function processDiscordMessageInner(
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

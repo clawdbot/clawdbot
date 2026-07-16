@@ -1,7 +1,7 @@
 // Imported by openai-transport-stream.test.ts to keep its mocked suite in one Vitest module graph.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { buildOpenAICompletionsParams, testing } from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
   makeCompletionsModel,
@@ -11,6 +11,7 @@ import {
   streamChunks,
   expectRecordFields,
 } from "./openai-transport-stream.test-harness.js";
+import { testing } from "./openai-transport-stream.test-support.js";
 
 describe("openai transport stream", () => {
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
@@ -1509,3 +1510,4 @@ describe("openai transport stream", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

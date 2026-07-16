@@ -1,0 +1,23 @@
+title: Matrix streaming folds tool progress into the preview message
+scenario:
+  id: matrix-room-tool-progress-preview
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      requiredChannelDriver: live
+      matrixConfigOverrides:
+        streaming: quiet
+        toolProfile: coding
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runToolProgressPreviewScenario
+  args:
+    - expr: "scenarioContext"

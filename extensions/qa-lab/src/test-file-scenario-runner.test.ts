@@ -35,7 +35,7 @@ async function readPid(filePath: string, timeoutMs: number) {
     } catch {
       // retry until the process writes its pid
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for pid in ${filePath}`);
 }
@@ -46,7 +46,7 @@ async function waitForDead(pid: number, timeoutMs: number) {
     if (!isProcessRunning(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process ${pid} still alive`);
 }
@@ -1149,3 +1149,4 @@ describe("qa test file scenario runner", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

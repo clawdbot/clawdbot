@@ -6,9 +6,7 @@ import { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
-  MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-  type MattermostWebSocketLike,
-  WebSocketClosedBeforeOpenError,
+  type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -21,7 +19,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-class FakeWebSocket implements MattermostWebSocketLike {
+class FakeWebSocket implements ReturnType<MattermostWebSocketFactory> {
   public readonly sent: string[] = [];
   public pingCalls = 0;
   public closeCalls = 0;
@@ -140,12 +138,12 @@ describe("mattermost websocket monitor", () => {
     } catch (caught) {
       failure = caught;
     }
-    expect(failure).toBeInstanceOf(WebSocketClosedBeforeOpenError);
-    expect((failure as WebSocketClosedBeforeOpenError).message).toBe(
-      "websocket closed before open (code 1006)",
-    );
-    expect((failure as WebSocketClosedBeforeOpenError).code).toBe(1006);
-    expect((failure as WebSocketClosedBeforeOpenError).reason).toBe("connection refused");
+    expect(failure).toMatchObject({
+      name: "WebSocketClosedBeforeOpenError",
+      code: 1006,
+      reason: "connection refused",
+    });
+    expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
@@ -182,7 +180,7 @@ describe("mattermost websocket monitor", () => {
     });
 
     const firstAttempt = connectOnce();
-    await expect(firstAttempt).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    await expect(firstAttempt).rejects.toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
 
     await connectOnce();
 
@@ -222,9 +220,7 @@ describe("mattermost websocket monitor", () => {
     });
     expect(JSON.stringify(largeProps).length).toBeLessThan(800_000);
     expect(Buffer.byteLength(largePostEnvelope)).toBeGreaterThan(1024 * 1024);
-    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(
-      MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-    );
+    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(16 * 1024 * 1024);
 
     const runtime = testRuntime();
     const onPosted = vi.fn(async () => {});
@@ -242,7 +238,7 @@ describe("mattermost websocket monitor", () => {
           }),
         );
         socket.send(largePostEnvelope);
-        socket.send(Buffer.alloc(MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES + 1, 0x78));
+        socket.send(Buffer.alloc(16 * 1024 * 1024 + 1, 0x78));
       });
     });
 

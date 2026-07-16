@@ -7,6 +7,7 @@ import {
   pluginStateClear,
   pluginStateConsume,
   pluginStateDelete,
+  pluginStateDeleteIf,
   pluginStateEntries,
   pluginStateLookup,
   pluginStateRegister,
@@ -320,6 +321,16 @@ function createKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       });
     },
+    async deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
     async lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -420,6 +431,16 @@ function createSyncKeyedStoreForPluginId<T>(
         ...(env ? { env } : {}),
       });
     },
+    deleteIf(key, predicate) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDeleteIf({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
     lookup(key) {
       const normalizedKey = validateKey(key, "lookup");
       return pluginStateLookup({
@@ -490,7 +511,7 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 /** Clears plugin-state rows and option signatures for tests. */
-export function clearPluginStateStoreForTests(): void {
+function clearPluginStateStoreForTests(): void {
   clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
@@ -502,4 +523,10 @@ export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean
     closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateStoreTestApi")] = {
+    clearPluginStateStoreForTests,
+  };
 }

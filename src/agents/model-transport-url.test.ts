@@ -7,7 +7,7 @@ import {
   formatModelTransportDebugBaseUrl,
   formatModelTransportDebugUrl,
 } from "./model-transport-url.js";
-import { testing as openAITesting } from "./openai-transport-stream.js";
+import { testing as openAITesting } from "./openai-transport-stream.test-support.js";
 
 describe("model transport diagnostic URLs", () => {
   it("redacts credentials and request secrets from fetch URLs", () => {

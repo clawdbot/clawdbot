@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearGeneratedMediaTaskActivity,
   registerGeneratedMediaTaskActivity,
-  resetGeneratedMediaTaskActivityForTests,
 } from "./generated-media-task-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "./task-runtime.test-helpers.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,

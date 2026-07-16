@@ -1233,3 +1233,4 @@ export async function removeManagedNpmRootDependency(params: {
   };
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

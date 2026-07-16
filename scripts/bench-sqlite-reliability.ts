@@ -2,75 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type {
-  CliOptions,
-  ProfileId,
-  ReliabilityReport,
-} from "./lib/sqlite-reliability-contract.js";
-import { runReliabilityStress } from "./lib/sqlite-reliability-runner.js";
-
-const BOOLEAN_FLAGS = new Set(["--help"]);
-const VALUE_FLAGS = new Set(["--agent", "--output", "--profile", "--repository", "--state-dir"]);
-
-class CliUsageError extends Error {
-  override name = "CliUsageError";
-}
-
-function parseFlagValue(flag: string, argv: string[]): string | undefined {
-  const index = argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new CliUsageError(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function validateArgs(argv: string[]): void {
-  const seenValueFlags = new Set<string>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
-      continue;
-    }
-    if (!VALUE_FLAGS.has(arg)) {
-      throw new CliUsageError(`Unknown argument: ${arg}`);
-    }
-    if (seenValueFlags.has(arg)) {
-      throw new CliUsageError(`${arg} was provided more than once`);
-    }
-    seenValueFlags.add(arg);
-    const value = argv[index + 1];
-    if (!value || value.startsWith("-")) {
-      throw new CliUsageError(`${arg} requires a value`);
-    }
-    index += 1;
-  }
-}
-
-function parseProfile(raw: string | undefined): ProfileId {
-  if (!raw) {
-    return "default";
-  }
-  if (raw === "smoke" || raw === "default" || raw === "large") {
-    return raw;
-  }
-  throw new CliUsageError(
-    `--profile must be one of smoke, default, large; got ${JSON.stringify(raw)}`,
-  );
-}
-
-function parseOptions(argv: string[]): CliOptions {
-  return {
-    agentId: parseFlagValue("--agent", argv) ?? null,
-    output: parseFlagValue("--output", argv) ?? null,
-    profile: parseProfile(parseFlagValue("--profile", argv)),
-    repository: parseFlagValue("--repository", argv) ?? null,
-    stateDir: parseFlagValue("--state-dir", argv) ?? null,
-  };
-}
+import { CliUsageError, parseSqliteReliabilityCli } from "./lib/sqlite-reliability-cli.js";
+import type { ReliabilityReport } from "./lib/sqlite-reliability-contract.js";
 
 function printUsage(): void {
   console.log(`OpenClaw SQLite reliability stress proof
@@ -123,12 +56,13 @@ function printProofLines(report: ReliabilityReport): void {
 
 async function main(argv: string[]): Promise<void> {
   try {
-    validateArgs(argv);
-    if (argv.includes("--help")) {
+    const cli = parseSqliteReliabilityCli(argv);
+    if (cli.help) {
       printUsage();
       return;
     }
-    const options = parseOptions(argv);
+    const { options } = cli;
+    const { runReliabilityStress } = await import("./lib/sqlite-reliability-runner.js");
     const report = await runReliabilityStress(options);
     if (options.output) {
       fs.mkdirSync(path.dirname(options.output), { recursive: true });

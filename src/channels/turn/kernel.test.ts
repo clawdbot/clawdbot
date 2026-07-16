@@ -1504,3 +1504,4 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

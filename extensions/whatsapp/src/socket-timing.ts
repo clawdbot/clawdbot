@@ -38,7 +38,7 @@ export const DEFAULT_WHATSAPP_SOCKET_TIMING: Required<WhatsAppSocketTimingOption
   defaultQueryTimeoutMs: 60_000,
 };
 
-export class WhatsAppSocketOperationTimeoutError extends Error {
+class WhatsAppSocketOperationTimeoutError extends Error {
   readonly deliveryState = "unknown";
 
   constructor(

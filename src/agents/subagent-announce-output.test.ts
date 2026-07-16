@@ -8,7 +8,7 @@ import {
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
-} from "./subagent-announce-output.js";
+} from "./subagent-announce-output.test-support.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;

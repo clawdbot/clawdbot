@@ -71,6 +71,17 @@ export function getActiveAgentRingZeroTools(): readonly AnyAgentTool[] {
   return scope?.active === true ? scope.tools : [];
 }
 
+export function mergeAgentRingZeroTools(
+  ringZeroTools: readonly AnyAgentTool[],
+  tools: AnyAgentTool[],
+): AnyAgentTool[] {
+  if (ringZeroTools.length === 0) {
+    return tools;
+  }
+  const reservedNames = new Set(ringZeroTools.map((tool) => tool.name));
+  return [...ringZeroTools, ...tools.filter((tool) => !reservedNames.has(tool.name))];
+}
+
 /**
  * Read a host-owned tool fact for the current run. This does not activate or
  * grant a tool; only the host can bind executable authority to the run scope.

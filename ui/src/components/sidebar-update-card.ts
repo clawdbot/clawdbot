@@ -1,7 +1,12 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { UpdateAvailable } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT, postNativeUpdate } from "../app/native-link-routing.ts";
+import {
+  hasNativeUpdateBridge,
+  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+  NATIVE_UPDATE_DECLINED_EVENT,
+  postNativeUpdate,
+} from "../app/native-link-routing.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -52,8 +57,17 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @state() private dismissedUpdateKey: string | null = null;
+  @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
+  private nativeUpdateDeclined = false;
+
+  private readonly handleNativeUpdateAvailabilityChanged = () => {
+    this.nativeUpdateDeclined = false;
+    this.nativeUpdateAvailable = hasNativeUpdateBridge();
+  };
 
   private readonly handleNativeUpdateDeclined = () => {
+    this.nativeUpdateDeclined = true;
+    this.nativeUpdateAvailable = false;
     if (this.updateAvailable && !this.updateRunning) {
       this.onUpdate();
     }
@@ -61,10 +75,19 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.nativeUpdateAvailable = !this.nativeUpdateDeclined && hasNativeUpdateBridge();
+    window.addEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
     window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
   }
 
   override disconnectedCallback() {
+    window.removeEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
     window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     super.disconnectedCallback();
   }
@@ -79,7 +102,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     ) {
       return nothing;
     }
-    const title = this.updateRunning ? t("chat.updating") : t("chat.sidebar.updateAvailable");
+    const title = this.updateRunning
+      ? t("chat.updating")
+      : this.nativeUpdateAvailable
+        ? t("chat.sidebar.updateMacAndGateway")
+        : t("chat.sidebar.updateGateway");
     return html`
       <div class="sidebar-update-card" role="status" aria-live="polite">
         <button
@@ -87,7 +114,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           type="button"
           ?disabled=${this.updateRunning}
           @click=${() => {
-            if (!postNativeUpdate()) {
+            if (this.nativeUpdateDeclined || !postNativeUpdate()) {
               this.onUpdate();
             }
           }}

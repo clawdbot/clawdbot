@@ -13,7 +13,7 @@ export function registerTelegramMiniAppCommand(api: OpenClawPluginApi): void {
   api.registerCommand(createTelegramMiniAppDashboardCommand(api));
 }
 
-export function createTelegramMiniAppDashboardCommand(
+function createTelegramMiniAppDashboardCommand(
   api: OpenClawPluginApi,
 ): OpenClawPluginCommandDefinition {
   return {

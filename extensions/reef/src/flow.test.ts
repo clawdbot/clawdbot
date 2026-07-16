@@ -17,8 +17,10 @@ import {
 } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
+import type { ReefPeerTrust } from "./friend-types.js";
 import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
+import type { ReefTrustStore } from "./trust-store.js";
 import type { InboxEntry, ReefKeys } from "./types.js";
 
 const model = "mock-2026-07-12";
@@ -44,7 +46,7 @@ function reefKeys(identity = generateIdentity()): ReefKeys {
   };
 }
 
-function config(sender: ReturnType<typeof generateIdentity>) {
+function config() {
   return ReefChannelConfigSchema.parse({
     handle: "bob",
     email: "bob@example.com",
@@ -55,15 +57,32 @@ function config(sender: ReturnType<typeof generateIdentity>) {
       policyVersion: "v1",
       timeoutMs: 1_000,
     },
-    friends: {
-      alice: {
-        autonomy: "bounded",
-        ed25519PublicKey: sender.signing.publicKey,
-        x25519PublicKey: sender.encryption.publicKey,
-        keyEpoch: 1,
-      },
-    },
   });
+}
+
+function peerTrust(
+  identity: ReturnType<typeof generateIdentity>,
+  overrides: Partial<ReefPeerTrust> = {},
+): ReefPeerTrust {
+  return {
+    autonomy: "bounded",
+    ed25519PublicKey: identity.signing.publicKey,
+    x25519PublicKey: identity.encryption.publicKey,
+    keyEpoch: 1,
+    safetyNumberChanged: false,
+    approvedAt: 1,
+    ...overrides,
+  };
+}
+
+function trust(initial: Record<string, ReefPeerTrust>) {
+  const values = new Map(Object.entries(initial));
+  return {
+    values,
+    store: {
+      get: (peer: string) => values.get(peer),
+    } as unknown as ReefTrustStore,
+  };
 }
 
 function transport() {
@@ -112,6 +131,7 @@ describe("ReefMessageFlow inbound", () => {
       order.push("ingress");
     });
     const relay = transport();
+    const trusted = trust({ alice: peerTrust(alice) });
     relay.acknowledge.mockImplementation(async () => {
       const delivered = JSON.parse(
         await readFile(`${stateDir}/delivered.json`, "utf8"),
@@ -121,7 +141,8 @@ describe("ReefMessageFlow inbound", () => {
       return { result: "deleted" };
     });
     const flow = new ReefMessageFlow({
-      config: config(alice),
+      config: config(),
+      trust: trusted.store,
       keys: bob,
       stateDir,
       transport: relay as unknown as ReefTransportClient,
@@ -155,9 +176,11 @@ describe("ReefMessageFlow inbound", () => {
     const alice = generateIdentity();
     const bob = reefKeys();
     const relay = transport();
+    const trusted = trust({ alice: peerTrust(alice) });
     const ingress = new Map<string, unknown>();
     const flow = new ReefMessageFlow({
-      config: config(alice),
+      config: config(),
+      trust: trusted.store,
       keys: bob,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -198,9 +221,11 @@ describe("ReefMessageFlow inbound", () => {
     const bob = reefKeys();
     const relay = transport();
     const onIngress = vi.fn();
+    const trusted = trust({ alice: peerTrust(alice) });
     const deny: Verdict = { ...allow, decision: "deny", category: "injection", reason: "Denied." };
     const flow = new ReefMessageFlow({
-      config: config(alice),
+      config: config(),
+      trust: trusted.store,
       keys: bob,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -236,9 +261,11 @@ describe("ReefMessageFlow inbound", () => {
     const bob = reefKeys();
     const relay = transport();
     const classifier = guard(allow);
-    const cfg = config(alice);
+    const cfg = config();
+    const trusted = trust({ alice: peerTrust(alice) });
     const flow = new ReefMessageFlow({
       config: cfg,
+      trust: trusted.store,
       keys: bob,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -250,7 +277,7 @@ describe("ReefMessageFlow inbound", () => {
       onOwnerNotice: async () => {},
     });
     const first = await envelope(alice, bob, "01JZ0000000000000000000102", "hello");
-    delete cfg.friends.alice;
+    trusted.values.delete("alice");
     await expect(
       flow.processEntries([
         {
@@ -263,8 +290,7 @@ describe("ReefMessageFlow inbound", () => {
         },
       ]),
     ).rejects.toThrow("unapproved Reef sender");
-    cfg.friends.alice = config(alice).friends.alice!;
-    cfg.friends.alice.safetyNumberChanged = true;
+    trusted.values.set("alice", peerTrust(alice, { safetyNumberChanged: true }));
     const second = await envelope(alice, bob, "01JZ0000000000000000000103", "hello again");
     await expect(
       flow.processEntries([
@@ -287,19 +313,13 @@ describe("ReefMessageFlow outbound", () => {
   it("seals and posts an allowed message", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();
-    const cfg = config(bob);
+    const cfg = config();
     cfg.handle = "alice";
-    delete cfg.friends.alice;
-    cfg.friends.bob = {
-      autonomy: "bounded",
-      ed25519PublicKey: bob.signing.publicKey,
-      x25519PublicKey: bob.encryption.publicKey,
-      keyEpoch: 1,
-      safetyNumberChanged: false,
-    };
+    const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
     const flow = new ReefMessageFlow({
       config: cfg,
+      trust: trusted.store,
       keys: alice,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -329,16 +349,9 @@ describe("ReefMessageFlow outbound", () => {
   it("persists a proposal-bound owner review request and does not send or auto-approve", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();
-    const cfg = config(bob);
+    const cfg = config();
     cfg.handle = "alice";
-    delete cfg.friends.alice;
-    cfg.friends.bob = {
-      autonomy: "bounded",
-      ed25519PublicKey: bob.signing.publicKey,
-      x25519PublicKey: bob.encryption.publicKey,
-      keyEpoch: 1,
-      safetyNumberChanged: false,
-    };
+    const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
     const reviews = new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`);
     const review: Verdict = {
@@ -349,6 +362,7 @@ describe("ReefMessageFlow outbound", () => {
     };
     const flow = new ReefMessageFlow({
       config: cfg,
+      trust: trusted.store,
       keys: alice,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
@@ -393,16 +407,9 @@ describe("ReefMessageFlow outbound", () => {
   it("stops a guard denial before transport send", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();
-    const cfg = config(bob);
+    const cfg = config();
     cfg.handle = "alice";
-    delete cfg.friends.alice;
-    cfg.friends.bob = {
-      autonomy: "bounded",
-      ed25519PublicKey: bob.signing.publicKey,
-      x25519PublicKey: bob.encryption.publicKey,
-      keyEpoch: 1,
-      safetyNumberChanged: false,
-    };
+    const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
     const deny: Verdict = {
       ...allow,
@@ -412,6 +419,7 @@ describe("ReefMessageFlow outbound", () => {
     };
     const flow = new ReefMessageFlow({
       config: cfg,
+      trust: trusted.store,
       keys: alice,
       stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,

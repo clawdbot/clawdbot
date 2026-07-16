@@ -47,9 +47,7 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-export function resolveGatewayServiceEntrypoint(
-  command: GatewayServiceCommandConfig,
-): string | undefined {
+function resolveGatewayServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
   const gatewayIndex = command.programArguments.indexOf("gateway");
   if (gatewayIndex <= 0) {
     return undefined;

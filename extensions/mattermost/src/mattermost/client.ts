@@ -29,7 +29,7 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type MattermostRequestInit = RequestInit & {
+type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
 };
 
@@ -328,7 +328,7 @@ export async function sendMattermostTyping(
   });
 }
 
-export async function createMattermostDirectChannel(
+async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
   signal?: AbortSignal,

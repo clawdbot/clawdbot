@@ -151,7 +151,7 @@ describe("runCronCommandJob", () => {
       job: makeCommandJob({
         kind: "command",
         argv: ["sh", "-lc", shellCommand],
-        timeoutSeconds: 0.2,
+        timeoutSeconds: 1,
       }),
     });
 

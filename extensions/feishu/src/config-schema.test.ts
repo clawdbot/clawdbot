@@ -1,6 +1,6 @@
 // Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { FeishuConfigSchema } from "./config-schema.js";
+import { FeishuChannelConfigSchema, FeishuConfigSchema } from "./config-schema.js";
 
 // The NEGATIVE webhook fixtures below spread these bases and add
 // verificationToken separately so the GHSA-G353-MGV3-8PCJ opengrep pattern —
@@ -60,6 +60,26 @@ describe("FeishuConfigSchema webhook validation", () => {
     });
 
     expect(result.groupPolicy).toBe("open");
+  });
+
+  it("exports legacy groupPolicy as a typed config input", () => {
+    const expected = {
+      anyOf: [
+        { type: "string", enum: ["open", "allowlist", "disabled"] },
+        { type: "string", const: "allowall" },
+      ],
+    };
+
+    expect(FeishuChannelConfigSchema.schema).toMatchObject({
+      properties: {
+        groupPolicy: expected,
+        accounts: {
+          additionalProperties: {
+            properties: { groupPolicy: expected },
+          },
+        },
+      },
+    });
   });
 
   it("rejects top-level webhook mode without verificationToken", () => {

@@ -5,9 +5,9 @@ import {
   findMissingLiveTransportStandardScenarios,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discordQaLiveRuntime } from "./discord-live.runtime.js";
+import { discordQaScenarioSupport } from "./discord-live.runtime.js";
 
-const { testing } = discordQaLiveRuntime;
+const { testing } = discordQaScenarioSupport;
 
 describe("discord live qa runtime", () => {
   afterEach(() => {

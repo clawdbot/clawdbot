@@ -77,7 +77,7 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
   }));
 }
 
-export function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
+function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
   const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
   const plugins = currentConfig.plugins;
   if (plugins?.enabled === false) {

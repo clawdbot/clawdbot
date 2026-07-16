@@ -43,7 +43,7 @@ function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
   return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
-export function resolveDiscordGatewayReadyTimeoutMs(params?: {
+function resolveDiscordGatewayReadyTimeoutMs(params?: {
   configuredTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {
@@ -54,7 +54,7 @@ export function resolveDiscordGatewayReadyTimeoutMs(params?: {
   );
 }
 
-export function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
+function resolveDiscordGatewayRuntimeReadyTimeoutMs(params?: {
   configuredTimeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {

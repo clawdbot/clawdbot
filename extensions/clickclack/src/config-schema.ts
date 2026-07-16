@@ -11,6 +11,7 @@ const ClickClackAccountConfigSchema = z
     enabled: z.boolean().optional(),
     baseUrl: z.string().url().optional(),
     token: buildSecretInputSchema().optional(),
+    tokenFile: z.string().optional(),
     workspace: z.string().optional(),
     botUserId: z.string().optional(),
     agentId: z.string().optional(),
@@ -23,6 +24,7 @@ const ClickClackAccountConfigSchema = z
     allowFrom: z.array(z.string()).optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),
     agentActivity: z.boolean().optional(),
+    commandMenu: z.boolean().optional(),
   })
   .strict();
 

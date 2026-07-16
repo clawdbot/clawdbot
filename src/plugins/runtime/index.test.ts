@@ -17,8 +17,12 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
   getRuntimeAuthForModel: vi.fn(),
   resolveApiKeyForProvider: vi.fn(),
 }));
+const sandboxContextMocks = vi.hoisted(() => ({
+  resolveSandboxContext: vi.fn(),
+}));
 
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
+vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { setGatewayNodesRuntime, setGatewaySubagentRuntime } from "./gateway-bindings.js";
 import { clearGatewaySubagentRuntime } from "./gateway-bindings.test-fixtures.js";
@@ -117,6 +121,7 @@ describe("plugin runtime command execution", () => {
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
     runtimeModelAuthMocks.getRuntimeAuthForModel.mockReset();
     runtimeModelAuthMocks.resolveApiKeyForProvider.mockReset();
+    sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
     clearGatewaySubagentRuntime();
   });
@@ -237,6 +242,64 @@ describe("plugin runtime command execution", () => {
     expect(policy.levels.map((level) => level.id)).toContain("xhigh");
   });
 
+  it("includes persisted session exec overrides in sandbox authority", () => {
+    const runtime = createPluginRuntime();
+    const getSessionEntry = vi
+      .spyOn(runtime.agent.session, "getSessionEntry")
+      .mockReturnValue({ sessionId: "session", updatedAt: 1, execHost: "gateway" });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
+        list: [{ id: "main", default: true }],
+      },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const result = runtime.sandbox.resolveWorkspaceAuthority({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+    });
+
+    expect(getSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+    });
+    expect(result.confinementError).toContain("outside the sandbox");
+  });
+
+  it("prepares the live sandbox before returning workspace authority", async () => {
+    const runtime = createPluginRuntime();
+    vi.spyOn(runtime.agent.session, "getSessionEntry").mockReturnValue(undefined);
+    sandboxContextMocks.resolveSandboxContext.mockResolvedValue({ backendId: "docker" });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
+        list: [{ id: "main", default: true, workspace: "/workspace" }],
+      },
+      tools: {
+        elevated: { enabled: false },
+        sandbox: { tools: { allow: ["read"] } },
+      },
+    };
+
+    await expect(
+      runtime.sandbox.prepareWorkspaceAuthority({
+        config,
+        agentId: "main",
+        sessionKey: "agent:main:subagent:workboard-card",
+        workspaceDir: "/workspace",
+      }),
+    ).resolves.toEqual({ sandboxed: true, workspaceAccess: "rw" });
+    expect(sandboxContextMocks.resolveSandboxContext).toHaveBeenCalledWith({
+      config,
+      agentId: "main",
+      sessionKey: "agent:main:subagent:workboard-card",
+      workspaceDir: "/workspace",
+      requireCurrentConfig: true,
+    });
+  });
+
   it.each([
     {
       name: "exposes runtime.mediaUnderstanding helpers and keeps stt as an alias",
@@ -326,6 +389,27 @@ describe("plugin runtime command execution", () => {
         expectFunctionKeys(runtime.llm as Record<string, unknown>, [
           "complete",
           "acquireLocalService",
+        ]);
+      },
+    },
+    {
+      name: "exposes runtime.sandbox workspace-authority resolution",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.sandbox as Record<string, unknown>, [
+          "resolveWorkspaceAuthority",
+          "prepareWorkspaceAuthority",
+        ]);
+      },
+    },
+    {
+      name: "exposes runtime.worktrees checkout inspection and lifecycle helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.worktrees as Record<string, unknown>, [
+          "resolveCheckoutRoot",
+          "hasSelfContainedCheckoutMetadata",
+          "create",
+          "release",
+          "removeIfLossless",
         ]);
       },
     },

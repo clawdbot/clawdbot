@@ -27,7 +27,8 @@ async function send(
 }
 
 export const reefOutboundAdapter: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
+  // The encrypted flow belongs to the Gateway account lifecycle; other processes must delegate.
+  deliveryMode: "gateway",
   textChunkLimit: 32 * 1024,
   deliveryCapabilities: { durableFinal: { text: true, replyTo: true, thread: true } },
   resolveTarget: ({ to }) => {

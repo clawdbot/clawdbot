@@ -1196,3 +1196,4 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

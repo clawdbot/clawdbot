@@ -206,7 +206,7 @@ async function waitForNextRequest(
       }
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error(`Timed out waiting for the next ${method} request`);

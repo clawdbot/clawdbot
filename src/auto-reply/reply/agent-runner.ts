@@ -105,11 +105,11 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
-  runAgentTurnWithFallback,
-} from "./agent-runner-execution.js";
+} from "./agent-runner-failure-reply.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -136,6 +136,7 @@ import {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   evaluateNoOpRearmAdmission,
   type NoOpRearmWakeClass,
@@ -1184,7 +1185,7 @@ export async function runReplyAgent(replyParams: {
   isActive: boolean;
   isRunActive?: () => boolean;
   isStreaming: boolean;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -1245,7 +1246,6 @@ export async function runReplyAgent(replyParams: {
     isContinuationWake,
     replyOperation: providedReplyOperation,
   } = replyParams;
-
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
@@ -1499,7 +1499,6 @@ export async function runReplyAgent(replyParams: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
-
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   const replyRouteThreadId = resolveRoutedDeliveryThreadId({
     ctx: sessionCtx,
@@ -1522,6 +1521,7 @@ export async function runReplyAgent(replyParams: {
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
+      onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
     if (replyOperationRunState) {
       replyOperationRunState.admission =
@@ -3984,3 +3984,4 @@ export async function runReplyAgent(replyParams: {
     typing.markDispatchIdle();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

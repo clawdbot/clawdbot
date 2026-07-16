@@ -9,6 +9,8 @@ const elements = {
   channel: document.querySelector("#channel"),
   description: document.querySelector("#description"),
   eyebrow: document.querySelector("#eyebrow"),
+  gatewayList: document.querySelector("#gateway-list"),
+  discoveryStatus: document.querySelector("#discovery-status"),
   installButton: document.querySelector("#install-button"),
   installControls: document.querySelector("#install-controls"),
   installLog: document.querySelector("#install-log"),
@@ -20,6 +22,8 @@ const elements = {
 };
 
 let primaryAction = null;
+let discoveryPending = false;
+let discoverySignature = null;
 
 function show(element, visible) {
   element.classList.toggle("hidden", !visible);
@@ -62,6 +66,87 @@ function friendlyError(error) {
     return error;
   }
   return error?.message || "OpenClaw could not complete the operation.";
+}
+
+function gatewayHost(gateway) {
+  return (gateway.host || "").trim().replace(/\.$/, "");
+}
+
+function canConnectDirect(gateway) {
+  return (
+    gateway.tls ||
+    gateway.directReachable ||
+    gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
+  );
+}
+
+function renderGateways(gateways) {
+  elements.gatewayList.replaceChildren();
+  elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
+  if (!gateways.length) {
+    const empty = document.createElement("p");
+    empty.className = "discovery-empty";
+    empty.textContent = "Looking for nearby OpenClaw gateways…";
+    elements.gatewayList.append(empty);
+    return;
+  }
+
+  for (const gateway of gateways) {
+    const button = document.createElement("button");
+    button.className = "gateway-card";
+    button.type = "button";
+    button.disabled = !canConnectDirect(gateway);
+    if (button.disabled) {
+      button.title = "This gateway does not advertise a direct connection.";
+    }
+
+    const copy = document.createElement("span");
+    copy.className = "gateway-copy";
+    const name = document.createElement("span");
+    name.className = "gateway-name";
+    name.textContent = gateway.name;
+    const endpoint = document.createElement("span");
+    endpoint.className = "gateway-endpoint";
+    endpoint.textContent = `${gatewayHost(gateway)}:${gateway.port}`;
+    copy.append(name, endpoint);
+
+    const badge = document.createElement("span");
+    badge.className = `gateway-badge${gateway.tls ? " secure" : ""}`;
+    badge.textContent = gateway.tls ? "TLS" : "HTTP";
+    button.append(copy, badge);
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      void invoke("connect_discovered_gateway", {
+        host: gateway.host,
+        port: gateway.port,
+        tls: gateway.tls,
+      }).catch(() => {
+        button.disabled = false;
+        elements.discoveryStatus.textContent = "CONNECT FAILED";
+      });
+    });
+    elements.gatewayList.append(button);
+  }
+}
+
+async function refreshGateways() {
+  if (discoveryPending) {
+    return;
+  }
+  discoveryPending = true;
+  try {
+    const gateways = await invoke("discover_gateways");
+    const signature = JSON.stringify(gateways);
+    if (signature !== discoverySignature) {
+      discoverySignature = signature;
+      renderGateways(gateways);
+    }
+  } catch {
+    discoverySignature = null;
+    elements.discoveryStatus.textContent = "UNAVAILABLE";
+  } finally {
+    discoveryPending = false;
+  }
 }
 
 async function connect() {
@@ -154,6 +239,8 @@ elements.primaryAction.addEventListener("click", () => {
 });
 
 await listen("install-progress", ({ payload }) => appendLog(payload.line));
+void refreshGateways();
+window.setInterval(() => void refreshGateways(), 2000);
 
 const mode = new URLSearchParams(window.location.search).get("mode");
 if (mode === "reconnecting") {

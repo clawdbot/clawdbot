@@ -4,7 +4,6 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
   parseStrictNonNegativeInteger,
 } from "../../packages/normalization-core/src/number-coercion.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
@@ -27,12 +26,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_GITHUB_COPILOT_DOMAIN,
+  normalizeGithubCopilotDomain,
+} from "./github-copilot-domain.js";
+import { resolveGithubCopilotTokenEndpoint } from "./github-copilot-token-endpoint.js";
+import {
   fingerprintCopilotSourceCredential,
   isCopilotTokenUsable,
   resolveCopilotTokenCache,
   type CachedCopilotToken,
 } from "./provider-auth-copilot-cache.js";
-import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { CachedCopilotToken } from "./provider-auth-copilot-cache.js";
@@ -42,6 +44,7 @@ export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 
+export { normalizeGithubCopilotDomain };
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,
@@ -148,40 +151,6 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 const COPILOT_PROVIDER_ID = "github-copilot";
 
 const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
-
-// Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
-// GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
-// nested hosts (`api.<tenant>.ghe.com`, `copilot-api.<tenant>.ghe.com`) are
-// derived service endpoints, not tenants — accepting one would template broken
-// hosts like `api.api.<tenant>.ghe.com` for the token exchange. Bare `ghe.com`
-// is likewise excluded: it is not a tenant and hosts no Copilot endpoint.
-const GHE_DATA_RESIDENCY_HOST = /^[a-z0-9-]+\.ghe\.com$/;
-
-/**
- * Coerce a user/config-supplied GitHub host to a safe bare lowercase hostname.
- *
- * Fails closed to public `github.com`: only the public host and data-residency
- * GHE tenants (`*.ghe.com`) are trusted. Any other value falls back to the
- * default rather than being used verbatim, because the resolved host becomes the
- * `api.<host>` endpoint that receives the GitHub OAuth token during exchange — a
- * typo or injected value like `evil.com` must never redirect that token.
- * (Classic self-hosted GHE Server uses arbitrary hostnames but does not host
- * Copilot, so it is deliberately out of scope.)
- */
-export function normalizeGithubCopilotDomain(raw: string | undefined | null): string {
-  const trimmed = (raw ?? "").trim().toLowerCase();
-  if (!trimmed) {
-    return DEFAULT_GITHUB_COPILOT_DOMAIN;
-  }
-  // Reject scheme/path/credentials so template URL construction cannot be hijacked.
-  if (!/^[a-z0-9.-]+$/.test(trimmed)) {
-    return DEFAULT_GITHUB_COPILOT_DOMAIN;
-  }
-  if (trimmed === DEFAULT_GITHUB_COPILOT_DOMAIN || GHE_DATA_RESIDENCY_HOST.test(trimmed)) {
-    return trimmed;
-  }
-  return DEFAULT_GITHUB_COPILOT_DOMAIN;
-}
 
 function readGithubCopilotDomainFromConfig(config?: OpenClawConfig): string | undefined {
   const params = config?.models?.providers?.[COPILOT_PROVIDER_ID]?.params;
@@ -300,48 +269,12 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
   }
 }
 
-function resolveCopilotProxyHost(proxyEp: string): string | null {
-  const trimmed = proxyEp.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const urlText = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(urlText);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return null;
-    }
-    return normalizeLowercaseStringOrEmpty(url.hostname);
-  } catch {
-    return null;
-  }
-}
-
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function deriveCopilotApiBaseUrlFromToken(
   /** Copilot API token text that may contain a `proxy-ep` attribute. */
   token: string,
 ): string | null {
-  const trimmed = token.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const match = trimmed.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
-  const proxyEp = match?.[1]?.trim();
-  if (!proxyEp) {
-    return null;
-  }
-
-  const proxyHost = resolveCopilotProxyHost(proxyEp);
-  if (!proxyHost) {
-    return null;
-  }
-  const host = proxyHost.replace(/^proxy\./i, "api.");
-
-  const baseUrl = `https://${host}`;
-  return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
+  return resolveGithubCopilotTokenEndpoint(token).baseUrl;
 }
 
 /**

@@ -21,6 +21,10 @@ import {
   clearToolStreamSegments,
   hasVisibleStreamParts,
 } from "./stream-reconciliation.ts";
+import {
+  authoritativeHistoryAppliedForRun,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -162,6 +166,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
+  const authoritativeTerminalMatches = Boolean(
+    payload.runId &&
+    authoritativeHistoryAppliedForRun(state, payload.runId) &&
+    chatEventSessionMatches(state, payload),
+  );
   if (!sessionMatches && !activeRunMatches) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -221,7 +230,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+    if (authoritativeTerminalMatches) {
+      // History already owns this run's terminal message. Discard the live
+      // projection; reconcileTerminalRun below clears its remaining stream.
+      clearToolStreamSegments(state);
+    } else if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
       if (
         hasVisibleStreamParts(state, {
           includeCurrent: false,
@@ -233,11 +246,28 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+      state.chatMessages = appendTerminalAssistantMessage(
+        state.chatMessages,
+        rememberLiveTerminalRun(finalMessage, terminalRunId),
+      );
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
-    reconcileTerminalRun("done", "done");
+    if (payload.yielded === true && payload.stopReason === "end_turn") {
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          yielded: true,
+          runId: terminalRunId,
+          sessionKey: state.sessionKey,
+          sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
+          clearLocalRun: true,
+          clearChatStream: true,
+        },
+      );
+    } else {
+      reconcileTerminalRun("done", "done");
+    }
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {

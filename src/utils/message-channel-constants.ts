@@ -3,6 +3,13 @@ import { isStringOption } from "./string-readers.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 
+export function internalSessionConversationId(
+  channelId: string,
+  sessionKey: string | undefined,
+): string | undefined {
+  return channelId === INTERNAL_MESSAGE_CHANNEL ? sessionKey : undefined;
+}
+
 // Internal, non-delivery sources that may surface as a `channel` hint when an
 // agent run is triggered by something other than a chat message — heartbeat
 // ticks, cron jobs, or webhook receivers. They are not deliverable on their

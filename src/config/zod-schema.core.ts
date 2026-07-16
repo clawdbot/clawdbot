@@ -1151,3 +1151,4 @@ export const ProviderCommandsSchema = z
   })
   .strict()
   .optional();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

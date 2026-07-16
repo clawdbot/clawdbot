@@ -3149,3 +3149,4 @@ describe("previewRemHarness", () => {
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

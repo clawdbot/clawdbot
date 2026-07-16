@@ -1,9 +1,4 @@
-// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
-/**
- * OpenClaw built-in and plugin tool assembly.
- *
- * Creates the per-run tool inventory from config, channel context, sandbox policy, auth stores, and plugin tools.
- */
+/** Builds the per-run built-in and plugin tool inventory. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SourceReplyDeliveryMode,
@@ -12,11 +7,10 @@ import type {
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
-import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
+import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
@@ -32,6 +26,10 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import {
+  createOpenClawContinuationTools,
+  type OpenClawContinuationToolOptions,
+} from "./openclaw-tools.continuation.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
@@ -50,11 +48,9 @@ import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
-import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
-import { createContinueWorkTool, type ContinueWorkRequest } from "./tools/continue-work-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
-import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import {
   createCreateGoalTool,
@@ -67,17 +63,15 @@ import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
+import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
-import {
-  createRequestCompactionTool,
-  type RequestCompactionToolOpts,
-} from "./tools/request-compaction-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
@@ -88,8 +82,6 @@ import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-
-const log = createSubsystemLogger("agents/openclaw-tools");
 /**
  * Drops tools whose requiredClientCaps the originating gateway client did not
  * declare. Capability availability is a hard fact, not policy: every tool
@@ -105,7 +97,6 @@ export function filterToolsByClientCaps(
     (tool) => !tool.requiredClientCaps?.some((requiredCap) => !clientCaps.has(requiredCap)),
   );
 }
-
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
@@ -202,13 +193,6 @@ export function createOpenClawTools(
     wrapBeforeToolCallHook?: boolean;
     /** Override or extend the default hook context used by construction-time wrapping. */
     beforeToolCallHookContext?: HookContext;
-    /**
-     * If true, session tools resolve config from the active runtime snapshot at
-     * each execution rather than capturing the construction-time config. Lets
-     * `tools.sessions.visibility` and other session-tool-relevant keys hot-reload
-     * without rebuilding the tool list. RFC §6.5.
-     */
-    liveSessionToolConfig?: boolean;
     /** Records hot-path tool-prep stages for reply startup diagnostics. */
     recordToolPrepStage?: (name: string) => void;
     /** Trusted sender id from inbound context (not tool args). */
@@ -235,21 +219,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
-    /** Whether the current run consumes the continue_delegate staging queue. */
-    drainsContinuationDelegateQueue?: boolean;
-    /** Internal maintenance/model-only runs that cannot schedule post-turn continuation work. */
-    disableContinuationTools?: boolean;
-    /** Callback for continue_work to request a post-turn continuation. */
-    continueWorkOpts?: {
-      requestContinuation: (request: ContinueWorkRequest) => void;
-    };
-    /** Closures for request_compaction tool (Trigger E). Only set when continuation is enabled. */
-    requestCompactionOpts?: {
-      sessionId?: string;
-      getContextUsage: () => number | null;
-      triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
-    };
-  } & SpawnedToolContext,
+  } & SpawnedToolContext &
+    OpenClawContinuationToolOptions,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config;
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
@@ -481,12 +452,6 @@ export function createOpenClawTools(
     pluginToolDenylist: options?.pluginToolDenylist,
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
-  const sessionToolConfig = options?.liveSessionToolConfig
-    ? ({ getConfig: getRuntimeConfig } as const)
-    : ({ config: resolvedConfig } as const);
-  const continuationToolsEnabled =
-    options?.disableContinuationTools !== true &&
-    options?.config?.agents?.defaults?.continuation?.enabled === true;
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -517,6 +482,11 @@ export function createOpenClawTools(
               ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
               : {}),
           }),
+          createSessionsTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+          }),
         ]),
     ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
@@ -538,10 +508,8 @@ export function createOpenClawTools(
     ...(embedded
       ? []
       : [
-          createGatewayTool({
-            agentSessionKey: options?.agentSessionKey,
-            config: options?.config,
-          }),
+          createGatewayTool(),
+          ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
         ]),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
@@ -582,13 +550,13 @@ export function createOpenClawTools(
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      ...sessionToolConfig,
+      config: resolvedConfig,
       callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
-      ...sessionToolConfig,
+      config: resolvedConfig,
       callGateway: effectiveCallGateway,
     }),
     createSessionsSearchTool({
@@ -605,7 +573,7 @@ export function createOpenClawTools(
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
-            ...sessionToolConfig,
+            config: resolvedConfig,
             callGateway,
           }),
         ]),
@@ -618,6 +586,9 @@ export function createOpenClawTools(
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
             agentThreadId: options?.agentThreadId,
+            currentMessagingTarget: options?.currentMessagingTarget,
+            currentChannelId: options?.currentChannelId,
+            currentThreadTs: options?.currentThreadTs,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,
@@ -637,11 +608,12 @@ export function createOpenClawTools(
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
       runSessionKey: options?.runSessionKey,
-      ...sessionToolConfig,
+      config: resolvedConfig,
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
@@ -653,64 +625,18 @@ export function createOpenClawTools(
       },
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
-    // Continuation tools (continue_work / continue_delegate / request_compaction) register
-    // asymmetrically by design:
-    //   - continue_work + request_compaction need runner-supplied callbacks (continueWorkOpts /
-    //     requestCompactionOpts) to fire back in-process during the active turn. Without those
-    //     closures they would be dead tools that error when invoked.
-    //   - continue_delegate writes the delegate request to TaskFlow (the durable queue / SQLite
-    //     seam-of-record). The fire path does not require a runner-supplied closure; TaskFlow
-    //     itself is the seam. The drainsContinuationDelegateQueue flag answers a different
-    //     question entirely ("should this run drain pending queued delegates after the current
-    //     turn?"), not "do you have the closure to fire delegates?" — so it gates as `!== false`
-    //     rather than truthy-on-explicit-opts.
-    // This asymmetry caused upstream concern (openclaw/openclaw#79925 [P2] review): a caller that
-    // sets continuation.enabled=true but omits continueWorkOpts/requestCompactionOpts gets
-    // continue_delegate alone, with no warning. The guard below surfaces that silent partial-
-    // registration so misconfiguration is observable instead of hidden.
-    // Tracking: continuation tool-registration guard.
-    ...(continuationToolsEnabled && options?.continueWorkOpts
-      ? [
-          createContinueWorkTool({
-            agentSessionKey: options?.agentSessionKey,
-            ...options.continueWorkOpts,
-          }),
-        ]
-      : []),
-    ...(continuationToolsEnabled && options?.drainsContinuationDelegateQueue !== false
-      ? [
-          createContinueDelegateTool({
-            agentSessionKey: options?.agentSessionKey,
-          }),
-        ]
-      : []),
-    ...(continuationToolsEnabled && options?.requestCompactionOpts
-      ? [
-          createRequestCompactionTool({
-            agentSessionKey: options?.agentSessionKey,
-            sessionId: options?.sessionId,
-            runId: options?.runId,
-            ...options.requestCompactionOpts,
-          }),
-        ]
-      : []),
+    ...createOpenClawContinuationTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
+      drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
+      disableContinuationTools: options?.disableContinuationTools,
+      continueWorkOpts: options?.continueWorkOpts,
+      requestCompactionOpts: options?.requestCompactionOpts,
+    }),
   ];
-
-  if (continuationToolsEnabled && !options?.continueWorkOpts && !options?.requestCompactionOpts) {
-    log.warn(
-      "continuation.enabled=true but neither continueWorkOpts nor requestCompactionOpts " +
-        "were supplied — only continue_delegate will register. If this is a live runner, it " +
-        "must supply both callbacks for the full continuation tool set (likely a config/wiring " +
-        "gap). If this is an inventory/catalog/dispatch build, register the tools via stub " +
-        "callbacks (buildInventoryContinuationToolOpts) so the catalog reflects the full surface " +
-        "and this warning is satisfied honestly rather than suppressed.",
-      {
-        agentSessionKey: options?.agentSessionKey,
-        runSessionKey: options?.runSessionKey,
-        drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
-      },
-    );
-  }
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
   if (!options?.disablePluginTools) {
@@ -733,20 +659,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const gatewayCallerIdentity =
-    hookAgentId && options?.agentSessionKey?.trim()
-      ? {
-          agentId: hookAgentId,
-          sessionKey: options.agentSessionKey.trim(),
-          turnSourceChannel: options.agentChannel,
-          turnSourceTo:
-            options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo,
-          turnSourceAccountId: options.agentAccountId,
-          turnSourceThreadId: options.currentThreadTs ?? options.agentThreadId,
-        }
-      : undefined;
-  const wrapGatewayCallerIdentity = (tool: AnyAgentTool) =>
-    wrapToolWithGatewayCallerIdentity(tool, gatewayCallerIdentity);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(hookAgentId, options);
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);

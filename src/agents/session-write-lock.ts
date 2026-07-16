@@ -1077,7 +1077,7 @@ export async function acquireSessionWriteLock(params: {
   }
 }
 
-export const testing = {
+const testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   inspectLockPayloadForTest: inspectLockPayload,
@@ -1095,9 +1095,17 @@ export async function drainSessionWriteLockStateForTest(): Promise<void> {
   unregisterCleanupHandlers();
 }
 
-export function resetSessionWriteLockStateForTest(): void {
+function resetSessionWriteLockStateForTest(): void {
   releaseAllLocksSync();
   stopWatchdogTimer();
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionWriteLockTestApi")] = {
+    resetSessionWriteLockStateForTest,
+    testing,
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

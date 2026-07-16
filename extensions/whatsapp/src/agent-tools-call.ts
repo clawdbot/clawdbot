@@ -332,7 +332,7 @@ function createWhatsAppCallToolWithDependencies(
   };
 }
 
-export function createWhatsAppCallTool(
+function createWhatsAppCallTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext,
 ): AnyAgentTool | null {
@@ -344,13 +344,3 @@ export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
     name: "whatsapp_call",
   });
 }
-
-export const testing = {
-  createWhatsAppCallToolWithDependencies,
-  normalizeTelephonyPcm,
-  resolveCallWindowMs,
-  resolveLinkedWhatsAppSelfE164,
-  resolveRequesterE164,
-  resolveSetupCommand,
-  wrapPcm16MonoInWav,
-};

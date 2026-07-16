@@ -10,12 +10,17 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   clearTuiLastSessionPointers,
+  readTuiLastSessionKey,
+  writeTuiLastSessionKey,
+} from "../tui/tui-last-session.js";
+import {
   moveHeartbeatMainSessionEntry,
   resolveHeartbeatMainSessionRepairCandidate,
-} from "./doctor-heartbeat-main-session-repair.js";
+} from "./doctor-heartbeat-main-session-repair.test-support.js";
 import {
   detectStateIntegrityHealthIssues,
   noteStateIntegrity,
@@ -121,6 +126,7 @@ describe("structured state integrity findings", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -266,6 +272,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -664,23 +671,17 @@ describe("doctor state integrity oauth dir checks", () => {
         updatedAt: Date.now(),
       },
     });
-    const tuiLastSessionPath = path.join(
-      process.env.OPENCLAW_STATE_DIR ?? "",
-      "tui",
-      "last-session.json",
-    );
-    fs.mkdirSync(path.dirname(tuiLastSessionPath), { recursive: true });
-    fs.writeFileSync(
-      tuiLastSessionPath,
-      JSON.stringify(
-        {
-          default: { sessionKey: "agent:main:main", updatedAt: Date.now() },
-          telegram: { sessionKey: "agent:main:telegram:thread", updatedAt: Date.now() },
-        },
-        null,
-        2,
-      ),
-    );
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    await writeTuiLastSessionKey({
+      scopeKey: "default",
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: "telegram",
+      sessionKey: "agent:main:telegram:thread",
+      stateDir,
+    });
 
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.startsWith("Move heartbeat-owned main session"),
@@ -698,12 +699,10 @@ describe("doctor state integrity oauth dir checks", () => {
     }
     expect(store[recoveredKey]?.sessionId).toBe("heartbeat-session");
 
-    const tuiStore = JSON.parse(fs.readFileSync(tuiLastSessionPath, "utf8")) as Record<
-      string,
-      { sessionKey?: string }
-    >;
-    expect(tuiStore.default).toBeUndefined();
-    expect(tuiStore.telegram?.sessionKey).toBe("agent:main:telegram:thread");
+    await expect(readTuiLastSessionKey({ scopeKey: "default", stateDir })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: "telegram", stateDir })).resolves.toBe(
+      "agent:main:telegram:thread",
+    );
     expect(doctorChangesText()).toContain("Moved heartbeat-owned main session agent:main:main");
     expect(doctorChangesText()).toContain("Cleared 1 stale TUI last-session pointer");
   });
@@ -862,7 +861,7 @@ describe("doctor state integrity oauth dir checks", () => {
     }
   });
 
-  it("moves store entries and clears matching TUI pointers without touching others", () => {
+  it("moves store entries and clears matching TUI pointers without touching others", async () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:main": { sessionId: "main-session", updatedAt: 1 },
     };
@@ -880,27 +879,30 @@ describe("doctor state integrity oauth dir checks", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tui-pointer-clear-"));
     try {
-      const filePath = path.join(tempDir, "last-session.json");
-      fs.writeFileSync(
-        filePath,
-        JSON.stringify({
-          terminal: { sessionKey: "agent:main:main" },
-          telegram: { sessionKey: "agent:main:telegram:thread" },
-        }),
-      );
+      await writeTuiLastSessionKey({
+        scopeKey: "terminal",
+        sessionKey: "agent:main:main",
+        stateDir: tempDir,
+      });
+      await writeTuiLastSessionKey({
+        scopeKey: "telegram",
+        sessionKey: "agent:main:telegram:thread",
+        stateDir: tempDir,
+      });
       expect(
         clearTuiLastSessionPointers({
-          filePath,
+          stateDir: tempDir,
           sessionKeys: new Set(["agent:main:main"]),
         }),
       ).toBe(1);
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<
-        string,
-        { sessionKey?: string }
-      >;
-      expect(parsed.terminal).toBeUndefined();
-      expect(parsed.telegram?.sessionKey).toBe("agent:main:telegram:thread");
+      await expect(
+        readTuiLastSessionKey({ scopeKey: "terminal", stateDir: tempDir }),
+      ).resolves.toBeNull();
+      await expect(
+        readTuiLastSessionKey({ scopeKey: "telegram", stateDir: tempDir }),
+      ).resolves.toBe("agent:main:telegram:thread");
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });

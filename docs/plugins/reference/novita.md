@@ -16,7 +16,7 @@ Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
 
 ## Surface
 
-providers: novita, novita-ai, novitaai
+providers: `novita`, `novita-ai`, `novitaai`
 
 ## Related docs
 

@@ -10,7 +10,7 @@ import {
   closeOpenAICodexWebSocketSessions,
   extractOpenAICodexAccountId,
   parseSSEForTest,
-  resetOpenAICodexWebSocketDebugStats,
+  resetOpenAICodexWebSocketStateForTest,
   streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
@@ -104,7 +104,7 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
-    resetOpenAICodexWebSocketDebugStats();
+    resetOpenAICodexWebSocketStateForTest();
     configureAiTransportHost({});
   });
 

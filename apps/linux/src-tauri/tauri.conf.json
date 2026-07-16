@@ -29,7 +29,22 @@
           "description": "Local setup screens can invoke app commands and receive installer progress.",
           "local": true,
           "windows": ["main"],
-          "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+          "permissions": [
+            "allow-bootstrap",
+            "allow-connect-discovered-gateway",
+            "allow-discover-gateways",
+            "allow-gateway-action",
+            "allow-install-cli",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
+        },
+        {
+          "identifier": "canvas-renderer",
+          "description": "The bundled Canvas renderer can relay A2UI actions.",
+          "local": true,
+          "windows": ["canvas"],
+          "permissions": ["allow-canvas-a2ui-action"]
         }
       ]
     }

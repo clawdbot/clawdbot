@@ -1,13 +1,18 @@
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 // Zalouser tests cover monitor.account scope plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send.test-mocks.js";
-import { testing } from "./monitor.js";
 import "./zalo-js.test-mocks.js";
+import { monitorZalouserProvider } from "./monitor.js";
 import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
+
+type ZaloJsModule = typeof import("./zalo-js.js");
+type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -95,12 +100,39 @@ describe("zalouser monitor pairing account scoping", () => {
       raw: { source: "test" },
     };
 
-    await testing.processMessage({
-      message,
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue");
+    const abortController = new AbortController();
+    let resolveListener: ((params: ListenerParams) => void) | undefined;
+    const listenerReady = new Promise<ListenerParams>((resolve) => {
+      resolveListener = resolve;
+    });
+    startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
+      resolveListener?.(listenerParams);
+      return { stop: vi.fn() };
+    });
+    const run = monitorZalouserProvider({
       account,
       config,
       runtime: createZalouserRuntimeEnv(),
+      abortSignal: abortController.signal,
     });
+    try {
+      const listenerParams = await listenerReady;
+      const resultIndex = enqueueSpy.mock.results.length;
+      listenerParams.onMessage(message);
+      const queued = enqueueSpy.mock.results[resultIndex]?.value;
+      if (!(queued instanceof Promise)) {
+        throw new Error("Zalouser monitor did not enqueue the inbound message");
+      }
+      await queued;
+    } finally {
+      abortController.abort();
+      try {
+        await run;
+      } finally {
+        enqueueSpy.mockRestore();
+      }
+    }
 
     expect(readAllowFromStore).toHaveBeenCalledOnce();
     const allowStoreParams = requireRecord(

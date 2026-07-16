@@ -1,9 +1,5 @@
 /** Builds ACP session presentation, metadata, usage, and config-option snapshots. */
-import type {
-  InitializeRequest,
-  SessionConfigOption,
-  SessionModeState,
-} from "@agentclientprotocol/sdk";
+import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
 import {
   toAcpSessionLineageMeta,
   type AcpSessionLineageMeta,
@@ -26,13 +22,6 @@ export const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
 export const ACP_ELEVATED_LEVEL_CONFIG_ID = "elevated_level";
 export const ACP_TIMEOUT_CONFIG_ID = "timeout";
 export const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
-
-/** Normalized ACP client capability flags used to choose session controls. */
-export type ClientCapabilityState = {
-  readTextFile: boolean;
-  writeTextFile: boolean;
-  terminal: boolean;
-};
 
 /** Gateway session fields needed to build ACP session presentation state. */
 export type GatewaySessionPresentationRow = Pick<
@@ -91,17 +80,6 @@ export type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
 };
-
-/** Normalizes optional ACP initialize capabilities into stable booleans. */
-export function normalizeClientCapabilities(
-  capabilities: InitializeRequest["clientCapabilities"] | undefined,
-): ClientCapabilityState {
-  return {
-    readTextFile: capabilities?.fs?.readTextFile === true,
-    writeTextFile: capabilities?.fs?.writeTextFile === true,
-    terminal: capabilities?.terminal === true,
-  };
-}
 
 function formatThinkingLevelName(level: string): string {
   switch (level) {
