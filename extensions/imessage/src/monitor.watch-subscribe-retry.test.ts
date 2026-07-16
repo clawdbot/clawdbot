@@ -66,19 +66,6 @@ function createRpcClient(overrides?: {
 
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   beforeEach(() => {
-    // Clear any iMessage runtime left behind by earlier tests in the same
-    // non-isolated vitest worker. The runtime slot is registered on globalThis
-    // (so duplicate plugin-sdk module instances share one runtime per plugin
-    // id) and survives vi.resetModules between files. Without this clear,
-    // loadIMessageRecoveryCursor("default") can return a rowid written by an
-    // earlier test, and the monitor sends watch.subscribe with the leaked
-    // `since_rowid` (and logs `since_rowid=<leaked>` instead of
-    // `since_rowid=none`), reproducing #1095 in broad serial suite order.
-    // We deliberately clear rather than install a fresh test runtime here so
-    // the recovery-cursor read falls through to the catch path (returns null)
-    // and the test stays decoupled from the plugin-state sqlite store, which
-    // would otherwise interact badly with the fake timers this suite uses.
-    clearIMessageRuntime();
     vi.useFakeTimers();
     installIMessageFailingStateRuntimeForTest();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
