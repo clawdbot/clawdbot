@@ -122,7 +122,6 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  getSubagentRunByChildSessionKey: () => null,
   getLatestSubagentRunByChildSessionKey: () => null,
   listSubagentRunsForController: () => [],
   markSubagentRunTerminated: () => 0,
