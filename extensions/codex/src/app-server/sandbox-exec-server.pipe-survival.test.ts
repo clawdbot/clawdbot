@@ -79,7 +79,7 @@ describe("sandbox exec-server pipe survival", () => {
   it("process bridge suppresses stdout/stderr errors and keeps serving", async () => {
     const sandbox = createSandboxContext({
       buildExecSpec: async ({ command }) => ({
-        argv: ["/bin/sh", "-c", command],
+        argv: ["/bin/sh", "-c", `exec ${command}`],
         env: { PATH: process.env.PATH, TMPDIR },
         stdinMode: "pipe-closed" as const,
       }),
