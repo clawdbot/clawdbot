@@ -1,9 +1,9 @@
 // Resource ceiling assertions for Docker E2E stats output.
 import fs from "node:fs";
-import { createInterface } from "node:readline";
 
 const [statsFile, maxMemoryRaw, maxCpuRaw, label = "docker"] = process.argv.slice(2);
 const NON_NEGATIVE_DECIMAL_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d+)?$/u;
+const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 
 function parseFiniteLimit(raw, name) {
   const text = String(raw ?? "").trim();
@@ -92,11 +92,45 @@ async function scanStatsFileLines(file, onLine) {
     return;
   }
   const input = fs.createReadStream(file, { encoding: "utf8" });
-  const lines = createInterface({ crlfDelay: Infinity, input });
-  for await (const line of lines) {
+  let pending = "";
+  let pendingBytes = 0;
+
+  const appendSegment = (segment) => {
+    if (!segment) {
+      return;
+    }
+    const segmentBytes = Buffer.byteLength(segment, "utf8");
+    if (pendingBytes + segmentBytes > MAX_STATS_SAMPLE_LINE_BYTES) {
+      throw new Error(
+        `docker stats sample for ${label} exceeded ${MAX_STATS_SAMPLE_LINE_BYTES} bytes`,
+      );
+    }
+    pending += segment;
+    pendingBytes += segmentBytes;
+  };
+  const emitPendingLine = () => {
+    const line = pending.endsWith("\r") ? pending.slice(0, -1) : pending;
+    pending = "";
+    pendingBytes = 0;
     if (line) {
       onLine(line);
     }
+  };
+
+  for await (const chunk of input) {
+    let start = 0;
+    for (let index = 0; index < chunk.length; index += 1) {
+      if (chunk.charCodeAt(index) !== 10) {
+        continue;
+      }
+      appendSegment(chunk.slice(start, index));
+      emitPendingLine();
+      start = index + 1;
+    }
+    appendSegment(chunk.slice(start));
+  }
+  if (pending) {
+    emitPendingLine();
   }
 }
 

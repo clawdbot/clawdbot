@@ -101,8 +101,30 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     const source = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(source).toContain("createReadStream");
+    expect(source).toContain("MAX_STATS_SAMPLE_LINE_BYTES");
+    expect(source).not.toContain("createInterface");
     expect(source).not.toContain("readFileSync(statsFile");
     expect(source).not.toContain("split(/\\r?\\n/u)");
+  });
+
+  it("rejects oversized stats sample lines before parsing JSON", () => {
+    const result = runAssert(writeStats(`{"padding":"${"x".repeat(1024 * 1024)}"}\n`));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("exceeded 1048576 bytes");
+    expect(result.stderr).not.toContain("was not valid JSON");
+  });
+
+  it("accepts large stats sample lines within the line cap", () => {
+    const padding = "x".repeat(1024);
+    const result = runAssert(
+      writeStats(
+        `{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"${padding}"}\n`,
+      ),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("samples=1");
   });
 
   it("accepts byte-unit Docker memory samples", () => {
