@@ -138,6 +138,8 @@ export type SubagentCompletionDeliveryState = {
   createdAt?: number;
   enqueuedAt?: number;
   deliveredAt?: number;
+  /** Completion was observed and incorporated by the requester turn itself. */
+  requesterConsumedAt?: number;
   announcedAt?: number;
   lastAttemptAt?: number;
   attemptCount?: number;

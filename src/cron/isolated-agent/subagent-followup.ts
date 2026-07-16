@@ -10,6 +10,11 @@ import {
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
+type DescendantSubagentFallbackReply = {
+  text: string;
+  consumedRunIds: string[];
+};
+
 function resolveCronSubagentTimings() {
   const fastTestMode = isFastTestRuntimeEnv();
   return {
@@ -23,7 +28,7 @@ function resolveCronSubagentTimings() {
 export async function readDescendantSubagentFallbackReply(params: {
   sessionKey: string;
   runStartedAt: number;
-}): Promise<string | undefined> {
+}): Promise<DescendantSubagentFallbackReply | undefined> {
   const descendants = listDescendantRunsForRequester(params.sessionKey)
     .filter(
       (entry) =>
@@ -49,6 +54,7 @@ export async function readDescendantSubagentFallbackReply(params: {
   }
 
   const replies: string[] = [];
+  const consumedRunIds: string[] = [];
   // Limit fallback synthesis to the latest few children so a noisy run does not
   // flood the cron announce with stale descendant output.
   const latestRuns = [...latestByChild.values()]
@@ -75,14 +81,15 @@ export async function readDescendantSubagentFallbackReply(params: {
       continue;
     }
     replies.push(reply);
+    consumedRunIds.push(entry.runId);
   }
   if (replies.length === 0) {
     return undefined;
   }
   if (replies.length === 1) {
-    return replies[0];
+    return { text: replies[0] ?? "", consumedRunIds };
   }
-  return replies.join("\n\n");
+  return { text: replies.join("\n\n"), consumedRunIds };
 }
 
 /**

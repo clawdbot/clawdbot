@@ -1,5 +1,4 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveStorePath } from "../../config/sessions/inbound.runtime.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -15,6 +14,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { buildNormalizedDirectCronPayloads } from "./delivery-direct-payloads.js";
 import {
   appendAdmittedDirectCronDeliveryTranscriptMirror,
   buildDirectCronTranscriptMirrorPayloads,
@@ -26,10 +26,7 @@ import {
   resolveCronAwarenessMainSessionKey,
   resolveCronAwarenessText,
   resolveDirectCronDeliverySessionKey,
-  resolveDirectCronFallbackSourceIndex,
-  resolveDirectCronSummaryFallbackText,
   resolveDirectCronTranscriptMirrorText,
-  shouldAttachDirectCronFallbackText,
   isSameSessionKey,
   shouldQueueCronAwareness,
 } from "./delivery-dispatch-awareness.js";
@@ -204,61 +201,12 @@ export async function dispatchCronDelivery(
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     try {
-      const summaryFallbackText = resolveDirectCronSummaryFallbackText({
+      const normalizedPayloads = buildNormalizedDirectCronPayloads({
+        deliveryPayloads,
         outputText,
         summary,
         synthesizedText,
       });
-      const normalizedSummaryFallback = summaryFallbackText
-        ? normalizeSilentReplyText(summaryFallbackText)
-        : undefined;
-      const normalizedSummaryFallbackText =
-        normalizedSummaryFallback?.strippedTrailingSilentToken === true
-          ? undefined
-          : normalizedSummaryFallback?.text;
-      const normalizeDirectPayload = (payload: ReplyPayload): ReplyPayload => {
-        const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
-        return normalized
-          ? {
-              ...payload,
-              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-            }
-          : payload;
-      };
-      const normalizedDeliveryPayloads = deliveryPayloads
-        .map(normalizeDirectPayload)
-        .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
-      const existingFallbackSourceIndex = resolveDirectCronFallbackSourceIndex(
-        normalizedDeliveryPayloads,
-        normalizedSummaryFallbackText,
-      );
-      const needsFallbackSource =
-        Boolean(normalizedSummaryFallbackText) &&
-        normalizedDeliveryPayloads.some(shouldAttachDirectCronFallbackText) &&
-        existingFallbackSourceIndex === undefined;
-      const fallbackSourceIndex = needsFallbackSource ? 0 : existingFallbackSourceIndex;
-      const directPayloads = needsFallbackSource
-        ? [{ text: normalizedSummaryFallbackText }, ...normalizedDeliveryPayloads]
-        : normalizedDeliveryPayloads;
-      let normalizedPayloads: ReplyPayload[] = [];
-      for (const payload of directPayloads) {
-        normalizedPayloads.push(
-          shouldAttachDirectCronFallbackText(payload) && normalizedSummaryFallbackText
-            ? {
-                ...payload,
-                fallbackText: {
-                  text: normalizedSummaryFallbackText,
-                  ...(fallbackSourceIndex !== undefined
-                    ? { replacesPayloadIndex: fallbackSourceIndex }
-                    : {}),
-                },
-              }
-            : payload,
-        );
-      }
-      if (normalizedPayloads.length === 0 && normalizedSummaryFallbackText) {
-        normalizedPayloads = [{ text: normalizedSummaryFallbackText }];
-      }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -580,6 +528,22 @@ export async function dispatchCronDelivery(
     const spawnOnlyHandoff = params.spawnOnlyHandoff;
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    const creditRequesterConsumedDescendants = async (runIds: readonly string[]) => {
+      if (runIds.length === 0) {
+        return;
+      }
+      try {
+        subagentRegistryRuntime.markDescendantCompletionConsumedByRequester({
+          requesterSessionKey: params.runSessionKey,
+          runStartedAt: params.runStartedAt,
+          runIds,
+        });
+      } catch (err) {
+        await logCronDeliveryWarn(
+          `[cron:${params.job.id}] failed to credit requester-consumed descendant completions (bestEffort): ${formatErrorMessage(err)}`,
+        );
+      }
+    };
     const subagentFollowupSessionKey = params.runSessionKey;
     let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
       subagentFollowupSessionKey,
@@ -618,10 +582,16 @@ export async function dispatchCronDelivery(
         subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+        const fallbackReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         });
+        if (fallbackReply) {
+          finalReply = typeof fallbackReply === "string" ? fallbackReply : fallbackReply.text;
+          await creditRequesterConsumedDescendants(
+            typeof fallbackReply === "string" ? [] : fallbackReply.consumedRunIds,
+          );
+        }
       }
       if (finalReply && activeSubagentRuns === 0) {
         outputText = finalReply;
@@ -632,10 +602,17 @@ export async function dispatchCronDelivery(
     } else if (completedDescendantReply) {
       // Descendants already finished before we got here. Use their output
       // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
+      const completedText =
+        typeof completedDescendantReply === "string"
+          ? completedDescendantReply
+          : completedDescendantReply.text;
+      outputText = completedText;
+      summary = pickSummaryFromOutput(completedText) ?? summary;
+      synthesizedText = completedText;
+      deliveryPayloads = [{ text: completedText }];
+      await creditRequesterConsumedDescendants(
+        typeof completedDescendantReply === "string" ? [] : completedDescendantReply.consumedRunIds,
+      );
     }
     if (spawnOnlyHandoff && !synthesizedText?.trim()) {
       // An accepted spawn is the turn's only completion; retiring it without

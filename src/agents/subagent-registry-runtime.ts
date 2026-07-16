@@ -11,6 +11,7 @@ export {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-announce-read.js";
+export { markDescendantCompletionConsumedByRequester } from "./subagent-registry-consumption.js";
 
 export async function replaceSubagentRunAfterSteer(
   params: Parameters<typeof import("./subagent-registry.js").replaceSubagentRunAfterSteer>[0],

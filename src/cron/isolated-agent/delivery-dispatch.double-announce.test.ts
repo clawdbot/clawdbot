@@ -1081,9 +1081,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   it("consolidates descendant output into the final direct delivery", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
-    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
-      "Detailed child result, everything finished successfully.",
-    );
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+      text: "Detailed child result, everything finished successfully.",
+      consumedRunIds: ["run-child"],
+    });
 
     const params = makeBaseParams({ synthesizedText: "on it" });
     const state = await dispatchCronDelivery(params);
@@ -1140,7 +1141,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
       }
       vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
-      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
+      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue({
+        text: childReply,
+        consumedRunIds: ["run-child"],
+      });
 
       const params = makeBaseParams({
         spawnOnlyHandoff: true,
@@ -1270,7 +1274,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async (params) =>
       params.sessionKey === runSessionKey
-        ? "Run-scoped child result, everything finished successfully."
+        ? {
+            text: "Run-scoped child result, everything finished successfully.",
+            consumedRunIds: ["run-child"],
+          }
         : undefined,
     );
 
