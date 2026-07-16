@@ -10,7 +10,10 @@ import {
   sendText,
   setOutboundAudioPort,
 } from "../messaging/outbound.js";
+import type { DeliveryTarget } from "../messaging/sender.js";
+import type { MessageResponse } from "../types.js";
 import type { InboundContext } from "./inbound-context.js";
+import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
@@ -1288,11 +1291,23 @@ describe("reply-session-conflict shared helpers", () => {
 });
 
 describe("sendReplySessionConflictTerminalNotice", () => {
-  const senderSendTextMock = vi.fn(async () => undefined);
-  const buildDeliveryTargetMock = vi.fn((event: { senderId: string; type: string }) => ({
-    type: event.type === "group" ? "group" : "c2c",
-    id: event.senderId,
-  }));
+  const senderSendTextMock = vi.fn(
+    async (
+      _target: DeliveryTarget,
+      _content: string,
+      _creds: { appId: string; clientSecret: string },
+      _opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
+    ): Promise<MessageResponse> => ({
+      id: "msg-return",
+      timestamp: "2026-04-25T00:00:00.000Z",
+    }),
+  );
+  const buildDeliveryTargetMock = vi.fn(
+    (event: { senderId: string; type: string }): DeliveryTarget => ({
+      type: event.type === "group" ? "group" : "c2c",
+      id: event.senderId,
+    }),
+  );
   const accountToCredsMock = vi.fn(() => ({
     appId: "app",
     clientSecret: "secret",
@@ -1364,12 +1379,13 @@ describe("sendReplySessionConflictTerminalNotice", () => {
 
     // Verify: send target comes from the event.
     const sendCall = senderSendTextMock.mock.calls[0];
+    expect(sendCall).toBeDefined();
     // First arg is the target built from the event.
     expect(buildDeliveryTargetMock).toHaveBeenCalledWith(baseEvent);
-    expect(sendCall[0]).toEqual(buildDeliveryTargetMock(baseEvent));
+    expect(sendCall![0]).toEqual(buildDeliveryTargetMock(baseEvent));
 
     // Verify: text contains the error ID and is in Chinese, no stack/internal info.
-    const sentText: string = sendCall[1];
+    const sentText: string = sendCall![1];
     expect(sentText).toContain("deadbeef");
     expect(sentText).toContain("会话冲突");
     expect(sentText).toContain("请重新发送");
@@ -1456,7 +1472,8 @@ describe("sendReplySessionConflictTerminalNotice", () => {
       (crypto as any).getRandomValues = originalGetRandomValues;
     }
 
-    const sentText: string = senderSendTextMock.mock.calls[0][1];
+    expect(senderSendTextMock.mock.calls[0]).toBeDefined();
+    const sentText: string = senderSendTextMock.mock.calls[0]![1];
     // Must not leak internal path/class names.
     expect(sentText).not.toContain("gateway");
     expect(sentText).not.toContain("outbound-dispatch");
@@ -1494,7 +1511,8 @@ describe("sendReplySessionConflictTerminalNotice", () => {
       (crypto as any).getRandomValues = originalGetRandomValues;
     }
 
-    const sentText: string = senderSendTextMock.mock.calls[0][1];
+    expect(senderSendTextMock.mock.calls[0]).toBeDefined();
+    const sentText: string = senderSendTextMock.mock.calls[0]![1];
     const logCalls = errorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
 
     // Both must reference "aaaaaaaa" (the first generated ID).

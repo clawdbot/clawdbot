@@ -359,8 +359,9 @@ export interface SessionConflictTerminalNoticeDeps {
  * error text, session keys, or stack traces are exposed.
  *
  * If the terminal notice itself fails to send, the failure is logged at
- * ``terminal_notice_failed`` and the message is not marked delivered.
- * QQBot currently has no durable-spool / replay-claim system — that is
+ * ``terminal_notice_failed`` and the session's inbound work completes with
+ * no delivery.  QQBot currently has no durable ingress or replay mechanism
+ * to automatically recover the original message — that is
  * deferred to a follow-up PR.
  */
 export async function sendReplySessionConflictTerminalNotice(
@@ -370,7 +371,14 @@ export async function sendReplySessionConflictTerminalNotice(
   if (!isReplySessionInitConflictError(error)) {
     return;
   }
-  const { event, account, log, senderSendText, buildDeliveryTargetFn, accountToCredsFn } = deps;
+  const {
+    event,
+    account,
+    log,
+    senderSendText: senderSendTextFn,
+    buildDeliveryTargetFn,
+    accountToCredsFn,
+  } = deps;
   const errorId = generateSessionConflictErrorId();
   const terminalText = `当前消息因会话冲突未能处理，请重新发送。\n错误编号：${errorId}`;
 
@@ -383,7 +391,7 @@ export async function sendReplySessionConflictTerminalNotice(
   );
 
   try {
-    await senderSendText(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
+    await senderSendTextFn(buildDeliveryTargetFn(event), terminalText, accountToCredsFn(account), {
       msgId: event.messageId,
     });
   } catch (sendErr) {
