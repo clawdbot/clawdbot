@@ -600,7 +600,39 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe(true);
   });
+  it("keeps Copilot Claude thinking levels when catalog reasoning is false", () => {
+    const catalog = [
+      {
+        provider: "github-copilot",
+        id: "claude-sonnet-4.6",
+        api: "anthropic-messages",
+        reasoning: false,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
+      },
+    ];
 
+    const levels = listThinkingLevels("github-copilot", "claude-sonnet-4.6", catalog);
+    expect(levels).toContain("high");
+    expect(levels).toContain("adaptive");
+    expect(levels).toContain("max");
+    expect(levels).not.toEqual(["off"]);
+  });
+
+  it("keeps Copilot Claude thinking levels when reasoning metadata is stale", () => {
+    const catalog = [
+      {
+        provider: "github-copilot",
+        id: "claude-sonnet-4.6",
+        api: "anthropic-messages",
+        reasoning: false,
+      },
+    ];
+
+    const levels = listThinkingLevels("github-copilot", "claude-sonnet-4.6", catalog);
+    expect(levels).toContain("high");
+    expect(levels).toContain("adaptive");
+    expect(levels).not.toEqual(["off"]);
+  });
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [
