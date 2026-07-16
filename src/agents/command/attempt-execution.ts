@@ -1104,7 +1104,7 @@ export async function runAgentAttempt(params: {
       disableTools: params.opts.modelRun === true,
       onAgentEvent: params.onAgentEvent,
       deferTerminalLifecycle: params.deferTerminalLifecycle,
-      deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
+      deferTerminalLifecycleEnd: params.deferTerminalLifecycle,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       onUserMessagePersisted: params.onUserMessagePersisted,

@@ -80,7 +80,9 @@ export async function prepareSubagentContinuationAccounting(params: {
     const hasTokenData =
       typeof childEntry?.inputTokens === "number" || typeof childEntry?.outputTokens === "number";
     if (!hasTokenData) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
       childEntry = params.readSessionEntry(params.childSessionKey, { refresh: true });
       if (
         typeof childEntry?.inputTokens !== "number" &&
@@ -95,8 +97,10 @@ export async function prepareSubagentContinuationAccounting(params: {
       (typeof childEntry?.inputTokens === "number" ? childEntry.inputTokens : 0) +
       (typeof childEntry?.outputTokens === "number" ? childEntry.outputTokens : 0);
     if (accumulatedChildTokens > 0) {
+      const configuredSessionStore =
+        typeof params.cfg.session?.store === "string" ? params.cfg.session.store : undefined;
       const parentAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
-      const parentStorePath = resolveStorePath(params.cfg.session?.store, {
+      const parentStorePath = resolveStorePath(configuredSessionStore, {
         agentId: parentAgentId,
       });
       try {
@@ -126,7 +130,7 @@ export async function prepareSubagentContinuationAccounting(params: {
       }
 
       const childAgentId = resolveAgentIdFromSessionKey(params.childSessionKey);
-      const childStorePath = resolveStorePath(params.cfg.session?.store, { agentId: childAgentId });
+      const childStorePath = resolveStorePath(configuredSessionStore, { agentId: childAgentId });
       try {
         const persistedChild = await updateSessionEntry(
           {
