@@ -598,6 +598,22 @@ Built-in capability selectors include `openclaw.workspace-writable`,
 `openclaw.mcp-runtime-ready`, `openclaw.sandbox-ready`, and
 `openclaw.harness-ready`. They are not enabled unless listed by the operator.
 
+## Hosting profile
+
+```json5
+{
+  hosting: {
+    profile: "container", // local | container | reverse-proxy | node-mode
+  },
+}
+```
+
+`hosting.profile` selects an optional, release-tested readiness posture. A Gateway with no selected
+profile retains the universal lifecycle baseline and does not add profile-only requirements.
+`OPENCLAW_HOSTING_PROFILE` overrides config, and `gateway run --hosting-profile` overrides both.
+Invalid values stop Gateway startup. See [Hosting profiles](/gateway/hosting-profiles) for the
+condition set and operator examples for each profile.
+
 ## Gateway
 
 ```json5
