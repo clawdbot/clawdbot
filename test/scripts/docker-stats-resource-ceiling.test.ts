@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs";
+const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 const tempRoots: string[] = [];
 
 function writeStats(contents: string): string {
@@ -24,6 +25,14 @@ function runAssert(statsFile: string, maxMemoryMiB = "512", maxCpuPercent = "100
       encoding: "utf8",
     },
   );
+}
+
+function validStatsLineWithBytes(byteLength: number): string {
+  const prefix = '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"';
+  const suffix = '"}';
+  const paddingLength = byteLength - Buffer.byteLength(prefix + suffix, "utf8");
+  expect(paddingLength).toBeGreaterThan(0);
+  return `${prefix}${"x".repeat(paddingLength)}${suffix}`;
 }
 
 afterEach(() => {
@@ -123,6 +132,27 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("samples=1");
+  });
+
+  it("accepts CRLF stats sample lines whose content exactly matches the line cap", () => {
+    const line = validStatsLineWithBytes(MAX_STATS_SAMPLE_LINE_BYTES);
+    const result = runAssert(writeStats(`${line}\r\n`));
+
+    expect(Buffer.byteLength(line, "utf8")).toBe(MAX_STATS_SAMPLE_LINE_BYTES);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("samples=1");
+  });
+
+  it("accepts stats sample lines separated by standalone carriage returns", () => {
+    const result = runAssert(
+      writeStats(
+        '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\r{"MemUsage":"64MiB / 2GiB","CPUPerc":"15.0%"}\r',
+      ),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("memory=128.0MiB");
+    expect(result.stdout).toContain("samples=2");
   });
 
   it("accepts byte-unit Docker memory samples", () => {

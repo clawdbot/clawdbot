@@ -94,6 +94,7 @@ async function scanStatsFileLines(file, onLine) {
   const input = fs.createReadStream(file, { encoding: "utf8" });
   let pending = "";
   let pendingBytes = 0;
+  let skipLineFeedAfterCarriageReturn = false;
 
   const appendSegment = (segment) => {
     if (!segment) {
@@ -120,11 +121,20 @@ async function scanStatsFileLines(file, onLine) {
   for await (const chunk of input) {
     let start = 0;
     for (let index = 0; index < chunk.length; index += 1) {
-      if (chunk.charCodeAt(index) !== 10) {
+      const code = chunk.charCodeAt(index);
+      if (skipLineFeedAfterCarriageReturn) {
+        skipLineFeedAfterCarriageReturn = false;
+        if (code === 10) {
+          start = index + 1;
+          continue;
+        }
+      }
+      if (code !== 10 && code !== 13) {
         continue;
       }
       appendSegment(chunk.slice(start, index));
       emitPendingLine();
+      skipLineFeedAfterCarriageReturn = code === 13;
       start = index + 1;
     }
     appendSegment(chunk.slice(start));
