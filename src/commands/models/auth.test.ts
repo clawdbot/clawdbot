@@ -389,6 +389,7 @@ describe("modelsAuthClearCooldownCommand", () => {
             blockedReason: undefined,
           },
         };
+        return true;
       },
     );
     mocks.callGateway.mockResolvedValue({});
@@ -421,7 +422,7 @@ describe("modelsAuthClearCooldownCommand", () => {
     expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
       syncExternalCli: false,
     });
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledTimes(2);
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledOnce();
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store,
       profileId,
@@ -525,15 +526,12 @@ describe("modelsAuthClearCooldownCommand", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("detects failure state that appears in the authoritative reload", async () => {
-    const initiallyClearStore = {
+  it("rejects when clearing an inherited profile fails in the owning store", async () => {
+    const store = {
       version: 1,
       profiles: {
         [profileId]: { type: "api_key" as const, provider: "openai", key: "placeholder" },
       },
-    };
-    const persistedBlockedStore = {
-      ...initiallyClearStore,
       usageStats: {
         [profileId]: {
           blockedUntil: Date.now() + 3_600_000,
@@ -541,16 +539,29 @@ describe("modelsAuthClearCooldownCommand", () => {
         },
       },
     };
-    mocks.loadAuthProfileStoreForRuntime
-      .mockReturnValueOnce(initiallyClearStore)
-      .mockReturnValueOnce(persistedBlockedStore);
-    mocks.clearAuthProfileCooldown.mockResolvedValue(undefined);
+    mocks.loadValidConfigOrThrow.mockResolvedValue({ agents: { list: [{ id: "worker" }] } });
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/worker");
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store);
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue(undefined);
+    mocks.clearAuthProfileCooldown.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 
-    await expect(modelsAuthClearCooldownCommand({ profileId }, createRuntime())).rejects.toThrow(
-      `Failed to clear cooldown state for auth profile "${profileId}"`,
-    );
+    const runtime = createRuntime();
+    await expect(
+      modelsAuthClearCooldownCommand({ profileId, agent: "worker" }, runtime),
+    ).rejects.toThrow(`Failed to clear cooldown state for auth profile "${profileId}"`);
 
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledTimes(2);
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(1, {
+      store,
+      profileId,
+      agentDir: "/tmp/openclaw/agents/worker",
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenNthCalledWith(2, {
+      store,
+      profileId,
+      agentDir: undefined,
+    });
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });
 

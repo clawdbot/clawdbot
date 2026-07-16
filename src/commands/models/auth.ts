@@ -32,7 +32,7 @@ import {
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles/store.js";
-import type { AuthProfileCredential, ProfileUsageStats } from "../../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -85,23 +85,6 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
     throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
   }
   return expires;
-}
-
-function hasAuthProfileFailureState(stats: ProfileUsageStats | undefined): boolean {
-  return Boolean(
-    stats &&
-    ((stats.errorCount ?? 0) > 0 ||
-      stats.blockedUntil !== undefined ||
-      stats.blockedReason !== undefined ||
-      stats.blockedSource !== undefined ||
-      stats.blockedModel !== undefined ||
-      stats.cooldownUntil !== undefined ||
-      stats.cooldownReason !== undefined ||
-      stats.cooldownModel !== undefined ||
-      stats.disabledUntil !== undefined ||
-      stats.disabledReason !== undefined ||
-      stats.failureCounts !== undefined),
-  );
 }
 
 function guardCancel<T>(value: T | symbol): T {
@@ -827,15 +810,23 @@ export async function modelsAuthClearCooldownCommand(
   }
 
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({ agentDir, profileId });
-  await clearAuthProfileCooldown({ store, profileId, agentDir });
-  if (resolveAuthStorePath(ownerAgentDir) !== resolveAuthStorePath(agentDir)) {
-    await clearAuthProfileCooldown({ store, profileId, agentDir: ownerAgentDir });
-  }
-  const refreshedStore = loadAuthProfileStoreForRuntime(agentDir, { syncExternalCli: false });
-  if (hasAuthProfileFailureState(refreshedStore.usageStats?.[profileId])) {
+  const selectedStoreCleared = await clearAuthProfileCooldown({ store, profileId, agentDir });
+  if (!selectedStoreCleared) {
     throw new Error(
       `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
     );
+  }
+  if (resolveAuthStorePath(ownerAgentDir) !== resolveAuthStorePath(agentDir)) {
+    const ownerStoreCleared = await clearAuthProfileCooldown({
+      store,
+      profileId,
+      agentDir: ownerAgentDir,
+    });
+    if (!ownerStoreCleared) {
+      throw new Error(
+        `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
+      );
+    }
   }
   runtime.log(`Cleared persisted cooldown state for auth profile "${profileId}".`);
   runtime.log(

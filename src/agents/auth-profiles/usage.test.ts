@@ -885,8 +885,9 @@ describe("clearAuthProfileCooldown", () => {
     });
     mockLockedUpdateForStore(store);
 
-    await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
 
+    expect(cleared).toBe(true);
     const stats = store.usageStats?.["anthropic:default"];
     expectProfileErrorStateCleared(stats);
   });
@@ -914,8 +915,24 @@ describe("clearAuthProfileCooldown", () => {
   it("no-ops for unknown profile id", async () => {
     const store = makeStore(undefined);
     mockLockedUpdateForStore(store);
-    await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
+    expect(cleared).toBe(true);
     expect(store.usageStats).toBeUndefined();
+  });
+
+  it("reports a failed locked update", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        errorCount: 1,
+      },
+    });
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
+
+    const cleared = await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
+
+    expect(cleared).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
   });
 });
 
