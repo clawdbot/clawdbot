@@ -1,0 +1,41 @@
+{
+  "name": "@openclaw/qa-channel",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw QA synthetic channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.12"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "qa-channel",
+      "label": "QA Channel",
+      "selectionLabel": "QA Channel (Synthetic)",
+      "detailLabel": "QA Channel",
+      "docsPath": "/channels/qa-channel",
+      "docsLabel": "qa-channel",
+      "blurb": "Synthetic Slack-class transport for automated OpenClaw QA scenarios.",
+      "systemImage": "checklist",
+      "order": 999,
+      "exposure": {
+        "configured": false,
+        "setup": false,
+        "docs": false
+      }
+    }
+  }
+}

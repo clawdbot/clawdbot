@@ -1,0 +1,35 @@
+{
+  "id": "duckduckgo",
+  "uiHints": {
+    "webSearch.region": {
+      "label": "DuckDuckGo Region",
+      "help": "Optional DuckDuckGo region code such as us-en, uk-en, or de-de."
+    },
+    "webSearch.safeSearch": {
+      "label": "DuckDuckGo SafeSearch",
+      "help": "SafeSearch level for DuckDuckGo results."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["duckduckgo"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "type": "string"
+          },
+          "safeSearch": {
+            "type": "string",
+            "enum": ["strict", "moderate", "off"]
+          }
+        }
+      }
+    }
+  }
+}

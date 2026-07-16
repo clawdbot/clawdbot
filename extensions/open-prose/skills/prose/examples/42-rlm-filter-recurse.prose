@@ -1,0 +1,46 @@
+# RLM: Filter and Recurse
+# Cheap screening before expensive deep analysis
+
+input documents: "Collection of documents to search"
+input question: "Question requiring multi-source evidence"
+
+agent screener:
+  model: haiku
+  prompt: "Quick relevance check. Err toward inclusion."
+
+agent investigator:
+  model: opus
+  prompt: "Deep analysis. Extract specific evidence with citations."
+
+agent reasoner:
+  model: opus
+  prompt: "Synthesize into answer. Chain reasoning. Cite sources."
+
+block search(docs, q, depth):
+  if **docs is empty** or depth <= 0:
+    output []
+
+  let relevant = session: screener
+    prompt: "Find documents relevant to: {q}"
+    context: docs
+
+  let evidence = relevant | pmap:
+    session: investigator
+      prompt: "Extract evidence for: {q}"
+      context: item
+
+  let gaps = session "What aspects of '{q}' still lack evidence?"
+    context: evidence
+
+  if **significant gaps remain**:
+    let refined = session "Refine query to target: {gaps}"
+    let more = do search(docs, refined, depth - 1)
+    output evidence + more
+
+  output evidence
+
+let all_evidence = do search(documents, question, 3)
+
+output answer = session: reasoner
+  prompt: "Answer: {question}"
+  context: all_evidence

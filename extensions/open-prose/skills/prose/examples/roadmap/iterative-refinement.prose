@@ -1,0 +1,20 @@
+# Iterative Refinement Example
+# Write draft, get feedback, refine until approved
+
+agent writer:
+  model: opus
+
+agent reviewer:
+  model: sonnet
+
+let draft = session: writer
+  prompt: "Write a first draft about AI safety"
+
+loop until **approved**:
+  let feedback = session: reviewer
+    prompt: "Review this draft and provide feedback"
+    context: draft
+
+  draft = session: writer
+    prompt: "Improve the draft based on feedback"
+    context: { draft, feedback }

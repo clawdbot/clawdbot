@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/imessage",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw iMessage channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "imessage",
+      "label": "iMessage",
+      "selectionLabel": "iMessage (imsg)",
+      "detailLabel": "iMessage",
+      "docsPath": "/channels/imessage",
+      "docsLabel": "imessage",
+      "blurb": "this is still a work in progress.",
+      "aliases": [
+        "imsg"
+      ],
+      "systemImage": "message.fill"
+    }
+  }
+}

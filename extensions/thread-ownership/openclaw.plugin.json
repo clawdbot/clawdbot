@@ -1,0 +1,28 @@
+{
+  "id": "thread-ownership",
+  "name": "Thread Ownership",
+  "description": "Prevents multiple agents from responding in the same Slack thread. Uses HTTP calls to the slack-forwarder ownership API.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "forwarderUrl": {
+        "type": "string"
+      },
+      "abTestChannels": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "uiHints": {
+    "forwarderUrl": {
+      "label": "Forwarder URL",
+      "help": "Base URL of the slack-forwarder ownership API (default: http://slack-forwarder:8750)"
+    },
+    "abTestChannels": {
+      "label": "A/B Test Channels",
+      "help": "Slack channel IDs where thread ownership is enforced"
+    }
+  }
+}

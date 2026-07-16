@@ -1,0 +1,139 @@
+{
+  "id": "active-memory",
+  "name": "Active Memory",
+  "description": "Runs a bounded blocking memory sub-agent before eligible conversational replies and injects relevant memory into prompt context.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "agents": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "model": { "type": "string" },
+      "modelFallback": { "type": "string" },
+      "modelFallbackPolicy": {
+        "type": "string",
+        "enum": ["default-remote", "resolved-only"]
+      },
+      "allowedChatTypes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["direct", "group", "channel"]
+        }
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+      },
+      "timeoutMs": { "type": "integer", "minimum": 250 },
+      "queryMode": {
+        "type": "string",
+        "enum": ["message", "recent", "full"]
+      },
+      "promptStyle": {
+        "type": "string",
+        "enum": [
+          "balanced",
+          "strict",
+          "contextual",
+          "recall-heavy",
+          "precision-heavy",
+          "preference-only"
+        ]
+      },
+      "promptOverride": { "type": "string" },
+      "promptAppend": { "type": "string" },
+      "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "recentUserTurns": { "type": "integer", "minimum": 0, "maximum": 4 },
+      "recentAssistantTurns": { "type": "integer", "minimum": 0, "maximum": 3 },
+      "recentUserChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "recentAssistantChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
+      "logging": { "type": "boolean" },
+      "persistTranscripts": { "type": "boolean" },
+      "transcriptDir": { "type": "string" },
+      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+      "qmd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "searchMode": {
+            "type": "string",
+            "enum": ["inherit", "search", "vsearch", "query"]
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Active Memory Recall",
+      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available."
+    },
+    "agents": {
+      "label": "Target Agents",
+      "help": "Explicit agent ids that may use active memory."
+    },
+    "model": {
+      "label": "Memory Model",
+      "help": "Provider/model used for the blocking memory sub-agent."
+    },
+    "modelFallback": {
+      "label": "Fallback Memory Model",
+      "help": "Optional provider/model to use if no explicit plugin model, session model, or agent primary model resolves."
+    },
+    "modelFallbackPolicy": {
+      "label": "Model Fallback Policy",
+      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
+    },
+    "allowedChatTypes": {
+      "label": "Allowed Chat Types",
+      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)"
+    },
+    "queryMode": {
+      "label": "Query Mode",
+      "help": "Choose whether the blocking memory sub-agent sees only the latest user message, a small recent tail, or the full conversation."
+    },
+    "promptStyle": {
+      "label": "Prompt Style",
+      "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "thinking": {
+      "label": "Thinking Override",
+      "help": "Advanced: optional thinking level for the blocking memory sub-agent. Defaults to off for speed."
+    },
+    "promptOverride": {
+      "label": "Prompt Override",
+      "help": "Advanced: replace the default Active Memory sub-agent instructions. Conversation context is still appended."
+    },
+    "promptAppend": {
+      "label": "Prompt Append",
+      "help": "Advanced: append extra operator instructions after the default Active Memory sub-agent instructions."
+    },
+    "maxSummaryChars": {
+      "label": "Max Summary Characters",
+      "help": "Maximum total characters allowed in the active-memory summary."
+    },
+    "logging": {
+      "label": "Enable Logging",
+      "help": "Emit active memory timing and result logs."
+    },
+    "persistTranscripts": {
+      "label": "Persist Transcripts",
+      "help": "Keep blocking memory sub-agent session transcripts on disk in a separate plugin-owned directory."
+    },
+    "transcriptDir": {
+      "label": "Transcript Directory",
+      "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+    },
+    "qmd.searchMode": {
+      "label": "QMD Search Mode",
+      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
+    }
+  }
+}

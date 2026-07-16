@@ -1,0 +1,9 @@
+{
+  "id": "signal",
+  "channels": ["signal"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

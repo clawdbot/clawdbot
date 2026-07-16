@@ -1,0 +1,158 @@
+{
+  "id": "codex",
+  "name": "Codex",
+  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "providers": ["codex"],
+  "commandAliases": [
+    {
+      "name": "codex",
+      "kind": "runtime-slash",
+      "cliCommand": "plugins"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 2500
+          }
+        }
+      },
+      "appServer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "transport": {
+            "type": "string",
+            "enum": ["stdio", "websocket"],
+            "default": "stdio"
+          },
+          "command": {
+            "type": "string",
+            "default": "codex"
+          },
+          "args": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              { "type": "string" }
+            ]
+          },
+          "url": { "type": "string" },
+          "authToken": { "type": "string" },
+          "headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "requestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "approvalPolicy": {
+            "type": "string",
+            "enum": ["never", "on-request", "on-failure", "untrusted"],
+            "default": "never"
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": ["read-only", "workspace-write", "danger-full-access"],
+            "default": "workspace-write"
+          },
+          "approvalsReviewer": {
+            "type": "string",
+            "enum": ["user", "guardian_subagent"],
+            "default": "user"
+          },
+          "serviceTier": { "type": "string" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for discovering Codex app-server models."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Codex harness available but uses the bundled fallback model list."
+    },
+    "discovery.timeoutMs": {
+      "label": "Discovery Timeout",
+      "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "advanced": true
+    },
+    "appServer": {
+      "label": "App Server",
+      "help": "Runtime controls for connecting to Codex app-server.",
+      "advanced": true
+    },
+    "appServer.transport": {
+      "label": "Transport",
+      "help": "Use stdio to spawn Codex locally, or websocket to connect to an already-running app-server.",
+      "advanced": true
+    },
+    "appServer.command": {
+      "label": "Command",
+      "help": "Executable used for stdio transport.",
+      "advanced": true
+    },
+    "appServer.args": {
+      "label": "Arguments",
+      "help": "Arguments used for stdio transport. Defaults to app-server --listen stdio://.",
+      "advanced": true
+    },
+    "appServer.url": {
+      "label": "WebSocket URL",
+      "help": "Codex app-server WebSocket URL when transport is websocket.",
+      "advanced": true
+    },
+    "appServer.authToken": {
+      "label": "Auth Token",
+      "help": "Bearer token sent to the WebSocket app-server.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "appServer.headers": {
+      "label": "Headers",
+      "help": "Additional headers sent to the WebSocket app-server.",
+      "advanced": true
+    },
+    "appServer.requestTimeoutMs": {
+      "label": "Request Timeout",
+      "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.approvalPolicy": {
+      "label": "Approval Policy",
+      "help": "Codex native approval policy sent to thread start, resume, and turns.",
+      "advanced": true
+    },
+    "appServer.sandbox": {
+      "label": "Sandbox",
+      "help": "Codex native sandbox mode sent to thread start and resume.",
+      "advanced": true
+    },
+    "appServer.approvalsReviewer": {
+      "label": "Approvals Reviewer",
+      "help": "Use user approvals or the Codex guardian subagent for native app-server approvals.",
+      "advanced": true
+    },
+    "appServer.serviceTier": {
+      "label": "Service Tier",
+      "help": "Optional Codex service tier passed when starting or resuming threads.",
+      "advanced": true
+    }
+  }
+}

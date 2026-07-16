@@ -1,0 +1,74 @@
+{
+  "id": "amazon-bedrock",
+  "enabledByDefault": true,
+  "providers": ["amazon-bedrock"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "region": { "type": "string" },
+          "providerFilter": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "refreshInterval": { "type": "integer", "minimum": 0 },
+          "defaultContextWindow": { "type": "integer", "minimum": 1 },
+          "defaultMaxTokens": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "guardrail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "guardrailIdentifier": { "type": "string" },
+          "guardrailVersion": { "type": "string" },
+          "streamProcessingMode": { "type": "string", "enum": ["sync", "async"] },
+          "trace": { "type": "string", "enum": ["enabled", "disabled", "enabled_full"] }
+        },
+        "required": ["guardrailIdentifier", "guardrailVersion"]
+      }
+    }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": ["models.bedrockDiscovery"]
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for Amazon Bedrock model auto-discovery."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Amazon Bedrock plugin available but skips implicit startup discovery. When true, discovery can run even without AWS auth env markers."
+    },
+    "discovery.region": {
+      "label": "Discovery Region",
+      "help": "AWS region to use for Bedrock model discovery. Defaults to AWS_REGION, AWS_DEFAULT_REGION, then us-east-1."
+    },
+    "discovery.providerFilter": {
+      "label": "Provider Filter",
+      "help": "Optional Bedrock provider-name allowlist for discovery, such as anthropic or amazon."
+    },
+    "discovery.refreshInterval": {
+      "label": "Discovery Refresh Interval (s)",
+      "help": "How long to cache Bedrock discovery results in seconds. Set to 0 to disable caching."
+    },
+    "discovery.defaultContextWindow": {
+      "label": "Default Context Window",
+      "help": "Fallback context window to assign to discovered Bedrock models."
+    },
+    "discovery.defaultMaxTokens": {
+      "label": "Default Max Tokens",
+      "help": "Fallback max output tokens to assign to discovered Bedrock models."
+    },
+    "guardrail": {
+      "label": "Guardrail",
+      "help": "Amazon Bedrock Guardrails settings applied to Bedrock model invocations."
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "fireworks",
+  "enabledByDefault": true,
+  "providers": ["fireworks"],
+  "providerAuthEnvVars": {
+    "fireworks": ["FIREWORKS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "fireworks",
+      "method": "api-key",
+      "choiceId": "fireworks-api-key",
+      "choiceLabel": "Fireworks API key",
+      "groupId": "fireworks",
+      "groupLabel": "Fireworks",
+      "groupHint": "API key",
+      "optionKey": "fireworksApiKey",
+      "cliFlag": "--fireworks-api-key",
+      "cliOption": "--fireworks-api-key <key>",
+      "cliDescription": "Fireworks API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

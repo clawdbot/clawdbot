@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/lmstudio-provider",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "OpenClaw LM Studio provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

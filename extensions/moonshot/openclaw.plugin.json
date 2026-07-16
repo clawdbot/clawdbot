@@ -1,0 +1,76 @@
+{
+  "id": "moonshot",
+  "enabledByDefault": true,
+  "providers": ["moonshot"],
+  "providerAuthEnvVars": {
+    "moonshot": ["MOONSHOT_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "moonshot",
+      "method": "api-key",
+      "choiceId": "moonshot-api-key",
+      "choiceLabel": "Moonshot API key (.ai)",
+      "groupId": "moonshot",
+      "groupLabel": "Moonshot AI (Kimi K2.5)",
+      "groupHint": "Kimi K2.5",
+      "optionKey": "moonshotApiKey",
+      "cliFlag": "--moonshot-api-key",
+      "cliOption": "--moonshot-api-key <key>",
+      "cliDescription": "Moonshot API key"
+    },
+    {
+      "provider": "moonshot",
+      "method": "api-key-cn",
+      "choiceId": "moonshot-api-key-cn",
+      "choiceLabel": "Moonshot API key (.cn)",
+      "groupId": "moonshot",
+      "groupLabel": "Moonshot AI (Kimi K2.5)",
+      "groupHint": "Kimi K2.5",
+      "optionKey": "moonshotApiKey",
+      "cliFlag": "--moonshot-api-key",
+      "cliOption": "--moonshot-api-key <key>",
+      "cliDescription": "Moonshot API key"
+    }
+  ],
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Kimi Search API Key",
+      "help": "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
+      "sensitive": true
+    },
+    "webSearch.baseUrl": {
+      "label": "Kimi Search Base URL",
+      "help": "Kimi base URL override."
+    },
+    "webSearch.model": {
+      "label": "Kimi Search Model",
+      "help": "Kimi model override."
+    }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["moonshot"],
+    "webSearchProviders": ["kimi"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

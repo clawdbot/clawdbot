@@ -1,0 +1,56 @@
+{
+  "name": "@openclaw/zalouser",
+  "version": "2026.4.12",
+  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "zca-js": "2.1.2"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.12"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "zalouser",
+      "label": "Zalo Personal",
+      "selectionLabel": "Zalo (Personal Account)",
+      "docsPath": "/channels/zalouser",
+      "docsLabel": "zalouser",
+      "blurb": "Zalo personal account via QR code login.",
+      "aliases": [
+        "zlu"
+      ],
+      "order": 85,
+      "quickstartAllowFrom": false
+    },
+    "install": {
+      "npmSpec": "@openclaw/zalouser",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.12"
+    },
+    "build": {
+      "openclawVersion": "2026.4.12"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

@@ -1,0 +1,302 @@
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  isValidOpenAIModel,
+  isValidOpenAIVoice,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+  openaiTTS,
+  resolveOpenAITtsInstructions,
+} from "./tts.js";
+
+describe("openai tts", () => {
+  const originalFetch = globalThis.fetch;
+  const proxyEnvKeys = [
+    "OPENCLAW_DEBUG_PROXY_ENABLED",
+    "OPENCLAW_DEBUG_PROXY_DB_PATH",
+    "OPENCLAW_DEBUG_PROXY_BLOB_DIR",
+    "OPENCLAW_DEBUG_PROXY_SESSION_ID",
+  ] as const;
+  let priorProxyEnv: Partial<Record<(typeof proxyEnvKeys)[number], string | undefined>> = {};
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    for (const key of proxyEnvKeys) {
+      const value = priorProxyEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    priorProxyEnv = {};
+  });
+
+  describe("isValidOpenAIVoice", () => {
+    it("accepts all valid OpenAI voices including newer additions", () => {
+      for (const voice of OPENAI_TTS_VOICES) {
+        expect(isValidOpenAIVoice(voice)).toBe(true);
+      }
+      for (const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]) {
+        expect(isValidOpenAIVoice(newerVoice), newerVoice).toBe(true);
+      }
+    });
+
+    it("rejects invalid voice names", () => {
+      expect(isValidOpenAIVoice("invalid")).toBe(false);
+      expect(isValidOpenAIVoice("")).toBe(false);
+      expect(isValidOpenAIVoice("ALLOY")).toBe(false);
+      expect(isValidOpenAIVoice("alloy ")).toBe(false);
+      expect(isValidOpenAIVoice(" alloy")).toBe(false);
+    });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
+    });
+  });
+
+  describe("isValidOpenAIModel", () => {
+    it("matches the supported model set and rejects unsupported values", () => {
+      expect(OPENAI_TTS_MODELS).toContain("gpt-4o-mini-tts");
+      expect(OPENAI_TTS_MODELS).toContain("tts-1");
+      expect(OPENAI_TTS_MODELS).toContain("tts-1-hd");
+      expect(OPENAI_TTS_MODELS).toHaveLength(3);
+      expect(Array.isArray(OPENAI_TTS_MODELS)).toBe(true);
+      expect(OPENAI_TTS_MODELS.length).toBeGreaterThan(0);
+      const cases = [
+        { model: "gpt-4o-mini-tts", expected: true },
+        { model: "tts-1", expected: true },
+        { model: "tts-1-hd", expected: true },
+        { model: "invalid", expected: false },
+        { model: "", expected: false },
+        { model: "gpt-4", expected: false },
+      ] as const;
+      for (const testCase of cases) {
+        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
+      }
+    });
+
+    it("treats the default endpoint with trailing slash as the default endpoint", () => {
+      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
+    });
+  });
+
+  describe("resolveOpenAITtsInstructions", () => {
+    it("keeps instructions only for gpt-4o-mini-tts variants", () => {
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
+        "Speak warmly",
+      );
+      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
+    });
+  });
+
+  describe("openaiTTS diagnostics", () => {
+    function createStreamingErrorResponse(params: {
+      status: number;
+      chunkCount: number;
+      chunkSize: number;
+      byte: number;
+    }): { response: Response; getReadCount: () => number } {
+      let reads = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (reads >= params.chunkCount) {
+            controller.close();
+            return;
+          }
+          reads += 1;
+          controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+        },
+      });
+      return {
+        response: new Response(stream, { status: params.status }),
+        getReadCount: () => reads,
+      };
+    }
+
+    it("includes parsed provider detail and request id for JSON API errors", async () => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                message: "Invalid API key",
+                type: "invalid_request_error",
+                code: "invalid_api_key",
+              },
+            }),
+            {
+              status: 401,
+              headers: {
+                "Content-Type": "application/json",
+                "x-request-id": "req_123",
+              },
+            },
+          ),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "bad-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow(
+        "OpenAI TTS API error (401): Invalid API key [type=invalid_request_error, code=invalid_api_key] [request_id=req_123]",
+      );
+    });
+
+    it("falls back to raw body text when the error body is non-JSON", async () => {
+      const fetchMock = vi.fn(
+        async () => new Response("temporary upstream outage", { status: 503 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
+    });
+
+    it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
+      const streamed = createStreamingErrorResponse({
+        status: 503,
+        chunkCount: 200,
+        chunkSize: 1024,
+        byte: 120,
+      });
+      const fetchMock = vi.fn(async () => streamed.response);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS API error (503)");
+
+      expect(streamed.getReadCount()).toBeLessThan(200);
+    });
+
+    it("records TTS exchanges in debug proxy capture mode", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
+      priorProxyEnv = Object.fromEntries(
+        proxyEnvKeys.map((key) => [key, process.env[key]]),
+      ) as typeof priorProxyEnv;
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      store.upsertSession({
+        id: "tts-session",
+        startedAt: Date.now(),
+        mode: "test",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      });
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store.getSessionEvents("tts-session", 10);
+      expect(
+        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+      ).toBe(true);
+    });
+
+    it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
+      priorProxyEnv = Object.fromEntries(
+        proxyEnvKeys.map((key) => [key, process.env[key]]),
+      ) as typeof priorProxyEnv;
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const runtime = await import("../../src/proxy-capture/runtime.js");
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      runtime.initializeDebugProxyCapture("test");
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      runtime.finalizeDebugProxyCapture();
+
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      const events = store
+        .getSessionEvents("tts-patched-session", 10)
+        .filter((event) => event.host === "api.openai.com");
+      expect(events).toHaveLength(2);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
+      store.close();
+    });
+  });
+});

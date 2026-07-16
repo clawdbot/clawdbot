@@ -1,0 +1,41 @@
+{
+  "id": "tavily",
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "tavily": ["TAVILY_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Tavily API Key",
+      "help": "Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "tvly-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Tavily Base URL",
+      "help": "Tavily API base URL override."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["tavily"],
+    "tools": ["tavily_search", "tavily_extract"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

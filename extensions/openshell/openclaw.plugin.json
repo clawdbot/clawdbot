@@ -1,0 +1,115 @@
+{
+  "id": "openshell",
+  "name": "OpenShell Sandbox",
+  "description": "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["mirror", "remote"]
+      },
+      "command": {
+        "type": "string",
+        "minLength": 1
+      },
+      "gateway": {
+        "type": "string",
+        "minLength": 1
+      },
+      "gatewayEndpoint": {
+        "type": "string",
+        "minLength": 1
+      },
+      "from": {
+        "type": "string",
+        "minLength": 1
+      },
+      "policy": {
+        "type": "string",
+        "minLength": 1
+      },
+      "providers": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "gpu": {
+        "type": "boolean"
+      },
+      "autoProviders": {
+        "type": "boolean"
+      },
+      "remoteWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "remoteAgentWorkspaceDir": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace."
+    },
+    "command": {
+      "label": "OpenShell Command",
+      "help": "Path or command name for the openshell CLI."
+    },
+    "gateway": {
+      "label": "Gateway Name",
+      "help": "Optional OpenShell gateway name passed as --gateway."
+    },
+    "gatewayEndpoint": {
+      "label": "Gateway Endpoint",
+      "help": "Optional OpenShell gateway endpoint passed as --gateway-endpoint."
+    },
+    "from": {
+      "label": "Sandbox Source",
+      "help": "OpenShell sandbox source for first-time create. Defaults to openclaw."
+    },
+    "policy": {
+      "label": "Policy File",
+      "help": "Optional path to a custom OpenShell sandbox policy YAML."
+    },
+    "providers": {
+      "label": "Providers",
+      "help": "Provider names to attach when a sandbox is created."
+    },
+    "gpu": {
+      "label": "GPU",
+      "help": "Request GPU resources when creating the sandbox.",
+      "advanced": true
+    },
+    "autoProviders": {
+      "label": "Auto-create Providers",
+      "help": "When enabled, pass --auto-providers during sandbox create.",
+      "advanced": true
+    },
+    "remoteWorkspaceDir": {
+      "label": "Remote Workspace Dir",
+      "help": "Primary writable workspace inside the OpenShell sandbox.",
+      "advanced": true
+    },
+    "remoteAgentWorkspaceDir": {
+      "label": "Remote Agent Dir",
+      "help": "Mirror path for the real agent workspace when workspaceAccess is read-only.",
+      "advanced": true
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for openshell CLI operations such as create/upload/download.",
+      "advanced": true
+    }
+  }
+}

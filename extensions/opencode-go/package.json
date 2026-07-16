@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/opencode-go-provider",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw OpenCode Go provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

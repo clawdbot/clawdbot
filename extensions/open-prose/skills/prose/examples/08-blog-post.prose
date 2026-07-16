@@ -1,0 +1,20 @@
+# Write a Blog Post
+# End-to-end content creation workflow
+
+# Research the topic
+session "Research the topic: 'Best practices for error handling in TypeScript'. Find authoritative sources and common patterns."
+
+# Create outline
+session "Create a detailed outline for the blog post. Include introduction, 4-5 main sections, and conclusion."
+
+# Write first draft
+session "Write the full blog post following the outline. Target 1500-2000 words. Include code examples."
+
+# Technical review
+session "Review the blog post for technical accuracy. Verify all code examples compile and work correctly."
+
+# Editorial review
+session "Review the blog post for clarity and readability. Simplify complex sentences and improve flow."
+
+# Add finishing touches
+session "Add a compelling title, meta description, and suggest 3-5 relevant tags for the post."

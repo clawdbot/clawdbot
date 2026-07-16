@@ -1,0 +1,12 @@
+{
+  "id": "zalouser",
+  "channels": ["zalouser"],
+  "channelEnvVars": {
+    "zalouser": ["ZALOUSER_PROFILE", "ZCA_PROFILE"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

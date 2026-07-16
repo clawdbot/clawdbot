@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/irc",
+  "version": "2026.4.12",
+  "description": "OpenClaw IRC channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "minHostVersion": ">=2026.4.10"
+    },
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "irc",
+      "label": "IRC",
+      "selectionLabel": "IRC (Server + Nick)",
+      "detailLabel": "IRC",
+      "docsPath": "/channels/irc",
+      "docsLabel": "irc",
+      "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
+      "aliases": [
+        "internet-relay-chat"
+      ],
+      "systemImage": "network",
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasIrcConfiguredState"
+      }
+    }
+  }
+}

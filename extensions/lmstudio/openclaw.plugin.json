@@ -1,0 +1,29 @@
+{
+  "id": "lmstudio",
+  "enabledByDefault": true,
+  "providers": ["lmstudio"],
+  "providerAuthEnvVars": {
+    "lmstudio": ["LM_API_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "lmstudio",
+      "method": "custom",
+      "choiceId": "lmstudio",
+      "choiceLabel": "LM Studio",
+      "choiceHint": "Local/self-hosted LM Studio server",
+      "optionKey": "lmstudioApiKey",
+      "cliFlag": "--lmstudio-api-key",
+      "cliOption": "--lmstudio-api-key <key>",
+      "cliDescription": "LM Studio API key",
+      "groupId": "lmstudio",
+      "groupLabel": "LM Studio",
+      "groupHint": "Self-hosted open-weight models"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

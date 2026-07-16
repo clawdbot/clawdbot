@@ -1,0 +1,23 @@
+{
+  "id": "irc",
+  "channels": ["irc"],
+  "channelEnvVars": {
+    "irc": [
+      "IRC_HOST",
+      "IRC_PORT",
+      "IRC_TLS",
+      "IRC_NICK",
+      "IRC_USERNAME",
+      "IRC_REALNAME",
+      "IRC_PASSWORD",
+      "IRC_CHANNELS",
+      "IRC_NICKSERV_PASSWORD",
+      "IRC_NICKSERV_REGISTER_EMAIL"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

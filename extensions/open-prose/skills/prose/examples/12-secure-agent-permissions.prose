@@ -1,0 +1,43 @@
+# Secure Agent with Permissions Example
+# This demonstrates defining agents with restricted access permissions.
+
+# Import required skills
+import "code-analyzer" from "github:anthropic/code-tools"
+
+# Define a read-only code reviewer
+# This agent can read source files but cannot modify them or run shell commands
+agent code-reviewer:
+  model: sonnet
+  prompt: "You are a thorough code reviewer"
+  skills: ["code-analyzer"]
+  permissions:
+    read: ["src/**/*.ts", "src/**/*.js", "*.md"]
+    write: []
+    bash: deny
+
+# Define a documentation writer with limited write access
+# Can only write to docs directory
+agent doc-writer:
+  model: opus
+  prompt: "You write technical documentation"
+  permissions:
+    read: ["src/**/*", "docs/**/*"]
+    write: ["docs/**/*.md"]
+    bash: deny
+
+# Define a full-access admin agent
+agent admin:
+  model: opus
+  prompt: "You perform administrative tasks"
+  permissions:
+    read: ["**/*"]
+    write: ["**/*"]
+    bash: prompt
+    network: allow
+
+# Workflow: Code review followed by documentation update
+session: code-reviewer
+  prompt: "Review the codebase for security issues and best practices"
+
+session: doc-writer
+  prompt: "Update the documentation based on the code review findings"

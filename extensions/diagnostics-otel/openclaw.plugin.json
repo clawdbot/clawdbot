@@ -1,0 +1,8 @@
+{
+  "id": "diagnostics-otel",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

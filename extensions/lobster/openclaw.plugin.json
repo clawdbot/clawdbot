@@ -1,0 +1,10 @@
+{
+  "id": "lobster",
+  "name": "Lobster",
+  "description": "Typed workflow tool with resumable approvals.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

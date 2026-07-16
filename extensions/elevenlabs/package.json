@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/elevenlabs-speech",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw ElevenLabs speech plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

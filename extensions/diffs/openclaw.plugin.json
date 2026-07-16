@@ -1,0 +1,192 @@
+{
+  "id": "diffs",
+  "name": "Diffs",
+  "description": "Read-only diff viewer and file renderer for agents.",
+  "skills": ["./skills"],
+  "uiHints": {
+    "viewerBaseUrl": {
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl."
+    },
+    "defaults.fontFamily": {
+      "label": "Default Font",
+      "help": "Preferred font family name for diff content and headers."
+    },
+    "defaults.fontSize": {
+      "label": "Default Font Size",
+      "help": "Base diff font size in pixels."
+    },
+    "defaults.lineSpacing": {
+      "label": "Default Line Spacing",
+      "help": "Line-height multiplier applied to diff rows."
+    },
+    "defaults.layout": {
+      "label": "Default Layout",
+      "help": "Initial diff layout shown in the viewer."
+    },
+    "defaults.showLineNumbers": {
+      "label": "Show Line Numbers",
+      "help": "Show line numbers by default."
+    },
+    "defaults.diffIndicators": {
+      "label": "Diff Indicator Style",
+      "help": "Choose added/removed indicators style."
+    },
+    "defaults.wordWrap": {
+      "label": "Default Word Wrap",
+      "help": "Wrap long lines by default."
+    },
+    "defaults.background": {
+      "label": "Default Background Highlights",
+      "help": "Show added/removed background highlights by default."
+    },
+    "defaults.theme": {
+      "label": "Default Theme",
+      "help": "Initial viewer theme."
+    },
+    "defaults.fileFormat": {
+      "label": "Default File Format",
+      "help": "Rendered file format for file mode (PNG or PDF)."
+    },
+    "defaults.fileQuality": {
+      "label": "Default File Quality",
+      "help": "Quality preset for PNG/PDF rendering."
+    },
+    "defaults.fileScale": {
+      "label": "Default File Scale",
+      "help": "Device scale factor used while rendering file artifacts."
+    },
+    "defaults.fileMaxWidth": {
+      "label": "Default File Max Width",
+      "help": "Maximum file render width in CSS pixels."
+    },
+    "defaults.mode": {
+      "label": "Default Output Mode",
+      "help": "Tool default when mode is omitted. Use view for canvas/gateway viewer, file for PNG/PDF, or both."
+    },
+    "security.allowRemoteViewer": {
+      "label": "Allow Remote Viewer",
+      "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "viewerBaseUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+        "not": {
+          "pattern": "[?#]"
+        }
+      },
+      "defaults": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fontFamily": {
+            "type": "string",
+            "default": "Fira Code"
+          },
+          "fontSize": {
+            "type": "number",
+            "minimum": 10,
+            "maximum": 24,
+            "default": 15
+          },
+          "lineSpacing": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3,
+            "default": 1.6
+          },
+          "layout": {
+            "type": "string",
+            "enum": ["unified", "split"],
+            "default": "unified"
+          },
+          "showLineNumbers": {
+            "type": "boolean",
+            "default": true
+          },
+          "diffIndicators": {
+            "type": "string",
+            "enum": ["bars", "classic", "none"],
+            "default": "bars"
+          },
+          "wordWrap": {
+            "type": "boolean",
+            "default": true
+          },
+          "background": {
+            "type": "boolean",
+            "default": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": ["light", "dark"],
+            "default": "dark"
+          },
+          "fileFormat": {
+            "type": "string",
+            "enum": ["png", "pdf"],
+            "default": "png"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["png", "pdf"]
+          },
+          "fileQuality": {
+            "type": "string",
+            "enum": ["standard", "hq", "print"],
+            "default": "standard"
+          },
+          "fileScale": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "fileMaxWidth": {
+            "type": "number",
+            "minimum": 640,
+            "maximum": 2400
+          },
+          "imageFormat": {
+            "type": "string",
+            "enum": ["png", "pdf"]
+          },
+          "imageQuality": {
+            "type": "string",
+            "enum": ["standard", "hq", "print"]
+          },
+          "imageScale": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "imageMaxWidth": {
+            "type": "number",
+            "minimum": 640,
+            "maximum": 2400
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["view", "image", "file", "both"],
+            "default": "both"
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowRemoteViewer": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    }
+  }
+}

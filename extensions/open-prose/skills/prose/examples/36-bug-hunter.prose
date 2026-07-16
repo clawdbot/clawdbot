@@ -1,0 +1,237 @@
+# Bug Hunter
+#
+# Given a bug report or error, systematically investigate, diagnose,
+# and fix it. Watch the AI think through the problem like a senior
+# developer - gathering evidence, forming hypotheses, and verifying fixes.
+#
+# Usage: Paste an error message or describe a bug.
+
+input bug_report: "Error message, stack trace, or bug description"
+
+agent detective:
+  model: opus
+  persist: true
+  prompt: """
+You are a debugging specialist. Your approach:
+1. Gather evidence before forming hypotheses
+2. Follow the data, not assumptions
+3. Verify each hypothesis with tests
+4. Document your reasoning for future reference
+
+Think out loud. Show your work.
+"""
+
+agent surgeon:
+  model: opus
+  prompt: """
+You are a code surgeon. You make precise, minimal fixes:
+- Change only what's necessary
+- Preserve existing behavior
+- Add regression tests
+- Leave code cleaner than you found it
+
+No drive-by refactoring. Fix the bug, nothing more.
+"""
+
+# ============================================================================
+# Phase 1: Evidence Gathering
+# ============================================================================
+
+session: detective
+  prompt: "New bug to investigate. Let me gather initial evidence."
+
+parallel:
+  # Parse the error
+  error_analysis = session: detective
+    prompt: """
+Analyze this bug report/error:
+{bug_report}
+
+Extract:
+- Error type and message
+- Stack trace (if present)
+- File paths and line numbers
+- Any patterns or keywords
+"""
+
+  # Search for related code
+  code_context = session "Search for related code"
+    prompt: """
+Based on the error, search the codebase:
+1. Find the file(s) mentioned in the error
+2. Find related files that might be involved
+3. Look for similar patterns that might have the same bug
+4. Check git history for recent changes to these files
+
+Use Glob and Grep to search efficiently.
+"""
+    context: bug_report
+
+  # Check for known issues
+  prior_knowledge = session "Check for similar issues"
+    prompt: """
+Search for similar issues:
+1. Check git log for related commits
+2. Search for TODO/FIXME comments nearby
+3. Look for any existing tests that might be relevant
+
+Report what you find.
+"""
+    context: bug_report
+
+# ============================================================================
+# Phase 2: Diagnosis
+# ============================================================================
+
+resume: detective
+  prompt: """
+Synthesize all evidence into hypotheses.
+
+For each hypothesis:
+- State the theory
+- Supporting evidence
+- How to verify
+- Confidence level (high/medium/low)
+
+Start with the most likely cause.
+"""
+  context: { error_analysis, code_context, prior_knowledge }
+
+let hypotheses = resume: detective
+  prompt: "List hypotheses in order of likelihood. We'll test the top one first."
+
+# ============================================================================
+# Phase 3: Hypothesis Testing
+# ============================================================================
+
+loop until **root cause confirmed** (max: 5):
+  let current_hypothesis = resume: detective
+    prompt: "Select the next most likely hypothesis to test."
+    context: hypotheses
+
+  # Design and run a test
+  let test_result = session: detective
+    prompt: """
+Test this hypothesis: {current_hypothesis}
+
+Design a verification approach:
+1. What would we expect to see if this is the cause?
+2. How can we reproduce it?
+3. Run the test and report results
+
+Use actual code execution to verify.
+"""
+    context: { current_hypothesis, code_context }
+
+  # Evaluate result
+  choice **based on the test results**:
+    option "Hypothesis confirmed":
+      resume: detective
+        prompt: """
+Root cause confirmed: {current_hypothesis}
+
+Document:
+- The exact cause
+- Why it happens
+- The conditions that trigger it
+"""
+        context: test_result
+
+    option "Hypothesis disproven":
+      resume: detective
+        prompt: """
+Hypothesis disproven. Update our understanding:
+- What did we learn?
+- How does this change remaining hypotheses?
+- What should we test next?
+"""
+        context: test_result
+      hypotheses = resume: detective
+        prompt: "Re-rank remaining hypotheses based on new evidence"
+
+    option "Inconclusive - need more evidence":
+      resume: detective
+        prompt: "What additional evidence do we need? How do we get it?"
+        context: test_result
+
+# ============================================================================
+# Phase 4: Fix Implementation
+# ============================================================================
+
+let diagnosis = resume: detective
+  prompt: """
+Final diagnosis summary:
+- Root cause: [what]
+- Location: [where]
+- Trigger: [when/how]
+- Impact: [what breaks]
+
+Hand off to surgeon for the fix.
+"""
+
+session: surgeon
+  prompt: """
+Implement the fix for this bug:
+
+{diagnosis}
+
+Steps:
+1. Read and understand the code around the bug
+2. Implement the minimal fix
+3. Verify the fix doesn't break other things
+4. Create a test that would have caught this bug
+"""
+  context: { diagnosis, code_context }
+
+# Run tests to verify
+let verification = session "Verify the fix"
+  prompt: """
+Verify the fix works:
+1. Run the reproduction case - should now pass
+2. Run the full test suite - should all pass
+3. Check for any edge cases we might have missed
+"""
+
+if **tests are failing**:
+  loop until **all tests pass** (max: 3):
+    session: surgeon
+      prompt: "Fix is incomplete. Adjust based on test results."
+      context: verification
+
+    verification = session "Re-verify after adjustment"
+      prompt: "Run tests again and report"
+
+# ============================================================================
+# Phase 5: Documentation & Commit
+# ============================================================================
+
+session "Create bug fix commit"
+  prompt: """
+Create a well-documented commit:
+
+git commit with message:
+fix: [brief description]
+
+Root cause: [what was wrong]
+Fix: [what we changed]
+Test: [what test we added]
+
+Closes #[issue number if applicable]
+"""
+
+output report = resume: detective
+  prompt: """
+Bug Hunt Complete!
+
+Investigation Report:
+- Bug: {bug_report summary}
+- Root Cause: {diagnosis}
+- Fix: [files changed]
+- Tests Added: [what tests]
+- Time to Resolution: [duration]
+
+Lessons Learned:
+- How could we have caught this earlier?
+- Are there similar patterns to check?
+- Should we add any tooling/linting?
+"""

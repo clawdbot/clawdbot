@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/searxng-plugin",
+  "version": "2026.4.12",
+  "private": true,
+  "description": "OpenClaw SearXNG plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

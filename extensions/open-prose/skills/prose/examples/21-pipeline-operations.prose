@@ -1,0 +1,35 @@
+# Pipeline Operations Example
+# Demonstrates functional-style collection transformations
+
+# Define a collection of startup ideas
+let ideas = ["AI tutor", "smart garden", "fitness tracker", "meal planner", "travel assistant"]
+
+# Filter to keep only tech-focused ideas
+let tech_ideas = ideas | filter:
+  session "Is this idea primarily technology-focused? Answer yes or no."
+    context: item
+
+# Map to expand each idea into a business pitch
+let pitches = tech_ideas | map:
+  session "Write a compelling one-paragraph business pitch for this idea"
+    context: item
+
+# Reduce all pitches into a portfolio summary
+let portfolio = pitches | reduce(summary, pitch):
+  session "Integrate this pitch into the portfolio summary, maintaining coherence"
+    context: [summary, pitch]
+
+# Present the final portfolio
+session "Format and present the startup portfolio as a polished document"
+  context: portfolio
+
+# Parallel map example - research multiple topics concurrently
+let topics = ["market analysis", "competition", "funding options"]
+
+let research = topics | pmap:
+  session "Research this aspect of the startup portfolio"
+    context: item
+
+# Final synthesis
+session "Create an executive summary combining all research findings"
+  context: research

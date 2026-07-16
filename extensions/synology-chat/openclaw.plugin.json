@@ -1,0 +1,19 @@
+{
+  "id": "synology-chat",
+  "channels": ["synology-chat"],
+  "channelEnvVars": {
+    "synology-chat": [
+      "SYNOLOGY_CHAT_TOKEN",
+      "SYNOLOGY_CHAT_INCOMING_URL",
+      "SYNOLOGY_NAS_HOST",
+      "SYNOLOGY_ALLOWED_USER_IDS",
+      "SYNOLOGY_RATE_LIMIT",
+      "OPENCLAW_BOT_NAME"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

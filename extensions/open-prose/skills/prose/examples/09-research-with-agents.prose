@@ -1,0 +1,25 @@
+# Research Pipeline with Specialized Agents
+# This example demonstrates defining agents with different models
+# and using them in sessions with property overrides.
+
+# Define specialized agents
+agent researcher:
+  model: sonnet
+  prompt: "You are a research assistant skilled at finding and synthesizing information"
+
+agent writer:
+  model: opus
+  prompt: "You are a technical writer who creates clear, concise documentation"
+
+# Step 1: Initial research with the researcher agent
+session: researcher
+  prompt: "Research recent developments in renewable energy storage technologies"
+
+# Step 2: Deep dive with a more powerful model
+session: researcher
+  model: opus
+  prompt: "Analyze the top 3 most promising battery technologies and their potential impact"
+
+# Step 3: Write up the findings
+session: writer
+  prompt: "Create a summary report of the research findings suitable for executives"
