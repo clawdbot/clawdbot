@@ -252,6 +252,16 @@ describe("buildGlobalExecPolicyClampWarning", () => {
     ).toBeUndefined();
   });
 
+  it("does not warn when host approvals have no policy overrides", () => {
+    expect(
+      buildGlobalExecPolicyClampWarning({
+        cfg: { tools: { exec: { security: "full" } } },
+        approvalsPath: "/tmp/openclaw-exec-approvals.json",
+        approvals: { version: 1, agents: {} },
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not warn when requested security is already effective", () => {
     expect(
       buildGlobalExecPolicyClampWarning({
