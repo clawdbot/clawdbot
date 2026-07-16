@@ -91,6 +91,27 @@ describe("install.sh", () => {
     }
   });
 
+  it("bounds stalled curl downloads and propagates timeout failures", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      curl() {
+        printf 'curl=%s\n' "$*"
+        return 28
+      }
+      DOWNLOADER=curl
+      set +e
+      download_file "https://example.invalid/archive.tgz" "/tmp/archive.tgz"
+      printf 'status=%s\n' "$?"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
+    expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
+    expect(result.stdout).toContain("status=28");
+  });
+
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
     expect(script).toContain('DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"');

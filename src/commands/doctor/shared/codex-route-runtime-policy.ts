@@ -7,10 +7,12 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
   canonicalOpenAIModelUsesCodexRuntime,
+  isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   normalizeRuntimeString,
   parseModelRef,
   toCanonicalOpenAIModelRef,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import { modelConfigContainsRef, rewriteStringModelSlot } from "./codex-route-model-slots.js";
 import type { CodexRouteHit, MutableRecord } from "./codex-route-types.js";
@@ -373,6 +375,7 @@ export function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
   const value = params.container?.[params.key];
@@ -396,6 +399,7 @@ export function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
     container: params.container,
     key: params.key,
     path: params.path,
+    blockedModelIdentities: params.blockedModelIdentities,
   });
 }
 
@@ -406,6 +410,7 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   env?: NodeJS.ProcessEnv;
 }): void {
   const value = params.container?.[params.key];
@@ -434,6 +439,10 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     const canonicalModel = toCanonicalOpenAIModelRef(entry.trim());
     if (
       !canonicalModel ||
+      isBlockedLegacyCodexModelRef({
+        modelRef: entry,
+        blockedModelIdentities: params.blockedModelIdentities,
+      }) ||
       !canonicalOpenAIModelUsesCodexRuntime({
         cfg: params.cfg,
         modelRef: canonicalModel,

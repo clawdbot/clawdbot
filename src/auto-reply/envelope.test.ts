@@ -79,6 +79,16 @@ describe("formatAgentEnvelope", () => {
     const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
     expect(body).toBe("[Telegram] hi");
   });
+
+  it("formats the Unix epoch timestamp", () => {
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: 0,
+      envelope: { timezone: "utc" },
+      body: "hello",
+    });
+    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
+  });
 });
 
 describe("formatInboundEnvelope", () => {

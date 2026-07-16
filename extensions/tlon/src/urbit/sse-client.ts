@@ -188,31 +188,36 @@ export class UrbitSSEClient {
 
     this.streamController = controller;
 
-    const { response, release } = await urbitFetch({
-      baseUrl: this.url,
-      path: `/~/channel/${this.channelId}`,
-      init: {
-        method: "GET",
-        headers: {
-          Accept: "text/event-stream",
-          Cookie: this.cookie,
+    let stream: Awaited<ReturnType<typeof urbitFetch>>;
+    try {
+      stream = await urbitFetch({
+        baseUrl: this.url,
+        path: `/~/channel/${this.channelId}`,
+        init: {
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            Cookie: this.cookie,
+          },
         },
-      },
-      ssrfPolicy: this.ssrfPolicy,
-      lookupFn: this.lookupFn,
-      fetchImpl: this.fetchImpl,
-      signal: controller.signal,
-      auditContext: "tlon-urbit-sse-stream",
-    });
+        ssrfPolicy: this.ssrfPolicy,
+        lookupFn: this.lookupFn,
+        fetchImpl: this.fetchImpl,
+        signal: controller.signal,
+        auditContext: "tlon-urbit-sse-stream",
+      });
+    } finally {
+      // The deadline only covers waiting for response headers. Always disarm it
+      // before response handling so failed connects cannot retain the process.
+      clearTimeout(timeoutId);
+    }
 
+    const { response, release } = stream;
     this.streamRelease = release;
 
-    // Clear timeout once connection established (headers received).
-    clearTimeout(timeoutId);
-
     if (!response.ok) {
-      await release();
       this.streamRelease = null;
+      await release();
       throw new Error(`Stream connection failed: ${response.status}`);
     }
 
@@ -220,9 +225,7 @@ export class UrbitSSEClient {
       if (!this.aborted) {
         this.logger.error?.(`Stream error: ${String(error)}`);
         for (const { err } of this.eventHandlers.values()) {
-          if (err) {
-            err(error);
-          }
+          err?.(error);
         }
       }
     });

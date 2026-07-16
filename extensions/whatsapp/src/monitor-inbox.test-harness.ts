@@ -7,7 +7,6 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
-  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
   resetPairingSecurityMocks,
   upsertPairingRequestMock as pairingUpsertPairingRequestMock,
 } from "./pairing-security.test-harness.js";
@@ -30,10 +29,9 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
-export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
-export type MockSock = {
+type MockSock = {
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };

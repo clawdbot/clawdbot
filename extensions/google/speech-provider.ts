@@ -663,15 +663,3 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     },
   };
 }
-
-export const testing = {
-  DEFAULT_GOOGLE_TTS_MODEL,
-  DEFAULT_GOOGLE_TTS_VOICE,
-  GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
-  GOOGLE_TTS_MODELS,
-  GOOGLE_TTS_SAMPLE_RATE,
-  normalizeGoogleTtsModel,
-  renderGoogleAudioProfilePrompt,
-  wrapPcm16MonoToWav,
-};
-export { testing as __testing };

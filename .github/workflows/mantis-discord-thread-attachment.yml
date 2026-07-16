@@ -261,7 +261,7 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          timeout --signal=TERM --kill-after=10s 120s git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version

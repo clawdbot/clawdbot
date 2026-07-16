@@ -18,7 +18,8 @@ case "$OUTPUT_DIR" in
   /*) OUTPUT_DIR_HOST="$OUTPUT_DIR" ;;
   *) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;
 esac
-OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -127,7 +128,8 @@ if [ -n "$resolved_package_dir" ]; then
   package_source_kind="prepared-package-set"
   package_mount_args=(-v "$resolved_package_dir:/package-under-test:ro")
   registry_helper_mount_args=(
-    -v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"
+    -v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"
+    -v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"
   )
 elif [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
@@ -220,7 +222,7 @@ docker_env=(
   -e TMPDIR=/tmp
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
-  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"
+  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"
   -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
   -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
@@ -354,7 +356,7 @@ process.stdin.on("end", () => {
   registry_port_file="$(mktemp)"
   registry_log="$(mktemp)"
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
-    node /tmp/openclaw-npm-registry-server.mjs \
+    node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     "${registry_args[@]}" >"$registry_log" 2>&1 &
   registry_pid=$!
@@ -416,6 +418,7 @@ run_logged docker_e2e_run_with_harness \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
+  -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail

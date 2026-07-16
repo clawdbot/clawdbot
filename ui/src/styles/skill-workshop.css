@@ -43,10 +43,28 @@
   margin-top: var(--space-4);
 }
 
-/* Replaces the old .content--skill-workshop > .skill-workshop rule: the board
-   nests inside the hub tabpanel now, and dropping min-height: 0 at either
-   level would let tall boards grow the page instead of scrolling internally. */
-.sw-hub-panel > .skill-workshop {
+/* The board nests inside the hub tabpanel, which may wrap it in an inner
+   mode-switching tab panel. The inner tab panel must be a flex container so
+   the height constraint passes through to .skill-workshop. Shadow-DOM part
+   overrides make the tab panel's internal wrapper a flex column that fills
+   the host; width:100% preserves the full-width block behavior. */
+#skill-workshop-mode-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sw-hub-panel::part(base),
+#skill-workshop-mode-panel::part(base) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.sw-hub-panel .skill-workshop {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -1025,7 +1043,8 @@
   }
 }
 
-/* Progressive history review */
+/* Progressive history review — flex-shrink:0 keeps the banner from
+   collapsing when the board flex container is height-constrained. */
 .sw-history {
   position: relative;
   display: grid;
@@ -1035,6 +1054,7 @@
   margin: 18px 0 22px;
   padding: 24px 26px;
   overflow: hidden;
+  flex-shrink: 0;
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
   border-radius: 18px;
   background:

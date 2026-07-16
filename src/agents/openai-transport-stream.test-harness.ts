@@ -15,7 +15,7 @@ export type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICom
 
 export type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
-export type ResponsesApi = Extract<
+type ResponsesApi = Extract<
   Api,
   "openai-responses" | "openai-chatgpt-responses" | "azure-openai-responses"
 >;

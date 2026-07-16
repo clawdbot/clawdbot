@@ -25,7 +25,12 @@ import { DEFAULT_ACCOUNT_ID, DEFAULT_MAIN_KEY, normalizeAgentId } from "../routi
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
+  type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
+import {
+  detectLegacyApnsRegistrations,
+  migrateLegacyApnsRegistrations,
+} from "./state-migrations.apns.js";
 import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
@@ -110,6 +115,10 @@ import {
   resolveLegacyTaskRunsSidecarPath,
 } from "./state-migrations.storage.js";
 import {
+  detectLegacySubagentRegistry,
+  migrateLegacySubagentRegistry,
+} from "./state-migrations.subagent-registry.js";
+import {
   detectLegacyTuiLastSessions,
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
@@ -124,6 +133,20 @@ import {
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
+
+function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
+  switch (migration.kind) {
+    case "agent-databases-composite-primary-key":
+      return "agent database registry primary key → agent_id,path";
+    case "audit-events-v2":
+      return "audit event ledger → versioned message lifecycle schema";
+    case "operator-approvals-system-agent":
+      return "operator approvals → OpenClaw system changes";
+    case "strict-tables-v3":
+      return "tables → SQLite STRICT typing";
+  }
+  return migration.kind satisfies never;
+}
 
 let autoMigrateChecked = false;
 
@@ -402,11 +425,19 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const apns = detectLegacyApnsRegistrations({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const webPush = detectLegacyWebPush({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const nodeHost = detectLegacyNodeHostConfig({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const subagentRegistry = detectLegacySubagentRegistry({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
@@ -521,11 +552,7 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (stateSchemaMigrations.length > 0) {
     for (const migration of stateSchemaMigrations) {
-      preview.push(
-        migration.kind === "agent-databases-composite-primary-key"
-          ? "- Shared SQLite schema: agent database registry primary key → agent_id,path"
-          : "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
-      );
+      preview.push(`- Shared SQLite schema: ${describeStateSchemaMigration(migration)}`);
     }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
@@ -568,11 +595,17 @@ export async function detectLegacyStateMigrations(params: {
   if (managedOutgoingImages.hasLegacy) {
     preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
   }
+  if (apns.hasLegacy) {
+    preview.push("- APNs registrations: legacy JSON → shared SQLite state");
+  }
   if (webPush.hasLegacy) {
     preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
   }
   if (nodeHost.hasLegacy) {
     preview.push("- Node-host config: legacy node.json → shared SQLite state");
+  }
+  if (subagentRegistry.hasLegacy) {
+    preview.push("- Subagent runs: discard retired transient subagents/runs.json state");
   }
   if (rescuePending.hasLegacy) {
     preview.push("- System-agent rescue approvals: discard retired pending JSON capabilities");
@@ -665,8 +698,10 @@ export async function detectLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    apns,
     webPush,
     nodeHost,
+    subagentRegistry,
     rescuePending,
     channelPairing,
     execApprovals,
@@ -858,6 +893,11 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.managedOutgoingImages,
     stateDir: detected.stateDir,
   });
+  const apns = await migrateLegacyApnsRegistrations({
+    detected: detected.apns,
+    env,
+    stateDir: detected.stateDir,
+  });
   const webPush = await migrateLegacyWebPush({
     detected: detected.webPush,
     env,
@@ -865,6 +905,11 @@ export async function runLegacyStateMigrations(params: {
   });
   const nodeHost = await migrateLegacyNodeHostConfig({
     detected: detected.nodeHost,
+    env,
+    stateDir: detected.stateDir,
+  });
+  const subagentRegistry = await migrateLegacySubagentRegistry({
+    detected: detected.subagentRegistry,
     env,
     stateDir: detected.stateDir,
   });
@@ -905,8 +950,10 @@ export async function runLegacyStateMigrations(params: {
     tuiLastSessions,
     commitments,
     managedOutgoingImages,
+    apns,
     webPush,
     nodeHost,
+    subagentRegistry,
     pluginPlans,
   ]);
   return {
@@ -925,8 +972,10 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.changes,
       ...commitments.changes,
       ...managedOutgoingImages.changes,
+      ...apns.changes,
       ...webPush.changes,
       ...nodeHost.changes,
+      ...subagentRegistry.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
       ...execApprovals.changes,
@@ -953,8 +1002,10 @@ export async function runLegacyStateMigrations(params: {
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
       ...managedOutgoingImages.warnings,
+      ...apns.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
+      ...subagentRegistry.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
       ...execApprovals.warnings,

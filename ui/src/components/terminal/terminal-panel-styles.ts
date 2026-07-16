@@ -64,88 +64,6 @@ export const terminalPanelStyles = css`
     background: var(--bg, #0e1015);
     min-height: 36px;
   }
-  .tp-tabs {
-    --track-width: 0;
-    display: block;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .tp-tabs::part(nav) {
-    display: flex;
-    align-items: stretch;
-    gap: 1px;
-  }
-  .tp-tabs::part(body) {
-    display: none;
-  }
-  .tp-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tp-tab::part(base) {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px;
-    height: 36px;
-    color: var(--muted, #8a919e);
-    white-space: nowrap;
-    font-size: 12.5px;
-    border-bottom: 2px solid transparent;
-    transition:
-      color 0.12s ease,
-      background 0.12s ease;
-  }
-  .tp-tab:hover::part(base) {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  .tp-tab[active]::part(base) {
-    color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
-  }
-  .tp-tab.is-exited::part(base) {
-    opacity: 0.55;
-  }
-  .tp-tab.is-connecting .tp-tab__icon {
-    animation: tp-pulse 1.2s ease-in-out infinite;
-  }
-  .tp-tab__icon {
-    display: inline-flex;
-    color: var(--accent, #4ec9a8);
-  }
-  .tp-tab.is-exited .tp-tab__icon {
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__label {
-    font-variant-numeric: tabular-nums;
-  }
-  .tp-tab__status {
-    font-size: 11px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    align-self: center;
-    flex: 0 0 26px;
-    width: 26px;
-    height: 26px;
-    opacity: 0;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close {
-    opacity: 0.7;
-  }
-  .tp-tab__close:hover,
-  .tp-tab__close:focus-visible {
-    opacity: 1;
-  }
-  .tp-new,
   .tp-icon {
     display: inline-flex;
     align-items: center;
@@ -158,11 +76,6 @@ export const terminalPanelStyles = css`
     border-radius: 6px;
     padding: 0;
   }
-  .tp-new {
-    align-self: center;
-  }
-  .tp-tab__close:hover,
-  .tp-new:hover,
   .tp-icon:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
     color: var(--text, #d7dae0);
@@ -309,14 +222,8 @@ export const terminalPanelStyles = css`
       transform: rotate(360deg);
     }
   }
-  @keyframes tp-pulse {
-    50% {
-      opacity: 0.35;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
-    .tp-connecting__spinner,
-    .tp-tab.is-connecting .tp-tab__icon {
+    .tp-connecting__spinner {
       animation: none;
     }
   }

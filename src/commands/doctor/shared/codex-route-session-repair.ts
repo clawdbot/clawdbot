@@ -7,11 +7,15 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 import {
   isOpenAICodexAuthProfileRef,
+  isBlockedLegacyCodexModelPair,
+  isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
+  isLegacyCodexProviderId,
   isProviderlessModelRef,
   normalizeRuntimeString,
   toCanonicalOpenAIModelRef,
   toOpenAIModelId,
+  type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
 import type {
   CodexSessionRouteRepairSummary,
@@ -22,12 +26,32 @@ function rewriteSessionModelPair(params: {
   entry: SessionEntry;
   providerKey: "modelProvider" | "providerOverride";
   modelKey: "model" | "modelOverride";
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): boolean {
   let changed = false;
   const provider = normalizeString(params.entry[params.providerKey]);
   const model =
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
-  if (provider === "openai-codex") {
+  const legacyProviderModelRef =
+    sessionProviderAllowsScopedModelRef(provider) && isOpenAICodexModelRef(model)
+      ? model
+      : undefined;
+  const blockedIdentity =
+    isBlockedLegacyCodexModelPair({
+      providerId: provider,
+      modelId: model,
+      blockedModelIdentities: params.blockedModelIdentities,
+    }) ||
+    (legacyProviderModelRef
+      ? isBlockedLegacyCodexModelRef({
+          modelRef: legacyProviderModelRef,
+          blockedModelIdentities: params.blockedModelIdentities,
+        })
+      : false);
+  if (blockedIdentity) {
+    return false;
+  }
+  if (isLegacyCodexProviderId(provider)) {
     params.entry[params.providerKey] = "openai";
     if (model) {
       const modelId = toOpenAIModelId(model);
@@ -37,8 +61,11 @@ function rewriteSessionModelPair(params: {
     }
     return true;
   }
-  if (model && isOpenAICodexModelRef(model)) {
-    const canonicalModel = toCanonicalOpenAIModelRef(model);
+  if (legacyProviderModelRef) {
+    const canonicalModel =
+      provider === "openai"
+        ? toOpenAIModelId(legacyProviderModelRef)
+        : toCanonicalOpenAIModelRef(legacyProviderModelRef);
     if (canonicalModel) {
       params.entry[params.modelKey] = canonicalModel;
       changed = true;
@@ -47,11 +74,34 @@ function rewriteSessionModelPair(params: {
   return changed;
 }
 
-function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
-  if (
-    !isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) &&
-    !isOpenAICodexModelRef(entry.fallbackNoticeActiveModel)
-  ) {
+function sessionProviderAllowsScopedModelRef(provider: string | undefined): boolean {
+  // Canonical "openai" pairs keep raw model ids untouched: a configured
+  // OpenAI-compatible model may legitimately be ID'd "codex/<x>". Only an
+  // absent or legacy provider field marks the model string as a scoped ref.
+  return !provider || isLegacyCodexProviderId(provider);
+}
+
+function sessionModelPairHasLegacyRoute(provider: unknown, model: unknown): boolean {
+  const normalizedProvider = normalizeString(provider);
+  return (
+    isLegacyCodexProviderId(normalizedProvider) ||
+    (sessionProviderAllowsScopedModelRef(normalizedProvider) &&
+      typeof model === "string" &&
+      isOpenAICodexModelRef(model))
+  );
+}
+
+function clearStaleCodexFallbackNotice(
+  entry: SessionEntry,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): boolean {
+  const endpoints = [entry.fallbackNoticeSelectedModel, entry.fallbackNoticeActiveModel];
+  const hasBlockedEndpoint = endpoints.some(
+    (modelRef) =>
+      isOpenAICodexModelRef(modelRef) &&
+      isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities }),
+  );
+  if (hasBlockedEndpoint || !endpoints.some(isOpenAICodexModelRef)) {
     return false;
   }
   delete entry.fallbackNoticeSelectedModel;
@@ -60,7 +110,7 @@ function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
   return true;
 }
 
-function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
+function preserveRepairedSessionRuntimeIntent(entry: SessionEntry): boolean {
   const harnessRuntime = normalizeRuntimeString(entry.agentHarnessId);
   const overrideRuntime = normalizeRuntimeString(entry.agentRuntimeOverride);
   let changed = false;
@@ -68,20 +118,33 @@ function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
     delete entry.agentHarnessId;
     changed = true;
   }
-  if (entry.agentRuntimeOverride !== undefined && overrideRuntime !== "openclaw") {
-    delete entry.agentRuntimeOverride;
+  if (overrideRuntime !== "openclaw" && entry.agentRuntimeOverride !== "codex") {
+    entry.agentRuntimeOverride = "codex";
     changed = true;
   }
   return changed;
 }
 
-function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
+function repairProviderlessCodexSessionOverride(
+  entry: SessionEntry,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): boolean {
   if (
     !isProviderlessModelRef(entry.modelOverride) ||
     !isOpenAICodexAuthProfileRef(entry.authProfileOverride) ||
     entry.authProfileOverrideSource !== "auto" ||
     entry.modelOverrideSource !== "auto" ||
     normalizeString(entry.providerOverride)
+  ) {
+    return false;
+  }
+  const authProvider = normalizeString(entry.authProfileOverride)?.split(":", 1)[0];
+  if (
+    isBlockedLegacyCodexModelPair({
+      providerId: authProvider,
+      modelId: entry.modelOverride,
+      blockedModelIdentities,
+    })
   ) {
     return false;
   }
@@ -104,6 +167,7 @@ function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
 function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
@@ -115,18 +179,27 @@ function repairCodexSessionStoreRoutes(params: {
       entry,
       providerKey: "modelProvider",
       modelKey: "model",
+      blockedModelIdentities: params.blockedModelIdentities,
     });
     const changedOverrideModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "providerOverride",
       modelKey: "modelOverride",
+      blockedModelIdentities: params.blockedModelIdentities,
     });
-    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(entry);
+    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
+      entry,
+      params.blockedModelIdentities,
+    );
     const changedModelRoute =
       changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
-    const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
-    const changedRuntimePins =
-      changedModelRoute || changedFallbackNotice ? clearStaleSessionRuntimePins(entry) : false;
+    const changedFallbackNotice = clearStaleCodexFallbackNotice(
+      entry,
+      params.blockedModelIdentities,
+    );
+    const changedRuntimePins = changedModelRoute
+      ? preserveRepairedSessionRuntimeIntent(entry)
+      : false;
     if (!changedModelRoute && !changedFallbackNotice && !changedRuntimePins) {
       continue;
     }
@@ -145,23 +218,61 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { repairCodexSessionStoreRoutes };
 }
 
-function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {
+function scanCodexSessionStoreRoutes(
+  store: Record<string, SessionEntry>,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): string[] {
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
     if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       return [];
     }
+    const isBlockedPair = (provider: unknown, model: unknown) => {
+      const normalizedProvider = normalizeString(provider);
+      const legacyProviderModelRef =
+        sessionProviderAllowsScopedModelRef(normalizedProvider) &&
+        typeof model === "string" &&
+        isOpenAICodexModelRef(model)
+          ? model
+          : undefined;
+      return (
+        isBlockedLegacyCodexModelPair({
+          providerId: provider,
+          modelId: model,
+          blockedModelIdentities,
+        }) ||
+        (legacyProviderModelRef &&
+          isBlockedLegacyCodexModelRef({
+            modelRef: legacyProviderModelRef,
+            blockedModelIdentities,
+          }))
+      );
+    };
+    const fallbackNoticeEndpoints = [
+      entry.fallbackNoticeSelectedModel,
+      entry.fallbackNoticeActiveModel,
+    ];
+    const hasBlockedFallbackNoticeEndpoint = fallbackNoticeEndpoints.some(
+      (modelRef) =>
+        isOpenAICodexModelRef(modelRef) &&
+        isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities }),
+    );
+    const hasRewritableFallbackNotice =
+      !hasBlockedFallbackNoticeEndpoint && fallbackNoticeEndpoints.some(isOpenAICodexModelRef);
     const hasLegacyRoute =
-      normalizeString(entry.modelProvider) === "openai-codex" ||
-      normalizeString(entry.providerOverride) === "openai-codex" ||
-      isOpenAICodexModelRef(entry.model) ||
-      isOpenAICodexModelRef(entry.modelOverride) ||
+      (sessionModelPairHasLegacyRoute(entry.modelProvider, entry.model) &&
+        !isBlockedPair(entry.modelProvider, entry.model)) ||
+      (sessionModelPairHasLegacyRoute(entry.providerOverride, entry.modelOverride) &&
+        !isBlockedPair(entry.providerOverride, entry.modelOverride)) ||
       (isProviderlessModelRef(entry.modelOverride) &&
         isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
         entry.authProfileOverrideSource === "auto" &&
         entry.modelOverrideSource === "auto" &&
-        !normalizeString(entry.providerOverride)) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
+        !normalizeString(entry.providerOverride) &&
+        !isBlockedPair(
+          normalizeString(entry.authProfileOverride)?.split(":", 1)[0],
+          entry.modelOverride,
+        )) ||
+      hasRewritableFallbackNotice;
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
@@ -172,6 +283,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<CodexSessionRouteRepairSummary> {
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
     env: params.env ?? process.env,
@@ -183,6 +295,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(
         loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+        params.blockedModelIdentities,
       );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
@@ -194,7 +307,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         stale.length > 0
           ? [
               [
-                "- Legacy `openai-codex/*` session route state detected.",
+                "- Legacy `codex/*` or `openai-codex/*` session route state detected.",
                 `- Affected sessions: ${stale.length}.`,
                 "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins across all agent session stores.",
               ].join("\n"),
@@ -208,13 +321,18 @@ export async function maybeRepairCodexSessionRoutes(params: {
   for (const target of targets) {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
       loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      params.blockedModelIdentities,
     );
     if (staleSessionKeys.length === 0) {
       continue;
     }
     const result = await updateSessionStore(
       target.storePath,
-      (store) => repairCodexSessionStoreRoutes({ store }),
+      (store) =>
+        repairCodexSessionStoreRoutes({
+          store,
+          blockedModelIdentities: params.blockedModelIdentities,
+        }),
       { skipMaintenance: true },
     );
     if (!result.changed) {

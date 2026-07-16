@@ -15,6 +15,7 @@ const {
   createLineBotMock,
   createLineNodeWebhookHandlerMock,
   registerWebhookTargetWithPluginRouteMock,
+  runDetachedWebhookWorkMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
@@ -25,6 +26,7 @@ const {
     vi.fn<LineNodeWebhookHandler>(async () => {}),
   ),
   registerWebhookTargetWithPluginRouteMock: vi.fn(),
+  runDetachedWebhookWorkMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
@@ -100,6 +102,17 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-request-guards")>(
+    "openclaw/plugin-sdk/webhook-request-guards",
+  );
+  runDetachedWebhookWorkMock.mockImplementation(actual.runDetachedWebhookWork);
+  return {
+    ...actual,
+    runDetachedWebhookWork: runDetachedWebhookWorkMock,
+  };
+});
+
 vi.mock("./webhook-node.js", async () => {
   const actual = await vi.importActual<typeof import("./webhook-node.js")>("./webhook-node.js");
   return {
@@ -148,6 +161,7 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
+    vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");
     vi.doUnmock("./markdown-to-line.js");
@@ -163,6 +177,9 @@ describe("monitorLineProvider lifecycle", () => {
       account: { accountId: "default" },
       handleWebhook: vi.fn<LineHandleWebhook>(),
     }));
+    // Clear call history only; the implementation was wired to the actual
+    // helper once in the module mock factory.
+    runDetachedWebhookWorkMock.mockClear();
     innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
     createLineNodeWebhookHandlerMock
       .mockReset()
@@ -395,6 +412,39 @@ describe("monitorLineProvider lifecycle", () => {
       handleWebhook: ReturnType<typeof vi.fn>;
     };
     expect(res.statusCode).toBe(200);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
+  });
+
+  it("runs matched event processing on a detached admitted work root", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const req = Object.assign(createMockIncomingRequest([payload]), {
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    }) as unknown as IncomingMessage;
+    const res = createRouteResponse();
+
+    await route.handler(req, res);
+
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn>;
+    };
+    expect(res.statusCode).toBe(200);
+    // The request admission is released once the route handler returns, so
+    // event processing dispatched on the inherited chain would be refused as
+    // draining; the dispatch must reserve its own root.
+    expect(runDetachedWebhookWorkMock).toHaveBeenCalledTimes(1);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
 
     monitor.stop();

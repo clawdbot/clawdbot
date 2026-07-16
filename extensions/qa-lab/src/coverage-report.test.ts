@@ -165,12 +165,6 @@ describe("qa coverage report", () => {
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
     expect(inventory.missingCoverage).toStrictEqual([]);
-    expect(inventory.liveTransportLanes.map((lane) => lane.transportId)).toEqual([
-      "discord",
-      "slack",
-      "telegram",
-      "whatsapp",
-    ]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(3);
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
@@ -306,10 +300,6 @@ describe("qa coverage report", () => {
     );
     expect(report).toContain("otel-trace-smoke, docker-prometheus-smoke");
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
-    expect(report).toContain("## Live Transport Lanes");
-    expect(report).toContain(
-      "- telegram (telegram): canary: channel-canary, help-command: telegram-help-command, mention-gating: channel-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
-    );
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
     expect(report).toContain("- Fulfilled taxonomy categories:");
@@ -337,7 +327,7 @@ describe("qa coverage report", () => {
     expect(report).not.toContain("Native test refs");
   });
 
-  it("includes required channel driver flags in scenario match commands", () => {
+  it("includes a runnable channel driver choice in scenario match commands", () => {
     const matches = findQaScenarioMatches(
       readQaScenarioPack().scenarios,
       "whatsapp-access-control-group-disabled",
@@ -352,7 +342,23 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("uses the live lane for channel scenarios without a driver restriction", () => {
+  it("keeps qa-channel scenario commands on the default driver", () => {
+    const matches = findQaScenarioMatches(
+      readQaScenarioPack().scenarios,
+      "instruction-followthrough-repo-contract",
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "instruction-followthrough-repo-contract",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --scenario instruction-followthrough-repo-contract`",
+    );
+    expect(report).not.toContain("--channel-driver live --channel qa-channel");
+  });
+
+  it("uses the live lane as the coverage-report default for channel scenarios", () => {
     const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "dm-per-room-session");
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "dm-per-room-session",

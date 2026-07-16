@@ -84,13 +84,17 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 			inlineRanges = append(inlineRanges, span)
 		}
 	}
-	inlineRanges = append(inlineRanges, protectedMarkdownLinkLabelRanges(text)...)
+	inlineRanges = append(inlineRanges, protectedMarkdownLinkRanges(text)...)
 	masked := maskByteRanges(text, inlineRanges, nextPlaceholder, placeholders, mapping)
 
+	return maskByteRanges(masked, markdownListMarkerRanges(masked), nextPlaceholder, placeholders, mapping)
+}
+
+func markdownListMarkerRanges(text string) [][2]int {
 	listRanges := make([][2]int, 0)
 	fenceState := markdownLiteralFenceState{}
 	offset := 0
-	for _, line := range strings.SplitAfter(masked, "\n") {
+	for _, line := range strings.SplitAfter(text, "\n") {
 		insideFence := false
 		if fenceState.delimiter != "" {
 			if continuesMarkdownLiteralFenceContainer(line, fenceState) {
@@ -115,10 +119,19 @@ func maskMarkdownDocSyntax(text string, nextPlaceholder func() string, placehold
 		}
 		offset += len(line)
 	}
-	return maskByteRanges(masked, listRanges, nextPlaceholder, placeholders, mapping)
+	return listRanges
 }
 
-func protectedMarkdownLinkLabelRanges(text string) [][2]int {
+func extractMarkdownListMarkerPrefixes(text string) []string {
+	ranges := markdownListMarkerRanges(text)
+	prefixes := make([]string, 0, len(ranges))
+	for _, span := range ranges {
+		prefixes = append(prefixes, text[span[0]:span[1]])
+	}
+	return prefixes
+}
+
+func protectedMarkdownLinkRanges(text string) [][2]int {
 	ranges := make([][2]int, 0)
 	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
 		if len(match) < 6 {
@@ -127,7 +140,9 @@ func protectedMarkdownLinkLabelRanges(text string) [][2]int {
 		label := text[match[2]:match[3]]
 		destination := markdownInlineLinkDestination(text[match[4]:match[5]])
 		if isProtectedProductLinkLabel(label, destination) {
-			ranges = append(ranges, [2]int{match[2], match[3]})
+			// Keep the protected label attached to its original destination even when
+			// recursive chunk retries isolate or recombine the surrounding prose.
+			ranges = append(ranges, [2]int{match[0], match[1]})
 		}
 	}
 	return ranges
@@ -154,12 +169,25 @@ func extractNumericValues(text string) []string {
 	values := make([]string, 0)
 	for _, span := range numericValueRe.FindAllStringIndex(text, -1) {
 		candidate := [2]int{span[0], span[1]}
-		if hasCompositeNumericLeadingContinuation(text, candidate[0]) || hasCompositeNumericContinuation(text, candidate[1]) || rangeOverlapsAny(candidate, protocolRanges) {
+		if hasCompositeNumericLeadingContinuation(text, candidate[0]) ||
+			(hasCompositeNumericContinuation(text, candidate[1]) && !hasClockMeridiemSuffix(text, candidate)) ||
+			rangeOverlapsAny(candidate, protocolRanges) {
 			continue
 		}
 		values = append(values, text[span[0]:span[1]])
 	}
 	return values
+}
+
+func hasClockMeridiemSuffix(text string, span [2]int) bool {
+	if !strings.Contains(text[span[0]:span[1]], ":") || span[1]+2 > len(text) {
+		return false
+	}
+	suffix := strings.ToLower(text[span[1] : span[1]+2])
+	if suffix != "am" && suffix != "pm" {
+		return false
+	}
+	return span[1]+2 == len(text) || !isCompositeNumericWordByte(text[span[1]+2])
 }
 
 func hasCompositeNumericLeadingContinuation(text string, position int) bool {

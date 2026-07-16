@@ -11,7 +11,7 @@ import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-en
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
-export const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
+const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,

@@ -10,6 +10,10 @@ import { resolveNormalizedProviderModelMaxTokens } from "../../../config/default
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
+import {
+  isBlockedLegacyCodexModelRef,
+  type LegacyCodexModelIdentity,
+} from "./codex-route-model-ref.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {
@@ -292,7 +296,10 @@ function normalizeLegacyCodexCliAgentRuntimePolicy(raw: unknown): {
   };
 }
 
-function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
+function normalizeLegacyRuntimeAgentModelConfig(
+  raw: unknown,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): {
   value?: unknown;
   changed: boolean;
   selectedRuntime?: string;
@@ -300,7 +307,9 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
   selectedRefs: SelectedRuntimeRef[];
 } {
   if (typeof raw === "string") {
-    const migrated = migrateLegacyRuntimeModelRef(raw);
+    const migrated = isBlockedLegacyCodexModelRef({ modelRef: raw, blockedModelIdentities })
+      ? null
+      : migrateLegacyRuntimeModelRef(raw);
     return migrated
       ? {
           value: migrated.ref,
@@ -322,7 +331,10 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
   }
 
   const migratedPrimary =
-    typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
+    typeof raw.primary === "string" &&
+    !isBlockedLegacyCodexModelRef({ modelRef: raw.primary, blockedModelIdentities })
+      ? migrateLegacyRuntimeModelRef(raw.primary)
+      : null;
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
   const selectedRefs: SelectedRuntimeRef[] = [];
@@ -343,7 +355,12 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
       if (typeof fallback !== "string") {
         return fallback;
       }
-      const migratedFallback = migrateLegacyRuntimeModelRef(fallback);
+      const migratedFallback = isBlockedLegacyCodexModelRef({
+        modelRef: fallback,
+        blockedModelIdentities,
+      })
+        ? null
+        : migrateLegacyRuntimeModelRef(fallback);
       if (
         migratedFallback &&
         (migratedFallback.runtime === selectedRuntime ||
@@ -408,6 +425,7 @@ function normalizeLegacyRuntimeAllowlistModels(
   rawModels: unknown,
   selectedRuntime: string | undefined,
   selectedRuntimeRequiresPolicy: boolean,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): {
   value?: unknown;
   changed: boolean;
@@ -425,7 +443,12 @@ function normalizeLegacyRuntimeAllowlistModels(
     requiresRuntimePolicy: boolean;
   }> = [];
   for (const [rawKey, entry] of Object.entries(rawModels)) {
-    const migrated = migrateLegacyRuntimeModelRef(rawKey);
+    const migrated = isBlockedLegacyCodexModelRef({
+      modelRef: rawKey,
+      blockedModelIdentities,
+    })
+      ? null
+      : migrateLegacyRuntimeModelRef(rawKey);
     if (
       migrated &&
       (migrated.runtime === selectedRuntime ||
@@ -546,12 +569,13 @@ function normalizeLegacyRuntimeAgentContainer(
   raw: Record<string, unknown>,
   path: string,
   changes: string[],
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
   const legacyWholeAgentRuntime = resolveLegacyWholeAgentRuntimePolicy(raw.agentRuntime);
 
-  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
+  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model, blockedModelIdentities);
   if (model.changed) {
     next.model = model.value;
     changed = true;
@@ -567,6 +591,7 @@ function normalizeLegacyRuntimeAgentContainer(
     raw.models,
     model.selectedRuntime,
     model.selectedRuntimeRequiresPolicy,
+    blockedModelIdentities,
   );
   if (models.changed) {
     next.models = models.value;
@@ -684,6 +709,7 @@ function normalizeLegacyCodexCliProviderRuntimePins(
 export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfig,
   changes: string[],
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): OpenClawConfig {
   const providerPinned = normalizeLegacyCodexCliProviderRuntimePins(cfg, changes);
   const cfgWithProviders = providerPinned.config;
@@ -699,6 +725,7 @@ export function normalizeLegacyRuntimeModelRefs(
       rawAgents.defaults,
       "agents.defaults",
       changes,
+      blockedModelIdentities,
     );
     if (defaults.changed) {
       nextAgents.defaults = defaults.value;
@@ -713,7 +740,12 @@ export function normalizeLegacyRuntimeModelRefs(
       }
       const agentId = normalizeOptionalString(entry.id);
       const path = agentId ? `agents.list.${sanitizeForLog(agentId)}` : `agents.list[${index}]`;
-      const agent = normalizeLegacyRuntimeAgentContainer(entry, path, changes);
+      const agent = normalizeLegacyRuntimeAgentContainer(
+        entry,
+        path,
+        changes,
+        blockedModelIdentities,
+      );
       if (agent.changed) {
         changed = true;
         return agent.value;

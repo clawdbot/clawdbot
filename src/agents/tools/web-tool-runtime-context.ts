@@ -88,9 +88,7 @@ export function resolveWebSearchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
-}): ResolvedWebToolRuntimeContext<RuntimeWebSearchMetadata> & {
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-} {
+}) {
   const resolved = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebSearch,
@@ -100,7 +98,6 @@ export function resolveWebSearchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
-    runtimeMetadata: resolved.runtimeMetadata,
     runtimeWebSearch: resolved.runtimeMetadata,
   };
 }
@@ -110,9 +107,7 @@ export function resolveWebFetchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
-}): ResolvedWebToolRuntimeContext<RuntimeWebFetchMetadata> & {
-  runtimeWebFetch?: RuntimeWebFetchMetadata;
-} {
+}) {
   const resolved = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebFetch,
@@ -122,7 +117,6 @@ export function resolveWebFetchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
-    runtimeMetadata: resolved.runtimeMetadata,
     runtimeWebFetch: resolved.runtimeMetadata,
   };
 }

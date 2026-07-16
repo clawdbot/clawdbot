@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -2411,6 +2412,63 @@ function withTrailingNewline(content: string): string {
   return content.endsWith("\n") ? content : `${content}\n`;
 }
 
+async function resolveMemoryWritePath(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch (err) {
+    const hasTrailingSeparator =
+      filePath.endsWith(path.sep) ||
+      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
+      throw err;
+    }
+  }
+
+  // Canonicalize each parent before applying a relative link target. Lexical
+  // normalization would change `..` semantics when an earlier component is a symlink.
+  const parentPath = await fs.realpath(path.dirname(filePath));
+  const canonicalPath = path.join(parentPath, path.basename(filePath));
+  let linkTarget: string;
+  try {
+    linkTarget = await fs.readlink(canonicalPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "EINVAL") {
+      return canonicalPath;
+    }
+    throw err;
+  }
+  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
+  const targetPath = isWindowsRootRelative
+    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
+    : path.isAbsolute(linkTarget)
+      ? linkTarget
+      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
+  return await resolveMemoryWritePath(targetPath);
+}
+
+function isAtomicReplacePermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
+}
+
+async function writeExistingMemoryInPlace(filePath: string, content: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(content, { encoding: "utf-8" });
+    await handle.truncate(Buffer.byteLength(content));
+    await handle.sync();
+    return true;
+  } finally {
+    await handle.close();
+  }
+}
+
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
   // Marker keys include source paths, so spaces are valid. Capture until the
@@ -2497,7 +2555,10 @@ export async function applyShortTermPromotions(
       };
     }
 
-    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+    // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
+    // final target atomically without severing the chain, matching the prior writeFile path.
+    const memoryWritePath = await resolveMemoryWritePath(memoryPath);
+    const existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
       }
@@ -2530,11 +2591,52 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      await fs.writeFile(
-        memoryPath,
-        `${header}${withTrailingNewline(baseMemory)}${section}`,
-        "utf-8",
-      );
+      const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
+      const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
+      let atomicRenameCommitted = false;
+      const trackedRename: typeof fs.rename = async (source, destination) => {
+        await fs.rename(source, destination);
+        atomicRenameCommitted = true;
+      };
+      try {
+        await replaceFileAtomic({
+          filePath: memoryWritePath,
+          content,
+          dirMode: memoryDirMode,
+          mode: 0o600,
+          preserveExistingMode: true,
+          tempPrefix: `${path.basename(memoryPath)}.promotion`,
+          syncTempFile: true,
+          syncParentDir: true,
+          throwOnCleanupError: true,
+          // Stage proof prevents a future post-rename permission error from entering fallback.
+          fileSystem: {
+            promises: {
+              mkdir: fs.mkdir,
+              chmod: fs.chmod,
+              writeFile: fs.writeFile,
+              rename: trackedRename,
+              copyFile: fs.copyFile,
+              unlink: fs.unlink,
+              rm: fs.rm,
+              open: fs.open,
+              stat: fs.stat,
+              lstat: fs.lstat,
+            },
+          },
+        });
+      } catch (error) {
+        // Released promotion writes could update an existing writable MEMORY.md even when
+        // directory ACLs blocked rename. Retain that in-place contract only after a real
+        // atomic permission failure and a successful writable-file open.
+        if (
+          atomicRenameCommitted ||
+          !isAtomicReplacePermissionError(error) ||
+          !(await writeExistingMemoryInPlace(memoryWritePath, content))
+        ) {
+          throw error;
+        }
+      }
     }
 
     for (const candidate of rehydratedSelected) {

@@ -20,6 +20,16 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/suite.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 1,
+        "slack:adapter": 1,
+        "telegram:adapter": 1,
+        "telegram:all": 0,
+        "telegram:mock-release": 0,
+        "telegram:release": 0,
+        "whatsapp:adapter": 1,
+      }
     kind: flow
     summary: Run the shared channel canary through QA Channel, Crabline, or a live adapter.
     transportPolicy:

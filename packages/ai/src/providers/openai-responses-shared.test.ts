@@ -724,6 +724,32 @@ describe("convertResponsesMessages", () => {
     expect(functionOutput?.output).not.toBe("(no output)");
   });
 
+  it("does not emit image parts or placeholders for payload-less tool media", () => {
+    const input = convertResponsesMessages(
+      { ...nativeOpenAIModel, input: ["text", "image"] },
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput?.output).toBe("(no output)");
+    expect(JSON.stringify(functionOutput)).not.toContain("input_image");
+    expect(JSON.stringify(functionOutput)).not.toContain("see attached image");
+  });
+
   it("keeps encrypted reasoning replay item ids when requested", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -1232,6 +1258,126 @@ describe("processResponsesStream", () => {
       ["toolcall_end", 0],
       ["toolcall_end", 1],
     ]);
+  });
+
+  it("routes indexed Responses tool arguments when item ids rotate", async () => {
+    const output = createResponsesAssistantOutput(gpt56SolModel);
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "encrypted_delta_1",
+          delta: '{"path":',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "encrypted_delta_2",
+          delta: '"README.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          item_id: "encrypted_done",
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_read", status: "completed" },
+        },
+      ]),
+      output,
+      stream,
+      gpt56SolModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+
+  it("rejects indexed Responses completions when call ids change", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read",
+              call_id: "call_read_a",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "encrypted_delta",
+            delta: '{"path":"README.md"}',
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read_done",
+              call_id: "call_read_b",
+              name: "read",
+              arguments: '{"path":"README.md"}',
+            },
+          },
+          {
+            type: "response.completed",
+            response: { id: "resp_read", status: "completed" },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 
   it("rejects reuse of an active Responses tool-call output index", async () => {

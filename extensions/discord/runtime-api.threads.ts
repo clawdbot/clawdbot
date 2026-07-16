@@ -1,6 +1,5 @@
 // Discord plugin module implements runtime api.threads behavior.
 export {
-  testing as __testing,
   testing,
   autoBindSpawnedDiscordSubagent,
   createNoopThreadBindingManager,

@@ -15,7 +15,7 @@ import {
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
-export type SystemAgentVerifiedInferenceTestFixture = {
+type SystemAgentVerifiedInferenceTestFixture = {
   binding: SystemAgentVerifiedInferenceBinding;
   deps: SystemAgentVerifiedInferenceDeps;
 };

@@ -8,10 +8,13 @@
  */
 export {
   AllowFromListSchema,
+  ChannelGroupEntrySchema,
   BlockStreamingCoalesceSchema,
   buildCatchallMultiAccountChannelSchema,
   buildChannelConfigSchema,
   buildNestedDmConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,

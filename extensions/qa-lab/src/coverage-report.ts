@@ -1,9 +1,5 @@
 // Qa Lab plugin module implements coverage report behavior.
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  buildLiveTransportCoverageLaneSummaries,
-  type LiveTransportCoverageLaneSummary,
-} from "./live-transports/shared/live-transport-scenarios.js";
 import { QA_SCENARIO_PACKS, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
@@ -28,7 +24,6 @@ type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
   executionPath?: string;
   runtimeParityTier?: string;
   requiredProviderMode?: string;
-  requiredChannelDriver?: string;
   requiredProvider?: string;
   requiredModel?: string;
 };
@@ -63,7 +58,6 @@ type QaCoverageInventory = {
   byTheme: Record<string, QaCoverageIdSummary[]>;
   bySurface: Record<string, QaCoverageIdSummary[]>;
   scenarioPacks: QaCoverageScenarioPackSummary[];
-  liveTransportLanes: LiveTransportCoverageLaneSummary[];
   scorecardTaxonomy: QaScorecardTaxonomyReport;
 };
 
@@ -168,7 +162,6 @@ function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaSce
     ...(scenario.execution.kind !== "flow" ? { executionPath: scenario.execution.path } : {}),
     runtimeParityTier: scenario.runtimeParityTier,
     requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
-    requiredChannelDriver: stringifyConfigValue(config.requiredChannelDriver),
     requiredProvider: stringifyConfigValue(config.requiredProvider),
     requiredModel: stringifyConfigValue(config.requiredModel),
   };
@@ -300,7 +293,6 @@ export function buildQaCoverageInventory(
     byTheme,
     bySurface,
     scenarioPacks: buildScenarioPackSummaries(scenarios),
-    liveTransportLanes: buildLiveTransportCoverageLaneSummaries(),
     scorecardTaxonomy: readQaScorecardTaxonomyReport(scenarios),
   };
 }
@@ -311,28 +303,6 @@ function pushCoverageIdLines(lines: string[], coverageIds: readonly QaCoverageId
       .map((scenario) => `${scenario.intent}: ${scenario.id} (${scenario.sourcePath})`)
       .join(", ");
     lines.push(`- ${coverage.id}: ${scenarios}`);
-  }
-}
-
-function pushLiveTransportLines(
-  lines: string[],
-  lanes: readonly LiveTransportCoverageLaneSummary[],
-) {
-  for (const lane of lanes) {
-    const members = lane.members
-      .map((member) =>
-        member.scenarioId
-          ? `${member.standardId}: ${member.scenarioId}`
-          : `${member.standardId}: always-on`,
-      )
-      .join(", ");
-    const missing =
-      lane.baselineMissingStandardScenarioIds.length > 0
-        ? lane.baselineMissingStandardScenarioIds.join(", ")
-        : "none";
-    lines.push(
-      `- ${lane.transportId} (${lane.commandName}): ${members}; missing baseline: ${missing}`,
-    );
   }
 }
 
@@ -443,12 +413,6 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
     lines.push("");
   }
 
-  if (inventory.liveTransportLanes.length > 0) {
-    lines.push("## Live Transport Lanes", "");
-    pushLiveTransportLines(lines, inventory.liveTransportLanes);
-    lines.push("");
-  }
-
   pushScorecardTaxonomyLines(lines, inventory.scorecardTaxonomy);
 
   if (inventory.overlappingCoverage.length > 0) {
@@ -474,7 +438,6 @@ function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
   const metadata = [
     match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
     match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
-    match.requiredChannelDriver ? `channelDriver=${match.requiredChannelDriver}` : "",
     match.requiredProvider ? `provider=${match.requiredProvider}` : "",
     match.requiredModel ? `model=${match.requiredModel}` : "",
   ].filter(Boolean);
@@ -487,20 +450,18 @@ function uniqueScenarioValues(values: (string | undefined)[]) {
 
 function formatSuiteCommand(matches: readonly QaScenarioSearchMatch[]) {
   const scenarioArgs = matches.map((match) => `--scenario ${match.id}`).join(" ");
-  const requiredDrivers = uniqueScenarioValues(matches.map((match) => match.requiredChannelDriver));
   const channels = uniqueScenarioValues(matches.map((match) => match.channel));
-  const selectedDriver =
-    requiredDrivers.length === 1 ? requiredDrivers[0] : channels.length === 1 ? "live" : undefined;
-  const driverArg =
-    selectedDriver && selectedDriver !== "qa-channel" ? ` --channel-driver ${selectedDriver}` : "";
-  const channelArg = driverArg && channels.length === 1 ? ` --channel ${channels[0]}` : "";
+  const [channel] = channels;
+  const selectedDriver = channels.length === 1 && channel !== "qa-channel" ? "live" : undefined;
+  const driverArg = selectedDriver ? ` --channel-driver ${selectedDriver}` : "";
+  const channelArg = driverArg && channel ? ` --channel ${channel}` : "";
   return `pnpm openclaw qa suite${driverArg}${channelArg} ${scenarioArgs}`;
 }
 
 function scenarioMatchCommandGroups(matches: readonly QaScenarioSearchMatch[]) {
   const groups = new Map<string, QaScenarioSearchMatch[]>();
   for (const match of matches) {
-    const key = JSON.stringify([match.executionKind, match.channel, match.requiredChannelDriver]);
+    const key = JSON.stringify([match.executionKind, match.channel]);
     const group = groups.get(key) ?? [];
     group.push(match);
     groups.set(key, group);

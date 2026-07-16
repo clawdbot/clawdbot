@@ -1,4 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import type {
   RestartRecoveryTerminalDeliveryEvidence,
   RestartRecoveryTerminalDeliveryEvidenceResult,
@@ -7,8 +12,36 @@ import type { SessionEntry } from "./types.js";
 
 const MAX_TERMINAL_RUN_IDS = 64;
 
+type RestartRecoveryChannelAuthority = {
+  deliveryContext: DeliveryContext & { channel: string; to: string };
+  sourceTurnId: string;
+};
+
 function normalizeRunId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolves only a complete durable channel claim; session-route fallbacks carry no authority. */
+export function resolveRestartRecoveryChannelAuthority(
+  entry: SessionEntry,
+): RestartRecoveryChannelAuthority | undefined {
+  const sourceTurnId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const deliveryContext = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  const channel = normalizeRunId(deliveryContext?.channel);
+  const to = normalizeRunId(deliveryContext?.to);
+  if (
+    entry.restartRecoverySourceIngress !== "channel" ||
+    !sourceTurnId ||
+    !channel ||
+    !to ||
+    !isDeliverableMessageChannel(channel)
+  ) {
+    return undefined;
+  }
+  return {
+    sourceTurnId,
+    deliveryContext: { ...deliveryContext, channel, to },
+  };
 }
 
 function normalizeThreadId(value: unknown): string | undefined {
@@ -239,12 +272,19 @@ function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | unde
 }
 
 type RestartRecoveryNormalizedField =
+  | "restartRecoveryBeforeAgentReplyState"
+  | "restartRecoveryDeliveryReceiptState"
+  | "restartRecoveryDeliveryToolCallId"
   | "restartRecoveryDeliveryMediaUrls"
   | "restartRecoveryDisableMessageTool"
   | "restartRecoverySuppressTextDelivery"
   | "restartRecoveryDeliveryRequestFingerprint"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryRequesterAccountId"
+  | "restartRecoveryRequesterSenderId"
+  | "restartRecoverySameChannelThreadRequired"
+  | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoveryTerminalDeliveryEvidence"
   | "restartRecoveryTerminalRunIds";
@@ -256,12 +296,17 @@ function sameOptionalStringArray(left: unknown, right: string[] | undefined): bo
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+/** Compares normalized durable terminal-source tombstones by value and order. */
+export function sameRestartRecoveryTerminalRunIds(left: unknown, right: unknown): boolean {
+  return sameOptionalStringArray(left, normalizeRestartRecoveryTerminalRunIds(right));
+}
+
 /** Normalizes restart-claim fields while preserving an already-canonical array identity. */
 export function normalizeRestartRecoveryEntryFields(
   entry: SessionEntry,
-  assign: (
-    key: RestartRecoveryNormalizedField,
-    value: string | string[] | true | RestartRecoveryTerminalDeliveryEvidence[] | undefined,
+  assign: <K extends RestartRecoveryNormalizedField>(
+    key: K,
+    value: SessionEntry[K] | undefined,
   ) => void,
 ): void {
   const deliveryMediaUrls = normalizePresentStringArray(entry.restartRecoveryDeliveryMediaUrls);
@@ -280,6 +325,28 @@ export function normalizeRestartRecoveryEntryFields(
     entry.restartRecoverySuppressTextDelivery === true ? true : undefined,
   );
   assign(
+    "restartRecoveryBeforeAgentReplyState",
+    entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
+      entry.restartRecoveryBeforeAgentReplyState === "pending" ||
+      entry.restartRecoveryBeforeAgentReplyState === "continue" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-silent" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+      entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable"
+      ? entry.restartRecoveryBeforeAgentReplyState
+      : undefined,
+  );
+  assign(
+    "restartRecoveryDeliveryReceiptState",
+    entry.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
+      entry.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+      ? entry.restartRecoveryDeliveryReceiptState
+      : undefined,
+  );
+  assign(
+    "restartRecoveryDeliveryToolCallId",
+    normalizeRunId(entry.restartRecoveryDeliveryToolCallId),
+  );
+  assign(
     "restartRecoveryDeliveryRequestFingerprint",
     normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
   );
@@ -287,6 +354,26 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryDeliverySourceRunId",
     normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
+  );
+  assign(
+    "restartRecoveryRequesterAccountId",
+    normalizeRunId(entry.restartRecoveryRequesterAccountId),
+  );
+  assign(
+    "restartRecoveryRequesterSenderId",
+    normalizeRunId(entry.restartRecoveryRequesterSenderId),
+  );
+  assign(
+    "restartRecoverySameChannelThreadRequired",
+    entry.restartRecoverySameChannelThreadRequired === true ? true : undefined,
+  );
+  assign(
+    "restartRecoverySourceIngress",
+    entry.restartRecoverySourceIngress === "channel" ||
+      entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "internal"
+      ? entry.restartRecoverySourceIngress
+      : undefined,
   );
   assign(
     "restartRecoverySourceReplyDeliveryMode",
@@ -358,6 +445,26 @@ export function hasRestartRecoveryTerminalRun(
   );
 }
 
+/** Matches durable source ownership regardless of the surrounding run status. */
+export function hasRestartRecoverySourceClaim(
+  entry: SessionEntry | null | undefined,
+  sourceTurnId: string,
+): entry is SessionEntry {
+  const normalizedSourceTurnId = normalizeRunId(sourceTurnId);
+  return (
+    normalizedSourceTurnId !== undefined &&
+    normalizeRunId(entry?.restartRecoveryDeliveryRunId) !== undefined &&
+    normalizeRunId(entry?.restartRecoveryDeliverySourceRunId) === normalizedSourceTurnId
+  );
+}
+
+export function hasActiveRestartRecoverySourceClaim(
+  entry: SessionEntry | null | undefined,
+  sourceTurnId: string,
+): entry is SessionEntry {
+  return entry?.status === "running" && hasRestartRecoverySourceClaim(entry, sourceTurnId);
+}
+
 /** Clears exact active ownership and optionally records its client source as terminal. */
 export function buildRestartRecoveryClaimCleanupPatch(params: {
   entry: SessionEntry;
@@ -382,6 +489,9 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
         )
       : undefined;
   return {
+    restartRecoveryBeforeAgentReplyState: undefined,
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
     restartRecoveryDeliveryContext: undefined,
     restartRecoveryDeliveryMediaUrls: undefined,
     restartRecoveryDisableMessageTool: undefined,
@@ -389,6 +499,10 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRequestFingerprint: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryRequesterAccountId: undefined,
+    restartRecoveryRequesterSenderId: undefined,
+    restartRecoverySameChannelThreadRequired: undefined,
+    restartRecoverySourceIngress: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

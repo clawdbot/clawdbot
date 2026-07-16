@@ -14,6 +14,21 @@ import { NonEmptyString } from "./primitives.js";
  */
 
 /** Model option shown in selectors and model catalog results. */
+export const GatewayAgentRuntimeSchema = closedObject({
+  id: NonEmptyString,
+  fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  source: Type.Union([
+    Type.Literal("env"),
+    Type.Literal("agent"),
+    Type.Literal("defaults"),
+    Type.Literal("model"),
+    Type.Literal("provider"),
+    Type.Literal("implicit"),
+    Type.Literal("session"),
+    Type.Literal("session-key"),
+  ]),
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
@@ -22,6 +37,7 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
@@ -57,20 +73,7 @@ export const AgentSummarySchema = closedObject({
       fallbacks: Type.Optional(Type.Array(NonEmptyString)),
     }),
   ),
-  agentRuntime: Type.Optional(
-    closedObject({
-      id: NonEmptyString,
-      fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
-      source: Type.Union([
-        Type.Literal("env"),
-        Type.Literal("agent"),
-        Type.Literal("defaults"),
-        Type.Literal("model"),
-        Type.Literal("provider"),
-        Type.Literal("implicit"),
-      ]),
-    }),
-  ),
+  agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   thinkingLevels: Type.Optional(
     Type.Array(
       closedObject({
@@ -112,12 +115,12 @@ export const AgentsCreateResultSchema = closedObject({
   model: Type.Optional(NonEmptyString),
 });
 
-/** Updates mutable agent identity, workspace, and model fields. */
+/** Updates mutable agent identity, workspace, and model fields; null clears the model override. */
 export const AgentsUpdateParamsSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
+  model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
 });
@@ -893,6 +896,7 @@ export const ToolsInvokeResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type AgentSummary = Static<typeof AgentSummarySchema>;
+export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
 export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;
 export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
 export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;

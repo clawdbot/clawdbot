@@ -3,7 +3,6 @@ import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   azureSpeechTTS,
-  buildAzureSpeechSsml,
   inferAzureSpeechFileExtension,
   isAzureSpeechVoiceCompatible,
   listAzureSpeechVoices,
@@ -43,21 +42,6 @@ describe("azure speech tts", () => {
     vi.restoreAllMocks();
   });
 
-  it("escapes SSML text and attributes", () => {
-    expect(
-      buildAzureSpeechSsml({
-        text: `Tom & "Jerry" <tag>`,
-        voice: `en-US-JennyNeural" xml:lang="evil`,
-        lang: `en-US" bad="1`,
-      }),
-    ).toBe(
-      `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
-        `xml:lang="en-US&quot; bad=&quot;1">` +
-        `<voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">` +
-        `Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
-    );
-  });
-
   it("normalizes region and endpoint routing", () => {
     expect(normalizeAzureSpeechBaseUrl({ region: "eastus" })).toBe(
       "https://eastus.tts.speech.microsoft.com",
@@ -86,11 +70,11 @@ describe("azure speech tts", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await azureSpeechTTS({
-      text: "hello",
-      apiKey: "speech-key",
+      text: `Tom & "Jerry" <tag>`,
+      apiKey: "fixture-value",
       region: "eastus",
-      voice: "en-US-JennyNeural",
-      lang: "en-US",
+      voice: `en-US-JennyNeural" xml:lang="evil`,
+      lang: `en-US" bad="1`,
       outputFormat: "audio-24khz-48kbitrate-mono-mp3",
       timeoutMs: 1234,
     });
@@ -101,10 +85,15 @@ describe("azure speech tts", () => {
     expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
     expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
-    expect(headers.get("Ocp-Apim-Subscription-Key")).toBe("speech-key");
+    expect(headers.get("Ocp-Apim-Subscription-Key")).toBe("fixture-value");
     expect(headers.get("Content-Type")).toBe("application/ssml+xml");
     expect(headers.get("X-Microsoft-OutputFormat")).toBe("audio-24khz-48kbitrate-mono-mp3");
-    expect(init.body).toContain(`<voice name="en-US-JennyNeural">hello</voice>`);
+    expect(init.body).toBe(
+      `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
+        `xml:lang="en-US&quot; bad=&quot;1">` +
+        `<voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">` +
+        `Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
+    );
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 

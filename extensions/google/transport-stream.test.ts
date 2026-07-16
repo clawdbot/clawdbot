@@ -6,6 +6,7 @@ import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
 const {
   buildGuardedModelFetchMock,
@@ -36,13 +37,9 @@ vi.mock("google-auth-library", () => ({
 }));
 
 let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildGoogleGenerativeAiParams;
-let buildGoogleGemini3FirstResponseRetryParams: typeof import("./transport-stream.js").buildGoogleGemini3FirstResponseRetryParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
-let resolveGoogleGemini3FirstResponseRetryMs: typeof import("./transport-stream.js").resolveGoogleGemini3FirstResponseRetryMs;
-let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
-let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -327,16 +324,10 @@ describe("google transport stream", () => {
   beforeAll(async () => {
     ({
       buildGoogleGenerativeAiParams,
-      buildGoogleGemini3FirstResponseRetryParams,
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
-      resolveGoogleGemini3FirstResponseRetryMs,
     } = await import("./transport-stream.js"));
-    ({
-      hasGoogleVertexAuthorizedUserAdcSync,
-      resolveGoogleVertexAuthorizedUserHeaders,
-      resetGoogleVertexAuthorizedUserTokenCacheForTest,
-    } = await import("./vertex-adc.js"));
+    ({ resolveGoogleVertexAuthorizedUserHeaders } = await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
@@ -345,7 +336,7 @@ describe("google transport stream", () => {
     googleAuthGetAccessTokenMock.mockReset();
     googleAuthMock.mockClear();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
-    resetGoogleVertexAuthorizedUserTokenCacheForTest();
+    resetGoogleVertexAdcState();
   });
 
   afterEach(() => {
@@ -861,41 +852,6 @@ describe("google transport stream", () => {
     expect(result.content[2]).toEqual({ type: "text", text: "answer" });
   });
 
-  it("builds a lean Gemini 3 first-response retry payload", () => {
-    const model = buildGeminiModel({
-      id: "gemini-3.1-pro-preview",
-      name: "Gemini 3.1 Pro Preview",
-    });
-    const retryPayload = buildGoogleGemini3FirstResponseRetryParams({
-      model,
-      request: {
-        contents: [{ role: "user", parts: [{ text: "hello" }] }],
-        generationConfig: {
-          thinkingConfig: {
-            includeThoughts: true,
-            thinkingLevel: "HIGH",
-          },
-        },
-      },
-    });
-
-    expect(retryPayload?.generationConfig).toEqual({
-      thinkingConfig: {
-        thinkingLevel: "LOW",
-      },
-    });
-  });
-
-  it("rejects non-integer Gemini 3 first-response retry env values", () => {
-    const envName = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
-
-    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "1200" })).toBe(1200);
-    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "0" })).toBe(0);
-    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "0x10" })).toBe(45_000);
-    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "100.5" })).toBe(45_000);
-    expect(resolveGoogleGemini3FirstResponseRetryMs({ [envName]: "1e3" })).toBe(45_000);
-  });
-
   it("wraps malformed Gemini SSE JSON", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
 
@@ -1099,26 +1055,41 @@ describe("google transport stream", () => {
     });
   });
 
-  it("detects supported Vertex ADC sources synchronously", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-detect-"));
-    for (const type of ["authorized_user", "external_account", "service_account"]) {
-      const credentialsPath = path.join(tempDir, `${type}.json`);
-      await writeFile(credentialsPath, JSON.stringify({ type }), "utf8");
+  it.each([
+    ["eu", "https://aiplatform.eu.rep.googleapis.com"],
+    ["us", "https://aiplatform.us.rep.googleapis.com"],
+  ])(
+    "routes the %s Vertex multi-region through the production stream",
+    async (location, origin) => {
+      const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-region-"));
+      vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+      vi.stubEnv("HOME", path.join(tempDir, "home"));
+      vi.stubEnv("APPDATA", "");
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
+      googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
+      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+      const streamFn = createGoogleVertexTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          buildGoogleVertexModel(),
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
+            typeof streamFn
+          >[1],
+          {
+            apiKey: "gcp-vertex-credentials",
+            fetch: vi.fn(),
+          } as Parameters<typeof streamFn>[2],
+        ),
+      );
+      await stream.result();
 
-      expect(
-        hasGoogleVertexAuthorizedUserAdcSync({
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-        }),
-      ).toBe(true);
-    }
-
-    expect(
-      hasGoogleVertexAuthorizedUserAdcSync({
-        HOME: path.join(tempDir, "empty-home"),
-        KUBERNETES_SERVICE_HOST: "10.0.0.1",
-      }),
-    ).toBe(false);
-  });
+      const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+      expect(String(url)).toBe(
+        `${origin}/v1/projects/demo/locations/${location}/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse`,
+      );
+    },
+  );
 
   it("resolves non-file Vertex ADC through google-auth-library without OAuth refresh fetch", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-authlib-"));
@@ -1303,8 +1274,6 @@ describe("google transport stream", () => {
         },
       ]),
     );
-
-    expect(hasGoogleVertexAuthorizedUserAdcSync()).toBe(true);
 
     const model = buildGoogleVertexModel();
 
@@ -1578,8 +1547,6 @@ describe("google transport stream", () => {
         },
       ]),
     );
-
-    expect(hasGoogleVertexAuthorizedUserAdcSync()).toBe(true);
 
     const streamFn = createGoogleVertexTransportStreamFn();
     const stream = await Promise.resolve(
@@ -2662,6 +2629,30 @@ describe("google transport stream", () => {
     expect(params.contents[1]).toMatchObject({
       parts: [{ functionResponse: { response: { output: "(see attached audio)" } } }],
     });
+  });
+
+  it("does not emit inline data or media placeholders for payload-less tool images", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash", input: ["text", "image"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn(),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    const serialized = JSON.stringify(params.contents);
+    expect(serialized).toContain('"output":""');
+    expect(serialized).not.toContain("inlineData");
+    expect(serialized).not.toContain("see attached image");
   });
 
   it.each([

@@ -151,6 +151,10 @@ export async function stageSandboxMedia(params: {
     }
   }
 
+  if (staged.size > 0 && hostWorkspaceStagingDir) {
+    ctx.MediaWorkspaceDir = path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir);
+  }
+
   rewriteStagedMediaPaths({
     ctx,
     sessionCtx,

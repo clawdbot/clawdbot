@@ -22,7 +22,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-agent-message-action-react",
     title: "WhatsApp user-path agent reaction uses the message tool",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       actions: true,
@@ -53,7 +52,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-agent-message-action-upload-file",
     title: "WhatsApp user-path agent upload-file sends media",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       actions: true,
@@ -91,7 +89,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-group-agent-message-action-react",
     title: "WhatsApp group user-path agent reaction uses the message tool",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       actions: true,
@@ -123,7 +120,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-group-agent-message-action-upload-file",
     title: "WhatsApp group user-path agent upload-file sends media",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       actions: true,
@@ -163,7 +159,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-inbound-reaction-no-trigger",
     title: "WhatsApp inbound user reaction does not start a fresh run",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_INBOUND_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -197,7 +192,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-reply-context-isolation",
     title: "WhatsApp direct Gateway send does not reuse prior quote context",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_REPLY_ISOLATION_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -256,7 +250,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-inbound-image-caption",
     title: "WhatsApp inbound image caption reaches the agent",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 60_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_IMAGE_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -278,7 +271,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-audio-preflight",
     title: "WhatsApp inbound audio preflight transcript reaches the agent",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       audioPreflight: true,
@@ -301,7 +293,6 @@ export const WHATSAPP_QA_USER_PATH_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-outbound-media-matrix",
     title: "WhatsApp direct Gateway send delivers outbound media variants",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_OUTBOUND_MEDIA_${randomUUID().slice(0, 8).toUpperCase()}`;

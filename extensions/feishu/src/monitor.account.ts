@@ -12,11 +12,7 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
-import {
-  hasProcessedFeishuMessage,
-  recordProcessedFeishuMessage,
-  warmupDedupFromPluginState,
-} from "./dedup.js";
+import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -307,7 +303,6 @@ function registerEventHandlers(
       resolveDebounceText: ({ event, botOpenId, botName }) =>
         parseFeishuMessageEvent(event, botOpenId, botName).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
-      recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,

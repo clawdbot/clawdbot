@@ -718,17 +718,25 @@ async function buildClawHubError(
 }
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const reset =
-    normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
-    normalizeHeaderValue(headers.get("Retry-After"));
+  const resetSeconds =
+    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
   const segments: string[] = [];
-  if (reset && Number.isFinite(Number(reset))) {
-    segments.push(`(resets in ${reset}s)`);
+  if (resetSeconds !== undefined) {
+    segments.push(`(resets in ${resetSeconds}s)`);
   }
   if (!hasToken) {
     segments.push("Sign in for higher rate limits.");
   }
   return segments.join(" ");
+}
+
+function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
+  const normalized = normalizeHeaderValue(value);
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  return parseStrictNonNegativeInteger(normalized);
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {

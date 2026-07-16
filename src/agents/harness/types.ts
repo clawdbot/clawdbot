@@ -196,12 +196,29 @@ type AgentHarnessAuthBindingCapability = {
   };
 };
 
+type AgentHarnessProviderUsageCapability = {
+  /**
+   * Contributes runtime-owned quota data without registering a text provider.
+   * Provider usage hooks remain authoritative when both surfaces exist.
+   */
+  fetchUsageSnapshot?: (
+    ctx: import("../../plugins/provider-runtime.types.js").ProviderFetchUsageSnapshotContext,
+  ) =>
+    | Promise<
+        import("../../infra/provider-usage.types.js").ProviderUsageSnapshot | null | undefined
+      >
+    | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
+    | null
+    | undefined;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

@@ -6,6 +6,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
+  promptPressureKeys: new Set<string>(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -18,6 +19,17 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  toolResultWarningDedupe: {
+    promptPressure: {
+      check: (key: string) => {
+        if (hoisted.promptPressureKeys.has(key)) {
+          return true;
+        }
+        hoisted.promptPressureKeys.add(key);
+        return false;
+      },
+    },
+  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
@@ -101,6 +113,7 @@ function createInput(options?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hoisted.promptPressureKeys.clear();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -178,6 +191,24 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).toHaveBeenCalledWith(
       expect.stringContaining("aggregate tool-result pressure"),
     );
+  });
+
+  it("deduplicates aggregate pressure warnings per session key", () => {
+    hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
+      messages: [...inputMessages],
+      truncatedCount: 1,
+      aggregateTruncatedCount: 1,
+      aggregatePressureEngaged: true,
+      aggregateBudgetChars: 200,
+    }));
+    const attempt = createAttempt({ sessionId: "dup-session", sessionKey: "dup-session" });
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).toHaveBeenCalledTimes(1);
+    hoisted.warn.mockClear();
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
   it("moves runtime-only context into the active system prompt", () => {

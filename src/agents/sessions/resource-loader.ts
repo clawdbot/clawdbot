@@ -7,15 +7,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { CONFIG_DIR_NAME } from "../config.js";
-import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
-import type { ResourceDiagnostic } from "./diagnostics.js";
-
-export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
-
 import type { Skill } from "../../skills/loading/session.js";
 import { loadSkills } from "../../skills/loading/session.js";
+import { CONFIG_DIR_NAME } from "../config.js";
+import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import {
   createExtensionRuntime,
@@ -64,7 +61,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
       console.error(
         chalk.yellow(`Warning: Could not read ${description} file ${input}: ${String(error)}`),
       );
-      return input;
+      return undefined;
     }
   }
 
@@ -89,7 +86,7 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
   return null;
 }
 
-export function loadProjectContextFiles(options: {
+function loadProjectContextFiles(options: {
   cwd: string;
   agentDir: string;
 }): Array<{ path: string; content: string }> {
@@ -133,7 +130,7 @@ export function loadProjectContextFiles(options: {
   return contextFiles;
 }
 
-export interface DefaultResourceLoaderOptions {
+interface DefaultResourceLoaderOptions {
   cwd: string;
   agentDir: string;
   settingsManager?: SettingsManager;

@@ -1,5 +1,6 @@
 // Persistent cron session tests cover lifecycle admission and mutation races.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -14,6 +15,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
   preflightCronModelProviderMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
@@ -267,6 +269,73 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
     await expect(run).resolves.toMatchObject({ status: "ok" });
     expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
+  });
+
+  it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
+    const sessionKey = "agent:main:main";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId: "persistent-session" });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
+        sessionEntry: { ...initialSessionEntry },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
+
+    let agentExecutionStarted = false;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: { onExecutionStarted?: () => void }) => {
+        runParams.onExecutionStarted?.();
+        agentExecutionStarted = true;
+        return {
+          payloads: [{ text: "completed" }],
+          meta: { agentMeta: {} },
+        };
+      },
+    );
+
+    const committedRows = new Map<string, SessionEntry>([
+      [`${inMemoryStorePath}\0${sessionKey}`, structuredClone(initialSessionEntry) as SessionEntry],
+    ]);
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const current = committedRows.get(key);
+        const writeBase = current ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
+        }
+        const existingEntry =
+          agentExecutionStarted && scope.sessionKey === sessionKey
+            ? { ...writeBase, lifecycleRevision: "replacement-revision" }
+            : current;
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+        }
+        return committed;
+      },
+    );
+
+    await expect(
+      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: `CronSessionLifecycleClaimError: Session "${sessionKey}" changed while starting work. Retry.`,
+      executionStarted: true,
+    });
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {

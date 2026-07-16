@@ -102,6 +102,9 @@ describe("OpenClaw performance workflow", () => {
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
     expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain(
+      "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
+    );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
@@ -115,6 +118,10 @@ describe("OpenClaw performance workflow", () => {
     );
     expect(installRun).toContain(
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain("--max-time 180");
+    expect(installRun).toContain(
+      "--retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused",
     );
     expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
@@ -189,6 +196,40 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain("pnpm build");
     expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+  });
+
+  it("keeps source gateway health waits within one startup budget", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const deadline = "gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))";
+    const remaining = "gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))";
+    const deadlineFailure = [
+      "  if (( gateway_ready_remaining <= 0 )); then",
+      '    cat "$gateway_log" >&2',
+      '    echo "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway health." >&2',
+      "    exit 1",
+      "  fi",
+    ].join("\n");
+    const probeCap = [
+      '  gateway_probe_timeout="$gateway_ready_remaining"',
+      "  if (( gateway_probe_timeout > gateway_probe_timeout_seconds )); then",
+      '    gateway_probe_timeout="$gateway_probe_timeout_seconds"',
+      "  fi",
+    ].join("\n");
+    const boundedProbe =
+      'curl -fsS --connect-timeout 2 --max-time "$gateway_probe_timeout" "http://127.0.0.1:${gateway_port}/healthz"';
+
+    expect(run).toContain("gateway_ready_timeout_seconds=120");
+    expect(run).toContain("gateway_probe_timeout_seconds=5");
+    expect(run).toContain(deadline);
+    expect(run).toContain(remaining);
+    expect(run).toContain(deadlineFailure);
+    expect(run).toContain(probeCap);
+    expect(run).toContain(boundedProbe);
+    expect(run.split("/healthz")).toHaveLength(2);
+    expect(run.indexOf(deadline)).toBeLessThan(run.indexOf(remaining));
+    expect(run.indexOf(remaining)).toBeLessThan(run.indexOf(deadlineFailure));
+    expect(run.indexOf(deadlineFailure)).toBeLessThan(run.indexOf(probeCap));
+    expect(run.indexOf(probeCap)).toBeLessThan(run.indexOf(boundedProbe));
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {

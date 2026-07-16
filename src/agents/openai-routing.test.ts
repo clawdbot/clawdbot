@@ -158,6 +158,54 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe(false);
   });
 
+  it("honors the deprecated whole-agent OpenClaw runtime opt-out", () => {
+    const config = {
+      agents: {
+        defaults: { agentRuntime: { id: "openclaw" } },
+        list: [{ id: "worker", agentRuntime: { id: "openclaw" } }],
+      },
+    } satisfies OpenClawConfig;
+
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
+    expect(
+      modelSelectionShouldEnsureCodexPlugin({
+        model: "openai/gpt-5.5",
+        config,
+        agentId: "worker",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps per-model Codex policy above the whole-agent OpenClaw opt-out", () => {
+    const config = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "openclaw" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
+  });
+
+  it("keeps per-model auto policy above the whole-agent OpenClaw opt-out", () => {
+    const config = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "openclaw" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "auto" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
+  });
+
   it("normalizes OpenAI provider keys before checking custom base URLs", () => {
     const config = {
       models: {

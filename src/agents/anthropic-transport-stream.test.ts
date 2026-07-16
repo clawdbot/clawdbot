@@ -3212,6 +3212,45 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
+  it("replays payload-less tool images as no output without Anthropic image blocks", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "fake" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_husk",
+    );
+    expect(toolResult.content).toBe("(no output)");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
+  });
+
   it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
     const imageData = Buffer.from("image").toString("base64");
 

@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 // Control UI tests cover chat flow behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -16,9 +18,17 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const sessionAccessibilityProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "session-accessibility",
+);
 
 let server: ControlUiE2eServer;
-const contextBrowsers = new WeakMap<BrowserContext, Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 const openBrowserContexts = new Set<BrowserContext>();
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -140,30 +150,35 @@ async function scrollChatThreadToTop(page: Page): Promise<void> {
 }
 
 async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  let context: BrowserContext | undefined;
-  try {
-    context = await browser.newContext(options);
-    contextBrowsers.set(context, browser);
-    openBrowserContexts.add(context);
-    return context;
-  } catch (error) {
-    await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
-    throw error;
-  }
+  const context = await browser.newContext(options);
+  openBrowserContexts.add(context);
+  return context;
 }
 
 async function closeBrowserContext(context: BrowserContext): Promise<void> {
-  const browser = contextBrowsers.get(context);
   openBrowserContexts.delete(context);
-  contextBrowsers.delete(context);
   await context.close().catch(() => {});
-  await browser?.close().catch(() => {});
 }
 
 async function closeOpenBrowserContexts(): Promise<void> {
   await Promise.all([...openBrowserContexts].map((context) => closeBrowserContext(context)));
+}
+
+async function captureSessionAccessibilityProof(page: Page, name: string): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await mkdir(sessionAccessibilityProofDir, { recursive: true });
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await page.screenshot({
+    fullPage: true,
+    path: path.join(sessionAccessibilityProofDir, `${name}.png`),
+  });
+  await writeFile(
+    path.join(sessionAccessibilityProofDir, `${name}.yml`),
+    await sidebar.ariaSnapshot(),
+    "utf8",
+  );
 }
 
 async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
@@ -237,11 +252,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
     await closeOpenBrowserContexts();
+    await browser?.close();
     await server?.close();
   });
 
@@ -3129,6 +3151,110 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const initialKey = "agent:main:session-a";
+    const key = "agent:main:session-b";
+    const readableTitle = "Readable planning title";
+    const baseTime = Date.now();
+    const sessionsWithDerivedTitle = chatSessionListResponse([
+      {
+        key: initialKey,
+        kind: "direct",
+        label: initialKey,
+        displayName: initialKey,
+        derivedTitle: "Initial readable title",
+        updatedAt: baseTime,
+      },
+      {
+        key,
+        kind: "direct",
+        label: key,
+        displayName: key,
+        derivedTitle: readableTitle,
+        updatedAt: baseTime - 60_000,
+      },
+    ]);
+    const sessionsWithoutDerivedTitle = chatSessionListResponse([
+      {
+        key: initialKey,
+        kind: "direct",
+        label: initialKey,
+        displayName: initialKey,
+        updatedAt: baseTime,
+      },
+      {
+        key,
+        kind: "direct",
+        label: key,
+        displayName: key,
+        updatedAt: baseTime - 60_000,
+      },
+    ]);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: { includeDerivedTitles: true }, response: sessionsWithDerivedTitle },
+            { match: {}, response: sessionsWithoutDerivedTitle },
+          ],
+        },
+      },
+      sessionKey: initialKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await row.locator("a.sidebar-recent-session__link").click();
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("sessions.list");
+          return requests.map((request) => request.params);
+        })
+        .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
+      const label = row.locator(".sidebar-recent-session__name");
+      const link = row.locator("a.sidebar-recent-session__link");
+      await expect.poll(() => label.textContent()).toBe(readableTitle);
+      expect(await row.getAttribute("role")).toBe("listitem");
+      expect(await row.getAttribute("aria-label")).toBeNull();
+      expect(await link.getAttribute("aria-label")).toBeNull();
+      expect(await link.getAttribute("aria-current")).toBe("page");
+      const descriptionId = await link.getAttribute("aria-describedby");
+      expect(descriptionId).toBeTruthy();
+      expect(await page.locator(`[id="${descriptionId}"]`).textContent()).toBeTruthy();
+      expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
+      await captureSessionAccessibilityProof(page, "after-derived-title");
+
+      const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
+      await row.hover();
+      await row.getByRole("button", { name: "Pin session" }).click();
+
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(requireRecord(patchRequest.params)).toMatchObject({
+        key,
+        pinned: true,
+      });
+      await expect
+        .poll(async () => {
+          const requests = await gateway.getRequests("sessions.list");
+          return requests.slice(listCountBeforePatch).map((request) => request.params);
+        })
+        .toContainEqual(expect.objectContaining({ includeDerivedTitles: true }));
+      await expect.poll(() => label.textContent()).toBe(readableTitle);
+      expect(await link.getAttribute("aria-current")).toBe("page");
+      expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
+      await captureSessionAccessibilityProof(page, "after-patch-refresh");
     } finally {
       await closeBrowserContext(context);
     }

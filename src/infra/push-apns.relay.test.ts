@@ -107,6 +107,43 @@ describe("push-apns.relay", () => {
       });
     });
 
+    it.each(["0x1000", "2e4", "2500ms"])(
+      "falls back for non-decimal env timeout %s",
+      (timeoutMs) => {
+        const resolved = resolveApnsRelayConfigFromEnv({
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: timeoutMs,
+        } as NodeJS.ProcessEnv);
+
+        expectRelayConfig(resolved, {
+          baseUrl: "https://relay.example.com",
+          timeoutMs: 10_000,
+        });
+      },
+    );
+
+    it("retains numeric timeout config values", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
+      });
+    });
+
     it("allows loopback http URLs for alternate truthy env values", () => {
       const resolved = resolveApnsRelayConfigFromEnv({
         OPENCLAW_APNS_RELAY_BASE_URL: "http://[::1]:8787",

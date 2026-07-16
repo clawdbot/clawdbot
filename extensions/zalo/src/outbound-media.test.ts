@@ -248,6 +248,27 @@ describe("zalo outbound hosted media", () => {
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
   });
 
+  it("rejects hosted media requests without a token", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const response = createMockResponse();
+
+    const handled = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: new URL(hostedUrl).pathname,
+      } as never,
+      response.res as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(401);
+    expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
+  });
+
   it("rejects malformed hosted media ids before touching disk", async () => {
     const response = createMockResponse();
 

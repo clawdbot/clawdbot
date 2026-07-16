@@ -9,9 +9,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   postJsonRequestMock,
+  fetchWithTimeoutGuardedMock,
   fetchWithTimeoutMock,
   readProviderJsonResponseMock,
   resolveApiKeyForProviderMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
 } = getProviderHttpMocks();
 
 let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
@@ -71,12 +74,16 @@ function requirePostJsonCall(index = 0): {
   url?: string;
   body?: Record<string, unknown>;
   headers?: Headers;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: unknown;
 } {
   const params = (postJsonRequestMock.mock.calls as unknown as Array<[unknown]>)[index]?.[0] as
     | {
         url?: string;
         body?: Record<string, unknown>;
         headers?: Headers;
+        allowPrivateNetwork?: boolean;
+        dispatcherPolicy?: unknown;
       }
     | undefined;
   if (!params) {
@@ -357,6 +364,104 @@ describe("xai video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.requestId).toBe("req_123");
     expect(result.metadata?.mode).toBe("generate");
+  });
+
+  it("applies configured xAI request policy to video generation requests", async () => {
+    const dispatcherPolicy = { proxyUrl: "http://proxy.example:3128" };
+    const requestPolicy = {
+      headers: { "X-Xai-Trace": "trace-1" },
+      proxy: { mode: "env-proxy" as const },
+      allowPrivateNetwork: true,
+    };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: true,
+      headers: new Headers({
+        ...params.defaultHeaders,
+        "X-Xai-Trace": "trace-1",
+      }),
+      dispatcherPolicy: dispatcherPolicy as never,
+    }));
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          request_id: "req_policy",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_policy",
+          status: "done",
+          video: { url: "https://cdn.x.ai/policy.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("video-bytes"),
+      });
+
+    await buildXaiVideoGenerationProvider().generateVideo({
+      provider: "xai",
+      model: "grok-imagine-video",
+      prompt: "Product demo shot",
+      cfg: {
+        models: {
+          providers: {
+            xai: {
+              request: requestPolicy,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+        capability: "video",
+        request: requestPolicy,
+      }),
+    );
+    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "allowPrivateNetwork",
+    );
+    const submitRequest = requirePostJsonCall();
+    expect(submitRequest.allowPrivateNetwork).toBe(true);
+    expect(submitRequest.dispatcherPolicy).toBe(dispatcherPolicy);
+    expect(submitRequest.headers?.get("X-Xai-Trace")).toBe("trace-1");
+
+    const pollCall = fetchWithTimeoutGuardedMock.mock.calls[0];
+    expect(pollCall?.[0]).toBe("https://api.x.ai/v1/videos/req_policy");
+    expect((pollCall?.[1] as { headers?: Headers } | undefined)?.headers?.get("X-Xai-Trace")).toBe(
+      "trace-1",
+    );
+    expect(pollCall?.[4]).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext: "xai-video-status",
+    });
+
+    const downloadOptions = fetchWithTimeoutGuardedMock.mock.calls[1]?.[4] as
+      | {
+          ssrfPolicy?: { allowPrivateNetwork?: boolean };
+          dispatcherPolicy?: unknown;
+          auditContext?: string;
+        }
+      | undefined;
+    expect(downloadOptions).toMatchObject({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext: "xai-video-download",
+    });
+    const downloadInit = fetchWithTimeoutGuardedMock.mock.calls[1]?.[1] as
+      | { headers?: Headers; method?: string }
+      | undefined;
+    expect(downloadInit?.method).toBe("GET");
+    expect(downloadInit?.headers).toBeUndefined();
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

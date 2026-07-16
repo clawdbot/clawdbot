@@ -612,7 +612,7 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
   }
 });
 
-test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
+test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
@@ -628,6 +628,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
       label?: string;
       providerOverride?: string;
       modelOverride?: string;
+      thinkingLevel?: string;
       parentSessionKey?: string;
       sessionFile?: string;
     };
@@ -635,6 +636,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     agentId: "ops",
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
+    thinkingLevel: "high",
     parentSessionKey: "main",
   });
 
@@ -643,6 +645,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
+  expect(created.payload?.entry?.thinkingLevel).toBe("high");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   const sessionFile = requireNonEmptyString(
     created.payload?.entry?.sessionFile,
@@ -658,6 +661,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(storedEntry?.label).toBe("Dashboard Chat");
   expect(storedEntry?.providerOverride).toBe("openai");
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
+  expect(storedEntry?.thinkingLevel).toBe("high");
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(sessionFile).toBe(storedEntry?.sessionFile);
 

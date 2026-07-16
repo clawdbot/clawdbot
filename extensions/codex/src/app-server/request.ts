@@ -116,12 +116,91 @@ type CodexAppServerScopedRequest = <T = JsonValue | undefined>(request: {
   requestParams?: unknown;
 }) => Promise<T>;
 
+const CODEX_USAGE_ISOLATED_SHUTDOWN = { forceKillDelayMs: 200, exitTimeoutMs: 300 } as const;
+const CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS = 4_000;
+const CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS = 250;
+const CODEX_USAGE_DEADLINE_RESERVE_MS =
+  CODEX_USAGE_ISOLATED_SHUTDOWN.forceKillDelayMs +
+  CODEX_USAGE_ISOLATED_SHUTDOWN.exitTimeoutMs +
+  CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
+
+/** Reads rate limits and best-effort account identity from one isolated app-server session. */
+export async function readCodexAppServerUsage(options: {
+  timeoutMs: number;
+  agentDir?: string;
+  authProfileId?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  startOptions?: CodexAppServerStartOptions;
+}): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
+  const deadline = Date.now() + options.timeoutMs;
+  return await withCodexAppServerJsonClient(
+    {
+      timeoutMs: options.timeoutMs,
+      timeoutMessage: "codex app-server usage read timed out",
+      agentDir: options.agentDir,
+      ...(options.authProfileId ? { authProfileId: options.authProfileId } : {}),
+      config: options.config,
+      startOptions: options.startOptions,
+      isolated: true,
+      // A throwaway read-only child: bound shutdown inside the outer usage deadline.
+      isolatedShutdown: CODEX_USAGE_ISOLATED_SHUTDOWN,
+    },
+    async (request) => {
+      const rateLimits = await request<JsonValue>({ method: "account/rateLimits/read" });
+      const accountEmail = await readCodexAccountEmailBestEffort(request, deadline);
+      return { rateLimits, ...(accountEmail ? { accountEmail } : {}) };
+    },
+  );
+}
+
+function extractCodexAccountEmail(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { account?: unknown; email?: unknown; accountEmail?: unknown };
+  const account =
+    record.account && typeof record.account === "object"
+      ? (record.account as { email?: unknown; accountEmail?: unknown })
+      : record;
+  const email = account.email ?? account.accountEmail;
+  return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
+async function readCodexAccountEmailBestEffort(
+  request: CodexAppServerScopedRequest,
+  deadline: number,
+): Promise<string | undefined> {
+  const boundMs = Math.min(
+    CODEX_ACCOUNT_READ_MAX_TIMEOUT_MS,
+    deadline - Date.now() - CODEX_USAGE_DEADLINE_RESERVE_MS,
+  );
+  if (boundMs <= 0) {
+    return undefined;
+  }
+  const read = request<unknown>({ method: "account/read", requestParams: {} }).then(
+    (account) => extractCodexAccountEmail(account),
+    () => undefined,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), boundMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 /**
  * Runs several guarded requests over one acquired client (shared lease or
  * isolated child) so related reads see the same app-server session. The whole
  * callback re-runs once when the client's start selection changed underneath it.
  */
-export async function withCodexAppServerJsonClient<T>(
+async function withCodexAppServerJsonClient<T>(
   params: {
     timeoutMs?: number;
     timeoutMessage?: string;

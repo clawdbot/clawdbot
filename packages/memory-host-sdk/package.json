@@ -8,6 +8,9 @@
     "@openclaw/retry": "workspace:*",
     "p-map": "7.0.5"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "exports": {
     "./runtime-core": "./src/runtime-core.ts",
     "./runtime-cli": "./src/runtime-cli.ts",

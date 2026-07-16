@@ -12,6 +12,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { createReplyOperation } from "./reply-run-registry.js";
+import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -2366,6 +2367,8 @@ describe("runPreparedReply media-only handling", () => {
           CommandBody: "No wtf",
           Provider: "telegram",
           Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
         },
         sessionCtx: {
@@ -2373,10 +2376,13 @@ describe("runPreparedReply media-only handling", () => {
           BodyStripped: "No wtf",
           Provider: "telegram",
           Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "-100123",
           ChatType: "group",
           InboundEventKind: "room_event",
           MediaType: "audio/ogg",
           MessageSid: "35676",
+          MessageSidFull: "  ",
           SenderName: "Keśava",
           AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
           AmbientTranscriptMessageId: "35676",
@@ -2399,6 +2405,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
       role: "user",
       content: "#35676 Keśava: No wtf",
+      idempotencyKey: buildChannelSourceTurnId({
+        provider: "telegram",
+        conversationId: "-100123",
+        messageId: "35676",
+      }),
       timestamp: expect.any(Number),
       __openclaw: { senderIsOwner: false, senderName: "Keśava" },
     });

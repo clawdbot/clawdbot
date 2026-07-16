@@ -90,6 +90,7 @@ function detection(
 ) {
   return {
     candidates: [candidate("claude-cli", "Claude Code")],
+    unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
     workspace: "/tmp/openclaw-workspace",

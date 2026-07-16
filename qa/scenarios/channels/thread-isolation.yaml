@@ -20,8 +20,15 @@ scenario:
     - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "matrix:adapter": 9,
+        "matrix:all": 4,
+        "matrix:fast": 2,
+        "matrix:transport": 3,
+        "slack:adapter": 5,
+      }
     kind: flow
-    channel: matrix
     summary: Establish a thread, then require a fresh top-level reply without stale relation metadata.
     config:
       threadMarker: QA-THREAD-ISOLATION-THREAD-OK

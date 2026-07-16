@@ -2960,6 +2960,23 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
 
+    def test_synthetic_secret_fixture_prefixes_are_generic(self) -> None:
+        for prefix in self.helper["SYNTHETIC_SECRET_PREFIXES"]:
+            with self.subTest(prefix=prefix):
+                self.assertTrue(
+                    self.helper["synthetic_secret_fixture"](
+                        f"{prefix}-token",
+                        "token",
+                    )
+                )
+
+        self.assertFalse(
+            self.helper["synthetic_secret_fixture"](
+                "test-correct-horse-battery-staple",
+                "password",
+            )
+        )
+
     def test_secret_detector_does_not_trust_in_band_suppressions(self) -> None:
         for marker in ("pragma: allowlist secret", "gitleaks:allow"):
             with self.subTest(marker=marker):
@@ -3063,6 +3080,21 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.helper["branch_bundle"](repo, base)
             with self.assertRaisesRegex(SystemExit, "secret-like content"):
                 self.helper["commit_bundle"](repo, "HEAD")
+
+    def test_local_bundle_allows_deleted_test_token_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            path = repo / "fixture.test.ts"
+            path.write_text('const request = { token: "test-token" };\n', encoding="utf-8")
+            git(repo, "add", path.name)
+            git(repo, "commit", "-q", "-m", "base")
+
+            path.write_text('const request = { token: String() };\n', encoding="utf-8")
+
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn('-const request = { token: "test-token" };', bundle)
+            self.assertFalse(truncated)
 
     def test_pi_refuses_truncated_review_input(self) -> None:
         reviewer = argparse.Namespace(engine="pi", tools=True)

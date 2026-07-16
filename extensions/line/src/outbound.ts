@@ -13,71 +13,17 @@ import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
-import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
+import {
+  buildLineMediaMessage,
+  hasLineSpecificMediaOptions,
+  resolveLineOutboundMedia,
+} from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineChannelData, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
-
-type LineChannelDataWithMedia = LineChannelData & {
-  mediaKind?: "image" | "video" | "audio";
-  previewImageUrl?: string;
-  durationMs?: number;
-  trackingId?: string;
-};
-
-function isLineUserTarget(target: string): boolean {
-  const normalized = target
-    .trim()
-    .replace(/^line:(group|room|user):/i, "")
-    .replace(/^line:/i, "");
-  return /^U/i.test(normalized);
-}
-
-function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
-  return Boolean(
-    lineData.mediaKind ??
-    lineData.previewImageUrl?.trim() ??
-    (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
-    lineData.trackingId?.trim(),
-  );
-}
-
-function buildLineMediaMessageObject(
-  resolved: LineOutboundMediaResolved,
-  opts?: { allowTrackingId?: boolean },
-): Record<string, unknown> {
-  switch (resolved.mediaKind) {
-    case "video": {
-      const previewImageUrl = resolved.previewImageUrl?.trim();
-      if (!previewImageUrl) {
-        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
-      }
-      return {
-        type: "video",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl,
-        ...(opts?.allowTrackingId && resolved.trackingId
-          ? { trackingId: resolved.trackingId }
-          : {}),
-      };
-    }
-    case "audio":
-      return {
-        type: "audio",
-        originalContentUrl: resolved.mediaUrl,
-        duration: resolved.durationMs ?? 60000,
-      };
-    default:
-      return {
-        type: "image",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
-      };
-  }
-}
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -87,7 +33,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   sendPayload: async ({ to, payload, accountId, cfg, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
-    const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
+    const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
     const lineRuntime = runtime.channel.line;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
@@ -147,6 +93,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
     const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
+    const mediaOptions = {
+      mediaKind: useLineSpecificMedia ? lineData.mediaKind : ("image" as const),
+      previewImageUrl: lineData.previewImageUrl,
+      durationMs: lineData.durationMs,
+      trackingId: lineData.trackingId,
+    };
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
@@ -165,12 +117,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           );
           continue;
         }
-        const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaKind: lineData.mediaKind,
-          previewImageUrl: lineData.previewImageUrl,
-          durationMs: lineData.durationMs,
-          trackingId: lineData.trackingId,
-        });
+        const resolved = await resolveLineOutboundMedia(trimmed, mediaOptions);
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
             verbose: false,
@@ -295,23 +242,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        if (!useLineSpecificMedia) {
-          quickReplyMessages.push({
-            type: "image",
-            originalContentUrl: trimmed,
-            previewImageUrl: trimmed,
-          });
-          continue;
-        }
-        const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaKind: lineData.mediaKind,
-          previewImageUrl: lineData.previewImageUrl,
-          durationMs: lineData.durationMs,
-          trackingId: lineData.trackingId,
-        });
-        quickReplyMessages.push(
-          buildLineMediaMessageObject(resolved, { allowTrackingId: isLineUserTarget(to) }),
-        );
+        quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
       if (quickReplyMessages.length > 0 && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;

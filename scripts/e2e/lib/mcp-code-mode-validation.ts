@@ -9,7 +9,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function outputText(response: unknown): string {
+function outputText(response: unknown): string {
   const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
   if (!Array.isArray(output)) {
     return "";

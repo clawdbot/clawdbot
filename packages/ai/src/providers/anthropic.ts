@@ -90,6 +90,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
+  isImageWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -165,12 +166,7 @@ function convertContentBlocks(
     > {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+  const hasImages = content.some(isImageWithMediaPayload);
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
@@ -192,7 +188,7 @@ function convertContentBlocks(
   > = [];
   let hasTextBlock = false;
 
-  for (const block of Array.isArray(content) ? content : []) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -202,7 +198,7 @@ function convertContentBlocks(
       blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (!isImageWithMediaPayload(record)) {
       continue;
     }
     blocks.push({
@@ -214,7 +210,7 @@ function convertContentBlocks(
           | "image/png"
           | "image/gif"
           | "image/webp",
-        data: typeof record.data === "string" ? record.data : "",
+        data: record.data,
       },
     });
   }

@@ -8,7 +8,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
-import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -81,7 +80,7 @@ describe("huggingface models", () => {
 
     await discoverHuggingfaceModels("hf_test_token");
 
-    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("accepts a custom discovery timeout override", async () => {

@@ -210,6 +210,13 @@ export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
     : undefined;
 }
 
+/** Keeps history projection, recovery, and retention on one task-row timestamp. */
+export function resolveCronTaskRecordTimestamp(
+  task: Pick<TaskRecord, "endedAt" | "lastEventAt" | "createdAt">,
+): number {
+  return task.endedAt ?? task.lastEventAt ?? task.createdAt;
+}
+
 /** Reads internal trigger recovery data without adding it to run-history responses. */
 export function cronTaskRecordToTriggerEval(
   task: TaskRecord,
@@ -250,7 +257,7 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   const entry = parseCronRunLogEntryObject(
     {
       ...wireDetail,
-      ts: task.endedAt ?? task.lastEventAt ?? task.createdAt,
+      ts: resolveCronTaskRecordTimestamp(task),
       jobId: task.sourceId,
       action: "finished",
       status: isCronRunStatus(task.detail.status) ? task.detail.status : undefined,

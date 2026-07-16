@@ -112,6 +112,23 @@ flow:
                               - expr: "30000"
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           - if:
+                              # The parent reply can arrive before child transcript writes finish.
+                              # Wait before opening the store so its integrity check sees settled FTS state.
+                              expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
+                              then:
+                                - forEach:
+                                    items:
+                                      expr: "config.expectedChildCompletionMarkers"
+                                    item: childCompletionMarker
+                                    actions:
+                                      - call: waitForOutboundMessage
+                                        args:
+                                          - ref: state
+                                          - lambda:
+                                              params: [candidate]
+                                              expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
+                                          - 30000
+                          - if:
                               expr: "Boolean(env.mock)"
                               then:
                                 - call: readRawQaSessionStore
@@ -163,6 +180,21 @@ flow:
                           - if:
                               expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
                               then:
+                                - if:
+                                    expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
+                                    then:
+                                      - forEach:
+                                          items:
+                                            expr: "config.expectedChildCompletionMarkers"
+                                          item: childCompletionMarker
+                                          actions:
+                                            - call: waitForOutboundMessage
+                                              args:
+                                                - ref: state
+                                                - lambda:
+                                                    params: [candidate]
+                                                    expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
+                                                - 30000
                                 - call: readRawQaSessionStore
                                   saveAs: timeoutStore
                                   args:
@@ -240,23 +272,4 @@ flow:
             expr: "lastError === '__done__'"
             message:
               expr: "lastError instanceof Error ? formatErrorMessage(lastError) : String(lastError ?? 'fanout retry exhausted')"
-        - if:
-            # Codex completes child sessions through its app-server path but
-            # does not relay the child marker back onto the parent QA channel.
-            # The shared assertions above already prove both child tool calls
-            # and child session rows; keep this transport-only proof OpenClaw-specific.
-            expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
-            then:
-              - forEach:
-                  items:
-                    expr: "config.expectedChildCompletionMarkers"
-                  item: childCompletionMarker
-                  actions:
-                    - call: waitForOutboundMessage
-                      args:
-                        - ref: state
-                        - lambda:
-                            params: [candidate]
-                            expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
-                        - 30000
       detailsExpr: "details"

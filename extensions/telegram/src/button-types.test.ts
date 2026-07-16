@@ -393,6 +393,24 @@ describe("buildTelegramPresentationButtons", () => {
     ]);
   });
 
+  it("skips hosted widget actions without a Telegram web app URL", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Hosted widget",
+                action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("lets canonical typed actions override deprecated button fields", () => {
     expect(
       buildTelegramPresentationButtons({

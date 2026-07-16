@@ -1,11 +1,10 @@
 // Tencent tests cover config compatibility repair behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  migrateTencentTokenHubModelDefaults,
-  TENCENT_TOKENHUB_DEFAULT_MODEL_REF,
-  TENCENT_TOKENHUB_PREVIEW_MODEL_REF,
-} from "./config-compat.js";
+import { migrateTencentTokenHubModelDefaults } from "./config-compat.js";
+
+const TENCENT_TOKENHUB_DEFAULT_MODEL_REF = "tencent-tokenhub/hy3";
+const TENCENT_TOKENHUB_PREVIEW_MODEL_REF = "tencent-tokenhub/hy3-preview";
 
 describe("Tencent config compatibility", () => {
   it("adds the stable TokenHub model and makes it primary for old preview defaults", () => {

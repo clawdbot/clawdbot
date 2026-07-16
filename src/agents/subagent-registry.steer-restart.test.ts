@@ -165,11 +165,6 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
-  saveSubagentRegistryToDisk: vi.fn(() => {}),
-}));
-
 vi.mock("./internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: removeInternalSessionEffectsSessionMock,
 }));

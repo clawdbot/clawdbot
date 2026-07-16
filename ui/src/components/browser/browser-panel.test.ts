@@ -1,11 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./browser-panel.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 describe("normalizeBrowserUrlDraft", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+  });
+
   afterEach(() => {
     document.body.replaceChildren();
-    localStorage.clear();
+    vi.unstubAllGlobals();
   });
   it("prefixes bare hosts with https", () => {
     expect(normalizeBrowserUrlDraft("example.com")).toBe("https://example.com/");
@@ -49,5 +54,21 @@ describe("normalizeBrowserUrlDraft", () => {
     const panel = element as unknown as HTMLElement & { updateComplete: Promise<unknown> };
     await panel.updateComplete;
     expect((panel as unknown as { open: boolean }).open).toBe(true);
+  });
+
+  it("keeps an already closed panel closed for an explicit close request", () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      open: boolean;
+      handleToggleRequest: (event: Event) => void;
+    };
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+    );
+
+    expect(panel.open).toBe(false);
   });
 });

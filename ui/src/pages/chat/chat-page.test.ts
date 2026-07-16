@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
+import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -181,6 +182,66 @@ describe("chat page split layout host", () => {
     expect(survivingPane).toBe(classicPane);
     expect(survivingPane.showPaneHeader).toBe(false);
     expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
+  });
+
+  it("applies mounted UI split, focus, and close commands", () => {
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    const navigation = setNavigationContext(page);
+    document.body.append(page);
+
+    const split = new CustomEvent(UI_COMMAND_EVENT, {
+      detail: {
+        command: { kind: "split", direction: "right", sessionKey: "agent:main:work" },
+        sessionKey: "main",
+      },
+      cancelable: true,
+    });
+    window.dispatchEvent(split);
+    expect(split.defaultPrevented).toBe(true);
+    expect(getLayout(page)?.columns.at(1)?.panes.at(0)?.sessionKey).toBe("agent:main:work");
+    expect(navigation.replace).toHaveBeenLastCalledWith("chat", {
+      search: searchForSession("agent:main:work"),
+    });
+
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        detail: { command: { kind: "focus", sessionKey: "main" }, sessionKey: "main" },
+        cancelable: true,
+      }),
+    );
+    expect(getLayout(page)?.activePaneId).toBe("p1");
+
+    window.dispatchEvent(
+      new CustomEvent(UI_COMMAND_EVENT, {
+        detail: {
+          command: { kind: "close-pane", sessionKey: "agent:main:work" },
+          sessionKey: "main",
+        },
+        cancelable: true,
+      }),
+    );
+    expect(getLayout(page)).toBeUndefined();
+  });
+
+  it("leaves UI split commands unhandled on narrow viewports", () => {
+    stubMatchMedia(true);
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    setNavigationContext(page);
+    document.body.append(page);
+
+    const split = new CustomEvent(UI_COMMAND_EVENT, {
+      detail: {
+        command: { kind: "split", direction: "right", sessionKey: "agent:main:work" },
+        sessionKey: "main",
+      },
+      cancelable: true,
+    });
+    window.dispatchEvent(split);
+    // Unhandled so the app host falls back to navigating to the session.
+    expect(split.defaultPrevented).toBe(false);
+    expect(getLayout(page)).toBeUndefined();
   });
 
   it("withholds the split-view opener on narrow single-pane viewports", async () => {

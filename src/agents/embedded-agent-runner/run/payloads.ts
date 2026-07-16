@@ -8,6 +8,7 @@ import {
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
+  getHeartbeatToolNotificationText,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import {
@@ -18,7 +19,11 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
+  SILENT_REPLY_TOKEN,
+} from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
@@ -55,6 +60,7 @@ import {
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
+import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
 type ToolErrorWarningPolicy = {
@@ -72,52 +78,9 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
-const MUTATING_FAILURE_ACTION_PATTERN =
-  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
-
-const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
-  `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN = new RegExp(
-  `\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b.{0,100}\\b(?:failed|failure|errored)\\b`,
-  "u",
-);
-const MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN = new RegExp(
-  `\\b(?:failed|failure)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
-  `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
-const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
-
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
-
-function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
-  const normalizedText = normalizeTextForComparison(text);
-  if (!normalizedText) {
-    return false;
-  }
-  if (DID_NOT_FAIL_PATTERN.test(normalizedText)) {
-    return false;
-  }
-  if (MUTATING_FAILURE_INABILITY_PATTERN.test(normalizedText)) {
-    return true;
-  }
-  if (NEGATED_FAILURE_PATTERN.test(normalizedText)) {
-    return false;
-  }
-  return (
-    MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
-  );
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -583,7 +546,13 @@ export function buildEmbeddedRunPayloads(params: {
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[] {
-  if (params.heartbeatToolResponse) {
+  const heartbeatTerminalToolFailure =
+    params.isHeartbeatTrigger === true &&
+    params.lastToolError &&
+    params.lastToolError.mutatingAction === true
+      ? { toolName: params.lastToolError.toolName }
+      : undefined;
+  if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
   // Internal source replies always need transcript/UI mirrors. Only a
@@ -601,8 +570,16 @@ export function buildEmbeddedRunPayloads(params: {
     didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
     runId: params.runId,
   });
+  if (params.heartbeatToolResponse) {
+    const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
+    replyItems.push({
+      text: heartbeatPayload.text ?? "",
+      ...(heartbeatPayload.channelData ? { channelData: heartbeatPayload.channelData } : {}),
+    });
+  }
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
+    params.heartbeatToolResponse !== undefined ||
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
@@ -789,9 +766,15 @@ export function buildEmbeddedRunPayloads(params: {
                 ? [fallbackAnswerText]
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
-  let hasUserFacingAssistantReply = completedSourceReplyViaMessageTool;
+  let hasUserFacingAssistantReply =
+    completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
-  let hasUserFacingFailureAcknowledgement = false;
+  let hasUserFacingFailureAcknowledgement =
+    params.heartbeatToolResponse?.notify === true &&
+    (params.heartbeatToolResponse.outcome === "blocked" ||
+      hasExplicitMutatingToolFailureAcknowledgement(
+        getHeartbeatToolNotificationText(params.heartbeatToolResponse),
+      ));
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -859,6 +842,9 @@ export function buildEmbeddedRunPayloads(params: {
       }
     }
   }
+  if (heartbeatTerminalToolFailure && !replyItems.some((item) => item.isReasoning !== true)) {
+    replyItems.push({ text: HEARTBEAT_TOKEN });
+  }
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
@@ -875,6 +861,9 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.isError !== undefined) {
         payload.isError = item.isError;
       }
+      if (item.isReasoning === true) {
+        payload.isReasoning = true;
+      }
       if (
         item.isError === true &&
         params.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -885,6 +874,11 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {
           nonTerminalToolErrorWarning: true,
+        });
+      }
+      if (heartbeatTerminalToolFailure) {
+        setReplyPayloadMetadata(payload, {
+          heartbeatTerminalToolFailure,
         });
       }
       if (

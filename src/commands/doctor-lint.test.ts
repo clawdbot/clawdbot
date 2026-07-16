@@ -219,7 +219,9 @@ describe("runDoctorLintCli", () => {
         ],
       });
       expect(payload.findings[0].message).toContain("Codex plugin is disabled by config");
-      expect(payload.findings[0].fixHint).toContain("openclaw doctor --fix");
+      // Explicit plugins.entries.codex.enabled=false blocks auto-repair, so the
+      // hint names the manual action instead of promising doctor --fix.
+      expect(payload.findings[0].fixHint).toContain("Enable plugins.entries.codex");
     } finally {
       stdout.mockRestore();
     }

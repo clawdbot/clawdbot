@@ -3323,10 +3323,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3370,10 +3370,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -4373,10 +4373,10 @@ describe("active-memory plugin", () => {
   it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4432,10 +4432,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4492,7 +4492,7 @@ describe("active-memory plugin", () => {
     testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4560,10 +4560,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       toolsAllow: ["memory_lookup_custom"],
       logging: true,
     };

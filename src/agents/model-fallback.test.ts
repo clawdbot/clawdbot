@@ -157,6 +157,7 @@ const authRuntimeMock = vi.hoisted(() => {
       loadAuthProfileStoreForRuntime: vi.fn((agentDir?: string) => getStore(agentDir)),
       resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
         getProfileIds(params.store, params.provider),
+      maybeReprobeWhamBlockedProfiles: vi.fn(),
       isProfileInCooldown,
       resolveProfilesUnavailableReason: (params: {
         store: AuthProfileStore;

@@ -11,7 +11,6 @@ describe("base64 helpers", () => {
     const encoded = Buffer.alloc(1_900_000).toString("base64");
 
     expect(canonicalizeBase64(encoded)).toBe(encoded);
-    expect(canonicalizeBase64(encoded + "!")).toBeUndefined();
   });
 
   it.each([

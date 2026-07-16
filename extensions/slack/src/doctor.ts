@@ -1,6 +1,9 @@
 // Slack plugin module implements doctor behavior.
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  collectStandardAllowlistLists,
+  createDangerousNameMatchingMutableAllowlistWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSlackAccountIds, mergeSlackAccountConfig } from "./accounts.js";
 import {
@@ -19,35 +22,14 @@ const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "slack",
     detector: isSlackMutableAllowEntry,
-    collectLists: (scope) => {
-      const lists = [
-        {
-          pathLabel: `${scope.prefix}.allowFrom`,
-          list: scope.account.allowFrom,
-        },
-      ];
-      const dm = asObjectRecord(scope.account.dm);
-      if (dm) {
-        lists.push({
-          pathLabel: `${scope.prefix}.dm.allowFrom`,
-          list: dm.allowFrom,
-        });
-      }
-      const channels = asObjectRecord(scope.account.channels);
-      if (channels) {
-        for (const [channelKey, channelRaw] of Object.entries(channels)) {
-          const channel = asObjectRecord(channelRaw);
-          if (!channel) {
-            continue;
-          }
-          lists.push({
-            pathLabel: `${scope.prefix}.channels.${channelKey}.users`,
-            list: channel.users,
-          });
-        }
-      }
-      return lists;
-    },
+    collectLists: (scope) =>
+      collectStandardAllowlistLists(scope, {
+        includeGroupAllowFrom: false,
+        includeDm: true,
+        includeGroups: true,
+        groupsKey: "channels",
+        groupField: "users",
+      }),
   });
 
 const SLACK_CANONICAL_CHANNEL_ID_RE = /^[CG][A-Z0-9]{8,}$/;

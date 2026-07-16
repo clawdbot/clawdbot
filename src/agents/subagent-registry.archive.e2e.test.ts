@@ -82,11 +82,6 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
-  saveSubagentRegistryToDisk: vi.fn(() => {}),
-}));
-
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.test-helpers.js");
 

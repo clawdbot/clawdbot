@@ -301,6 +301,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       agentId: sessionAgentId,
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
+      thinkingLevel: p.thinkingLevel,
       parentSessionKey: p.parentSessionKey,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree

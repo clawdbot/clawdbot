@@ -33,6 +33,7 @@ import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engi
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
@@ -48,6 +49,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -100,6 +102,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     env,
     shouldRepair: true,
+    blockedProviderPlan: params.blockedCodexProviderPlan,
   });
   applyMutation({
     config: codexRouteRepair.cfg,

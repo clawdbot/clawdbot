@@ -929,6 +929,56 @@ describe("saveMessageResourceFeishu", () => {
     });
   });
 
+  it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
+    vi.useFakeTimers();
+    let markReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      markReadStarted = resolve;
+    });
+    const stalled = new Readable({
+      read() {
+        markReadStarted?.();
+      },
+    });
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => stalled,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    try {
+      let settled = false;
+      const download = withIsolatedHome(() =>
+        saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_stalled_stream",
+          fileKey: "img_key_stalled",
+          type: "image",
+          maxBytes: 1024,
+        }),
+      );
+      void download.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await readStarted;
+      await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(download).rejects.toMatchObject({
+        name: "FeishuInboundMediaTimeoutError",
+        chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+      });
+      expect(stalled.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("recovers CJK filenames from the inbound message payload fallback", async () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");

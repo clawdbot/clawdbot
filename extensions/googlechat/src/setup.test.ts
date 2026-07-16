@@ -110,6 +110,60 @@ describe("googlechat setup", () => {
     ).toBe("Google Chat requires --token (service account JSON) or --token-file.");
   });
 
+  it("ignores blank service-account env values during setup", async () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", "   ");
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "  ");
+    const confirm = vi.fn(async () => true);
+    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
+
+    const result = await googlechatSetupWizard.prepare?.({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      credentialValues: {},
+      prompter: createTestWizardPrompter({ confirm, select }),
+    } as never);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledOnce();
+    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe("0");
+  });
+
+  it("offers valid service-account env credentials for the default account", async () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '  {"client_email":"bot@example.com"}  ');
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "  ");
+    const confirm = vi.fn(async () => true);
+    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
+
+    const result = await googlechatSetupWizard.prepare?.({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      credentialValues: {},
+      prompter: createTestWizardPrompter({ confirm, select }),
+    } as never);
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(select).not.toHaveBeenCalled();
+    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe("1");
+  });
+
+  it("does not offer default-account env credentials to named accounts", async () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+    const confirm = vi.fn(async () => true);
+    const select = vi.fn(async () => "file" as const) as unknown as WizardPrompter["select"];
+
+    const result = await googlechatSetupWizard.prepare?.({
+      cfg: {},
+      accountId: "alerts",
+      credentialValues: {},
+      prompter: createTestWizardPrompter({ confirm, select }),
+    } as never);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledOnce();
+    expect(result?.credentialValues?.["__googlechatUseEnv"]).toBe("0");
+  });
+
   it("builds a patch from token-file and trims optional webhook fields", () => {
     if (!googlechatSetupAdapter.applyAccountConfig) {
       throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");

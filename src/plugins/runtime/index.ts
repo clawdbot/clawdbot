@@ -36,7 +36,7 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );

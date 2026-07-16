@@ -6,6 +6,14 @@
   "build": {
     "frontendDist": "../ui"
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDODJFMzU1QTQ0MUMwNkYKUldSdndFR2tWZU9DVE9RYnlIcHFoNG1xUlQzUlloa0plQmZjY0dPbHpjWlEzWFozdmt0cHBlY2gK",
+      "endpoints": [
+        "https://github.com/openclaw/openclaw/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "app": {
     "withGlobalTauri": true,
     "windows": [
@@ -31,12 +39,18 @@
           "windows": ["main"],
           "permissions": [
             "allow-bootstrap",
+            "allow-check-for-updates",
             "allow-connect-discovered-gateway",
             "allow-discover-gateways",
             "allow-gateway-action",
             "allow-install-cli",
+            "allow-open-release-page",
+            "allow-relaunch",
+            "allow-updater-ready",
             "core:event:allow-listen",
-            "core:event:allow-unlisten"
+            "core:event:allow-unlisten",
+            "process:allow-restart",
+            "updater:default"
           ]
         },
         {
@@ -51,6 +65,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "Utility",
     "shortDescription": "OpenClaw Linux companion",
     "longDescription": "Installs OpenClaw, manages the local Gateway service, and hosts the Control UI.",

@@ -8,6 +8,13 @@ import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
+const runDetachedWebhookWork = vi.hoisted(() => vi.fn((run: () => Promise<void>) => run()));
+
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
+  return { ...actual, runDetachedWebhookWork };
+});
 
 vi.mock("./inbound.js", () => ({
   dispatchSmsInboundEvent,
@@ -136,6 +143,7 @@ function createMessageSid(index: number): string {
 describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
     dispatchSmsInboundEvent.mockClear();
+    runDetachedWebhookWork.mockClear();
     activeAccountId = `test-${++testAccountSequence}`;
   });
 
@@ -164,6 +172,7 @@ describe("createSmsWebhookHandler", () => {
     expect(firstRes.statusCode).toBe(200);
     expect(replayRes.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+    expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);
   });
 
   it("validates the raw RCS form before canonicalizing its sender", async () => {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildChildEnv,
+  resolveShardChildCommand,
   resolveShardPlans,
   runShardPlans,
 } from "../../scripts/ci-run-node-test-shard.mjs";
@@ -25,6 +26,13 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mjs", () => {
+  it("launches the child runner directly with Node", () => {
+    expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
+      command: "/runtime/node",
+      args: ["scripts/test-projects.mjs", "one.config.ts"],
+    });
+  });
+
   it("prefers explicit targets and keeps one target per child", () => {
     const plans = resolveShardPlans({
       OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(["a.test.ts", "b.test.ts"]),

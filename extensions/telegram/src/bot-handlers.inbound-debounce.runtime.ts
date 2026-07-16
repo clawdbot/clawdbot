@@ -14,6 +14,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import { getTelegramTextParts } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type TelegramDebounceLane = "default" | "forward";
 
@@ -29,7 +30,7 @@ export type TelegramDebounceEntry = {
   threadId?: number;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeKeys: string[];
+  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
   spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
 };
 
@@ -41,8 +42,8 @@ export function createTelegramInboundDebounceRuntime(
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
-    mergeDispatchDedupeKeys,
-    releaseDispatchDedupeKeys,
+    mergeDispatchDedupeClaims,
+    releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     spooledReplayOptions,
@@ -115,7 +116,7 @@ export function createTelegramInboundDebounceRuntime(
               ),
               ...spooledReplayOptions(participants),
             },
-            dispatchDedupeKeys: last.dispatchDedupeKeys,
+            dispatchDedupeClaims: last.dispatchDedupeClaims,
             spooledReplayParticipants: participants,
           });
           settleSpooledReplayParticipants(participants, result);
@@ -127,8 +128,8 @@ export function createTelegramInboundDebounceRuntime(
           .join("\n");
         const combinedMedia = entries.flatMap((entry) => entry.allMedia);
         if (!combinedText.trim() && combinedMedia.length === 0) {
-          releaseDispatchDedupeKeys(
-            mergeDispatchDedupeKeys(...entries.map((entry) => entry.dispatchDedupeKeys)),
+          releaseDispatchDedupeClaims(
+            mergeDispatchDedupeClaims(...entries.map((entry) => entry.dispatchDedupeClaims)),
           );
           settleSpooledReplayParticipants(participants, { kind: "skipped" });
           return;
@@ -161,8 +162,8 @@ export function createTelegramInboundDebounceRuntime(
             ),
             ...spooledReplayOptions(participants),
           },
-          dispatchDedupeKeys: mergeDispatchDedupeKeys(
-            ...entries.map((entry) => entry.dispatchDedupeKeys),
+          dispatchDedupeClaims: mergeDispatchDedupeClaims(
+            ...entries.map((entry) => entry.dispatchDedupeClaims),
           ),
           spooledReplayParticipants: participants,
         });
@@ -199,8 +200,8 @@ export function createTelegramInboundDebounceRuntime(
       }
     },
     onCancel: (items) => {
-      releaseDispatchDedupeKeys(
-        mergeDispatchDedupeKeys(...items.map((item) => item.dispatchDedupeKeys)),
+      releaseDispatchDedupeClaims(
+        mergeDispatchDedupeClaims(...items.map((item) => item.dispatchDedupeClaims)),
       );
       settleSpooledReplayParticipants(
         items

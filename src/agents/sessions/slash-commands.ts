@@ -5,7 +5,7 @@
  */
 import type { SourceInfo } from "./source-info.js";
 
-export type SlashCommandSource = "extension" | "prompt" | "skill";
+type SlashCommandSource = "extension" | "prompt" | "skill";
 
 export interface SlashCommandInfo {
   name: string;

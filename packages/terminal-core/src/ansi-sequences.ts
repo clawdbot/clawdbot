@@ -4,7 +4,7 @@ const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*${ANS
 
 const ansiOscAtIndexRegex = new RegExp(ANSI_OSC_PATTERN, "y");
 
-export type AnsiSegment =
+type AnsiSegment =
   | { controls: string[]; kind: "ansi"; value: string }
   | { kind: "text"; value: string };
 
@@ -21,7 +21,7 @@ function csiIntroducerLength(input: string, index: number): number {
   return code === 0x1b && input.charCodeAt(index + 1) === 0x5b ? 2 : 0;
 }
 
-export type AnsiCsiScan = {
+type AnsiCsiScan = {
   controls: string[];
   ended: boolean;
   value: string;

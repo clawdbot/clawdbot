@@ -1012,6 +1012,55 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("replays payload-less Responses tool images as no output without image parts", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        input: ["text", "image"],
+      }),
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+    };
+
+    const output = params.input?.find((item) => item.type === "function_call_output");
+    expect(output).toMatchObject({ call_id: "call_husk", output: "(no output)" });
+    expect(JSON.stringify(output)).not.toContain("input_image");
+    expect(JSON.stringify(output)).not.toContain("see attached image");
+  });
+
   it("preserves image-bearing Responses tool results as image input parts", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({

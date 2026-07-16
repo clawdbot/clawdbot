@@ -9,7 +9,8 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
-import { CodexAppServerClient } from "./client.js";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
+import { CodexAppServerClient, isCodexAppServerRequestTimeoutError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
@@ -479,6 +480,7 @@ describe("startCodexAttemptThread", () => {
       timeout: 1_000,
     });
     expect(error).toBeInstanceOf(Error);
+    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
     expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(harness.stdinDestroyed).toBe(true);
   });
@@ -529,6 +531,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
+    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
     expect((error as Error).message).toBe("codex app-server initialize timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
@@ -738,6 +741,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
+    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
     expect((error as Error).message).toBe("codex app-server startup aborted");
     expect(harness.process.stdin.destroyed).toBe(true);
   });
@@ -800,6 +804,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
+    expect(isCodexAppServerRequestTimeoutError(error)).toBe(true);
     expect((error as Error).message).toBe("plugin/list timed out");
     expect(harness.process.stdin.destroyed).toBe(true);
   });

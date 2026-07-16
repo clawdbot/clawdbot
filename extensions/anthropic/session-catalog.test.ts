@@ -17,11 +17,30 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
-  listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
   registerClaudeSessionCatalog,
 } from "./session-catalog.js";
+
+function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
+  let provider: SessionCatalogProvider | undefined;
+  const runtimeWithSession = {
+    ...runtime,
+    agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
+  } as PluginRuntime;
+  registerClaudeSessionCatalog({
+    id: "anthropic",
+    config: {},
+    runtime: runtimeWithSession,
+    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+      provider = candidate;
+    },
+  } as unknown as OpenClawPluginApi);
+  if (!provider) {
+    throw new Error("expected Anthropic session catalog registration");
+  }
+  return provider;
+}
 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
@@ -119,6 +138,40 @@ async function writeDesktopMetadata(
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
 }
 
+async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
+  await fs.mkdir(binDir, { recursive: true });
+  const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+  const packageExecutable = path.join(
+    binDir,
+    "node_modules",
+    "@anthropic-ai",
+    "claude-code",
+    "bin",
+    "claude.exe",
+  );
+  await fs.mkdir(path.dirname(packageExecutable), { recursive: true });
+  await fs.writeFile(
+    packageExecutable,
+    [
+      'echo "Error: claude native binary not installed." >&2',
+      'echo "node node_modules/@anthropic-ai/claude-code/install.cjs" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    executable,
+    process.platform === "win32"
+      ? '@ECHO off\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n'
+      : '#!/bin/sh\nexec "$basedir/node_modules/@anthropic-ai/claude-code/bin/claude.exe" "$@"\n',
+  );
+  if (process.platform !== "win32") {
+    await fs.chmod(executable, 0o755);
+    await fs.chmod(packageExecutable, 0o755);
+  }
+  return executable;
+}
+
 function message(
   sessionId: string,
   type: "user" | "assistant",
@@ -140,6 +193,7 @@ function message(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
@@ -1070,7 +1124,8 @@ describe("Claude session catalog", () => {
     ).rejects.toThrow("Claude session cannot be resumed in a terminal");
   });
 
-  it("prefers the login-shell Claude binary for local terminal capability and plans", async () => {
+  it("replaces a broken npm shim with Claude Desktop's newest native binary", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-1";
@@ -1116,9 +1171,35 @@ describe("Claude session catalog", () => {
       },
     } as unknown as OpenClawPluginApi);
 
-    await fs.writeFile(path.join(shellBinDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(shellBinDir, "claude"), 0o755);
+    await writeBrokenClaudeNpmShim(shellBinDir);
     nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const desktopVersionRoot = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code",
+    );
+    for (const version of ["2.1.9", "2.1.10"]) {
+      const desktopBinDir = path.join(
+        desktopVersionRoot,
+        version,
+        "claude.app",
+        "Contents",
+        "MacOS",
+      );
+      await fs.mkdir(desktopBinDir, { recursive: true });
+      await fs.writeFile(path.join(desktopBinDir, "claude"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(desktopBinDir, "claude"), 0o755);
+    }
+    const desktopExecutable = path.join(
+      desktopVersionRoot,
+      "2.1.10",
+      "claude.app",
+      "Contents",
+      "MacOS",
+      "claude",
+    );
     await expect(provider?.list({})).resolves.toMatchObject([
       { sessions: [{ threadId: sessionId, canOpenTerminal: true }] },
     ]);
@@ -1126,13 +1207,47 @@ describe("Claude session catalog", () => {
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
     ).resolves.toMatchObject({
       kind: "local",
-      argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
+      argv: [desktopExecutable, "--resume", sessionId],
       cwd: home,
       pathEnv: shellBinDir,
     });
     await expect(
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: "missing" }),
     ).rejects.toThrow("Claude session is unavailable");
+  });
+
+  it("hides terminal capability when the failed npm shim has no native replacement", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-session-broken-shim";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: home,
+          summary: "Broken shim session",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
+    });
+    const shellBinDir = path.join(home, "shell-bin");
+    await writeBrokenClaudeNpmShim(shellBinDir);
+    process.env.PATH = shellBinDir;
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const provider = captureCatalogProvider({
+      config: { current: () => ({}) },
+      nodes: { list: async () => ({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+
+    await expect(provider.list({})).resolves.toMatchObject([
+      { sessions: [{ threadId: sessionId, canOpenTerminal: false }] },
+    ]);
+    await expect(
+      provider.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).rejects.toThrow("Claude CLI is unavailable");
   });
 
   it("keeps one failed node isolated from healthy hosts", async () => {
@@ -1163,11 +1278,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:healthy", "node:failed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:healthy", "node:failed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
     ]);
@@ -1180,12 +1293,10 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:registry"] },
-    });
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:registry"] });
 
-    expect(result.hosts).toEqual([
+    expect(hosts).toEqual([
       expect.objectContaining({
         hostId: "node:registry",
         error: {
@@ -1226,11 +1337,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:malformed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:malformed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:malformed", error: expect.any(Object) }),
     ]);
   });

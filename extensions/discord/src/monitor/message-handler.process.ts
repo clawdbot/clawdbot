@@ -137,11 +137,7 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
-  try {
-    await processDiscordMessageInner(ctx, observer);
-  } finally {
-    ctx.replyTypingFeedback?.onCleanup?.();
-  }
+  await processDiscordMessageInner(ctx, observer);
 }
 
 async function processDiscordMessageInner(
@@ -174,7 +170,6 @@ async function processDiscordMessageInner(
     threadBindings,
     route,
     abortSignal,
-    replyTypingFeedback,
     preparedMedia: mediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
@@ -209,10 +204,9 @@ async function processDiscordMessageInner(
   const configuredTypingInterval =
     cfg.agents?.defaults?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
   const shouldDisableCoreTypingKeepalive =
-    Boolean(replyTypingFeedback) ||
-    (sourceRepliesAreToolOnly &&
-      configuredTypingMode === undefined &&
-      configuredTypingInterval === undefined);
+    sourceRepliesAreToolOnly &&
+    configuredTypingMode === undefined &&
+    configuredTypingInterval === undefined;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -415,11 +409,9 @@ async function processDiscordMessageInner(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
-  // Deliver target can move into a thread after preflight accepted the message.
-  // The typing owner follows the final target before reply dispatch starts.
-  const typingFeedback =
-    replyTypingFeedback ??
-    createDiscordReplyTypingFeedback({
+  let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
+  const getTypingFeedback = () =>
+    (typingFeedback ??= createDiscordReplyTypingFeedback({
       cfg,
       token,
       accountId,
@@ -427,21 +419,20 @@ async function processDiscordMessageInner(
       rest: feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: shouldDisableCoreTypingKeepalive ? undefined : 0,
-    });
-  if (replyTypingFeedback) {
-    // A carried prestart only covers queue wait time; dispatch needs a fresh
-    // controller after retargeting so an expired TTL cannot silence the run.
-    replyTypingFeedback.restartForDispatch(typingChannelId);
-  } else {
-    typingFeedback.updateChannelId(typingChannelId);
-  }
+    }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
-    typingCallbacks: typingFeedback,
+    // The core lifecycle reaches this callback only after reply admission.
+    // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
+    typingCallbacks: {
+      onReplyStart: () => getTypingFeedback().onReplyStart(),
+      onIdle: () => typingFeedback?.onIdle?.(),
+      onCleanup: () => typingFeedback?.onCleanup?.(),
+    },
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -662,6 +653,15 @@ async function processDiscordMessageInner(
     ];
     return `-# ${parts.join(" · ")}`;
   };
+  let replyLifecycleStarted = false;
+  const onDiscordReplyStart = async () => {
+    if (isProcessAborted(abortSignal)) {
+      return;
+    }
+    replyLifecycleStarted = true;
+    await replyPipeline.typingCallbacks?.onReplyStart();
+    await statusReactions.setThinking();
+  };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
@@ -789,6 +789,11 @@ async function processDiscordMessageInner(
         }),
       );
       return { visibleReplySent: false };
+    }
+    if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
+      // Fast replies can bypass the normal resolver lifecycle. Start feedback
+      // only after a deliverable final survives every suppression boundary.
+      await onDiscordReplyStart();
     }
     const draftStream = draftPreview.draftStream;
     if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
@@ -985,14 +990,6 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  const onDiscordReplyStart = async () => {
-    if (isProcessAborted(abortSignal)) {
-      return;
-    }
-    await replyPipeline.typingCallbacks?.onReplyStart();
-    await statusReactions.setThinking();
-  };
-
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
   let dispatchResult: Awaited<ReturnType<typeof dispatchReply>> | null = null;
   let dispatchError = false;
@@ -1191,15 +1188,9 @@ async function processDiscordMessageInner(
           if (payload.phase !== "update") {
             return;
           }
-          await draftPreview.pushToolProgress(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase,
-              title: payload.title,
-              explanation: payload.explanation,
-              steps: payload.steps,
-            }),
-          );
+          await draftPreview.pushPlanProgress(payload.planSteps, {
+            explanation: payload.explanation,
+          });
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {

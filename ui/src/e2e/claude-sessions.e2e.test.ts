@@ -296,7 +296,7 @@ suite("Claude native session catalog", () => {
       });
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
-      expect(await page.locator(".tp-tab.is-connecting").count()).toBe(1);
+      expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -319,7 +319,7 @@ suite("Claude native session catalog", () => {
         data: "Claude Code ready\r\n",
       });
       await expect.poll(() => connecting.count()).toBe(0);
-      expect(await page.locator(".tp-tab.is-live").count()).toBe(1);
+      expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -366,7 +366,7 @@ suite("Claude native session catalog", () => {
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tp-tab").count()).toBe(0);
+      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
     } finally {
       await context.close();
     }

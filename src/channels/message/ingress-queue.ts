@@ -72,7 +72,7 @@ export type ChannelIngressQueueCorruptClaim = {
 };
 
 /** Completed ingress event tombstone retained for duplicate detection. */
-export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
+type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
   id: string;
   channelId: string;
   accountId: string;
@@ -82,7 +82,7 @@ export type ChannelIngressQueueCompletedRecord<TCompletedMetadata = unknown> = {
 };
 
 /** Failed ingress event tombstone retained for duplicate detection and diagnostics. */
-export type ChannelIngressQueueFailedRecord = {
+type ChannelIngressQueueFailedRecord = {
   id: string;
   channelId: string;
   accountId: string;
@@ -105,7 +105,7 @@ export type ChannelIngressQueuePruneOptions = {
 };
 
 /** Result of enqueueing a possibly duplicate ingress event id. */
-export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
+type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
       duplicate: false;

@@ -1784,6 +1784,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
@@ -1794,6 +1795,32 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
 
 Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
+
+### Presence events
+
+Slack does not send presence changes through the Events API or Socket Mode. OpenClaw can instead poll [`users.getPresence`](https://docs.slack.dev/reference/methods/users.getPresence/) for human participants whose messages passed normal Slack access and routing checks.
+
+```json5
+{
+  channels: {
+    slack: {
+      presenceEvents: { mode: "auto" },
+      channels: {
+        C0123456789: { presenceEvents: { mode: "on" } },
+        C0987654321: { presenceEvents: { mode: "off" } },
+      },
+    },
+  },
+}
+```
+
+- `off` (default): no presence timer or Slack API calls.
+- `auto`: monitor DMs, MPIMs, and Slack threads active in the last 24 hours with at most 8 observed human participants. Top-level channel sessions are excluded.
+- `on`: monitor the same conversations without the participant cap and include top-level channel sessions. Use a per-channel override to force or suppress one channel.
+
+OpenClaw polls at most 45 unique users per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
+
+The bot token needs `users:read`, which is already included in the recommended manifest. Presence events are unavailable for Enterprise Grid org-wide installs.
 
 ## Configuration reference
 
@@ -1806,6 +1833,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`

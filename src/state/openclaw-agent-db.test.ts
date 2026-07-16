@@ -458,6 +458,22 @@ describe("openclaw agent database", () => {
     expect(collectSqliteSchemaShape(database.db)).toEqual(
       createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
     );
+    expect(
+      database.db
+        .prepare(
+          `SELECT name FROM pragma_table_list
+           WHERE schema = 'main'
+             AND type = 'table'
+             AND name NOT LIKE 'sqlite_%'
+             AND strict <> 1`,
+        )
+        .all(),
+    ).toEqual([]);
+    expect(() =>
+      database.db
+        .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
+        .run("not-an-integer"),
+    ).toThrow();
     expect(database.agentId).toBe("worker-1");
     expect(database.path).toBe(
       path.join(stateDir, "agents", "worker-1", "agent", "openclaw-agent.sqlite"),
@@ -473,6 +489,77 @@ describe("openclaw agent database", () => {
       schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(registered?.sizeBytes).toBeGreaterThan(0);
+  });
+
+  it("migrates version 8 tables to STRICT without losing agent state", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("last-good", '{"profile":"primary"}', 10);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE auth_profile_state RENAME TO auth_profile_state_strict;
+      CREATE TABLE auth_profile_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        state_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO auth_profile_state SELECT * FROM auth_profile_state_strict;
+      DROP TABLE auth_profile_state_strict;
+      DROP TRIGGER memory_index_sources_revision_after_insert;
+      DROP TRIGGER memory_index_sources_revision_after_update;
+      DROP TRIGGER memory_index_sources_revision_after_delete;
+      ALTER TABLE memory_index_sources RENAME TO memory_index_sources_strict;
+      CREATE TABLE memory_index_sources (
+        id INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL,
+        UNIQUE (path, source)
+      );
+      INSERT INTO memory_index_sources SELECT * FROM memory_index_sources_strict;
+      DROP TABLE memory_index_sources_strict;
+      INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+      VALUES ('MEMORY.md', 'memory', 'legacy-hash', 10.75, 20);
+      PRAGMA user_version = 8;
+      UPDATE schema_meta SET schema_version = 8 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'auth_profile_state'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(migrated.db.prepare("SELECT * FROM auth_profile_state").get()).toEqual({
+      state_key: "last-good",
+      state_json: '{"profile":"primary"}',
+      updated_at: 10,
+    });
+    expect(
+      migrated.db
+        .prepare("SELECT mtime, typeof(mtime) AS storage_type FROM memory_index_sources")
+        .get(),
+    ).toEqual({ mtime: 10.75, storage_type: "real" });
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      migrated.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    expect(migrated.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
 
   it("generates stable typed memory source identities", () => {
@@ -1470,7 +1557,7 @@ describe("openclaw agent database", () => {
       acp_owned: 1,
       plugin_owner_id: "history-owner",
     });
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(8);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
 
   it("inspects registered database ownership without mutating the database", () => {

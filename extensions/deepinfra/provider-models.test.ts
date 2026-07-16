@@ -1,3 +1,4 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Deepinfra tests cover provider models plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,17 +14,18 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
 });
 
 import {
-  DEEPINFRA_MODELS_URL,
   DEEPINFRA_DEFAULT_MODEL_REF,
   DEEPINFRA_MODEL_CATALOG,
   discoverDeepInfraModels,
   discoverDeepInfraSurfaces,
   hasDeepInfraApiKey,
-  resetDeepInfraModelCacheForTest,
 } from "./provider-models.js";
 
+const DEEPINFRA_MODELS_URL =
+  "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta";
+
 beforeEach(() => {
-  resetDeepInfraModelCacheForTest();
+  clearLiveCatalogCacheForTests();
   isProviderApiKeyConfiguredMock.mockReset();
   isProviderApiKeyConfiguredMock.mockReturnValue(false);
 });

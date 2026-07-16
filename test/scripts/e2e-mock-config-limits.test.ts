@@ -91,7 +91,7 @@ async function stopServer(child: ChildProcess) {
   child.kill("SIGTERM");
   await Promise.race([
     exited,
-    delay(1_000).then(() => {
+    delay(1_000, undefined, { ref: false }).then(() => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }

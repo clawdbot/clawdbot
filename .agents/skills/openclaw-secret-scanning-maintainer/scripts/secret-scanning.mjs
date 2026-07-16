@@ -60,7 +60,7 @@ function isBodyLocationType(locationType) {
 }
 
 /** Decides whether redacting an issue/PR body requires notifying the reporter. */
-export function decideBodyRedaction(currentBody, redactedBody) {
+function decideBodyRedaction(currentBody, redactedBody) {
   const bodyChanged = String(currentBody) !== String(redactedBody);
   return {
     body_changed: bodyChanged,
@@ -69,7 +69,7 @@ export function decideBodyRedaction(currentBody, redactedBody) {
 }
 
 /** Loads redaction-result metadata for issue/PR body secret locations. */
-export function loadBodyRedactionResult(locationType, resultFile) {
+function loadBodyRedactionResult(locationType, resultFile) {
   if (!isBodyLocationType(locationType)) {
     return { notify_required: true };
   }
@@ -887,7 +887,7 @@ function cmdSummary(jsonFile) {
 
 const args = [];
 
-export const commands = {
+const commands = {
   "fetch-alert": () => cmdFetchAlert(args[0]),
   "fetch-content": () => cmdFetchContent(args[0]),
   "redact-body": () => cmdRedactBody(args[0], args[1], args[2]),

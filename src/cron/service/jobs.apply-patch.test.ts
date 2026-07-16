@@ -1,6 +1,7 @@
 // Cron job patch tests cover applying partial updates to scheduled jobs.
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
 import type { CronJob } from "../types.js";
 import { applyJobPatch } from "./jobs.js";
 
@@ -239,5 +240,62 @@ describe("applyJobPatch delivery merge", () => {
         accountId: "bot-a",
       }),
     ).toBeNull();
+  });
+});
+
+describe("applyJobPatch failure alert merge", () => {
+  it("clears explicit fields, preserves omitted fields, and persists the result", () => {
+    const job = makeJob({
+      failureAlert: {
+        after: 2,
+        channel: "telegram",
+        to: "123456",
+        cooldownMs: 60_000,
+        includeSkipped: true,
+        mode: "announce",
+        accountId: "bot-a",
+      },
+    });
+
+    applyJobPatch(job, {
+      failureAlert: {
+        after: null,
+        to: null,
+        cooldownMs: null,
+        accountId: null,
+      },
+    });
+
+    expect(job.failureAlert).toEqual({
+      after: undefined,
+      channel: "telegram",
+      to: undefined,
+      cooldownMs: undefined,
+      includeSkipped: true,
+      mode: "announce",
+      accountId: undefined,
+    });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual({
+      channel: "telegram",
+      includeSkipped: true,
+      mode: "announce",
+    });
+
+    applyJobPatch(job, {
+      failureAlert: { channel: null, includeSkipped: null, mode: null },
+    });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual({});
+  });
+
+  it("clears the whole override only for explicit null", () => {
+    const original = { after: 2, channel: "telegram" as const };
+    const job = makeJob({ failureAlert: original });
+
+    applyJobPatch(job, {});
+    expect(job.failureAlert).toEqual(original);
+
+    applyJobPatch(job, { failureAlert: null });
+    expect(job.failureAlert).toBeUndefined();
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toBeUndefined();
   });
 });

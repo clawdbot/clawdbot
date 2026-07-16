@@ -127,6 +127,23 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
   });
 
+  it("passes the caller-provided inbound history through to the context payload", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+      inboundHistory: [{ sender: "user:user-2", body: "earlier chatter", timestamp: 1000 }],
+    });
+
+    expect(context?.ctxPayload.InboundHistory).toEqual([
+      { sender: "user:user-2", body: "earlier chatter", timestamp: 1000 },
+    ]);
+  });
+
   it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
     const timestamp = 1_700_000_000_000;
     const logCfg: OpenClawConfig = {

@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
+import { resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -364,7 +365,7 @@ function resolveDurableCronTaskRecovery(
   if (!row || !isCronTerminalTaskStatus(row.status)) {
     return undefined;
   }
-  const endedAt = row.endedAt ?? row.lastEventAt ?? row.createdAt;
+  const endedAt = resolveCronTaskRecordTimestamp(row);
   return {
     status: row.status,
     endedAt,

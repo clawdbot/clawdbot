@@ -10,6 +10,7 @@ import {
 import type { HealthSummary } from "../commands/health.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
+import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { cleanOldMedia } from "../media/store.js";
 import { startSkillCuratorMaintenance } from "../skills/workshop/curator.js";
 import {
@@ -32,6 +33,10 @@ import {
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+// Hourly sweep plus a one-day grace bounds orphan storage without racing the
+// stage-before-row-commit window.
+const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -76,6 +81,7 @@ export function startGatewayMaintenanceTimers(params: {
   mediaCleanupTtlMs?: number;
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
+  runDeliveryQueueMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
   registerSkillUsageTracking?: () => () => void;
@@ -136,6 +142,31 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
 
+  // Queue media has its own reference-aware retention policy and runs even when
+  // the general media TTL sweep is disabled.
+  const runDeliveryQueueMediaGc =
+    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+  let deliveryQueueMediaGcInFlight: Promise<void> | null = null;
+  let deliveryQueueMediaGcStartedAtMs = 0;
+  const performDeliveryQueueMediaGc = () => {
+    if (deliveryQueueMediaGcInFlight) {
+      return deliveryQueueMediaGcInFlight;
+    }
+    deliveryQueueMediaGcStartedAtMs = Date.now();
+    deliveryQueueMediaGcInFlight = Promise.resolve()
+      .then(async () => {
+        await runDeliveryQueueMediaGc();
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delivery queue media cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        deliveryQueueMediaGcInFlight = null;
+      });
+    return deliveryQueueMediaGcInFlight;
+  };
+  void performDeliveryQueueMediaGc();
+
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
     skillCuratorCleanup = startSkillCuratorMaintenance({
@@ -149,6 +180,9 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
+      void performDeliveryQueueMediaGc();
+    }
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return undefined;

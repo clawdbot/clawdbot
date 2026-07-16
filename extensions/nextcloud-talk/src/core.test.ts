@@ -250,24 +250,24 @@ describe("nextcloud talk core", () => {
     const stateDir = await makeTempDir();
 
     const firstGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const firstAttempt = await firstGuard.shouldProcessMessage({
+    const firstAttempt = await firstGuard.shouldProcess({
       accountId: "account-a",
       roomToken: "room-1",
       messageId: "msg-1",
     });
-    const replayAttempt = await firstGuard.shouldProcessMessage({
+    const replayAttempt = await firstGuard.shouldProcess({
       accountId: "account-a",
       roomToken: "room-1",
       messageId: "msg-1",
     });
 
     const secondGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const restartReplayAttempt = await secondGuard.shouldProcessMessage({
+    const restartReplayAttempt = await secondGuard.shouldProcess({
       accountId: "account-a",
       roomToken: "room-1",
       messageId: "msg-1",
     });
-    const otherAccountFirstAttempt = await secondGuard.shouldProcessMessage({
+    const otherAccountFirstAttempt = await secondGuard.shouldProcess({
       accountId: "account-b",
       roomToken: "room-1",
       messageId: "msg-1",
@@ -277,38 +277,6 @@ describe("nextcloud talk core", () => {
     expect(replayAttempt).toBe(false);
     expect(restartReplayAttempt).toBe(false);
     expect(otherAccountFirstAttempt).toBe(true);
-  });
-
-  it("releases in-flight replay claims when processing fails", async () => {
-    const guard = createNextcloudTalkReplayGuard({});
-
-    const firstClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    const secondClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-
-    expect(firstClaim).toBe("claimed");
-    expect(secondClaim).toBe("inflight");
-
-    guard.releaseMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-      error: new Error("transient"),
-    });
-
-    const retryClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    expect(retryClaim).toBe("claimed");
   });
 
   it("resolves allowlist matches", () => {

@@ -1,24 +1,13 @@
 // Zalouser plugin module implements security audit behavior.
+import { buildMutableAllowEntryDetector } from "openclaw/plugin-sdk/channel-policy";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type { ResolvedZalouserAccount } from "./accounts.js";
 
-export function isZalouserMutableGroupEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
-  const normalized = text
-    .replace(/^(zalouser|zlu):/i, "")
-    .replace(/^group:/i, "")
-    .trim();
-  if (!normalized) {
-    return false;
-  }
-  if (/^\d+$/.test(normalized)) {
-    return false;
-  }
-  return !/^g-\S+$/i.test(normalized);
-}
+export const isZalouserMutableGroupEntry = buildMutableAllowEntryDetector({
+  // Encode the existing ordered prefix grammar; repeated/out-of-order prefixes stay mutable.
+  stableIdPattern:
+    /^(?:(?:(?:zalouser|zlu):)?(?:group:)?(?:\d+|g-\S+)|(?:zalouser|zlu):(?:group:)?|group:)$/i,
+});
 
 export function collectZalouserSecurityAuditFindings(params: {
   accountId?: string | null;

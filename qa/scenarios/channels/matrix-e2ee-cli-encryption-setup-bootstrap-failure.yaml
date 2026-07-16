@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.access-and-identity
   execution:
+    profiles: { "matrix:all": 87, "matrix:e2ee-cli": 3 }
     kind: flow
     channel: matrix
     timeoutMs: 120000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         encryption: true
         startupVerification: off

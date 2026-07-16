@@ -112,6 +112,10 @@ const mocks = vi.hoisted(() => ({
     async (): Promise<string | undefined> => undefined,
   ),
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
+  repairCronCodexModelRefsAfterConfigWrite: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
@@ -407,6 +411,10 @@ vi.mock("../commands/doctor/cron/index.js", () => ({
   noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
 }));
 
+vi.mock("../commands/doctor/cron/legacy-repair.js", () => ({
+  repairCronCodexModelRefsAfterConfigWrite: mocks.repairCronCodexModelRefsAfterConfigWrite,
+}));
+
 vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
@@ -662,6 +670,11 @@ describe("doctor health contributions", () => {
     mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValue(undefined);
     mocks.maybeRepairLegacyCronStore.mockReset();
     mocks.maybeRepairLegacyCronStore.mockResolvedValue(undefined);
+    mocks.repairCronCodexModelRefsAfterConfigWrite.mockReset();
+    mocks.repairCronCodexModelRefsAfterConfigWrite.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.noteLegacyWhatsAppCrontabHealthCheck.mockReset();
     mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
@@ -3279,6 +3292,63 @@ describe("doctor health contributions", () => {
 
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("does not commit deferred cron migration when the config write fails", async () => {
+    const cfg = { agents: { defaults: { models: {} } } } as OpenClawConfig;
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+    const ctx = {
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: {
+        cfg,
+        shouldWriteConfig: true,
+        shouldRepairCronCodexModelRefsAfterConfigWrite: true,
+        blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await expect(requireDoctorContribution("doctor:write-config").run(ctx)).rejects.toThrow(
+      "config write failed",
+    );
+    expect(mocks.repairCronCodexModelRefsAfterConfigWrite).not.toHaveBeenCalled();
+  });
+
+  it("commits deferred cron migration after the config write succeeds", async () => {
+    const cfg = { agents: { defaults: { models: {} } } } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: cfg,
+      configResult: {
+        cfg,
+        shouldWriteConfig: true,
+        shouldRepairCronCodexModelRefsAfterConfigWrite: true,
+        blockedCodexModelIdentities: ["codex\u0000gpt-5.6-sol"],
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await requireDoctorContribution("doctor:write-config").run(ctx);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledWith({
+      cfg,
+      blockedModelIdentities: new Set(["codex\u0000gpt-5.6-sol"]),
+    });
+    expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.repairCronCodexModelRefsAfterConfigWrite.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   describe("config size drops during update", () => {

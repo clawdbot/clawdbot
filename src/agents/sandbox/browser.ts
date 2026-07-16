@@ -90,8 +90,10 @@ async function waitForSandboxCdp(params: {
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
     try {
+      // Keep a stalled request inside the outer browser startup deadline.
+      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - Date.now()));
       const ctrl = new AbortController();
-      const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const t = setTimeout(ctrl.abort.bind(ctrl), requestTimeoutMs);
       try {
         const res = await fetch(url, {
           headers: { Authorization: buildSandboxCdpAuthHeader(params.authToken) },

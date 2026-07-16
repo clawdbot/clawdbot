@@ -137,7 +137,11 @@ download_file() {
     detect_downloader
   fi
   if [[ "$DOWNLOADER" == "curl" ]]; then
-    curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused -o "$output" "$url"
+    # Bound post-connect stalls without imposing a total download duration.
+    curl -fsSL --proto '=https' --tlsv1.2 \
+      --speed-limit 1 --speed-time 30 \
+      --retry 3 --retry-delay 1 --retry-connrefused \
+      -o "$output" "$url"
     return
   fi
   wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"
@@ -621,7 +625,7 @@ install_alpine_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(linked_node_sqlite_version)"
-    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+); found Node ${installed_version}, SQLite ${sqlite_version}."
+    fail "Alpine Node package must provide Node >= ${required_version} with WAL-reset-safe SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x; found Node ${installed_version}, SQLite ${sqlite_version}."
   fi
 
   installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"

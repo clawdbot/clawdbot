@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [channels.native-approval-prompts]
   execution:
+    profiles: { "slack:default": 9 }
     kind: flow
     channel: slack
     runtime: codex

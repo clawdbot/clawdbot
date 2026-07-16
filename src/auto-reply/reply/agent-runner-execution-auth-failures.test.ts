@@ -242,6 +242,27 @@ describe("runAgentTurnWithFallback: authentication failures", () => {
     }
   });
 
+  it("surfaces the claude-cli re-auth hint when the CLI session is logged out", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("Not logged in · Please run /login", {
+        reason: "auth",
+        provider: "claude-cli",
+        model: "claude-sonnet-4-20250514",
+        status: 401,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
+    }
+  });
+
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(

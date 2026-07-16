@@ -24,6 +24,7 @@ struct OpenClawMascotAnimatorTests {
                 #expect((0...1).contains(pose.eyeGlowOpacity), "\(mood)")
                 #expect((-45...45).contains(pose.leftClawDegrees), "\(mood)")
                 #expect((-45...45).contains(pose.rightClawDegrees), "\(mood)")
+                #expect((0...1).contains(pose.hardHat), "\(mood)")
                 #expect(abs(pose.gaze.width) <= 1.2 && abs(pose.gaze.height) <= 1.2, "\(mood)")
                 time += 1.0 / 30
             }
@@ -71,6 +72,42 @@ struct OpenClawMascotAnimatorTests {
         #expect(pose.antennaDroop > 0.5)
         #expect(pose.mouthCurve < 0)
         #expect(pose.eyeGlowOpacity < 0.9)
+    }
+
+    @Test func `working mood hammers with hat and sparks`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        var minimumClaw: CGFloat = 45
+        var maximumClaw: CGFloat = -45
+        var wearsHat = false
+        var sparks = false
+        var time: TimeInterval = 0
+        while time < 4 {
+            let pose = animator.pose(at: time)
+            minimumClaw = min(minimumClaw, pose.rightClawDegrees)
+            maximumClaw = max(maximumClaw, pose.rightClawDegrees)
+            wearsHat = wearsHat || (time > 1 && pose.hardHat == 1)
+            sparks = sparks || pose.effect == .sparks
+            time += 1.0 / 30
+        }
+        #expect(wearsHat)
+        #expect(maximumClaw - minimumClaw > 25)
+        #expect(sparks)
+    }
+
+    @Test func `working brow wipe interrupts hammering`() {
+        let animator = self.makeAnimator()
+        _ = animator.pose(at: 0)
+        animator.setMood(.working, at: 0)
+        var wiped = false
+        var time: TimeInterval = 0
+        while time < 14 {
+            let pose = animator.pose(at: time)
+            wiped = wiped || (pose.effect == .sweat && pose.happyEyes > 0.5)
+            time += 1.0 / 30
+        }
+        #expect(wiped)
     }
 
     @Test func `affection taps trigger hearts`() {
@@ -158,6 +195,9 @@ struct OpenClawMascotAnimatorTests {
         #expect(celebrating.mouthCurve > 0)
         let idle = OpenClawMascotPose.staticPose(for: .idle)
         #expect(idle == OpenClawMascotPose())
+        let working = OpenClawMascotPose.staticPose(for: .working)
+        #expect(working.hardHat == 1)
+        #expect(working.rightClawDegrees < 0)
     }
 
     @Test func `clamp channels bounds every channel`() {
@@ -166,12 +206,14 @@ struct OpenClawMascotAnimatorTests {
         pose.bodyStretch = 3
         pose.bodyTilt = -90
         pose.leftClawDegrees = 400
+        pose.hardHat = 4
         pose.gaze = CGSize(width: 9, height: -9)
         pose.clampChannels()
         #expect(pose.floatOffset == -12)
         #expect(pose.bodyStretch == 1.05)
         #expect(pose.bodyTilt == -8)
         #expect(pose.leftClawDegrees == 45)
+        #expect(pose.hardHat == 1)
         #expect(pose.gaze == CGSize(width: 1.2, height: -1.2))
     }
 }

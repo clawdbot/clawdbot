@@ -35,13 +35,23 @@ function isTestOnlyPath(changedPath) {
   return isTestFileTarget(changedPath) || changedPath.startsWith("test/");
 }
 
+// Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
+// the build pipeline itself (mirrors the build-all cache key in ci.yml).
+// Paths outside this set — repo scripts, workflows, qa scenarios, docs mixes —
+// cannot change dist or bundled plugin asset bytes.
+const BUILD_INPUT_RE =
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|write-plugin-sdk-entry-dts\.ts|copy-export-html-templates\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mjs)$/u;
+
 /**
- * True when any changed path can influence built dist/packaging bytes.
- * Test-only diffs cannot change what `build:ci-artifacts` produces, so the
- * manifest may skip the build-artifacts lane for them.
+ * True when a changed path can influence built dist/packaging bytes: a
+ * non-test build-input source or the build pipeline itself. Diffs entirely
+ * outside that set (tests, repo scripts, workflows, qa scenarios) let the
+ * manifest skip the build-artifacts lane.
  */
 export function hasBuildArtifactAffectingChange(changedPaths) {
-  return changedPaths.some((changedPath) => !isTestOnlyPath(changedPath));
+  return changedPaths.some(
+    (changedPath) => BUILD_INPUT_RE.test(changedPath) && !isTestOnlyPath(changedPath),
+  );
 }
 
 // Surfaces the CI smoke scenarios exercise outside the core runtime import
@@ -79,6 +89,42 @@ export function hasQaSmokeAffectingChange(changedPaths, options = {}) {
     return true;
   }
   return hasImportGraphImpactOnTargets(sourcePaths, [QA_SMOKE_RUNTIME_ENTRY], cwd);
+}
+
+// Surfaces the prompt-snapshot check exercises outside its generator's
+// relative import graph: the snapshot fixtures and generator scripts, the
+// codex extension (its test API loads through a dynamic bundled-plugin module
+// id the graph walk cannot see), and the gate's own orchestration — changes
+// to the gate must not be able to skip the gated lane.
+const PROMPT_SNAPSHOT_SURFACE_RE =
+  /^(?:test\/(?:helpers\/agents|fixtures\/agents\/prompt-snapshots)|extensions\/codex)\/|^scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.[cm]?[jt]s)$|^scripts\/lib\/ci-changed-node-test-plan\.mjs$|^\.github\/(?:workflows\/ci\.yml$|actions\/)|^(?:package\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|pnpm-workspace\.yaml)$/u;
+// The generator renders real prompt-layer stacks, so its runtime blast radius
+// is the snapshot helper's import graph (auto-reply prompts, channel typing,
+// plugin-sdk agent harness, codex catalog fixtures).
+const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
+
+/**
+ * True when a changed path can influence generated prompt snapshots: it
+ * touches the snapshot surface directly, or the generator's import graph
+ * reaches it. Diffs outside both cannot change generator output, so the
+ * manifest may skip the check lane.
+ */
+export function hasPromptSnapshotAffectingChange(changedPaths, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+    return true;
+  }
+  const sourcePaths = changedPaths.filter(
+    (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
+  );
+  if (sourcePaths.length === 0) {
+    return false;
+  }
+  // Deleted sources cannot be graphed; fail safe to running the check.
+  if (sourcePaths.some((changedPath) => !existsSync(path.join(cwd, changedPath)))) {
+    return true;
+  }
+  return hasImportGraphImpactOnTargets(sourcePaths, [PROMPT_SNAPSHOT_ENTRY], cwd);
 }
 
 function createBoundaryShard() {

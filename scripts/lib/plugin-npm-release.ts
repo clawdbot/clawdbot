@@ -12,7 +12,7 @@ import {
   resolveNpmPublishPlan,
 } from "./npm-publish-plan.mjs";
 
-export type PluginPackageJson = {
+type PluginPackageJson = {
   name?: string;
   version?: string;
   type?: string;
@@ -64,11 +64,11 @@ export type PublishablePluginPackage = {
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
 
-export type PluginReleasePlanItem = PublishablePluginPackage & {
+type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
 };
 
-export type PluginReleasePlan = {
+type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];

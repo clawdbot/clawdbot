@@ -91,7 +91,7 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
  * Keep grouped creators here so callers can request stable tool sets without importing each
  * individual implementation module.
  */
-export type Tool = AgentTool;
+type Tool = AgentTool;
 export type ToolDef = ToolDefinition;
 export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
 export const allToolNames: Set<ToolName> = new Set([

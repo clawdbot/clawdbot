@@ -55,7 +55,7 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-export type SpawnCommandOptions = Omit<
+type SpawnCommandOptions = Omit<
   ExecaOptions,
   "env" | "extendEnv" | "shell" | "windowsHide" | "windowsVerbatimArguments"
 > & {

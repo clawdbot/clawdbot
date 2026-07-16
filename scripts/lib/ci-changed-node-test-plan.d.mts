@@ -14,4 +14,9 @@ export function createChangedNodeTestShards(
 
 export function hasBuildArtifactAffectingChange(changedPaths: string[]): boolean;
 
+export function hasPromptSnapshotAffectingChange(
+  changedPaths: string[],
+  options?: { cwd?: string },
+): boolean;
+
 export function hasQaSmokeAffectingChange(changedPaths: string[]): boolean;

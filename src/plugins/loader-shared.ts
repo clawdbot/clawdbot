@@ -31,6 +31,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import { clearMemoryPluginState } from "./memory-state.js";
+import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -164,6 +165,7 @@ export function createPluginCandidatesFromManifestRegistry(
 }
 
 export function clearActivatedPluginRuntimeState(): void {
+  clearPluginRuntimeArtifactResolutionMemo();
   clearAgentHarnesses();
   clearPluginCommands();
   clearCompactionProviders();

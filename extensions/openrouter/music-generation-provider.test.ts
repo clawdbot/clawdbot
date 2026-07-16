@@ -297,6 +297,45 @@ describe("openrouter music generation provider", () => {
     );
   });
 
+  it("applies configured OpenRouter request policy without allowing private networks", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-OpenRouter-Trace": "trace-1" },
+      proxy: { mode: "env-proxy" as const },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.from("wav").toString("base64") } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterMusicGenerationProvider().generateMusic({
+      provider: "openrouter",
+      model: "google/lyria-3-pro-preview",
+      prompt: "policy soundtrack",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              request: requestPolicy,
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        capability: "audio",
+        allowPrivateNetwork: false,
+        request: requestPolicy,
+      }),
+    );
+  });
+
   it("times out stalled OpenRouter audio streams after headers", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: stalledSseResponse(

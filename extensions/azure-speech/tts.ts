@@ -79,11 +79,7 @@ function escapeXmlAttr(value: string): string {
 }
 
 /** Build escaped SSML for one Azure Speech synthesis request. */
-export function buildAzureSpeechSsml(params: {
-  text: string;
-  voice: string;
-  lang?: string;
-}): string {
+function buildAzureSpeechSsml(params: { text: string; voice: string; lang?: string }): string {
   const lang = trimToUndefined(params.lang) ?? DEFAULT_AZURE_SPEECH_LANG;
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +

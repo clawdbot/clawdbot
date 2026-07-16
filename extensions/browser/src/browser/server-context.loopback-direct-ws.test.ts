@@ -32,7 +32,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
   it("uses an HTTP /json/list base when opening about:blank under strict SSRF", async () => {
     const createTargetViaCdp = vi
       .spyOn(cdpModule, "createTargetViaCdp")
-      .mockResolvedValue({ targetId: "CREATED" });
+      .mockResolvedValue({ targetId: "CREATED", finalUrl: "about:blank" });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
@@ -67,6 +67,7 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
       cdpUrl: "ws://127.0.0.1:18800/devtools/browser/SESSION?token=abc",
       url: "about:blank",
       ssrfPolicy: undefined,
+      waitForNavigationResult: true,
     });
   });
 

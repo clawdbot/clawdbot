@@ -187,13 +187,6 @@ function resolveKimiThinkingConfig(params: {
     : { type: "enabled", budget_tokens: levelBudgetTokens };
 }
 
-export function resolveKimiThinkingType(params: {
-  configuredThinking: unknown;
-  thinkingLevel?: KimiThinkingLevel;
-}): KimiThinkingType {
-  return resolveKimiThinkingConfig(params).type;
-}
-
 function stripTaggedToolCallCounter(value: string): string {
   return value.trim().replace(/:\d+$/, "");
 }
@@ -361,7 +354,7 @@ function wrapStreamMessageObjects(
   return stream;
 }
 
-export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const maybeStream = underlying(model, context, options);
@@ -374,7 +367,7 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
   };
 }
 
-export function createKimiThinkingWrapper(
+function createKimiThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingConfig: KimiThinkingConfig | KimiThinkingType,
 ): StreamFn {

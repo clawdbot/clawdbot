@@ -1163,6 +1163,30 @@ describe("cron method validation", () => {
     }
   });
 
+  it.each(["add", "update"] as const)(
+    "rejects cron.%s when one command env value is non-string",
+    async (method) => {
+      const payload = {
+        kind: "command",
+        argv: ["sh", "-lc", "echo ok"],
+        env: { PATH: "/bin", DEBUG: true },
+      };
+      const result =
+        method === "add"
+          ? await invokeCronAdd(agentTurnCronParams({ payload }))
+          : await invokeCronUpdate(
+              { id: "cron-1", patch: { payload } },
+              createCronJob({ payload: { kind: "command", argv: ["echo", "before"] } }),
+            );
+
+      expect(result.context.cron[method]).not.toHaveBeenCalled();
+      expectResponseError(result.respond, {
+        code: "INVALID_REQUEST",
+        messageIncludes: "command env must be an object with non-blank keys and string values",
+      });
+    },
+  );
+
   it("defaults session-target declarations to announce delivery", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
@@ -1362,6 +1386,32 @@ describe("cron method validation", () => {
     );
 
     expect(context.cron.update).toHaveBeenCalledWith("cron-1", { displayName: null });
+    expectCronSuccess(respond);
+  });
+
+  it("passes explicit failure alert clears through cron.update", async () => {
+    const failureAlert = {
+      after: null,
+      to: null,
+      cooldownMs: null,
+      accountId: null,
+    };
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert } },
+      createCronJob({ failureAlert: { after: 2, to: "123", cooldownMs: 60_000 } }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { failureAlert });
+    expectCronSuccess(respond);
+  });
+
+  it("passes a whole failure alert override clear through cron.update", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: null } },
+      createCronJob({ failureAlert: { after: 2 } }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { failureAlert: null });
     expectCronSuccess(respond);
   });
 

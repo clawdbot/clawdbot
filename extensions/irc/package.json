@@ -36,9 +36,7 @@
             "IRC_HOST",
             "IRC_NICK"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasIrcConfiguredState"
+        }
       }
     },
     "compat": {

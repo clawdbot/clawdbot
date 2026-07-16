@@ -25,7 +25,7 @@ export type SecretResolverWarning = {
   message: string;
 };
 
-export type SecretAssignment = {
+type SecretAssignment = {
   ref: SecretRef;
   path: string;
   expected: "string" | "string-or-object";
@@ -43,7 +43,6 @@ export type ResolverContext = {
 };
 
 export type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
-export type { SecretRefResolveCache } from "./resolve-types.js";
 
 /**
  * Creates the mutable collection context used while preparing a secrets runtime snapshot.

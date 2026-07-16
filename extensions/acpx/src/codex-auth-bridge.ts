@@ -232,7 +232,7 @@ function buildAdapterWrapperScript(params: {
   stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -401,13 +401,12 @@ function stripOpenClawWrapperArgs(args) {
 
 const rawConfiguredArgs = process.argv.slice(2);
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
-
-try {
-  if (stderrLogPath) {
-    writeFileSync(stderrLogPath, "", "utf8");
+if (stderrLogPath) {
+  try {
+    rmSync(stderrLogPath, { force: true });
+  } catch {
+    // Diagnostic cleanup must never prevent the adapter from starting.
   }
-} catch {
-  // Stderr capture is diagnostic-only; never break the ACP adapter.
 }
 
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);

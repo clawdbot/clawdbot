@@ -11,6 +11,7 @@ import type { ImageCompressionPolicy, WebMediaResult } from "../../media/web-med
 import type {
   describeImageWithModel,
   describeImagesWithModel,
+  MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
@@ -60,6 +61,10 @@ type ImageToolProviderDeps = {
   resolveDefaultMediaModel: typeof resolveDefaultMediaModel;
   resolveBundledStaticCatalogModel: typeof resolveBundledStaticCatalogModel;
   resolveModelAsync: ResolveModelAsync;
+  resolveRegisteredMediaUnderstandingProvider(params: {
+    providerId: string;
+    cfg?: OpenClawConfig;
+  }): MediaUnderstandingProvider | undefined;
   resolveImageCompressionPolicy: ResolveImageCompressionPolicy;
   loadImageWebMediaRuntime: () => Promise<ImageWebMediaRuntime>;
 };

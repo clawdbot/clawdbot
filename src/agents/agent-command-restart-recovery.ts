@@ -281,6 +281,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   entry: SessionEntry;
   forceRestartSafeTools?: boolean;
   runId: string;
+  sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
   suppressTextDelivery?: boolean;
@@ -292,6 +293,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
   | "restartRecoveryForceSafeTools"
+  | "restartRecoverySourceIngress"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
 > {
@@ -308,6 +310,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
+  if (!adoptsExistingClaim && createsScopedDeliveryClaim && !params.sourceIngress) {
+    throw new Error("restart recovery source ownership is required for a new claim");
+  }
   return {
     restartRecoveryDeliveryContext: adoptsExistingClaim
       ? params.entry.restartRecoveryDeliveryContext
@@ -334,6 +339,11 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoveryDeliverySourceRunId: adoptsExistingClaim
       ? params.entry.restartRecoveryDeliverySourceRunId
       : params.sourceRunId,
+    restartRecoverySourceIngress: adoptsExistingClaim
+      ? params.entry.restartRecoverySourceIngress
+      : createsScopedDeliveryClaim
+        ? params.sourceIngress
+        : undefined,
     restartRecoverySourceReplyDeliveryMode: adoptsExistingClaim
       ? params.entry.restartRecoverySourceReplyDeliveryMode
       : params.sourceRunId

@@ -192,14 +192,16 @@ function classifyRuntimeWebTargetPathState(params: {
       if (!configuredProvider) {
         return "active";
       }
-      return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+      const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
         contract: "webFetchProviders",
         value: configuredProvider,
         origin: "bundled",
         config: params.config,
-      }) === pluginId
-        ? "active"
-        : "inactive";
+      });
+      if (!configuredPluginId) {
+        return "unknown";
+      }
+      return configuredPluginId === pluginId ? "active" : "inactive";
     }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
@@ -209,14 +211,16 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    return commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+    const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
       contract: "webSearchProviders",
       value: configuredProvider,
       origin: "bundled",
       config: params.config,
-    }) === pluginId
-      ? "active"
-      : "inactive";
+    });
+    if (!configuredPluginId) {
+      return "unknown";
+    }
+    return configuredPluginId === pluginId ? "active" : "inactive";
   }
 
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
@@ -1119,8 +1123,18 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         optionalActivePaths: params.optionalActivePaths,
         resolutionPolicy,
       });
+      const handledPaths = new Set<string>();
+      const locallyResolvedPaths = new Set<string>();
       for (const unresolved of analyzed.unresolved) {
-        if (localFallback.targetStatesByPath[unresolved.path] !== "resolved_local") {
+        const localState = localFallback.targetStatesByPath[unresolved.path];
+        if (localState === "inactive_surface") {
+          // A partial gateway snapshot can omit inactive refs as well as unresolved refs.
+          // Local inactive classification is terminal even though it materializes no value.
+          targetStatesByPath[unresolved.path] = localState;
+          handledPaths.add(unresolved.path);
+          continue;
+        }
+        if (localState !== "resolved_local") {
           continue;
         }
         setPathExistingStrict(
@@ -1128,16 +1142,12 @@ export async function resolveCommandSecretRefsViaGateway(params: {
           unresolved.pathSegments,
           getPath(localFallback.resolvedConfig, unresolved.pathSegments),
         );
-        targetStatesByPath[unresolved.path] = "resolved_local";
+        targetStatesByPath[unresolved.path] = localState;
+        handledPaths.add(unresolved.path);
+        locallyResolvedPaths.add(unresolved.path);
       }
-      const recoveredPaths = new Set(
-        Object.entries(localFallback.targetStatesByPath)
-          .filter(([, state]) => state === "resolved_local")
-          .map(([path]) => path),
-      );
-      const stillUnresolved = analyzed.unresolved.filter(
-        (entry) => !recoveredPaths.has(entry.path),
-      );
+      diagnostics = dedupeDiagnostics([...diagnostics, ...localFallback.diagnostics]);
+      const stillUnresolved = analyzed.unresolved.filter((entry) => !handledPaths.has(entry.path));
       if (stillUnresolved.length > 0) {
         if (enforcesResolvedSecrets(mode)) {
           throw new Error(
@@ -1149,17 +1159,16 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         }
         diagnostics = dedupeDiagnostics([
           ...diagnostics,
-          ...localFallback.diagnostics,
           ...buildUnresolvedDiagnostics(params.commandName, stillUnresolved, mode),
         ]);
         for (const unresolved of stillUnresolved) {
           targetStatesByPath[unresolved.path] = "unresolved";
         }
-      } else if (recoveredPaths.size > 0) {
+      } else if (locallyResolvedPaths.size > 0) {
         diagnostics = dedupeDiagnostics([
           ...diagnostics,
-          `${params.commandName}: resolved ${recoveredPaths.size} secret ${
-            recoveredPaths.size === 1 ? "path" : "paths"
+          `${params.commandName}: resolved ${locallyResolvedPaths.size} secret ${
+            locallyResolvedPaths.size === 1 ? "path" : "paths"
           } locally after the gateway snapshot was incomplete.`,
         ]);
       }

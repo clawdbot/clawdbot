@@ -1189,11 +1189,6 @@
       "translated": "OpenClaw ทำงานอยู่"
     },
     {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
-    },
-    {
       "id": "native.android.356609f717b92350",
       "source": "$preview…",
       "translated": "$preview…"
@@ -19554,9 +19549,9 @@
       "translated": "OpenClaw จะตรวจสอบอีกครั้งก่อนเปลี่ยนการตั้งค่าการอนุมานใดๆ"
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "กำลังตรวจสอบ Claude Code, Codex, Gemini และคีย์ API ที่บันทึกไว้"
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "กำลังตรวจสอบการเข้าสู่ระบบ CLI, คีย์ API ที่บันทึกไว้ และเซิร์ฟเวอร์โมเดลภายในเครื่องบน Gateway"
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19564,9 +19559,9 @@
       "translated": "ไม่สามารถตรวจสอบบัญชี AI บน Gateway นี้ได้"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "ไม่สามารถตรวจสอบบัญชี AI บน Mac นี้ได้"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "ไม่สามารถตรวจสอบการเข้าถึง AI บน Gateway นี้ได้"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19609,14 +19604,24 @@
       "translated": "คัดลอกรายละเอียดการตั้งค่า"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "ไม่พบบัญชี AI บน Mac นี้"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "ไม่พบการเข้าถึง AI ที่ใช้งานได้บน Gateway นี้"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "ไม่เป็นไร — คุณสามารถเชื่อมต่อได้ด้วย API key หรือโทเค็น หากคุณใช้ Claude Code, Codex หรือ Gemini CLI บน Mac นี้ ให้เข้าสู่ระบบที่นั่นก่อนแล้วกด “ตรวจสอบอีกครั้ง”"
+      "id": "native.apple.06b98c6084617183",
+      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
+      "translated": "ไม่เป็นไร — คุณสามารถเชื่อมต่อด้วยคีย์ API หรือโทเค็นได้ นอกจากนี้คุณยังสามารถลงชื่อเข้าใช้ Claude Code หรือ Codex หรือเริ่ม Ollama หรือ LM Studio ด้วยโมเดลที่เหมาะสม แล้วกด “ตรวจสอบอีกครั้ง”"
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "ตรวจพบแล้ว แต่ไม่ได้ทดสอบโดยอัตโนมัติ"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",

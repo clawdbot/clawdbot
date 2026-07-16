@@ -15,11 +15,11 @@ scenario:
     - src/agents/tools/session-status-tool.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles: { "telegram:adapter": 11, "telegram:all": 10 }
     kind: flow
     channel: telegram
     summary: Ask the model to resolve the current Telegram group session through session_status.
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
 
 flow:

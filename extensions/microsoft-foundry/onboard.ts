@@ -426,7 +426,7 @@ export async function promptApiKeyEndpointAndModel(
   });
 }
 
-export function buildFoundryConnectionTest(params: {
+function buildFoundryConnectionTest(params: {
   endpoint: string;
   modelId: string;
   modelNameHint?: string | null;
@@ -489,7 +489,7 @@ function extractTenantSuggestions(rawMessage: string): Array<{ id: string; label
   return suggestions;
 }
 
-export function isValidTenantIdentifier(value: string): boolean {
+function isValidTenantIdentifier(value: string): boolean {
   const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return false;
@@ -501,6 +501,12 @@ export function isValidTenantIdentifier(value: string): boolean {
       trimmed,
     );
   return isTenantUuid || isTenantDomain;
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, { ...api, buildFoundryConnectionTest, isValidTenantIdentifier });
 }
 
 export async function promptTenantId(

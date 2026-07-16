@@ -12,6 +12,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
@@ -78,6 +79,7 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -180,6 +182,154 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
         : undefined,
     )
     .filter((message): message is AgentMessage => Boolean(message));
+}
+
+function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
+  if ((message as { role?: unknown }).role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
+function isSessionsSendToolName(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/^(?:functions?|tools?)[./_-]/, "") === "sessions_send"
+  );
+}
+
+function sanitizeSourceSessionSends(messages: AgentMessage[]): AgentMessage[] {
+  const sendCallIds = new Set<string>();
+  const resolvedCallIds = new Set<string>();
+  const resultTextByCallId = new Map<string, string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue;
+    }
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const record = block as { type?: unknown; id?: unknown; name?: unknown };
+      if (
+        typeof record.type === "string" &&
+        TOOL_CALL_BLOCK_TYPES.has(record.type) &&
+        isSessionsSendToolName(record.name) &&
+        typeof record.id === "string" &&
+        record.id.trim()
+      ) {
+        sendCallIds.add(record.id.trim());
+      }
+    }
+  }
+
+  for (const message of messages) {
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const callId = extractToolResultId(message);
+    if (!callId || !sendCallIds.has(callId)) {
+      continue;
+    }
+    resolvedCallIds.add(callId);
+    const resultText = extractMessageText(message) || formatNonTextPlaceholder(message.content);
+    if (resultText) {
+      resultTextByCallId.set(callId, resultText);
+    }
+  }
+
+  return messages.flatMap((message) => {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      let replaced = false;
+      const content = message.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const record = block as {
+          type?: unknown;
+          id?: unknown;
+          name?: unknown;
+          arguments?: unknown;
+        };
+        if (
+          typeof record.type !== "string" ||
+          !TOOL_CALL_BLOCK_TYPES.has(record.type) ||
+          !isSessionsSendToolName(record.name)
+        ) {
+          return block;
+        }
+        replaced = true;
+        const callId = typeof record.id === "string" ? record.id.trim() : "";
+        const resultText = callId ? resultTextByCallId.get(callId) : undefined;
+        const resolved = Boolean(callId && resolvedCallIds.has(callId));
+        const requestText = JSON.stringify({ callId: callId || undefined, args: record.arguments });
+        return {
+          type: "text",
+          text:
+            resolved && resultText
+              ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: ${resultText}`
+              : resolved
+                ? `sessions_send result received; delivery call omitted from replay.\nRequest: ${requestText}\nResult: [empty]`
+                : `sessions_send result missing; delivery call omitted from replay.\nRequest: ${requestText}`,
+        };
+      });
+      return replaced ? [{ ...message, content } as AgentMessage] : [message];
+    }
+    if (message.role === "toolResult") {
+      const callId = extractToolResultId(message);
+      if ((callId && sendCallIds.has(callId)) || isSessionsSendToolName(message.toolName)) {
+        return [];
+      }
+    }
+    return [message];
+  });
+}
+
+function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): AgentMessage[] {
+  const sanitizedMessages = sanitizeSourceSessionSends(messages);
+  let turnStart = sanitizedMessages.length;
+  while (turnStart > 0) {
+    const role = (sanitizedMessages[turnStart - 1] as { role?: unknown }).role;
+    if (role !== "assistant" && role !== "toolResult") {
+      break;
+    }
+    turnStart -= 1;
+  }
+
+  const tailMessage = messages.at(-1);
+  const endsWithTerminalAssistantText =
+    tailMessage !== undefined &&
+    tailMessage.role === "assistant" &&
+    Boolean(extractMessageText(tailMessage).trim()) &&
+    (!Array.isArray(tailMessage.content) ||
+      !tailMessage.content.some((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return typeof type === "string" && TOOL_CALL_BLOCK_TYPES.has(type);
+      }));
+  const activeInput = sanitizedMessages[turnStart - 1];
+
+  // A completed sessions_send target run is already delivered to its caller.
+  // Require terminal text so compaction after tool output can still recover unfinished work.
+  if (
+    endsWithTerminalAssistantText &&
+    turnStart < sanitizedMessages.length &&
+    turnStart > 0 &&
+    activeInput !== undefined &&
+    isReplayUnsafeInterSessionInput(activeInput)
+  ) {
+    return sanitizedMessages.slice(0, turnStart - 1);
+  }
+  return sanitizedMessages;
 }
 
 function containsRealConversation(messages: AgentMessage[]): boolean {
@@ -907,8 +1057,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = stripRuntimeContextCustomMessages(
-        collectSessionBranchMessages(ctx.sessionManager),
+      const branchMessages = filterReplayUnsafeSessionBranchMessages(
+        stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
       );
       if (containsRealConversation(branchMessages)) {
         log.info(

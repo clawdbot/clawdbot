@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -2473,13 +2474,7 @@ describe("session accessor seam", () => {
     resumeShouldAppend();
 
     const results = Promise.all([turnPromise, queuedAppendPromise]);
-    const completed = await Promise.race([
-      results.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 1_000);
-      }),
-    ]);
-    expect(completed).toBe(true);
+    await withTestTimeout(results, 1_000, "timed out waiting for queued transcript writes");
     await results;
     expect(unrelatedWriteError).toBeUndefined();
   });
@@ -2513,13 +2508,11 @@ describe("session accessor seam", () => {
       updateMode: "file-only",
     });
 
-    const completed = await Promise.race([
-      turnPromise.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 1_000);
-      }),
-    ]);
-    expect(completed).toBe(true);
+    await withTestTimeout(
+      turnPromise,
+      1_000,
+      "timed out waiting for expected-session transcript turn",
+    );
     const result = await turnPromise;
 
     expect(result.appendedCount).toBe(1);
@@ -2591,10 +2584,20 @@ describe("session accessor seam", () => {
       expectedSessionId: scope.sessionId,
       expectedSessionState: {
         abortedLastRun: retryable.abortedLastRun,
+        restartRecoveryBeforeAgentReplyState: retryable.restartRecoveryBeforeAgentReplyState,
+        restartRecoveryDeliveryReceiptState: retryable.restartRecoveryDeliveryReceiptState,
+        restartRecoveryDeliveryToolCallId: retryable.restartRecoveryDeliveryToolCallId,
         restartRecoveryDeliveryRequestFingerprint:
           retryable.restartRecoveryDeliveryRequestFingerprint,
         restartRecoveryDeliveryRunId: retryable.restartRecoveryDeliveryRunId,
         restartRecoveryDeliverySourceRunId: retryable.restartRecoveryDeliverySourceRunId,
+        restartRecoveryRequesterAccountId: retryable.restartRecoveryRequesterAccountId,
+        restartRecoveryRequesterSenderId: retryable.restartRecoveryRequesterSenderId,
+        restartRecoverySameChannelThreadRequired:
+          retryable.restartRecoverySameChannelThreadRequired,
+        restartRecoverySourceIngress: retryable.restartRecoverySourceIngress,
+        restartRecoverySourceReplyDeliveryMode: retryable.restartRecoverySourceReplyDeliveryMode,
+        restartRecoveryTerminalRunIds: retryable.restartRecoveryTerminalRunIds,
         status: retryable.status,
         updatedAt: retryable.updatedAt,
       },
@@ -2776,9 +2779,18 @@ describe("session accessor seam", () => {
     }
     const expectedSessionState = {
       abortedLastRun: stored.abortedLastRun,
+      restartRecoveryBeforeAgentReplyState: stored.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: stored.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: stored.restartRecoveryDeliveryToolCallId,
       restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: stored.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: stored.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired: stored.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: stored.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: stored.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: stored.restartRecoveryTerminalRunIds,
       status: stored.status,
       updatedAt: stored.updatedAt,
     };

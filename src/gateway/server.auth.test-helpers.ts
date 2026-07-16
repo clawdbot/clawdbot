@@ -12,7 +12,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
-  createGatewaySuiteHarness,
   connectReq,
   getTrackedConnectChallengeNonce,
   getFreePort,
@@ -391,18 +390,14 @@ async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise
 }
 
 export {
-  approvePendingPairingIfNeeded,
   BACKEND_GATEWAY_CLIENT,
-  buildDeviceAuthPayload,
   configureTrustedProxyControlUiAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   createSignedDevice,
-  createGatewaySuiteHarness,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
   getFreePort,
-  getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
@@ -420,7 +415,6 @@ export {
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
-  trackConnectChallengeNonce,
   TRUSTED_PROXY_CONTROL_UI_HEADERS,
   testState,
   testTailscaleWhois,

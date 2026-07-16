@@ -197,20 +197,20 @@ describe("stageSandboxMedia", () => {
     });
   });
 
-  it("stages managed inbound media URIs into the host workspace when sandboxing is off", async () => {
+  it("keeps host-staged inbound images available to native vision", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const cfg = createSandboxMediaStageConfig(home);
       const workspaceDir = join(home, "openclaw");
       sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
-      const fileName = "host-report.pdf";
-      await writeInboundMedia(home, fileName, "host-pdf-bytes");
+      const fileName = "host-photo.png";
+      await writeInboundMedia(home, fileName, "host-image-bytes");
       const existingProjectFile = join(workspaceDir, "media", "inbound", fileName);
       await fs.mkdir(dirname(existingProjectFile), { recursive: true });
       await fs.writeFile(existingProjectFile, "project-file");
       const mediaUri = `media://inbound/${fileName}`;
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-      ctx.MediaType = "application/pdf";
-      sessionCtx.MediaType = "application/pdf";
+      ctx.MediaType = "image/png";
+      sessionCtx.MediaType = "image/png";
 
       const result = await stageSandboxMedia({
         ctx,
@@ -227,7 +227,9 @@ describe("stageSandboxMedia", () => {
       );
       expect(result.staged.get(mediaUri)).toBe(stagedPath);
       expect(sessionCtx.MediaPath).toBe(stagedPath);
-      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-pdf-bytes");
+      expect(ctx.MediaWorkspaceDir).toBe(dirname(stagedPath));
+      expect(sessionCtx.MediaWorkspaceDir).toBeUndefined();
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
       await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
     });
   });

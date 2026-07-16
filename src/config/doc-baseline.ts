@@ -385,7 +385,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   });
 }
 
-export function collectConfigDocBaselineEntries(
+function collectConfigDocBaselineEntries(
   schema: JsonSchemaObject,
   uiHints: ConfigSchemaResponse["uiHints"],
   pathPrefix = "",
@@ -478,7 +478,7 @@ export function collectConfigDocBaselineEntries(
   return entries;
 }
 
-export function dedupeConfigDocBaselineEntries(
+function dedupeConfigDocBaselineEntries(
   entries: ConfigDocBaselineEntry[],
 ): ConfigDocBaselineEntry[] {
   const byPath = new Map<string, ConfigDocBaselineEntry>();

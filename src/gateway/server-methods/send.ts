@@ -19,6 +19,7 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -41,7 +42,12 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
+import {
+  beginTerminalSourceReplyDelivery,
+  cancelTerminalSourceReplyDelivery,
+  mirrorDeliveredSourceReplyToTranscript,
+  reconcileTerminalSourceReplyDelivery,
+} from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -84,9 +90,12 @@ function resolveTrustedMessageActionToolContext(params: {
 }):
   | {
       ok: true;
-      toolContext: ChannelThreadingToolContext | undefined;
+      toolContext: InternalChannelThreadingToolContext | undefined;
       requesterAccountId: string | undefined;
       requesterSenderId: string | undefined;
+      sessionId: string | undefined;
+      sourceReplyFinal: boolean | undefined;
+      sourceReplyToolCallId: string | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
   // Current-turn metadata can relax channel read policy. It must come from the
@@ -99,6 +108,9 @@ function resolveTrustedMessageActionToolContext(params: {
       toolContext: undefined,
       requesterAccountId: undefined,
       requesterSenderId: undefined,
+      sessionId: undefined,
+      sourceReplyFinal: undefined,
+      sourceReplyToolCallId: undefined,
     };
   }
   if (Date.now() >= messageActionContext.expiresAtMs) {
@@ -136,6 +148,9 @@ function resolveTrustedMessageActionToolContext(params: {
     toolContext: messageActionContext.toolContext,
     requesterAccountId: messageActionContext.requesterAccountId,
     requesterSenderId: messageActionContext.requesterSenderId,
+    sessionId: messageActionContext.sessionId,
+    sourceReplyFinal: messageActionContext.sourceReplyFinal,
+    sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
   };
 }
 
@@ -482,7 +497,16 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }) {
   try {
-    await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+    const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+    if (!mirrored && params.mirror.sourceReplyFinal === true) {
+      params.context.logGateway?.warn?.(
+        "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+        {
+          channel: params.mirror.channel,
+          sessionKey: params.mirror.sessionKey,
+        },
+      );
+    }
   } catch (err) {
     params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
       error: formatForLog(err),
@@ -605,6 +629,25 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
           });
         }
+        const sourceReplyMirror = {
+          action: request.action,
+          channel,
+          actionParams: request.params,
+          cfg,
+          sessionKey,
+          sessionId: trustedContext.sessionId,
+          agentId,
+          toolContext: trustedContext.toolContext,
+          idempotencyKey: request.idempotencyKey,
+          toolCallId: trustedContext.sourceReplyToolCallId,
+          ...(trustedContext.sourceReplyFinal !== undefined
+            ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
+            : {}),
+        };
+        const terminalDeliveryReceipt =
+          trustedContext.sourceReplyFinal === true
+            ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
+            : undefined;
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
@@ -628,6 +671,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gatewayClientScopes,
         });
         if (!handled) {
+          await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,
             `Message action ${request.action} not supported for channel ${channel}.`,
@@ -636,17 +680,25 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
+        try {
+          await reconcileTerminalSourceReplyDelivery({
+            deliveredPayload: payload,
+            mirror: sourceReplyMirror,
+            receipt: terminalDeliveryReceipt,
+          });
+        } catch (err) {
+          // The pre-send intent remains durable. Return the provider result so
+          // the model does not retry an external effect with an unknown outcome.
+          context.logGateway?.warn?.("Terminal source reply receipt reconciliation failed.", {
+            error: formatForLog(err),
+            channel,
+            sessionKey,
+          });
+        }
         await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
-            action: request.action,
-            channel,
-            actionParams: request.params,
-            cfg,
-            sessionKey,
-            agentId,
-            toolContext: trustedContext.toolContext,
-            idempotencyKey: request.idempotencyKey,
+            ...sourceReplyMirror,
             deliveredPayload: payload,
           },
         });

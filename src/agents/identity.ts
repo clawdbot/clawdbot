@@ -66,7 +66,7 @@ export function resolveIdentityNamePrefix(
 }
 
 /** Resolve the outbound message prefix, preserving explicit empty prefixes. */
-export function resolveMessagePrefix(
+function resolveMessagePrefix(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },

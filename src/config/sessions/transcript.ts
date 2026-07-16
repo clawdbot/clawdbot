@@ -71,6 +71,15 @@ export type SessionTranscriptDeliveryMirror =
       sourceMessageId?: string;
     };
 
+type InternalSessionTranscriptDeliveryMirror =
+  | SessionTranscriptDeliveryMirror
+  | {
+      kind: "message-tool-source-reply";
+      final: boolean;
+      sourceTurnId?: string;
+      toolCallId?: string;
+    };
+
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
 };
@@ -429,7 +438,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
-  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
@@ -745,11 +754,13 @@ async function readLatestVisibleTranscriptMessage(scope: {
 }
 
 function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  const marker = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
+  const marker = (message as { openclawDeliveryMirror?: InternalSessionTranscriptDeliveryMirror })
     .openclawDeliveryMirror;
   return (
     isRedundantDeliveryMirror(message) &&
-    (marker?.kind === "channel-final" || marker?.kind === "channel-final-suppressed")
+    (marker?.kind === "channel-final" ||
+      marker?.kind === "channel-final-suppressed" ||
+      marker?.kind === "message-tool-source-reply")
   );
 }
 

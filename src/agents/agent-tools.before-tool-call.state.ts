@@ -6,6 +6,8 @@
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
+const startedToolCallIds = new Set<string>();
+const trackedToolCallIds = new Set<string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -37,6 +39,44 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
   return blocked;
 }
 
+/** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
+export function peekPreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
+  return preExecutionBlockedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+/** Record active wrapper ownership so a racing timeout can inspect the boundary. */
+export function recordToolExecutionTracked(toolCallId: string, runId?: string): void {
+  trackedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+export function recordToolExecutionStarted(toolCallId: string, runId?: string): void {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  trackedToolCallIds.add(key);
+  startedToolCallIds.add(key);
+}
+
+/** Release execution-boundary evidence when the wrapped invocation settles. */
+export function clearTrackedToolExecution(toolCallId: string, runId?: string): void {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  trackedToolCallIds.delete(key);
+  startedToolCallIds.delete(key);
+}
+
+/**
+ * Consume exact in-flight execution state. Undefined means the wrapper already
+ * settled or the producer does not participate in OpenClaw boundary tracking.
+ */
+export function consumeTrackedToolExecutionStarted(
+  toolCallId: string,
+  runId?: string,
+): boolean | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const tracked = trackedToolCallIds.has(key);
+  const started = startedToolCallIds.has(key);
+  clearTrackedToolExecution(toolCallId, runId);
+  return tracked ? started : undefined;
+}
+
 export function recordStructuredReplaySafeToolCall(toolCallId: string, runId?: string): void {
   structuredReplaySafeToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
 }
@@ -52,5 +92,7 @@ export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: 
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
   preExecutionBlockedToolCallIds.clear();
+  trackedToolCallIds.clear();
+  startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
 }

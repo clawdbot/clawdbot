@@ -23,6 +23,7 @@ import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
+import type { PreparedSlackMessage } from "./message-handler/types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
@@ -103,8 +104,10 @@ export function createSlackMessageHandler(params: {
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Called after access/routing preparation accepts a human message. */
+  onPrepared?: (prepared: PreparedSlackMessage) => void;
 }): SlackMessageHandler {
-  const { ctx, account, trackEvent } = params;
+  const { ctx, account, trackEvent, onPrepared } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -261,6 +264,7 @@ export function createSlackMessageHandler(params: {
             if (!prepared) {
               return;
             }
+            onPrepared?.(prepared);
             if (entries.length > 1) {
               const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
               if (ids.length > 0) {

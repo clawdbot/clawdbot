@@ -1,5 +1,5 @@
 // WhatsApp plugin module implements outbound retry behavior.
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { formatError } from "./session-errors.js";
 import { isWhatsAppSocketOperationTimeoutError } from "./socket-timing.js";
 
@@ -35,39 +35,45 @@ export async function sendWhatsAppOutboundWithRetry<T>(params: {
   send: () => Promise<T>;
   onRetry?: (info: WhatsAppOutboundRetryInfo) => void;
 }): Promise<T> {
+  const runWithRetry = createChannelApiRetryRunner({
+    retry: {
+      attempts: WHATSAPP_OUTBOUND_MAX_ATTEMPTS,
+      minDelayMs: WHATSAPP_OUTBOUND_MIN_DELAY_MS,
+      maxDelayMs: WHATSAPP_OUTBOUND_MAX_DELAY_MS,
+      jitter: 0,
+    },
+    strictShouldRetry: true,
+    retryAfterMs: () => undefined,
+    shouldRetry: (error, attempt) => {
+      if (
+        !(error instanceof WhatsAppOutboundRetryError) ||
+        !isRetryableWhatsAppOutboundError(error.original)
+      ) {
+        return false;
+      }
+      params.onRetry?.({
+        attempt,
+        maxAttempts: WHATSAPP_OUTBOUND_MAX_ATTEMPTS,
+        backoffMs: Math.min(
+          WHATSAPP_OUTBOUND_MIN_DELAY_MS * 2 ** (attempt - 1),
+          WHATSAPP_OUTBOUND_MAX_DELAY_MS,
+        ),
+        error: error.original,
+        errorText: formatError(error.original),
+      });
+      return true;
+    },
+  });
   try {
-    return await retryAsync(
-      async () => {
-        try {
-          return await params.send();
-        } catch (error) {
-          // retryAsync normalizes non-Error throws. Keep the original value in
-          // an Error wrapper so the WhatsApp adapter can restore exact identity.
-          throw new WhatsAppOutboundRetryError(error);
-        }
-      },
-      {
-        attempts: WHATSAPP_OUTBOUND_MAX_ATTEMPTS,
-        minDelayMs: WHATSAPP_OUTBOUND_MIN_DELAY_MS,
-        maxDelayMs: WHATSAPP_OUTBOUND_MAX_DELAY_MS,
-        jitter: 0,
-        shouldRetry: (error) =>
-          error instanceof WhatsAppOutboundRetryError &&
-          isRetryableWhatsAppOutboundError(error.original),
-        onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
-          if (!(err instanceof WhatsAppOutboundRetryError)) {
-            return;
-          }
-          params.onRetry?.({
-            attempt,
-            maxAttempts,
-            backoffMs: delayMs,
-            error: err.original,
-            errorText: formatError(err.original),
-          });
-        },
-      },
-    );
+    return await runWithRetry(async () => {
+      try {
+        return await params.send();
+      } catch (error) {
+        // The shared runner normalizes non-Error throws. Keep the original in
+        // an Error wrapper so the WhatsApp adapter can restore exact identity.
+        throw new WhatsAppOutboundRetryError(error);
+      }
+    });
   } catch (error) {
     if (error instanceof WhatsAppOutboundRetryError) {
       throw error.original;

@@ -1057,12 +1057,7 @@ async function finishPreparedManualRun(
           state,
           job,
           {
-            status: coreResult.status,
-            error: coreResult.error,
-            deliveryError: coreResult.deliveryError,
-            diagnostics: coreResult.diagnostics,
-            delivered: coreResult.delivered,
-            provider: coreResult.provider,
+            ...coreResult,
             startedAt,
             endedAt,
           },

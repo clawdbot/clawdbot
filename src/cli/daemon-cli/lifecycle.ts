@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -61,7 +62,7 @@ function postRestartHealthAttempts(): number {
 function formatRestartFailure(params: {
   health: GatewayRestartSnapshot;
   port: number;
-  timeoutSeconds: number;
+  defaultTimeoutSeconds: number;
 }): { statusLine: string; failMessage: string } {
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
@@ -71,22 +72,37 @@ function formatRestartFailure(params: {
     };
   }
 
+  const timeoutSeconds = Math.max(
+    1,
+    Math.round(
+      params.health.elapsedMs === undefined
+        ? params.defaultTimeoutSeconds
+        : params.health.elapsedMs / 1000,
+    ),
+  );
   return {
-    statusLine: `Timed out after ${params.timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${params.timeoutSeconds}s waiting for health checks.`,
+    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
+    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
+  };
+}
+
+async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
+  port: number;
+  env: NodeJS.ProcessEnv;
+}> {
+  const command = await service.readCommand(process.env).catch(() => null);
+  const mergedEnv = mergeGatewayServiceEnv(process.env, command);
+
+  const portFromArgs = parsePortFromArgs(command?.programArguments);
+  const config = await readBestEffortConfig().catch(() => undefined);
+  return {
+    port: portFromArgs ?? resolveGatewayPort(config, mergedEnv),
+    env: mergedEnv,
   };
 }
 
 async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
-  const command = await service.readCommand(process.env).catch(() => null);
-  const serviceEnv = command?.environment ?? undefined;
-  const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(serviceEnv ?? undefined),
-  } as NodeJS.ProcessEnv;
-
-  const portFromArgs = parsePortFromArgs(command?.programArguments);
-  return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
+  return (await resolveGatewayLifecycleContext(service)).port;
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
@@ -347,9 +363,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const configuredPort = await resolveExplicitGatewayConfigPort();
-  const managedRestartPort =
-    configuredPort ??
-    (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
+  let managedRestartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
+    port: await resolveGatewayPortFallback(),
+    env: process.env,
+  }));
+  let managedRestartPort = configuredPort ?? managedRestartContext.port;
   // An unmanaged run loop keeps its lock port across in-process restarts, even
   // when config changes underneath it. Use that port for both the signal and
   // health proof or a valid CLI/env override looks like a failed restart.
@@ -369,8 +387,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     checkTokenDrift: true,
     expectedPort: configuredPort,
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
-      await repairLoadedGatewayServiceForStart({
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
+      const result = await repairLoadedGatewayServiceForStart({
         action: "restart",
         service,
         port: configuredPort,
@@ -379,7 +397,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warn,
         state,
         issues,
-      }),
+      });
+      // Repair rewrites the service definition, so the old command environment
+      // no longer identifies where the restarted gateway publishes readiness.
+      managedRestartContext = await resolveGatewayLifecycleContext(service);
+      managedRestartPort = configuredPort ?? managedRestartContext.port;
+      return result;
+    },
     onNotLoaded: async () => {
       if (process.platform === "darwin") {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
@@ -430,6 +454,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         port: managedRestartPort,
         attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        env: managedRestartContext.env,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
 
@@ -453,6 +478,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          env: managedRestartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
         });
       }
@@ -465,7 +491,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const failure = formatRestartFailure({
         health,
         port: managedRestartPort,
-        timeoutSeconds: restartWaitSeconds,
+        defaultTimeoutSeconds: restartWaitSeconds,
       });
       const runningNoPortLine =
         health.runtime.status === "running" && health.portUsage.status === "free"

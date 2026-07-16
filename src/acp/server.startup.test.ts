@@ -368,14 +368,14 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("subscribes the Gateway client to run-scoped tool events", async () => {
+  it("advertises approval handling and subscribes to run-scoped tool events", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
 
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {

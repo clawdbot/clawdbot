@@ -30,18 +30,20 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes a selected model for a plain session", () => {
+  it("includes selected model and thinking overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
         worktree: false,
       }),
     ).toEqual({
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "high",
     });
   });
 
@@ -51,6 +53,7 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        thinkingLevel: "medium",
         worktree: false,
         catalogId: "claude",
       }),

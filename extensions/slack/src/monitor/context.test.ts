@@ -200,4 +200,41 @@ describe("createSlackMonitorContext channel metadata cache", () => {
 
     await expect(ctx.resolveChannelName("C0OLDEST")).resolves.toEqual({});
   });
+
+  it("evicts the oldest user name when the bounded user cache fills", async () => {
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: { profile: { display_name: "test-user" } },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+    await ctx.resolveUserName("U0OLDEST");
+    for (let index = 0; index < 2048; index += 1) {
+      await ctx.resolveUserName(`U${index}`);
+    }
+    // U0OLDEST should have been evicted by the fill. Re-requesting it must
+    // call users.info again (cache miss) instead of returning a stale entry.
+    await ctx.resolveUserName("U0OLDEST");
+    expect(usersInfo).toHaveBeenCalledTimes(2050);
+  });
+
+  it("keeps a recently re-resolved user while older entries are evicted", async () => {
+    const usersInfo = vi.fn().mockImplementation(async ({ user }: { user: string }) => ({
+      user: { profile: { display_name: `name-${user}` } },
+    }));
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+    await ctx.resolveUserName("U0KEEP");
+    for (let index = 0; index < 2047; index += 1) {
+      await ctx.resolveUserName(`U${index}`);
+    }
+    // Touch U0KEEP so it becomes newest before the final insert that would
+    // otherwise push the original insertion past the 2048-entry bound.
+    await ctx.resolveUserName("U0KEEP");
+    await ctx.resolveUserName("U_NEW");
+    const before = usersInfo.mock.calls.length;
+    await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
+    expect(usersInfo).toHaveBeenCalledTimes(before);
+  });
 });

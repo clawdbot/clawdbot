@@ -54,9 +54,7 @@
             "SLACK_BOT_TOKEN",
             "SLACK_USER_TOKEN"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasSlackConfiguredState"
+        }
       }
     },
     "install": {

@@ -157,6 +157,10 @@ describe("presentation capability limits", () => {
           label: "Open app",
           action: { type: "web-app", url: "https://example.test/app/a-long-id" },
         },
+        {
+          label: "Open widget",
+          action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+        },
       ],
       {
         limits: {
@@ -184,6 +188,10 @@ describe("presentation capability limits", () => {
       {
         label: "Open app",
         action: { type: "web-app", url: "https://example.test/app/a-long-id" },
+      },
+      {
+        label: "Open widget",
+        action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
       },
     ]);
   });

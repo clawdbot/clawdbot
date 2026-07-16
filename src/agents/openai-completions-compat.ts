@@ -92,6 +92,7 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
+    isZai ||
     isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {

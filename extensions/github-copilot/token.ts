@@ -19,9 +19,6 @@ import {
   resolveCopilotTokenCache,
   type CachedCopilotToken,
 } from "./token-cache.js";
-export { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-auth";
-export type { CachedCopilotToken } from "./token-cache.js";
-
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
 let openConfiguredCacheStore: (() => PluginStateSyncKeyedStore<CachedCopilotToken>) | undefined;
@@ -86,8 +83,6 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
     await response.body?.cancel().catch(() => undefined);
   }
 }
-
-export type ResolveCopilotApiToken = typeof resolveCopilotApiToken;
 
 export async function resolveCopilotApiToken(params: {
   githubToken: string;

@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  AgentsUpdateParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -70,6 +71,19 @@ describe("AgentsListResultSchema", () => {
   });
 });
 
+describe("AgentsUpdateParamsSchema", () => {
+  it("distinguishes omitted, cleared, and invalid model values", () => {
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work" })).toBe(true);
+    expect(
+      Value.Check(AgentsUpdateParamsSchema, {
+        agentId: "work",
+        model: null,
+      }),
+    ).toBe(true);
+    expect(Value.Check(AgentsUpdateParamsSchema, { agentId: "work", model: "" })).toBe(false);
+  });
+});
+
 describe("ModelsListParamsSchema", () => {
   it("accepts the provider-config inventory view", () => {
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-config" })).toBe(true);
@@ -89,10 +103,16 @@ describe("ModelsListResultSchema", () => {
       id: "gpt-image",
       name: "GPT Image",
       provider: "openai",
+      agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
       input: ["text", "image", "audio", "video", "document"],
     };
 
     expect(Value.Check(ModelsListResultSchema, { models: [model] })).toBe(true);
+    expect(
+      Value.Check(ModelsListResultSchema, {
+        models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      }),
+    ).toBe(false);
     expect(
       Value.Check(ModelsListResultSchema, {
         models: [{ ...model, input: ["text", "binary"] }],

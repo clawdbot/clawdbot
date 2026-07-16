@@ -16,6 +16,7 @@ type SlackProviderMonitor = (params: {
   runtime?: RuntimeEnv;
   setStatus?: (next: Record<string, unknown>) => void;
 }) => Promise<unknown>;
+type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
 
 type SlackTestState = {
   config: Record<string, unknown>;
@@ -33,6 +34,8 @@ type SlackTestState = {
     (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
+  createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
+  createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
@@ -49,6 +52,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(),
   resolveSlackUserAllowlistMock: vi.fn(),
   socketModeLogger: undefined,
+  createSlackStartupAuthClientMock: vi.fn(),
 }));
 
 const slackInboundDeliveryTestCache = resolveGlobalDedupeCache(
@@ -60,6 +64,14 @@ const slackInboundDeliveryTestCache = resolveGlobalDedupeCache(
 );
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
+
+export function useRealSlackStartupAuthClientOnce(): void {
+  const actual = slackTestState.createSlackStartupAuthClientActual;
+  if (!actual) {
+    throw new Error("real Slack WebClient factory is unavailable");
+  }
+  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(actual);
+}
 
 type SlackClient = {
   auth: { test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>> };
@@ -246,6 +258,9 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     .mockImplementation(async ({ entries }) =>
       entries.map((input) => ({ input, resolved: false })),
     );
+  slackTestState.createSlackStartupAuthClientMock
+    .mockReset()
+    .mockReturnValue(getSlackClient() as unknown as ReturnType<SlackStartupAuthClientFactory>);
   const client = getSlackClient();
   client.auth.test.mockReset().mockResolvedValue({
     user_id: "bot-user",
@@ -309,6 +324,16 @@ vi.mock("./resolve-users.js", () => ({
   resolveSlackUserAllowlist: (params: { entries: string[] }) =>
     slackTestState.resolveSlackUserAllowlistMock(params),
 }));
+
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  slackTestState.createSlackStartupAuthClientActual = actual.createSlackStartupAuthClient;
+  return {
+    ...actual,
+    createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>
+      slackTestState.createSlackStartupAuthClientMock(...args),
+  };
+});
 
 vi.mock("./monitor/send.runtime.js", () => {
   return {

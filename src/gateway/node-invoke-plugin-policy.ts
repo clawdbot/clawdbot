@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -18,6 +19,7 @@ import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
+  isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -133,17 +135,60 @@ function createApprovalRuntime(params: {
         twoPhase: false,
         approvalKind: "plugin",
         deliverRequest: () => {
+          const deliveryTasks: Array<Promise<boolean>> = [];
           const forward = params.context.forwardPluginApprovalRequest;
-          if (!forward) {
+          if (forward) {
+            deliveryTasks.push(
+              forward(requestEvent).catch((err: unknown) => {
+                params.context.logGateway?.error?.(
+                  `plugin approvals: forward node policy request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          const iosPushDelivery = params.context.pluginApprovalIosPushDelivery;
+          if (iosPushDelivery?.handleRequested) {
+            deliveryTasks.push(
+              iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err: unknown) => {
+                  params.context.logGateway?.error?.(
+                    `plugin approvals: iOS push node policy request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
+            );
+          }
+          if (deliveryTasks.length === 0) {
             return false;
           }
-          return forward(requestEvent).catch((err: unknown) => {
-            params.context.logGateway?.error?.(
-              `plugin approvals: forward node policy request failed: ${String(err)}`,
-            );
-            return false;
-          });
+          return (async () => {
+            let delivered = false;
+            for (const task of deliveryTasks) {
+              delivered = (await task) || delivered;
+            }
+            return delivered;
+          })();
         },
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
       const decision = await decisionPromise;
       // This return hands execution authority to the plugin policy. Claim a

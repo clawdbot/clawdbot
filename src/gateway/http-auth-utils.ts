@@ -13,9 +13,18 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import {
+  resolveControlUiPluginAuthCookieGrants,
+  setControlUiPluginAuthCookie,
+} from "./control-ui-plugin-auth-cookie.js";
+import {
+  listControlUiPluginTabAuthGrants,
+  type ControlUiPluginTabAuthGrant,
+} from "./control-ui-plugin-tabs.js";
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
@@ -42,6 +51,8 @@ type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
+  controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
+  controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
@@ -102,6 +113,93 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     return null;
   }
   return result.requestAuth;
+}
+
+export function setControlUiPluginAuthCookieForRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  authMethod: GatewayAuthResult["method"],
+  trustDeclaredOperatorScopes: boolean,
+  authGeneration: string | undefined,
+  authenticatedScopes?: readonly string[],
+): ControlUiPluginTabAuthGrant[] {
+  const scopes = usesSharedSecretGatewayMethod(authMethod)
+    ? [...CLI_DEFAULT_OPERATOR_SCOPES]
+    : authMethod === "trusted-proxy" || authMethod === "tailscale"
+      ? resolveTrustedHttpOperatorScopes(req, {
+          trustDeclaredOperatorScopes,
+        })
+      : authMethod === "device-token"
+        ? (authenticatedScopes ?? [])
+        : [];
+  const grants = listControlUiPluginTabAuthGrants(scopes);
+  if (grants.length > 0) {
+    return setControlUiPluginAuthCookie(res, grants, { generation: authGeneration });
+  }
+  return [];
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined },
+): {
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null {
+  // WebSocket upgrades bypass this HTTP-only handoff and use
+  // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return null;
+  }
+  // Native plugins and the UI they serve share the Gateway's trusted in-process
+  // boundary. Cross-site sandbox descendants need an ambient cookie, so this
+  // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
+  const grants = resolveControlUiPluginAuthCookieGrants(req, {
+    requestPath: params.requestPath,
+    generation: params.authGeneration,
+  });
+  if (grants.length === 0) {
+    return null;
+  }
+  return {
+    requestAuth: {
+      trustDeclaredOperatorScopes: false,
+      controlUiPluginGrants: grants,
+    },
+    // Route dispatch selects the candidate that owns the first matched gateway
+    // route. Do not union scopes before that owner boundary is known.
+    operatorScopes: [],
+  };
+}
+
+export async function authorizePluginGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  requestPath: string;
+  resolveOperatorScopes: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[];
+}): Promise<{
+  requestAuth: AuthorizedGatewayHttpRequest;
+  operatorScopes: string[];
+} | null> {
+  const authGeneration = resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies);
+  const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
+    requestPath: params.requestPath,
+    authGeneration,
+  });
+  if (cookieAuth) {
+    return cookieAuth;
+  }
+  const requestAuth = await authorizeGatewayHttpRequestOrReply(params);
+  return requestAuth
+    ? { requestAuth, operatorScopes: params.resolveOperatorScopes(params.req, requestAuth) }
+    : null;
 }
 
 export async function checkGatewayHttpRequestAuth(params: {

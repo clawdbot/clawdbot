@@ -1,7 +1,12 @@
 // Discord tests cover shared interactive plugin behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
+import type {
+  MessagePresentation,
+  MessagePresentationAction,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
+import { buildDiscordActivityCustomId } from "./component-custom-id.js";
 import { buildDiscordComponentMessage } from "./components.js";
 import { parseCustomId } from "./internal/discord.js";
 import {
@@ -104,7 +109,7 @@ describe("buildDiscordInteractiveComponents", () => {
               buttons: [
                 {
                   label: "Review",
-                  action: { type, url: "https://example.com/review" },
+                  action: { type, url: "https://example.com/review" } as MessagePresentationAction,
                 },
               ],
             },
@@ -126,6 +131,88 @@ describe("buildDiscordInteractiveComponents", () => {
       });
     },
   );
+
+  it("renders hosted widget actions as Discord Activity buttons", () => {
+    const widgetId = "AAAAAAAAAAAAAAAAAAAAAA";
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Open widget",
+                action: { type: "web-app", widgetId },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open widget",
+              style: "secondary",
+              internalCustomId: buildDiscordActivityCustomId(widgetId),
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("falls back to a web-app URL when the hosted widget id is invalid", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Open app",
+                action: {
+                  type: "web-app",
+                  widgetId: "invalid",
+                  url: "https://example.com/app",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open app",
+              style: "link",
+              url: "https://example.com/app",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("skips web-app actions without a renderable Discord target", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Missing", action: { type: "web-app" } },
+            { label: "Invalid", action: { type: "web-app", widgetId: "invalid" } },
+          ],
+        },
+      ],
+    } as unknown as MessagePresentation;
+    expect(buildDiscordPresentationComponents(presentation)).toBeUndefined();
+  });
 
   it("renders typed approvals as actionable transport-private Discord controls", () => {
     const rendered = buildDiscordPresentationComponents({

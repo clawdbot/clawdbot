@@ -766,6 +766,28 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
 
+      const modelSelect = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      await modelSelect.click();
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-select")).toBe("true");
+      const thinkingSlider = page.locator(
+        '.new-session-page__composer [data-chat-thinking-slider="true"]',
+      );
+      await expect
+        .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
+        .toBe("off,minimal,low,medium,high");
+      await expect
+        .poll(() => page.locator(".new-session-page__composer [data-chat-speed-toggle]").count())
+        .toBe(0);
+      await thinkingSlider.press("End");
+      await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
+      await captureUiProof(page, "01-cloud-thinking-level.png");
+      await modelSelect.click();
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element.closest("details")?.open ?? false))
+        .toBe(false);
+
       // Picking a Gateway repo keeps the cloud selection: that folder is what
       // the managed worktree checks out and dispatch syncs to the worker.
       await page.locator("#new-session-folder-trigger").click();
@@ -819,6 +841,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         worktree: true,
         worktreeBaseRef: "main",
         cwd: TARGET_REPO,
+        thinkingLevel: "high",
       });
       expect(create.params).not.toHaveProperty("attachments");
       await gateway.waitForRequest("sessions.dispatch");
@@ -878,24 +901,35 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       ]);
 
       await gateway.setMethodResponse("sessions.list", {
-        count: 1,
+        count: 2,
         path: "",
         defaults: {},
         sessions: [
           {
             key: sessionKey,
             kind: "direct",
+            label: "Cloud session",
             updatedAt: Date.now(),
             worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
             placement: { state: "active" },
+          },
+          {
+            key: "agent:cloud:local-e2e",
+            kind: "direct",
+            label: "Local session",
+            updatedAt: Date.now() - 1,
+            placement: { state: "local" },
           },
         ],
         ts: Date.now(),
       });
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
       const sessionRow = page.locator('[data-session-key="agent:cloud:cloud-e2e"]');
+      const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
-      await page.locator('[data-placement-state="active"]').waitFor();
+      await localSessionRow.waitFor();
+      const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
+      await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
       await sessionRow.getByRole("button", { name: "Open session menu" }).click();
       const stopWorker = page
@@ -903,6 +937,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
       await captureUiProof(page, "02-active-cloud-worker-stop.png");
+      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
+      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
       page.once("dialog", (dialog) => void dialog.accept());
       await stopWorker.click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");

@@ -1,8 +1,5 @@
 // Openai plugin module implements prompt overlay behavior.
 import {
-  GPT5_BEHAVIOR_CONTRACT,
-  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
-  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   resolveGpt5PromptOverlayMode,
   resolveGpt5SystemPromptContribution,
@@ -10,10 +7,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 
 const OPENAI_PROVIDER_IDS = new Set(["openai"]);
-
-export const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
-export const OPENAI_HEARTBEAT_PROMPT_OVERLAY = GPT5_HEARTBEAT_PROMPT_OVERLAY;
-export const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
 
 type OpenAIPromptOverlayMode = Gpt5PromptOverlayMode;
 
@@ -23,7 +16,7 @@ export function resolveOpenAIPromptOverlayMode(
   return resolveGpt5PromptOverlayMode(undefined, pluginConfig);
 }
 
-export function shouldApplyOpenAIPromptOverlay(params: {
+function shouldApplyOpenAIPromptOverlay(params: {
   modelProviderId?: string;
   modelId?: string;
 }): boolean {

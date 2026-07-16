@@ -1543,6 +1543,27 @@ html.openclaw-native-macos
   min-height: 12px;
 }
 
+.sidebar-session-tree,
+.sidebar-session-tree__children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-session-tree__children {
+  margin-left: 12px;
+  padding-left: 7px;
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 52%, transparent);
+}
+
+.sidebar-session-tree__loading {
+  min-height: 28px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .sidebar-recent-sessions__group[data-session-section^="catalog:"] > .sidebar-recent-sessions__list {
   gap: 8px;
 }
@@ -1683,8 +1704,66 @@ html.openclaw-native-macos
   text-decoration: none;
 }
 
+.sidebar-child-session-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 31px;
+  height: 30px;
+  flex: 0 0 31px;
+  padding: 0 1px 0 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.sidebar-child-session-toggle:hover,
+.sidebar-child-session-toggle:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 88%, transparent);
+  color: var(--text);
+}
+
+.sidebar-child-session-toggle--running {
+  color: var(--accent);
+}
+
+.sidebar-child-session-toggle--failed {
+  color: var(--danger);
+}
+
+.sidebar-child-session-toggle__icon {
+  display: inline-flex;
+}
+
+.sidebar-child-session-toggle__icon svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.sidebar-child-session-toggle__count {
+  min-width: 9px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.sidebar-child-session-toggle + .sidebar-recent-session__link {
+  padding-left: 0;
+}
+
 .sidebar-recent-session__link:hover {
   text-decoration: none;
+}
+
+.sidebar-recent-session__state,
+.sidebar-recent-session__unread {
+  order: -1;
+  flex: none;
 }
 
 .sidebar-recent-session__name {
@@ -1696,6 +1775,49 @@ html.openclaw-native-macos
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
+}
+
+.sidebar-recent-session--child {
+  min-height: 30px;
+}
+
+.sidebar-recent-session--child .sidebar-recent-session__link {
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.sidebar-recent-session--child .sidebar-recent-session__name {
+  font-size: 12px;
+}
+
+.sidebar-recent-session--child .session-row-trail {
+  font-size: 10px;
+}
+
+.sidebar-child-session__status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.sidebar-child-session__status--done {
+  color: var(--ok);
+}
+
+.sidebar-child-session__status--failed,
+.sidebar-child-session__status--timeout {
+  color: var(--danger);
+}
+
+.sidebar-child-session__status svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {

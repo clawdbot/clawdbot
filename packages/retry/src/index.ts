@@ -18,7 +18,11 @@ export function computeBackoffSchedule(scheduleMs: readonly number[], attempt: n
   return attempt <= 0 ? 0 : (scheduleMs[index] ?? 0);
 }
 
-export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
+export async function sleepWithAbort(
+  ms: number,
+  abortSignal?: AbortSignal,
+  options: { ref?: boolean } = {},
+): Promise<void> {
   if (!Number.isFinite(ms) || ms <= 0) {
     return;
   }
@@ -50,6 +54,10 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
       timer = null;
       resolve();
     }, delayMs);
+    // Retry loops can stay abortable without keeping an otherwise idle process alive.
+    if (options.ref === false) {
+      timer.unref?.();
+    }
     if (abortSignal?.aborted) {
       onAbort();
     }

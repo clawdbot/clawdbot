@@ -16,11 +16,11 @@ scenario:
     - extensions/telegram/src/send.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles: { "telegram:adapter": 16, "telegram:all": 15 }
     kind: flow
     channel: telegram
     summary: Run the scripted three-chunk final and verify final chunk accounting.
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
 
 flow:

@@ -189,7 +189,7 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
-export type LlmCompleteMessage = {
+type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
@@ -215,6 +215,8 @@ export type LlmCompleteParams = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  /** Requested reasoning effort; the host normalizes it for the selected model. */
+  reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
   systemPrompt?: string;
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */

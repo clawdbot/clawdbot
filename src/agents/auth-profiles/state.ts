@@ -127,6 +127,7 @@ function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
     errorCount: normalizeFiniteNumber(raw.errorCount),
     failureCounts: normalizeFailureCounts(raw.failureCounts),
     lastFailureAt: normalizeFiniteNumber(raw.lastFailureAt),
+    lastProbeAt: normalizeFiniteNumber(raw.lastProbeAt),
   };
   for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
     if (stats[key] === undefined) {

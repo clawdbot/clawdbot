@@ -112,3 +112,40 @@ describe("buildApprovalPresentation", () => {
     ).toBeNull();
   });
 });
+
+describe("buildApprovalPresentation (system-agent)", () => {
+  function buildSystemAgentPresentation(request: { title: string; description: string }) {
+    return buildApprovalPresentation({
+      kind: "system-agent",
+      request: {
+        ...request,
+        command: "true",
+        proposalHash: "a".repeat(64),
+        allowedDecisions,
+        sessionId: "s1",
+      },
+      allowedDecisions,
+    });
+  }
+
+  it("drops a split emoji at the title boundary instead of leaving a lone surrogate", () => {
+    const title = `${"a".repeat(79)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title: "a".repeat(79) });
+  });
+
+  it("keeps an emoji that fits within the title limit intact", () => {
+    const title = `${"a".repeat(78)}\u{1F600}`;
+    const presentation = buildSystemAgentPresentation({ title, description: "d" });
+    expect(presentation).toMatchObject({ kind: "system-agent", title });
+  });
+
+  it("drops a split emoji at the description boundary instead of leaving a lone surrogate", () => {
+    const description = `${"a".repeat(511)}\u{1F6E1}`;
+    const presentation = buildSystemAgentPresentation({ title: "t", description });
+    expect(presentation).toMatchObject({
+      kind: "system-agent",
+      description: "a".repeat(511),
+    });
+  });
+});

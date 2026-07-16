@@ -393,6 +393,24 @@ function readPluginToolName(tool: unknown): string {
   return typeof tool.name === "string" ? tool.name.trim() : "";
 }
 
+function hasRequiredClientCaps(
+  requiredClientCaps: unknown,
+  clientCaps: ReadonlySet<string>,
+): boolean {
+  // Leave malformed metadata for describeMalformedPluginTool so one plugin
+  // cannot abort resolution before the normal isolation diagnostic runs.
+  if (requiredClientCaps === undefined) {
+    return true;
+  }
+  if (
+    !Array.isArray(requiredClientCaps) ||
+    requiredClientCaps.some((requiredCap) => typeof requiredCap !== "string")
+  ) {
+    return true;
+  }
+  return !requiredClientCaps.some((requiredCap) => !clientCaps.has(requiredCap));
+}
+
 function toElapsedMs(value: number): number {
   return Math.max(0, Math.round(value));
 }
@@ -531,6 +549,13 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   }
   if (!isRecord(tool.parameters)) {
     return `${name} missing parameters object`;
+  }
+  if (
+    tool.requiredClientCaps !== undefined &&
+    (!Array.isArray(tool.requiredClientCaps) ||
+      tool.requiredClientCaps.some((requiredCap) => typeof requiredCap !== "string"))
+  ) {
+    return `${name} requiredClientCaps must be an array of strings`;
   }
   return undefined;
 }
@@ -705,6 +730,7 @@ function buildPluginDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  clientCaps?: ReadonlySet<string>;
 }): string {
   return buildPluginToolDescriptorCacheKey({
     pluginId: params.plugin.id,
@@ -714,6 +740,7 @@ function buildPluginDescriptorCacheKey(params: {
     ctx: params.ctx,
     currentRuntimeConfig: params.currentRuntimeConfig,
     configCacheKeyMemo: params.configCacheKeyMemo,
+    clientCaps: params.clientCaps ? [...params.clientCaps] : undefined,
   });
 }
 
@@ -856,6 +883,7 @@ function resolveCachedPluginTools(params: {
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo: PluginToolDescriptorConfigCacheKeyMemo;
+  clientCaps: ReadonlySet<string>;
 }): { tools: AnyAgentTool[]; handledPluginIds: Set<string> } {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
@@ -909,6 +937,7 @@ function resolveCachedPluginTools(params: {
         ctx: params.ctx,
         currentRuntimeConfig: params.currentRuntimeConfig,
         configCacheKeyMemo: params.configCacheKeyMemo,
+        clientCaps: params.clientCaps,
       }),
     );
     if (
@@ -924,6 +953,9 @@ function resolveCachedPluginTools(params: {
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
+      if (!hasRequiredClientCaps(cachedDescriptor.requiredClientCaps, params.clientCaps)) {
+        continue;
+      }
       if (
         blocksHostRestrictedConversationReadTool({
           pluginId: plugin.id,
@@ -1262,6 +1294,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
+  clientCaps?: string[];
   toolAllowlist?: string[];
   toolDenylist?: string[];
   suppressNameConflicts?: boolean;
@@ -1287,6 +1320,7 @@ export function resolvePluginTools(params: {
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
+  const clientCaps = new Set(params.clientCaps ?? []);
   let currentRuntimeConfigForDescriptorCache: PluginLoadOptions["config"] | null | undefined =
     params.context.runtimeConfig;
   if (currentRuntimeConfigForDescriptorCache === undefined && params.context.getRuntimeConfig) {
@@ -1313,6 +1347,7 @@ export function resolvePluginTools(params: {
     runtimeOptions,
     currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
     configCacheKeyMemo,
+    clientCaps,
   });
   tools.push(...cached.tools);
   const runtimePluginIds = onlyPluginIds.filter(
@@ -1536,11 +1571,14 @@ export function resolvePluginTools(params: {
           }),
         )
       : policyAvailableList;
-    if (list.length === 0) {
+    const clientAvailableList = list.filter((tool) =>
+      isRecord(tool) ? hasRequiredClientCaps(tool.requiredClientCaps, clientCaps) : true,
+    );
+    if (clientAvailableList.length === 0) {
       continue;
     }
     const normalizedNameSet = new Set<string>();
-    for (const toolRaw of list) {
+    for (const toolRaw of clientAvailableList) {
       // Plugin factories run at request time and can return arbitrary values; isolate
       // malformed tools here so one bad plugin tool cannot poison every provider.
       const malformedReason = describeMalformedPluginTool(toolRaw);
@@ -1653,6 +1691,7 @@ export function resolvePluginTools(params: {
           ctx: params.context,
           currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
           configCacheKeyMemo,
+          clientCaps,
         }),
         descriptors,
       });

@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentPlanStep, AgentPlanStepStatus } from "openclaw/plugin-sdk/channel-outbound";
 import {
   readNonNegativeInteger,
   readNullableString,
@@ -67,7 +68,10 @@ export class CodexReasoningProjection {
     }
     const text = `${this.planTextByItem.get(itemId) ?? ""}${delta}`;
     this.planTextByItem.set(itemId, text);
-    this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(text) });
+    this.emitPlanUpdate({
+      explanation: undefined,
+      steps: splitPlanText(text).map((step) => ({ step, status: "pending" })),
+    });
   }
 
   handleTurnPlanUpdated(params: JsonObject): void {
@@ -78,11 +82,10 @@ export class CodexReasoningProjection {
           }
           const record = entry as JsonObject;
           const step = readString(record, "step");
-          const status = readString(record, "status");
           if (!step) {
             return [];
           }
-          return status ? [`${step} (${status})`] : [step];
+          return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
         })
       : undefined;
     this.emitPlanUpdate({
@@ -94,7 +97,10 @@ export class CodexReasoningProjection {
   recordItem(item: CodexThreadItem | undefined): void {
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
-      this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
+      this.emitPlanUpdate({
+        explanation: undefined,
+        steps: splitPlanText(item.text).map((step) => ({ step, status: "pending" })),
+      });
     }
   }
 
@@ -116,7 +122,7 @@ export class CodexReasoningProjection {
     return [...this.planTextByItem.values()].filter((text) => text.trim().length > 0).join("\n\n");
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: string[] }): void {
+  private emitPlanUpdate(params: { explanation?: string | null; steps?: AgentPlanStep[] }): void {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
@@ -131,6 +137,13 @@ export class CodexReasoningProjection {
       },
     });
   }
+}
+
+function normalizePlanStepStatus(status: string | undefined): AgentPlanStepStatus {
+  if (status === "inProgress" || status === "in_progress") {
+    return "in_progress";
+  }
+  return status === "completed" ? "completed" : "pending";
 }
 
 function collectReasoningTextValues(

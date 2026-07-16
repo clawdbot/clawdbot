@@ -1,208 +1,281 @@
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import type {
+  AgentHarness as _AgentHarness,
+  AgentPromptGuidance as _AgentPromptGuidance,
+  AgentPromptGuidanceEntry as _AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind as _AgentPromptSurfaceKind,
+  AnyAgentTool as _AnyAgentTool,
+  MediaUnderstandingProviderPlugin as _MediaUnderstandingProviderPlugin,
+  MigrationApplyResult as _MigrationApplyResult,
+  MigrationDetection as _MigrationDetection,
+  MigrationItem as _MigrationItem,
+  MigrationPlan as _MigrationPlan,
+  MigrationProviderContext as _MigrationProviderContext,
+  MigrationProviderPlugin as _MigrationProviderPlugin,
+  ProviderPlugin as _ProviderPlugin,
+  MigrationSummary as _MigrationSummary,
+  OpenClawGatewayDiscoveryAdvertiseContext as _OpenClawGatewayDiscoveryAdvertiseContext,
+  OpenClawGatewayDiscoveryService as _OpenClawGatewayDiscoveryService,
+  OpenClawPluginApi as _OpenClawPluginApi,
+  OpenClawPluginCommandDefinition as _OpenClawPluginCommandDefinition,
+  OpenClawPluginConfigSchema as _OpenClawPluginConfigSchema,
+  OpenClawPluginDefinition as _OpenClawPluginDefinition,
+  OpenClawPluginHttpRouteHandler as _OpenClawPluginHttpRouteHandler,
+  OpenClawPluginNodeHostCommand as _OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandAvailabilityContext as _OpenClawPluginNodeHostCommandAvailabilityContext,
+  OpenClawPluginNodeInvokePolicy as _OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext as _OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult as _OpenClawPluginNodeInvokePolicyResult,
+  OpenClawPluginReloadRegistration as _OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector as _OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginSecurityAuditContext as _OpenClawPluginSecurityAuditContext,
+  OpenClawPluginService as _OpenClawPluginService,
+  OpenClawPluginServiceContext as _OpenClawPluginServiceContext,
+  OpenClawPluginToolContext as _OpenClawPluginToolContext,
+  OpenClawPluginToolFactory as _OpenClawPluginToolFactory,
+  PluginAgentEventEmitParams as _PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult as _PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration as _PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent as _PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult as _PluginAgentTurnPrepareResult,
+  PluginCommandContext as _PluginCommandContext,
+  PluginCommandResult as _PluginCommandResult,
+  PluginControlUiDescriptor as _PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent as _PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult as _PluginHeartbeatPromptContributionResult,
+  PluginJsonValue as _PluginJsonValue,
+  PluginLogger as _PluginLogger,
+  PluginNextTurnInjection as _PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult as _PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord as _PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams as _PluginRunContextGetParams,
+  PluginRunContextPatch as _PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration as _PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext as _PluginSessionActionContext,
+  PluginSessionActionRegistration as _PluginSessionActionRegistration,
+  PluginSessionActionResult as _PluginSessionActionResult,
+  PluginSessionAttachmentParams as _PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult as _PluginSessionAttachmentResult,
+  PluginSessionExtensionProjection as _PluginSessionExtensionProjection,
+  PluginSessionExtensionRegistration as _PluginSessionExtensionRegistration,
+  PluginSessionSchedulerJobHandle as _PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration as _PluginSessionSchedulerJobRegistration,
+  PluginSessionTurnScheduleParams as _PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams as _PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult as _PluginSessionTurnUnscheduleByTagResult,
+  PluginToolMetadataRegistration as _PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration as _PluginTrustedToolPolicyRegistration,
+  ProviderApplyConfigDefaultsContext as _ProviderApplyConfigDefaultsContext,
+  ProviderAugmentModelCatalogContext as _ProviderAugmentModelCatalogContext,
+  ProviderAuthContext as _ProviderAuthContext,
+  ProviderAuthDoctorHintContext as _ProviderAuthDoctorHintContext,
+  ProviderAuthMethod as _ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext as _ProviderAuthMethodNonInteractiveContext,
+  ProviderAppGuidedSetup as _ProviderAppGuidedSetup,
+  ProviderAppGuidedSetupCandidate as _ProviderAppGuidedSetupCandidate,
+  ProviderAppGuidedSetupContext as _ProviderAppGuidedSetupContext,
+  ProviderAuthResult as _ProviderAuthResult,
+  ProviderBuildMissingAuthMessageContext as _ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext as _ProviderBuildUnknownModelHintContext,
+  ProviderBuiltInModelSuppressionContext as _ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult as _ProviderBuiltInModelSuppressionResult,
+  ProviderCacheTtlEligibilityContext as _ProviderCacheTtlEligibilityContext,
+  ProviderCatalogContext as _ProviderCatalogContext,
+  ProviderCatalogResult as _ProviderCatalogResult,
+  ProviderDefaultThinkingPolicyContext as _ProviderDefaultThinkingPolicyContext,
+  ProviderDeferSyntheticProfileAuthContext as _ProviderDeferSyntheticProfileAuthContext,
+  ProviderDiscoveryContext as _ProviderDiscoveryContext,
+  ProviderFailoverErrorContext as _ProviderFailoverErrorContext,
+  ProviderFetchUsageSnapshotContext as _ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext as _ProviderModernModelPolicyContext,
+  ProviderNormalizeConfigContext as _ProviderNormalizeConfigContext,
+  ProviderNormalizeModelIdContext as _ProviderNormalizeModelIdContext,
+  ProviderNormalizeResolvedModelContext as _ProviderNormalizeResolvedModelContext,
+  ProviderNormalizeToolSchemasContext as _ProviderNormalizeToolSchemasContext,
+  ProviderNormalizeTransportContext as _ProviderNormalizeTransportContext,
+  ProviderPrepareDynamicModelContext as _ProviderPrepareDynamicModelContext,
+  ProviderPrepareExtraParamsContext as _ProviderPrepareExtraParamsContext,
+  ProviderPrepareRuntimeAuthContext as _ProviderPrepareRuntimeAuthContext,
+  ProviderPreparedRuntimeAuth as _ProviderPreparedRuntimeAuth,
+  ProviderReasoningOutputMode as _ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext as _ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy as _ProviderReplayPolicy,
+  ProviderReplayPolicyContext as _ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry as _ProviderReplaySessionEntry,
+  ProviderReplaySessionState as _ProviderReplaySessionState,
+  ProviderResolveConfigApiKeyContext as _ProviderResolveConfigApiKeyContext,
+  ProviderResolveDynamicModelContext as _ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext as _ProviderResolveTransportTurnStateContext,
+  ProviderResolveUsageAuthContext as _ProviderResolveUsageAuthContext,
+  ProviderResolveWebSocketSessionPolicyContext as _ProviderResolveWebSocketSessionPolicyContext,
+  ProviderResolvedUsageAuth as _ProviderResolvedUsageAuth,
+  ProviderSanitizeReplayHistoryContext as _ProviderSanitizeReplayHistoryContext,
+  ProviderThinkingPolicyContext as _ProviderThinkingPolicyContext,
+  ProviderThinkingProfile as _ProviderThinkingProfile,
+  ProviderToolSchemaDiagnostic as _ProviderToolSchemaDiagnostic,
+  ProviderTransportTurnState as _ProviderTransportTurnState,
+  ProviderUsageAuthToken as _ProviderUsageAuthToken,
+  ProviderValidateReplayTurnsContext as _ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy as _ProviderWebSocketSessionPolicy,
+  ProviderWrapStreamFnContext as _ProviderWrapStreamFnContext,
+  RealtimeTranscriptionProviderPlugin as _RealtimeTranscriptionProviderPlugin,
+  SpeechProviderPlugin as _SpeechProviderPlugin,
+  TranscriptSourceProvider as _TranscriptSourceProvider,
+  UnifiedModelCatalogProviderContext as _UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin as _UnifiedModelCatalogProviderPlugin,
+  WorkerLease as _WorkerLease,
+  WorkerLeaseStatus as _WorkerLeaseStatus,
+  WorkerProfile as _WorkerProfile,
+  WorkerProvider as _WorkerProvider,
+  WorkerSshEndpoint as _WorkerSshEndpoint,
+  WorkerSshIdentity as _WorkerSshIdentity,
+  WorkerSshIdentityRequest as _WorkerSshIdentityRequest,
+} from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
-export type AnyAgentTool = import("../plugins/types.js").AnyAgentTool;
-export type AgentHarness = import("../plugins/types.js").AgentHarness;
-export type AgentPromptGuidance = import("../plugins/types.js").AgentPromptGuidance;
-export type AgentPromptGuidanceEntry = import("../plugins/types.js").AgentPromptGuidanceEntry;
-export type AgentPromptSurfaceKind = import("../plugins/types.js").AgentPromptSurfaceKind;
-export type MediaUnderstandingProviderPlugin =
-  import("../plugins/types.js").MediaUnderstandingProviderPlugin;
-export type TranscriptSourceProvider = import("../plugins/types.js").TranscriptSourceProvider;
-export type MigrationApplyResult = import("../plugins/types.js").MigrationApplyResult;
-export type MigrationDetection = import("../plugins/types.js").MigrationDetection;
-export type MigrationItem = import("../plugins/types.js").MigrationItem;
-export type MigrationPlan = import("../plugins/types.js").MigrationPlan;
-export type MigrationProviderContext = import("../plugins/types.js").MigrationProviderContext;
-export type MigrationProviderPlugin = import("../plugins/types.js").MigrationProviderPlugin;
-export type MigrationSummary = import("../plugins/types.js").MigrationSummary;
-export type OpenClawPluginApi = import("../plugins/types.js").OpenClawPluginApi;
-export type OpenClawPluginCommandDefinition =
-  import("../plugins/types.js").OpenClawPluginCommandDefinition;
-export type OpenClawPluginConfigSchema = import("../plugins/types.js").OpenClawPluginConfigSchema;
-export type OpenClawPluginDefinition = import("../plugins/types.js").OpenClawPluginDefinition;
-export type OpenClawPluginHttpRouteHandler =
-  import("../plugins/types.js").OpenClawPluginHttpRouteHandler;
+// Local alias declarations keep the .d.ts bundler materializing these names in
+// this chunk; direct re-exports break rolldown-plugin-dts chunk generation.
+export type AgentHarness = _AgentHarness;
+export type AgentPromptGuidance = _AgentPromptGuidance;
+export type AgentPromptGuidanceEntry = _AgentPromptGuidanceEntry;
+export type AgentPromptSurfaceKind = _AgentPromptSurfaceKind;
+export type AnyAgentTool = _AnyAgentTool;
+export type MediaUnderstandingProviderPlugin = _MediaUnderstandingProviderPlugin;
+export type MigrationApplyResult = _MigrationApplyResult;
+export type MigrationDetection = _MigrationDetection;
+export type MigrationItem = _MigrationItem;
+export type MigrationPlan = _MigrationPlan;
+export type MigrationProviderContext = _MigrationProviderContext;
+export type MigrationProviderPlugin = _MigrationProviderPlugin;
+// The plugin-authoring scaffold generates code importing ProviderPlugin from this entrypoint.
+export type ProviderPlugin = _ProviderPlugin;
+export type MigrationSummary = _MigrationSummary;
+export type OpenClawGatewayDiscoveryAdvertiseContext = _OpenClawGatewayDiscoveryAdvertiseContext;
+export type OpenClawGatewayDiscoveryService = _OpenClawGatewayDiscoveryService;
+export type OpenClawPluginApi = _OpenClawPluginApi;
+export type OpenClawPluginCommandDefinition = _OpenClawPluginCommandDefinition;
+export type OpenClawPluginConfigSchema = _OpenClawPluginConfigSchema;
+export type OpenClawPluginDefinition = _OpenClawPluginDefinition;
+export type OpenClawPluginHttpRouteHandler = _OpenClawPluginHttpRouteHandler;
+export type OpenClawPluginNodeHostCommand = _OpenClawPluginNodeHostCommand;
+export type OpenClawPluginNodeHostCommandAvailabilityContext =
+  _OpenClawPluginNodeHostCommandAvailabilityContext;
+export type OpenClawPluginNodeInvokePolicy = _OpenClawPluginNodeInvokePolicy;
+export type OpenClawPluginNodeInvokePolicyContext = _OpenClawPluginNodeInvokePolicyContext;
+export type OpenClawPluginNodeInvokePolicyResult = _OpenClawPluginNodeInvokePolicyResult;
+export type OpenClawPluginReloadRegistration = _OpenClawPluginReloadRegistration;
+export type OpenClawPluginSecurityAuditCollector = _OpenClawPluginSecurityAuditCollector;
+export type OpenClawPluginSecurityAuditContext = _OpenClawPluginSecurityAuditContext;
+export type OpenClawPluginService = _OpenClawPluginService;
+export type OpenClawPluginServiceContext = _OpenClawPluginServiceContext;
+export type OpenClawPluginToolContext = _OpenClawPluginToolContext;
+export type OpenClawPluginToolFactory = _OpenClawPluginToolFactory;
+export type PluginAgentEventEmitParams = _PluginAgentEventEmitParams;
+export type PluginAgentEventEmitResult = _PluginAgentEventEmitResult;
+export type PluginAgentEventSubscriptionRegistration = _PluginAgentEventSubscriptionRegistration;
+export type PluginAgentTurnPrepareEvent = _PluginAgentTurnPrepareEvent;
+export type PluginAgentTurnPrepareResult = _PluginAgentTurnPrepareResult;
+export type PluginCommandContext = _PluginCommandContext;
+export type PluginCommandResult = _PluginCommandResult;
+export type PluginControlUiDescriptor = _PluginControlUiDescriptor;
+export type PluginHeartbeatPromptContributionEvent = _PluginHeartbeatPromptContributionEvent;
+export type PluginHeartbeatPromptContributionResult = _PluginHeartbeatPromptContributionResult;
+export type PluginJsonValue = _PluginJsonValue;
+export type PluginLogger = _PluginLogger;
+export type PluginNextTurnInjection = _PluginNextTurnInjection;
+export type PluginNextTurnInjectionEnqueueResult = _PluginNextTurnInjectionEnqueueResult;
+export type PluginNextTurnInjectionRecord = _PluginNextTurnInjectionRecord;
+export type PluginRunContextGetParams = _PluginRunContextGetParams;
+export type PluginRunContextPatch = _PluginRunContextPatch;
+export type PluginRuntimeLifecycleRegistration = _PluginRuntimeLifecycleRegistration;
+export type PluginSessionActionContext = _PluginSessionActionContext;
+export type PluginSessionActionRegistration = _PluginSessionActionRegistration;
+export type PluginSessionActionResult = _PluginSessionActionResult;
+export type PluginSessionAttachmentParams = _PluginSessionAttachmentParams;
+export type PluginSessionAttachmentResult = _PluginSessionAttachmentResult;
+export type PluginSessionExtensionProjection = _PluginSessionExtensionProjection;
+export type PluginSessionExtensionRegistration = _PluginSessionExtensionRegistration;
+export type PluginSessionSchedulerJobHandle = _PluginSessionSchedulerJobHandle;
+export type PluginSessionSchedulerJobRegistration = _PluginSessionSchedulerJobRegistration;
+export type PluginSessionTurnScheduleParams = _PluginSessionTurnScheduleParams;
+export type PluginSessionTurnUnscheduleByTagParams = _PluginSessionTurnUnscheduleByTagParams;
+export type PluginSessionTurnUnscheduleByTagResult = _PluginSessionTurnUnscheduleByTagResult;
+export type PluginToolMetadataRegistration = _PluginToolMetadataRegistration;
+export type PluginTrustedToolPolicyRegistration = _PluginTrustedToolPolicyRegistration;
+export type ProviderApplyConfigDefaultsContext = _ProviderApplyConfigDefaultsContext;
+export type ProviderAugmentModelCatalogContext = _ProviderAugmentModelCatalogContext;
+export type ProviderAuthContext = _ProviderAuthContext;
+export type ProviderAuthDoctorHintContext = _ProviderAuthDoctorHintContext;
+export type ProviderAuthMethod = _ProviderAuthMethod;
+export type ProviderAuthMethodNonInteractiveContext = _ProviderAuthMethodNonInteractiveContext;
+export type ProviderAppGuidedSetup = _ProviderAppGuidedSetup;
+export type ProviderAppGuidedSetupCandidate = _ProviderAppGuidedSetupCandidate;
+export type ProviderAppGuidedSetupContext = _ProviderAppGuidedSetupContext;
+export type ProviderAuthResult = _ProviderAuthResult;
+export type ProviderBuildMissingAuthMessageContext = _ProviderBuildMissingAuthMessageContext;
+export type ProviderBuildUnknownModelHintContext = _ProviderBuildUnknownModelHintContext;
+export type ProviderBuiltInModelSuppressionContext = _ProviderBuiltInModelSuppressionContext;
+export type ProviderBuiltInModelSuppressionResult = _ProviderBuiltInModelSuppressionResult;
+export type ProviderCacheTtlEligibilityContext = _ProviderCacheTtlEligibilityContext;
+export type ProviderCatalogContext = _ProviderCatalogContext;
+export type ProviderCatalogResult = _ProviderCatalogResult;
+export type ProviderDefaultThinkingPolicyContext = _ProviderDefaultThinkingPolicyContext;
+export type ProviderDeferSyntheticProfileAuthContext = _ProviderDeferSyntheticProfileAuthContext;
+export type ProviderDiscoveryContext = _ProviderDiscoveryContext;
+export type ProviderFailoverErrorContext = _ProviderFailoverErrorContext;
+export type ProviderFetchUsageSnapshotContext = _ProviderFetchUsageSnapshotContext;
+export type ProviderModernModelPolicyContext = _ProviderModernModelPolicyContext;
+export type ProviderNormalizeConfigContext = _ProviderNormalizeConfigContext;
+export type ProviderNormalizeModelIdContext = _ProviderNormalizeModelIdContext;
+export type ProviderNormalizeResolvedModelContext = _ProviderNormalizeResolvedModelContext;
+export type ProviderNormalizeToolSchemasContext = _ProviderNormalizeToolSchemasContext;
+export type ProviderNormalizeTransportContext = _ProviderNormalizeTransportContext;
+export type ProviderPrepareDynamicModelContext = _ProviderPrepareDynamicModelContext;
+export type ProviderPrepareExtraParamsContext = _ProviderPrepareExtraParamsContext;
+export type ProviderPrepareRuntimeAuthContext = _ProviderPrepareRuntimeAuthContext;
+export type ProviderPreparedRuntimeAuth = _ProviderPreparedRuntimeAuth;
+export type ProviderReasoningOutputMode = _ProviderReasoningOutputMode;
+export type ProviderReasoningOutputModeContext = _ProviderReasoningOutputModeContext;
+export type ProviderReplayPolicy = _ProviderReplayPolicy;
+export type ProviderReplayPolicyContext = _ProviderReplayPolicyContext;
+export type ProviderReplaySessionEntry = _ProviderReplaySessionEntry;
+export type ProviderReplaySessionState = _ProviderReplaySessionState;
+export type ProviderResolveConfigApiKeyContext = _ProviderResolveConfigApiKeyContext;
+export type ProviderResolveDynamicModelContext = _ProviderResolveDynamicModelContext;
+export type ProviderResolveTransportTurnStateContext = _ProviderResolveTransportTurnStateContext;
+export type ProviderResolveUsageAuthContext = _ProviderResolveUsageAuthContext;
+export type ProviderResolveWebSocketSessionPolicyContext =
+  _ProviderResolveWebSocketSessionPolicyContext;
+export type ProviderResolvedUsageAuth = _ProviderResolvedUsageAuth;
+export type ProviderSanitizeReplayHistoryContext = _ProviderSanitizeReplayHistoryContext;
+export type ProviderThinkingPolicyContext = _ProviderThinkingPolicyContext;
+export type ProviderThinkingProfile = _ProviderThinkingProfile;
+export type ProviderToolSchemaDiagnostic = _ProviderToolSchemaDiagnostic;
+export type ProviderTransportTurnState = _ProviderTransportTurnState;
+export type ProviderUsageAuthToken = _ProviderUsageAuthToken;
+export type ProviderValidateReplayTurnsContext = _ProviderValidateReplayTurnsContext;
+export type ProviderWebSocketSessionPolicy = _ProviderWebSocketSessionPolicy;
+export type ProviderWrapStreamFnContext = _ProviderWrapStreamFnContext;
+export type RealtimeTranscriptionProviderPlugin = _RealtimeTranscriptionProviderPlugin;
+export type SpeechProviderPlugin = _SpeechProviderPlugin;
+export type TranscriptSourceProvider = _TranscriptSourceProvider;
+export type UnifiedModelCatalogProviderContext = _UnifiedModelCatalogProviderContext;
+export type UnifiedModelCatalogProviderPlugin = _UnifiedModelCatalogProviderPlugin;
+export type WorkerLease = _WorkerLease;
+export type WorkerLeaseStatus = _WorkerLeaseStatus;
+export type WorkerProfile = _WorkerProfile;
+export type WorkerProvider = _WorkerProvider;
+export type WorkerSshEndpoint = _WorkerSshEndpoint;
+export type WorkerSshIdentity = _WorkerSshIdentity;
+export type WorkerSshIdentityRequest = _WorkerSshIdentityRequest;
+
 export type OpenClawPluginGatewayEventScope =
   import("../plugins/gateway-events.js").OpenClawPluginGatewayEventScope;
 export type OpenClawPluginGatewayEvents =
   import("../plugins/gateway-events.js").OpenClawPluginGatewayEvents;
-export type OpenClawPluginNodeHostCommand =
-  import("../plugins/types.js").OpenClawPluginNodeHostCommand;
-export type OpenClawPluginNodeHostCommandAvailabilityContext =
-  import("../plugins/types.js").OpenClawPluginNodeHostCommandAvailabilityContext;
-export type OpenClawPluginNodeInvokePolicy =
-  import("../plugins/types.js").OpenClawPluginNodeInvokePolicy;
-export type OpenClawPluginNodeInvokePolicyContext =
-  import("../plugins/types.js").OpenClawPluginNodeInvokePolicyContext;
-export type OpenClawPluginNodeInvokePolicyResult =
-  import("../plugins/types.js").OpenClawPluginNodeInvokePolicyResult;
-export type OpenClawPluginReloadRegistration =
-  import("../plugins/types.js").OpenClawPluginReloadRegistration;
-export type OpenClawPluginSecurityAuditCollector =
-  import("../plugins/types.js").OpenClawPluginSecurityAuditCollector;
-export type OpenClawPluginSecurityAuditContext =
-  import("../plugins/types.js").OpenClawPluginSecurityAuditContext;
-export type OpenClawPluginService = import("../plugins/types.js").OpenClawPluginService;
-export type OpenClawPluginServiceContext =
-  import("../plugins/types.js").OpenClawPluginServiceContext;
-export type OpenClawPluginToolContext = import("../plugins/types.js").OpenClawPluginToolContext;
-export type OpenClawPluginToolFactory = import("../plugins/types.js").OpenClawPluginToolFactory;
-export type PluginLogger = import("../plugins/types.js").PluginLogger;
-export type WorkerLease = import("../plugins/types.js").WorkerLease;
-export type WorkerLeaseStatus = import("../plugins/types.js").WorkerLeaseStatus;
-export type WorkerProfile = import("../plugins/types.js").WorkerProfile;
-export type WorkerProvider = import("../plugins/types.js").WorkerProvider;
-export type WorkerSshEndpoint = import("../plugins/types.js").WorkerSshEndpoint;
-export type WorkerSshIdentity = import("../plugins/types.js").WorkerSshIdentity;
-export type WorkerSshIdentityRequest = import("../plugins/types.js").WorkerSshIdentityRequest;
 export { WorkerProviderError } from "../plugins/types.js";
-export type ProviderAugmentModelCatalogContext =
-  import("../plugins/types.js").ProviderAugmentModelCatalogContext;
-export type ProviderAuthContext = import("../plugins/types.js").ProviderAuthContext;
-export type ProviderAuthDoctorHintContext =
-  import("../plugins/types.js").ProviderAuthDoctorHintContext;
-export type ProviderAuthMethod = import("../plugins/types.js").ProviderAuthMethod;
-export type ProviderAuthMethodNonInteractiveContext =
-  import("../plugins/types.js").ProviderAuthMethodNonInteractiveContext;
-export type ProviderAuthResult = import("../plugins/types.js").ProviderAuthResult;
-export type ProviderApplyConfigDefaultsContext =
-  import("../plugins/types.js").ProviderApplyConfigDefaultsContext;
-export type ProviderBuildMissingAuthMessageContext =
-  import("../plugins/types.js").ProviderBuildMissingAuthMessageContext;
-export type ProviderBuildUnknownModelHintContext =
-  import("../plugins/types.js").ProviderBuildUnknownModelHintContext;
-export type ProviderBuiltInModelSuppressionContext =
-  import("../plugins/types.js").ProviderBuiltInModelSuppressionContext;
-export type ProviderBuiltInModelSuppressionResult =
-  import("../plugins/types.js").ProviderBuiltInModelSuppressionResult;
-export type ProviderCacheTtlEligibilityContext =
-  import("../plugins/types.js").ProviderCacheTtlEligibilityContext;
-export type ProviderCatalogContext = import("../plugins/types.js").ProviderCatalogContext;
-export type ProviderCatalogResult = import("../plugins/types.js").ProviderCatalogResult;
-export type ProviderDeferSyntheticProfileAuthContext =
-  import("../plugins/types.js").ProviderDeferSyntheticProfileAuthContext;
-export type ProviderDefaultThinkingPolicyContext =
-  import("../plugins/types.js").ProviderDefaultThinkingPolicyContext;
-export type ProviderDiscoveryContext = import("../plugins/types.js").ProviderDiscoveryContext;
-export type ProviderFailoverErrorContext =
-  import("../plugins/types.js").ProviderFailoverErrorContext;
-export type ProviderFetchUsageSnapshotContext =
-  import("../plugins/types.js").ProviderFetchUsageSnapshotContext;
-export type ProviderModernModelPolicyContext =
-  import("../plugins/types.js").ProviderModernModelPolicyContext;
-export type ProviderNormalizeConfigContext =
-  import("../plugins/types.js").ProviderNormalizeConfigContext;
-export type ProviderNormalizeToolSchemasContext =
-  import("../plugins/types.js").ProviderNormalizeToolSchemasContext;
-export type ProviderNormalizeTransportContext =
-  import("../plugins/types.js").ProviderNormalizeTransportContext;
-export type ProviderResolveConfigApiKeyContext =
-  import("../plugins/types.js").ProviderResolveConfigApiKeyContext;
-export type ProviderNormalizeModelIdContext =
-  import("../plugins/types.js").ProviderNormalizeModelIdContext;
-export type ProviderNormalizeResolvedModelContext =
-  import("../plugins/types.js").ProviderNormalizeResolvedModelContext;
-export type ProviderPrepareDynamicModelContext =
-  import("../plugins/types.js").ProviderPrepareDynamicModelContext;
-export type ProviderPrepareExtraParamsContext =
-  import("../plugins/types.js").ProviderPrepareExtraParamsContext;
-export type ProviderPrepareRuntimeAuthContext =
-  import("../plugins/types.js").ProviderPrepareRuntimeAuthContext;
-export type ProviderPreparedRuntimeAuth = import("../plugins/types.js").ProviderPreparedRuntimeAuth;
-export type ProviderReasoningOutputMode = import("../plugins/types.js").ProviderReasoningOutputMode;
-export type ProviderReasoningOutputModeContext =
-  import("../plugins/types.js").ProviderReasoningOutputModeContext;
-export type ProviderReplayPolicy = import("../plugins/types.js").ProviderReplayPolicy;
-export type ProviderReplayPolicyContext = import("../plugins/types.js").ProviderReplayPolicyContext;
-export type ProviderReplaySessionEntry = import("../plugins/types.js").ProviderReplaySessionEntry;
-export type ProviderReplaySessionState = import("../plugins/types.js").ProviderReplaySessionState;
-export type RealtimeTranscriptionProviderPlugin =
-  import("../plugins/types.js").RealtimeTranscriptionProviderPlugin;
-export type ProviderResolvedUsageAuth = import("../plugins/types.js").ProviderResolvedUsageAuth;
-export type ProviderUsageAuthToken = import("../plugins/types.js").ProviderUsageAuthToken;
-export type ProviderResolveDynamicModelContext =
-  import("../plugins/types.js").ProviderResolveDynamicModelContext;
-export type ProviderResolveTransportTurnStateContext =
-  import("../plugins/types.js").ProviderResolveTransportTurnStateContext;
-export type ProviderResolveWebSocketSessionPolicyContext =
-  import("../plugins/types.js").ProviderResolveWebSocketSessionPolicyContext;
-export type ProviderSanitizeReplayHistoryContext =
-  import("../plugins/types.js").ProviderSanitizeReplayHistoryContext;
-export type ProviderTransportTurnState = import("../plugins/types.js").ProviderTransportTurnState;
-export type ProviderToolSchemaDiagnostic =
-  import("../plugins/types.js").ProviderToolSchemaDiagnostic;
-export type ProviderResolveUsageAuthContext =
-  import("../plugins/types.js").ProviderResolveUsageAuthContext;
-export type ProviderThinkingProfile = import("../plugins/types.js").ProviderThinkingProfile;
-export type ProviderThinkingPolicyContext =
-  import("../plugins/types.js").ProviderThinkingPolicyContext;
-export type ProviderValidateReplayTurnsContext =
-  import("../plugins/types.js").ProviderValidateReplayTurnsContext;
-export type ProviderWebSocketSessionPolicy =
-  import("../plugins/types.js").ProviderWebSocketSessionPolicy;
-export type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
-export type UnifiedModelCatalogProviderContext =
-  import("../plugins/types.js").UnifiedModelCatalogProviderContext;
-export type UnifiedModelCatalogProviderPlugin =
-  import("../plugins/types.js").UnifiedModelCatalogProviderPlugin;
-export type OpenClawGatewayDiscoveryAdvertiseContext =
-  import("../plugins/types.js").OpenClawGatewayDiscoveryAdvertiseContext;
-export type OpenClawGatewayDiscoveryService =
-  import("../plugins/types.js").OpenClawGatewayDiscoveryService;
-export type SpeechProviderPlugin = import("../plugins/types.js").SpeechProviderPlugin;
-export type PluginCommandContext = import("../plugins/types.js").PluginCommandContext;
-export type PluginCommandResult = import("../plugins/types.js").PluginCommandResult;
-export type PluginAgentEventEmitParams = import("../plugins/types.js").PluginAgentEventEmitParams;
-export type PluginAgentEventEmitResult = import("../plugins/types.js").PluginAgentEventEmitResult;
-export type PluginAgentEventSubscriptionRegistration =
-  import("../plugins/types.js").PluginAgentEventSubscriptionRegistration;
-export type PluginAgentTurnPrepareEvent = import("../plugins/types.js").PluginAgentTurnPrepareEvent;
-export type PluginAgentTurnPrepareResult =
-  import("../plugins/types.js").PluginAgentTurnPrepareResult;
-export type PluginControlUiDescriptor = import("../plugins/types.js").PluginControlUiDescriptor;
-export type PluginHeartbeatPromptContributionEvent =
-  import("../plugins/types.js").PluginHeartbeatPromptContributionEvent;
-export type PluginHeartbeatPromptContributionResult =
-  import("../plugins/types.js").PluginHeartbeatPromptContributionResult;
-export type PluginJsonValue = import("../plugins/types.js").PluginJsonValue;
-export type PluginNextTurnInjection = import("../plugins/types.js").PluginNextTurnInjection;
-export type PluginNextTurnInjectionEnqueueResult =
-  import("../plugins/types.js").PluginNextTurnInjectionEnqueueResult;
-export type PluginNextTurnInjectionRecord =
-  import("../plugins/types.js").PluginNextTurnInjectionRecord;
-export type PluginRunContextGetParams = import("../plugins/types.js").PluginRunContextGetParams;
-export type PluginRunContextPatch = import("../plugins/types.js").PluginRunContextPatch;
-export type PluginRuntimeLifecycleRegistration =
-  import("../plugins/types.js").PluginRuntimeLifecycleRegistration;
-export type PluginSessionActionContext = import("../plugins/types.js").PluginSessionActionContext;
-export type PluginSessionActionRegistration =
-  import("../plugins/types.js").PluginSessionActionRegistration;
-export type PluginSessionActionResult = import("../plugins/types.js").PluginSessionActionResult;
-export type PluginSessionAttachmentParams =
-  import("../plugins/types.js").PluginSessionAttachmentParams;
-export type PluginSessionAttachmentResult =
-  import("../plugins/types.js").PluginSessionAttachmentResult;
-export type PluginSessionSchedulerJobHandle =
-  import("../plugins/types.js").PluginSessionSchedulerJobHandle;
-export type PluginSessionSchedulerJobRegistration =
-  import("../plugins/types.js").PluginSessionSchedulerJobRegistration;
-export type PluginSessionTurnScheduleParams =
-  import("../plugins/types.js").PluginSessionTurnScheduleParams;
-export type PluginSessionTurnUnscheduleByTagParams =
-  import("../plugins/types.js").PluginSessionTurnUnscheduleByTagParams;
-export type PluginSessionTurnUnscheduleByTagResult =
-  import("../plugins/types.js").PluginSessionTurnUnscheduleByTagResult;
-export type PluginSessionExtensionRegistration =
-  import("../plugins/types.js").PluginSessionExtensionRegistration;
-export type PluginSessionExtensionProjection =
-  import("../plugins/types.js").PluginSessionExtensionProjection;
-export type PluginToolMetadataRegistration =
-  import("../plugins/types.js").PluginToolMetadataRegistration;
-export type PluginTrustedToolPolicyRegistration =
-  import("../plugins/types.js").PluginTrustedToolPolicyRegistration;
 
 export type {
   PluginConversationBinding,

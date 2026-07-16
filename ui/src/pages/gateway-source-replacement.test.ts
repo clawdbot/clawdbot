@@ -210,6 +210,78 @@ describe("gateway source replacement across reconnect with a reused client", () 
     expect(page.usageResult).not.toBe(staleResult);
   });
 
+  it("keeps loaded usage data across a same-client reconnect", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, { connected: true });
+    const result = { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"];
+    const page = createPage("openclaw-usage-page", context) as TestPage & {
+      routeData: UsageRouteData;
+      applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+    };
+    page.routeData = {
+      gateway: context.gateway,
+      gatewaySnapshot: context.gateway.snapshot,
+      query: {
+        startDate: "2026-07-08",
+        endDate: "2026-07-08",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result,
+      costSummary: null,
+      providerUsageSummary: null,
+      error: null,
+    };
+
+    document.body.append(page);
+    await page.updateComplete;
+    page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
+    page.applyGatewaySnapshot(context.gateway.snapshot);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("retries a usage load interrupted by a same-client disconnect", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.usage" ? { sessions: [] } : {},
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client, { connected: true });
+    const page = createPage("openclaw-usage-page", context) as TestPage & {
+      routeData: UsageRouteData;
+      usageLoading: boolean;
+      applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
+    };
+    page.routeData = {
+      gateway: context.gateway,
+      gatewaySnapshot: context.gateway.snapshot,
+      query: {
+        startDate: "2026-07-08",
+        endDate: "2026-07-08",
+        scope: "family",
+        timeZone: "local",
+        agentId: null,
+      },
+      result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
+      costSummary: null,
+      providerUsageSummary: null,
+      error: null,
+    };
+
+    document.body.append(page);
+    await page.updateComplete;
+    page.usageLoading = true;
+    page.applyGatewaySnapshot({ ...context.gateway.snapshot, connected: false });
+    page.applyGatewaySnapshot(context.gateway.snapshot);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.usage", expect.any(Object)),
+    );
+  });
+
   it("preserves matching skills route data on the first bind", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;

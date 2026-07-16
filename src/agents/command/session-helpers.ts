@@ -1,8 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -56,75 +57,85 @@ export function clearPendingFinalDeliveryFields(
   };
 }
 
-export async function resolveCurrentRunDeliveryContext(params: {
+type PreparedCurrentRunDelivery = {
+  context: DeliveryContext;
+  targetMode: ChannelOutboundTargetMode;
+};
+
+export async function prepareCurrentRunDelivery(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
+  agentId: string;
+  currentSessionKey?: string;
   sessionEntry?: SessionEntry;
-}): Promise<DeliveryContext | undefined> {
+}): Promise<PreparedCurrentRunDelivery | undefined> {
   const { cfg, opts, sessionEntry } = params;
   if (opts.deliver !== true) {
     return undefined;
   }
-  // Restart recovery only needs durable route fields; final delivery resolves plugin-specific routes.
-  const deliveryPlan = resolveAgentDeliveryPlan({
-    sessionEntry,
-    requestedChannel: opts.replyChannel ?? opts.channel,
-    explicitTo: opts.replyTo ?? opts.to,
-    explicitThreadId: opts.threadId,
-    accountId: opts.replyAccountId ?? opts.accountId,
-    wantsDelivery: true,
-    turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
-    turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
-    turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
-    turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
-  });
+  const buildPlan = async (requestedChannel: string | undefined) =>
+    await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: params.agentId,
+      currentSessionKey: params.currentSessionKey,
+      sessionEntry,
+      requestedChannel,
+      explicitTo: opts.replyTo ?? opts.to,
+      explicitThreadId: opts.threadId,
+      accountId: opts.replyAccountId ?? opts.accountId,
+      wantsDelivery: true,
+      turnSourceChannel: opts.runContext?.messageChannel ?? opts.messageChannel,
+      turnSourceTo: opts.runContext?.currentChannelId ?? opts.to,
+      turnSourceAccountId: opts.runContext?.accountId ?? opts.accountId,
+      turnSourceThreadId: opts.runContext?.currentThreadTs ?? opts.threadId,
+    });
+  let deliveryPlan = await buildPlan(opts.replyChannel ?? opts.channel);
   const explicitChannelHint = normalizeOptionalString(opts.replyChannel ?? opts.channel);
   const explicitThreadId =
     opts.threadId != null && opts.threadId !== "" ? opts.threadId : undefined;
-  let effectivePlan = deliveryPlan;
   if (deliveryPlan.resolvedChannel === INTERNAL_MESSAGE_CHANNEL && !explicitChannelHint) {
-    try {
-      const selection = await resolveMessageChannelSelection({ cfg });
-      effectivePlan = {
-        ...deliveryPlan,
-        resolvedChannel: selection.channel,
-        deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? "implicit",
-      };
-    } catch {
-      return undefined;
-    }
+    const selection = await resolveMessageChannelSelection({ cfg });
+    deliveryPlan = await buildPlan(selection.channel);
   }
-  if (!isDeliverableMessageChannel(effectivePlan.resolvedChannel)) {
-    return undefined;
+  if (deliveryPlan.targetResolutionError) {
+    throw deliveryPlan.targetResolutionError;
+  }
+  if (!isDeliverableMessageChannel(deliveryPlan.resolvedChannel)) {
+    throw new Error(
+      "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+    );
   }
   const targetMode =
     opts.deliveryTargetMode ??
-    effectivePlan.deliveryTargetMode ??
-    (opts.to ? "explicit" : "implicit");
-  const resolvedTo =
-    effectivePlan.resolvedTo ??
-    resolveAgentOutboundTarget({
-      cfg,
-      plan: effectivePlan,
-      targetMode,
-      validateExplicitTarget: false,
-    }).resolvedTo;
+    deliveryPlan.deliveryTargetMode ??
+    ((opts.replyTo ?? opts.to) ? "explicit" : "implicit");
+  const resolved = resolveAgentOutboundTarget({
+    cfg,
+    plan: deliveryPlan,
+    targetMode,
+    validateExplicitTarget: true,
+  });
+  if (resolved.resolvedTarget && !resolved.resolvedTarget.ok) {
+    throw resolved.resolvedTarget.error;
+  }
+  const resolvedTo = resolved.resolvedTo;
   if (!resolvedTo) {
-    return undefined;
+    throw new Error(`delivery target is required for ${deliveryPlan.resolvedChannel}`);
   }
   const threadId =
     targetMode === "explicit"
       ? (explicitThreadId ??
-        (effectivePlan.baseDelivery.threadIdSource === "explicit"
-          ? effectivePlan.resolvedThreadId
+        (deliveryPlan.baseDelivery.threadIdSource === "explicit"
+          ? deliveryPlan.resolvedThreadId
           : undefined))
-      : effectivePlan.resolvedThreadId;
-  return normalizeDeliveryContext({
-    channel: effectivePlan.resolvedChannel,
+      : deliveryPlan.resolvedThreadId;
+  const context = normalizeDeliveryContext({
+    channel: deliveryPlan.resolvedChannel,
     to: resolvedTo,
-    accountId: effectivePlan.resolvedAccountId,
+    accountId: deliveryPlan.resolvedAccountId,
     threadId,
   });
+  return context ? { context, targetMode } : undefined;
 }
 
 export function createAgentCommandSessionWorkingCopy(params: {

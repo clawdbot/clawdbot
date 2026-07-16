@@ -15,6 +15,13 @@ extension OnboardingAISetupModel {
         }
     }
 
+    struct UnavailableCandidate: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let detail: String
+        let reason: String
+    }
+
     enum CandidateStatus: Equatable {
         case untried
         case testing

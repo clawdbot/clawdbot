@@ -418,7 +418,9 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
+      gatewayRuntime: expect.any(Object),
     });
+    expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
@@ -2561,6 +2563,11 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     deps: {} as never,
     startChannels: vi.fn(async () => {}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     logHooks: {
       info: vi.fn(),
       warn: vi.fn(),

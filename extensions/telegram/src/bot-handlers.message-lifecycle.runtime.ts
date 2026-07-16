@@ -1,7 +1,6 @@
 // Telegram dispatch dedupe, replay settlement, and synthetic-message helpers.
 import type { Message } from "grammy/types";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramMessageContextOptions,
@@ -24,6 +23,7 @@ import {
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
   releaseTelegramMessageDispatchReplay,
+  type TelegramMessageDispatchReplayClaim,
 } from "./message-dispatch-dedupe.js";
 
 export function createTelegramMessageLifecycleRuntime({
@@ -68,17 +68,20 @@ export function createTelegramMessageLifecycleRuntime({
     ...watermarks: Array<TelegramAmbientTranscriptWatermark | undefined>
   ): TelegramAmbientTranscriptWatermark | undefined =>
     watermarks.findLast((watermark) => watermark !== undefined);
-  const mergeDispatchDedupeKeys = (...groups: Array<readonly string[] | undefined>) => [
-    ...new Set(normalizeStringEntries(groups.flatMap((group) => group ?? []))),
-  ];
-  const releaseDispatchDedupeKeys = (keys: readonly string[], error?: unknown) => {
-    releaseTelegramMessageDispatchReplay({ guard: replayGuard, keys, error });
+  const mergeDispatchDedupeClaims = (
+    ...groups: Array<readonly TelegramMessageDispatchReplayClaim[] | undefined>
+  ) => [...new Set(groups.flatMap((group) => group ?? []))];
+  const releaseDispatchDedupeClaims = (
+    claims: readonly TelegramMessageDispatchReplayClaim[],
+    error?: unknown,
+  ) => {
+    releaseTelegramMessageDispatchReplay({ claims, error });
   };
-  const commitDispatchDedupeKeys = async (
-    keys: readonly string[],
+  const commitDispatchDedupeClaims = async (
+    claims: readonly TelegramMessageDispatchReplayClaim[],
     options: { requirePersistent?: boolean } = {},
   ) => {
-    await commitTelegramMessageDispatchReplay({ guard: replayGuard, keys, ...options });
+    await commitTelegramMessageDispatchReplay({ guard: replayGuard, claims, ...options });
   };
   const buildFailedProcessingResult = (error: unknown): TelegramMessageProcessingResult => ({
     kind: "failed-retryable",
@@ -125,13 +128,15 @@ export function createTelegramMessageLifecycleRuntime({
     participants.length > 0 ? { spooledReplay: true } : {};
   const claimMessageDispatchDedupe = async (
     msg: Message,
-  ): Promise<{ process: true; keys: string[] } | { process: false }> => {
+  ): Promise<
+    { process: true; claims: TelegramMessageDispatchReplayClaim[] } | { process: false }
+  > => {
     const claim = await claimTelegramMessageDispatchReplay({ guard: replayGuard, accountId, msg });
     if (claim.kind === "duplicate") {
       logVerbose(`telegram dispatch dedupe: skipped message ${msg.chat.id}:${msg.message_id}`);
       return { process: false };
     }
-    return { process: true, keys: claim.kind === "claimed" ? [claim.key] : [] };
+    return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
   };
   const buildSyntheticTextMessage = (params: {
     base: Message;
@@ -171,9 +176,9 @@ export function createTelegramMessageLifecycleRuntime({
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
-    mergeDispatchDedupeKeys,
-    releaseDispatchDedupeKeys,
-    commitDispatchDedupeKeys,
+    mergeDispatchDedupeClaims,
+    releaseDispatchDedupeClaims,
+    commitDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     beginSpooledReplaySettlementHolds,

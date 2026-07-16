@@ -4,7 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -16,6 +16,12 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
+import {
+  collectKnownSessionRows,
+  fetchChildSessionRows,
+  fetchSessionLineage,
+  mergeChildSessionRows,
+} from "./app-sidebar-child-session-data.ts";
 import {
   mergeCatalogSessionRows,
   mergeSessionCatalogPage,
@@ -36,6 +42,13 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   @state() protected sessionsResult: SessionsListResult | null = null;
   @state() protected sessionsAgentId: string | null = null;
   @state() protected sessionsLoading = false;
+  @state() protected childSessionRowsByParent: Readonly<
+    Record<string, readonly GatewaySessionRow[]>
+  > = {};
+  @state() protected loadedChildSessionKeys: ReadonlySet<string> = new Set();
+  @state() protected failedChildSessionKeys: ReadonlySet<string> = new Set();
+  @state() protected loadingChildSessionKeys: ReadonlySet<string> = new Set();
+  @state() protected activeSessionLineageRoot: GatewaySessionRow | null = null;
   @state() protected sessionsScrollState: SidebarSessionsScrollState = "none";
   @state() protected sessionCatalogs: SessionCatalog[] = [];
   @state() protected loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
@@ -46,6 +59,12 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
 
   private readonly subscriptions = new SubscriptionsController(this);
   private sessionsSource: SessionCapability | null = null;
+  private childSessionGeneration = 0;
+  private childSessionCanonicalListRevision: number | null = null;
+  private activeSessionLineageRouteKey: string | null = null;
+  private activeSessionLineageLoaded = false;
+  private activeSessionLineageRequestToken: symbol | null = null;
+  private activeSessionLineageRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -122,6 +141,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     if (this.sessionCatalogTimer) {
       globalThis.clearTimeout(this.sessionCatalogTimer);
       this.sessionCatalogTimer = null;
+    }
+    if (this.activeSessionLineageRetryTimer) {
+      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+      this.activeSessionLineageRetryTimer = null;
     }
     super.disconnectedCallback();
   }
@@ -433,6 +456,24 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
+    if (this.childSessionCanonicalListRevision !== sessions.canonicalListRevision) {
+      this.childSessionCanonicalListRevision = sessions.canonicalListRevision;
+      // The canonical root list advances after session events, but excludes hidden children.
+      // Drop child snapshots so expanded parents refetch live terminal state.
+      this.childSessionGeneration += 1;
+      this.childSessionRowsByParent = {};
+      this.loadedChildSessionKeys = new Set();
+      this.failedChildSessionKeys = new Set();
+      this.loadingChildSessionKeys = new Set();
+      this.activeSessionLineageRoot = null;
+      this.activeSessionLineageRouteKey = null;
+      this.activeSessionLineageLoaded = false;
+      this.activeSessionLineageRequestToken = null;
+      if (this.activeSessionLineageRetryTimer) {
+        globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+        this.activeSessionLineageRetryTimer = null;
+      }
+    }
     const snapshot = sessions.state;
     const gateway = this.context?.gateway;
     const sameClientDisconnected =
@@ -509,12 +550,148 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   private clearSessionCache() {
+    this.childSessionGeneration += 1;
+    this.childSessionCanonicalListRevision = null;
     this.reconnectListRevision = null;
     this.sessionsResult = null;
     this.sessionsAgentId = null;
     this.sessionRowsByAgent = {};
+    this.childSessionRowsByParent = {};
+    this.loadedChildSessionKeys = new Set();
+    this.failedChildSessionKeys = new Set();
+    this.loadingChildSessionKeys = new Set();
+    this.activeSessionLineageRoot = null;
+    this.activeSessionLineageRouteKey = null;
+    this.activeSessionLineageLoaded = false;
+    this.activeSessionLineageRequestToken = null;
+    if (this.activeSessionLineageRetryTimer) {
+      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+      this.activeSessionLineageRetryTimer = null;
+    }
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  }
+
+  protected async loadChildSessions(parentKey: string): Promise<void> {
+    if (
+      !parentKey ||
+      this.loadedChildSessionKeys.has(parentKey) ||
+      this.failedChildSessionKeys.has(parentKey) ||
+      this.loadingChildSessionKeys.has(parentKey)
+    ) {
+      return;
+    }
+    const sessions = this.context?.sessions;
+    if (!sessions) {
+      return;
+    }
+    const generation = this.childSessionGeneration;
+    this.loadingChildSessionKeys = new Set([...this.loadingChildSessionKeys, parentKey]);
+    try {
+      const isCurrent = () =>
+        generation === this.childSessionGeneration && sessions === this.context?.sessions;
+      const rows = await fetchChildSessionRows({
+        sessions,
+        parentKey,
+        isCurrent,
+      });
+      if (!rows || !isCurrent()) {
+        return;
+      }
+      for (const existing of this.childSessionRowsByParent[parentKey] ?? []) {
+        if (!rows.some((row) => row.key === existing.key)) {
+          rows.push(existing);
+        }
+      }
+      this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
+      this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
+      if (this.failedChildSessionKeys.has(parentKey)) {
+        const failedKeys = new Set(this.failedChildSessionKeys);
+        failedKeys.delete(parentKey);
+        this.failedChildSessionKeys = failedKeys;
+      }
+    } catch {
+      if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
+        return;
+      }
+      // Stop the expanded-row update loop. A canonical list revision or an
+      // explicit collapse/reopen clears the failure and retries the whole page set.
+      this.childSessionRowsByParent = {
+        ...this.childSessionRowsByParent,
+        [parentKey]: this.childSessionRowsByParent[parentKey] ?? [],
+      };
+      this.failedChildSessionKeys = new Set([...this.failedChildSessionKeys, parentKey]);
+    } finally {
+      if (generation === this.childSessionGeneration && sessions === this.context?.sessions) {
+        const next = new Set(this.loadingChildSessionKeys);
+        next.delete(parentKey);
+        this.loadingChildSessionKeys = next;
+      }
+    }
+  }
+
+  protected async loadActiveSessionLineage(sessionKey: string): Promise<void> {
+    const normalizedKey = sessionKey.trim();
+    if (normalizedKey !== this.activeSessionLineageRouteKey) {
+      this.activeSessionLineageRouteKey = normalizedKey;
+      this.activeSessionLineageLoaded = false;
+      this.activeSessionLineageRequestToken = null;
+      this.activeSessionLineageRoot = null;
+      if (this.activeSessionLineageRetryTimer) {
+        globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+        this.activeSessionLineageRetryTimer = null;
+      }
+    }
+    const gateway = this.context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (
+      !normalizedKey ||
+      this.activeSessionLineageLoaded ||
+      this.activeSessionLineageRequestToken !== null ||
+      this.activeSessionLineageRetryTimer !== null ||
+      !gateway?.snapshot.connected ||
+      !client ||
+      typeof client.request !== "function"
+    ) {
+      return;
+    }
+
+    const generation = this.childSessionGeneration;
+    const token = Symbol(normalizedKey);
+    this.activeSessionLineageRequestToken = token;
+    const isCurrent = () =>
+      generation === this.childSessionGeneration &&
+      token === this.activeSessionLineageRequestToken &&
+      gateway === this.context?.gateway &&
+      client === gateway.snapshot.client;
+    const lineage = await fetchSessionLineage({
+      client,
+      sessionKey: normalizedKey,
+      knownRows: collectKnownSessionRows(
+        this.sessionsResult?.sessions ?? [],
+        this.childSessionRowsByParent,
+      ),
+      isCurrent,
+    });
+    if (!lineage || !isCurrent()) {
+      return;
+    }
+    this.childSessionRowsByParent = mergeChildSessionRows(
+      this.childSessionRowsByParent,
+      lineage.rowsByParent,
+    );
+    this.activeSessionLineageRoot = lineage.topmostRow;
+    this.activeSessionLineageRequestToken = null;
+    if (lineage.lookupFailed) {
+      this.activeSessionLineageRetryTimer = globalThis.setTimeout(() => {
+        this.activeSessionLineageRetryTimer = null;
+        if (this.activeSessionLineageRouteKey === normalizedKey) {
+          this.requestUpdate();
+        }
+      }, 5_000);
+      return;
+    }
+    this.activeSessionLineageLoaded = true;
   }
 
   private invalidateSessionMutations() {

@@ -125,10 +125,39 @@ describe("Control UI mount fallback", () => {
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
 
-    expect(fetch).toHaveBeenNthCalledWith(1, expect.stringContaining("openclaw_mount_recovery="), {
-      cache: "no-store",
-      credentials: "same-origin",
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("openclaw_mount_recovery="),
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: expect.any(frameWindow.AbortSignal),
+      }),
+    );
+  });
+
+  it("times out stalled recovery probes so automatic retries can continue", async () => {
+    const frameWindow = createIsolatedWindow();
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof frameWindow.AbortSignal)) {
+        throw new Error("Expected recovery probe to include an abort signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+      });
     });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+
+    expect(signals).toHaveLength(6);
+    await vi.waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
   });
 
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {

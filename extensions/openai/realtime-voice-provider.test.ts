@@ -1101,6 +1101,55 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    const reconnectedSocket = FakeWebSocket.instances[1];
+    if (!reconnectedSocket) {
+      throw new Error("expected bridge to reconnect after close");
+    }
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    bridge.close();
+  });
+
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

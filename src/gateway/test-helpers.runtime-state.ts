@@ -155,7 +155,6 @@ export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
-export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
 export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {

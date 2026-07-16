@@ -18,7 +18,7 @@ type PersistReplySessionEntryParams = {
   touchedFields?: ReadonlyArray<keyof SessionEntry>;
 };
 
-export type PersistReplySessionEntryResult =
+type PersistReplySessionEntryResult =
   | { status: "current"; entry: SessionEntry }
   | { status: "lifecycle-invalidated"; error: string; entry?: SessionEntry };
 

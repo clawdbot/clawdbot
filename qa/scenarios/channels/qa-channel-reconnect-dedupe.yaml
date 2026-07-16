@@ -24,8 +24,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify qa-channel readiness recovery does not duplicate old outbound delivery.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       firstPrompt: "@openclaw Reconnect dedupe setup marker. Reply exactly: RECONNECT-FIRST-OK"
       secondPrompt: "@openclaw Reconnect dedupe follow-up marker. Reply exactly: RECONNECT-SECOND-OK"
       firstMarker: RECONNECT-FIRST-OK

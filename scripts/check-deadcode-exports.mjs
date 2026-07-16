@@ -3,15 +3,29 @@
 import { fileURLToPath } from "node:url";
 import { isLikelyRepoFilePath, runKnip, uniqueSorted } from "./deadcode-knip-runner.mjs";
 
-const KNIP_ARGS = [
-  "--config",
-  "config/knip.config.ts",
-  "--production",
+const KNIP_ISSUES = "exports,nsExports,types,nsTypes,enumMembers,namespaceMembers";
+
+const KNIP_SCANS = [
+  {
+    name: "production unused-export scan",
+    args: ["--config", "config/knip.config.ts", "--production"],
+  },
+  {
+    name: "full-tree unused-export scan",
+    args: ["--config", "config/knip.all-exports.config.ts"],
+  },
+  {
+    name: "script unused-export scan",
+    args: ["--config", "config/knip.scripts-exports.config.ts", "--include-entry-exports"],
+  },
+];
+
+const KNIP_COMMON_ARGS = [
   "--no-progress",
   "--reporter",
   "compact",
   "--include",
-  "exports,types,enumMembers",
+  KNIP_ISSUES,
   "--no-config-hints",
 ];
 
@@ -22,9 +36,10 @@ export function parseKnipCompactUnusedExportsResult(output) {
   let sawExportSection = false;
 
   for (const line of output.split(/\r?\n/u)) {
-    const sectionMatch = /^Unused (exports|exported types|exported enum members) \(\d+\)$/u.exec(
-      line,
-    );
+    const sectionMatch =
+      /^(Unused exports|Exports in used namespace|Unused exported types|Exported types in used namespace|Unused exported enum members|Unused exported namespace members) \(\d+\)$/u.exec(
+        line,
+      );
     if (sectionMatch) {
       inExportSection = true;
       sawExportSection = true;
@@ -81,18 +96,30 @@ export function checkUnusedExports(output) {
 }
 
 async function main() {
-  const result = await runKnip(KNIP_ARGS, { scanName: "unused-export scan" });
+  for (const scan of KNIP_SCANS) {
+    const ok = await runUnusedExportScan(scan);
+    if (!ok) {
+      process.exitCode = 1;
+      return;
+    }
+  }
+  console.log(
+    "[deadcode] Knip production and full-tree unused-export checks passed with 0 entries.",
+  );
+}
+
+async function runUnusedExportScan(scan) {
+  const result = await runKnip([...scan.args, ...KNIP_COMMON_ARGS], { scanName: scan.name });
   if (result.errorCode || result.status === null) {
     console.error(
-      `deadcode unused-export scan failed: ${result.errorCode ?? result.signal ?? "unknown"}${
+      `deadcode ${scan.name} failed: ${result.errorCode ?? result.signal ?? "unknown"}${
         result.errorMessage ? `: ${result.errorMessage}` : ""
       }`,
     );
     if (result.output) {
       console.error(result.output);
     }
-    process.exitCode = 1;
-    return;
+    return false;
   }
 
   const parsed = parseKnipCompactUnusedExportsResult(result.output);
@@ -100,21 +127,27 @@ async function main() {
   // legitimately prints no export sections; sectionless output is only a
   // failure signal when Knip also exited nonzero (crash/config error).
   if (!parsed.sawExportSection && result.status !== 0) {
-    console.error("deadcode unused-export scan produced no export sections.");
+    console.error(`deadcode ${scan.name} produced no export sections.`);
     if (result.output) {
       console.error(result.output);
     }
-    process.exitCode = 1;
-    return;
+    return false;
   }
 
   const check = checkUnusedExports(result.output);
   if (!check.ok) {
-    console.error(check.message);
-    process.exitCode = 1;
-    return;
+    console.error(`${scan.name}:\n${check.message}`);
+    return false;
   }
-  console.log("[deadcode] Knip unused-export check passed with 0 entries.");
+  if (result.status !== 0) {
+    console.error(`deadcode ${scan.name} exited with status ${result.status}.`);
+    if (result.output) {
+      console.error(result.output);
+    }
+    return false;
+  }
+  console.log(`[deadcode] Knip ${scan.name} passed with 0 entries.`);
+  return true;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

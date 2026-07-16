@@ -12,7 +12,6 @@ scenario:
     timeoutMs: 75000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         agentDefaults:
           blockStreamingChunk:

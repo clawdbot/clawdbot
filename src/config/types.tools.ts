@@ -745,9 +745,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled, except strict-agentic GPT-5 OpenAI/Codex runs may auto-enable `planTool`. */
+  /** Experimental tool flags. */
   experimental?: {
-    /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
+    /** Structured checklist tool; enabled by default. Set false to opt out. */
     planTool?: boolean;
   };
 };

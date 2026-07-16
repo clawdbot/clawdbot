@@ -248,6 +248,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "screen",
+    label: "screen",
+    description: "Drive operator web UI",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",

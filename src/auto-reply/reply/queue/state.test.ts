@@ -181,7 +181,9 @@ describe("refreshQueuedFollowupSession", () => {
       nextThinking: { agentRuntime: "codex" },
     });
 
-    expect(queue.items[0]?.run.thinkLevel).toBe("low");
+    // Sol's provider default reasoning level is medium (extensions/openai
+    // thinking-policy.ts); retargeting without an override adopts it.
+    expect(queue.items[0]?.run.thinkLevel).toBe("medium");
   });
 });
 

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   reactMatrixMessage: vi.fn(),
   editMatrixMessage: vi.fn(),
   deleteMatrixMessage: vi.fn(),
+  readMatrixMessages: vi.fn(),
   listMatrixReactions: vi.fn(),
   removeMatrixReactions: vi.fn(),
   sendMatrixMessage: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("./matrix/actions.js", () => {
     unpinMatrixMessage: mocks.unpinMatrixMessage,
     listMatrixPins: mocks.listMatrixPins,
     removeMatrixReactions: mocks.removeMatrixReactions,
+    readMatrixMessages: mocks.readMatrixMessages,
     sendMatrixMessage: mocks.sendMatrixMessage,
     voteMatrixPoll: mocks.voteMatrixPoll,
   };
@@ -77,6 +79,10 @@ describe("handleMatrixAction pollVote", () => {
     mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
     mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
     mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
+    mocks.readMatrixMessages.mockResolvedValue({
+      messages: [{ eventId: "$message" }],
+      nextBatch: "next",
+    });
     mocks.sendMatrixMessage.mockResolvedValue({
       messageId: "$sent",
       roomId: "!room:example",
@@ -364,6 +370,37 @@ describe("handleMatrixAction pollVote", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
       replyToId: undefined,
       threadId: "$thread",
+    });
+  });
+
+  it("returns the authorized room and thread with message reads", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    const result = await handleMatrixAction(
+      {
+        action: "readMessages",
+        accountId: "ops",
+        roomId: "room:!room:example",
+        threadId: "$thread",
+        limit: 5,
+      },
+      cfg,
+    );
+
+    expect(mocks.readMatrixMessages).toHaveBeenCalledWith("!room:example", {
+      cfg,
+      accountId: "ops",
+      client: mocks.matrixClient,
+      limit: 5,
+      before: undefined,
+      after: undefined,
+      threadId: "$thread",
+    });
+    expect(result.details).toEqual({
+      ok: true,
+      roomId: "!room:example",
+      threadId: "$thread",
+      messages: [{ eventId: "$message" }],
+      nextBatch: "next",
     });
   });
 

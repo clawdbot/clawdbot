@@ -1,7 +1,11 @@
 // Chat-owned model, reasoning, and speed picker.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -38,10 +42,13 @@ export type ChatModelControlsProps = {
   modelSwitching: boolean;
   modelsLoading?: boolean;
   mode?: "combined" | "model";
+  showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
+  thinkingDefaults?: SessionsListResult["defaults"];
+  thinkingSession?: GatewaySessionRow;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onRequestUpdate?: () => void;
@@ -149,6 +156,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   });
   const thinking = resolveChatThinkingSelectState({
     catalog: props.modelCatalog,
+    defaults: props.thinkingDefaults,
+    session: props.thinkingSession,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -245,6 +254,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     selectedModelValue: currentOverride,
     selectedThinkingValue: thinking.currentOverride,
     sessionKey: props.sessionKey,
+    showFastMode: props.showFastMode !== false,
     thinkingDefaultValue: thinking.defaultValue,
     thinkingDisabled,
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
@@ -290,6 +300,7 @@ function renderChatModelReasoningSelect(params: {
   selectedModelValue: string;
   selectedThinkingValue: string;
   sessionKey: string;
+  showFastMode: boolean;
   thinkingDefaultValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatModelSelectOption[];
@@ -309,6 +320,7 @@ function renderChatModelReasoningSelect(params: {
     selectedModelValue,
     selectedThinkingValue,
     sessionKey,
+    showFastMode,
     thinkingDefaultValue,
     thinkingDisabled,
     thinkingOptions,
@@ -412,7 +424,7 @@ function renderChatModelReasoningSelect(params: {
   const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
-  const showReasoningPanel = !modelOnly;
+  const showReasoningPanel = !modelOnly && (showReasoning || showFastMode);
   const providerGroups = new Map<string, ChatModelProviderOption[]>();
   for (const option of modelOptions) {
     const existing = providerGroups.get(option.provider);
@@ -708,37 +720,41 @@ function renderChatModelReasoningSelect(params: {
                           : ""}
                     `
                   : ""}
-                <div class="chat-controls__speed-row">
-                  <span class="chat-controls__inline-select-section-label"
-                    >${t("chat.modelControls.speed")}</span
-                  >
-                  <openclaw-tooltip .content=${speedTooltip}>
-                    <button
-                      class="chat-controls__speed-toggle ${fastMode.active
-                        ? "chat-controls__speed-toggle--active"
-                        : ""}"
-                      data-chat-speed-toggle=${fastMode.nextValue}
-                      type="button"
-                      role="switch"
-                      aria-checked=${fastMode.active ? "true" : "false"}
-                      aria-label=${`Fast responses: ${fastMode.label}`}
-                      ?disabled=${fastMode.disabled}
-                      @click=${(event: MouseEvent) => {
-                        event.stopPropagation();
-                        if (fastMode.disabled) {
-                          event.preventDefault();
-                          return;
-                        }
-                        commitFastMode(fastMode.nextValue);
-                      }}
-                    >
-                      <span class="chat-controls__speed-toggle-icon" aria-hidden="true">
-                        ${icons.zap}
-                      </span>
-                      <span>${fastMode.label}</span>
-                    </button>
-                  </openclaw-tooltip>
-                </div>
+                ${showFastMode
+                  ? html`
+                      <div class="chat-controls__speed-row">
+                        <span class="chat-controls__inline-select-section-label"
+                          >${t("chat.modelControls.speed")}</span
+                        >
+                        <openclaw-tooltip .content=${speedTooltip}>
+                          <button
+                            class="chat-controls__speed-toggle ${fastMode.active
+                              ? "chat-controls__speed-toggle--active"
+                              : ""}"
+                            data-chat-speed-toggle=${fastMode.nextValue}
+                            type="button"
+                            role="switch"
+                            aria-checked=${fastMode.active ? "true" : "false"}
+                            aria-label=${`Fast responses: ${fastMode.label}`}
+                            ?disabled=${fastMode.disabled}
+                            @click=${(event: MouseEvent) => {
+                              event.stopPropagation();
+                              if (fastMode.disabled) {
+                                event.preventDefault();
+                                return;
+                              }
+                              commitFastMode(fastMode.nextValue);
+                            }}
+                          >
+                            <span class="chat-controls__speed-toggle-icon" aria-hidden="true">
+                              ${icons.zap}
+                            </span>
+                            <span>${fastMode.label}</span>
+                          </button>
+                        </openclaw-tooltip>
+                      </div>
+                    `
+                  : nothing}
               </div>
             `
           : ""}

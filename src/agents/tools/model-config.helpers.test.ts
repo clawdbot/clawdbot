@@ -79,7 +79,7 @@ const resolveMedia = (
     agentDir: AGENT_DIR,
     authStore: store({}),
     openAiModel: MODEL,
-    codexModel: MODEL,
+    resolveCodexMediaRoute: () => ({ model: MODEL }),
     ...overrides,
   });
 

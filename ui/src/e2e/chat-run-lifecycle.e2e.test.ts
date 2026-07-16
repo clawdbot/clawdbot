@@ -15,13 +15,20 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-let browser: Browser | undefined;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 let page: Page | undefined;
 let server: ControlUiE2eServer | undefined;
 
 describeControlUiE2e("Control UI chat run lifecycle", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterEach(async () => {
@@ -29,17 +36,15 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       ?.context()
       .close()
       .catch(() => {});
-    await browser?.close().catch(() => {});
     page = undefined;
-    browser = undefined;
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
   it("shows compaction savings and live working time", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -66,7 +71,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
 
-    await currentPage.clock.runFor(177_000);
+    await currentPage.clock.fastForward(177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
@@ -83,7 +88,6 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
   });
 
   it("clears shared session activity when chat final arrives first", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -180,7 +184,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
-    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
     expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
 
@@ -205,7 +209,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
     // Re-publish after the former 10-second suppression window. The completed
     // run identity stays terminal until the Gateway publishes different state.
-    await currentPage.clock.runFor(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
+    await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     const lateStaleActiveUpdatedAt = await currentPage.evaluate(() => Date.now());
     const sessionListsBeforeLateStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -228,7 +232,6 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
   });
 
   it("does not announce Done when a yielded parent is waiting for continuation", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

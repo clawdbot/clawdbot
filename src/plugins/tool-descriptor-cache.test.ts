@@ -78,6 +78,23 @@ describe("plugin tool descriptor cache keys", () => {
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
   });
 
+  it("isolates descriptor caches by declared gateway client capabilities", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["show_widget"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+
+    const caplessKey = buildPluginToolDescriptorCacheKey(base);
+    const inlineKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      clientCaps: ["inline-widgets"],
+    });
+
+    expect(caplessKey).not.toBe(inlineKey);
+  });
+
   it("keeps distinct config objects distinct within the memo", () => {
     const firstConfig = { id: "first" } as never;
     const secondConfig = { id: "second" } as never;

@@ -40,9 +40,8 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter });
     } catch (error) {
-      log.warn(
-        `dropped node skill with invalid frontmatter: ${nodeId}/${skill.name}: ${String(error)}`,
-      );
+      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;

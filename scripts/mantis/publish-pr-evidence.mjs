@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Evidence bundles can include full videos, so allow slow transfers while bounding each PUT.
+const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -436,11 +439,40 @@ function run(command, args, options = {}) {
   });
 }
 
+async function uploadArtifact({ artifact, fetchImpl, request, timeoutMs }) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let response;
+  try {
+    response = await fetchImpl(request.url, {
+      body: request.body,
+      headers: request.headers,
+      method: request.method,
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(
+        `Timed out uploading Mantis artifact ${artifact.targetPath} after ${timeoutMs}ms.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if (response.ok) {
+    return;
+  }
+  const responseText = await response.text();
+  throw new Error(
+    `Failed to upload Mantis artifact ${artifact.targetPath}: ${response.status} ${response.statusText}\n${responseText}`,
+  );
+}
+
 export async function publishArtifactFiles({
   artifactRoot,
   fetchImpl = fetch,
   manifest,
   storageConfig = objectStorageConfig(),
+  timeoutMs = MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS,
 }) {
   const safeArtifactRoot = normalizeTargetPath(artifactRoot);
   const publicRoot = `${storageConfig.publicBaseUrl}/${encodePathForUrl(safeArtifactRoot)}`;
@@ -452,17 +484,7 @@ export async function publishArtifactFiles({
       config: storageConfig,
       key,
     });
-    const response = await fetchImpl(request.url, {
-      body: request.body,
-      headers: request.headers,
-      method: request.method,
-    });
-    if (!response.ok) {
-      const responseText = await response.text();
-      throw new Error(
-        `Failed to upload Mantis artifact ${artifact.targetPath}: ${response.status} ${response.statusText}\n${responseText}`,
-      );
-    }
+    await uploadArtifact({ artifact, fetchImpl, request, timeoutMs });
   }
   const indexArtifact = {
     targetPath: "index.json",
@@ -493,17 +515,7 @@ export async function publishArtifactFiles({
     config: storageConfig,
     key: normalizeTargetPath(`${safeArtifactRoot}/${indexArtifact.targetPath}`),
   });
-  const indexResponse = await fetchImpl(indexRequest.url, {
-    body: indexRequest.body,
-    headers: indexRequest.headers,
-    method: indexRequest.method,
-  });
-  if (!indexResponse.ok) {
-    const responseText = await indexResponse.text();
-    throw new Error(
-      `Failed to upload Mantis artifact ${indexArtifact.targetPath}: ${indexResponse.status} ${indexResponse.statusText}\n${responseText}`,
-    );
-  }
+  await uploadArtifact({ artifact: indexArtifact, fetchImpl, request: indexRequest, timeoutMs });
   return {
     artifactRoot: safeArtifactRoot,
     rawBase: publicRoot,

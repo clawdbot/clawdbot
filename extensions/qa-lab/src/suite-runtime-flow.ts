@@ -27,7 +27,6 @@ import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
-import { qaChannelPlugin } from "./runtime-api.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -291,7 +290,6 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     liveTurnTimeoutMs: params.liveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
     splitModelRef: params.splitModelRef,
-    qaChannelPlugin,
     hasDiscoveryLabels,
     reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles,

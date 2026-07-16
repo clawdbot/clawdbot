@@ -1,11 +1,7 @@
 // Covers path guard helpers for platform and symlink errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  isNotFoundPathError,
-  isPathInside,
-  normalizeWindowsPathForComparison,
-} from "./path-guards.js";
+import { isPathInside, normalizeWindowsPathForComparison } from "./path-guards.js";
 
 function setPlatform(platform: NodeJS.Platform): void {
   mockProcessPlatform(platform);
@@ -22,17 +18,6 @@ describe("normalizeWindowsPathForComparison", () => {
     ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\server\\share\\folder"],
   ])("normalizes windows path %s", (input, expected) => {
     expect(normalizeWindowsPathForComparison(input)).toBe(expected);
-  });
-});
-
-describe("node path error helpers", () => {
-  it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
   });
 });
 

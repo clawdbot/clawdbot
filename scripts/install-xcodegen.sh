@@ -17,7 +17,11 @@ trap 'rm -rf "$temp_dir"' EXIT
 archive="$temp_dir/xcodegen.zip"
 extract_dir="$temp_dir/extract"
 
-curl --fail --location --silent --show-error --retry 3 \
+# Bound individual transfers and the retry window. curl resets --max-time for
+# each retry, while a started retry can outlive --retry-max-time.
+curl --fail --location --silent --show-error \
+  --connect-timeout 10 --max-time 120 \
+  --retry 3 --retry-max-time 120 \
   --output "$archive" \
   "https://github.com/yonaskolb/XcodeGen/releases/download/$xcodegen_version/xcodegen.zip"
 if [[ "$(shasum -a 256 "$archive" | awk '{print $1}')" != "$xcodegen_checksum" ]]; then

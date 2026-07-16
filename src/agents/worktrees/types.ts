@@ -1,5 +1,11 @@
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
+export type ProvisionedFileState = {
+  path: string;
+  mode: number | null;
+  chunks: number;
+};
+
 export type ManagedWorktreeRecord = {
   id: string;
   name: string;

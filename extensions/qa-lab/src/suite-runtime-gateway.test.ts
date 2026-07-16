@@ -9,6 +9,7 @@ import {
   patchConfig,
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
+  waitForGatewayHealthy,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -122,7 +123,61 @@ describe("qa suite gateway helpers", () => {
     await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
       "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
     );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 15_000 }),
+    );
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds stalled suite gateway JSON response bodies", async () => {
+    vi.useFakeTimers();
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementation(async ({ timeoutMs }: { timeoutMs: number }) => {
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+            controller.enqueue(new TextEncoder().encode('{"pending":'));
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+      setTimeout(() => bodyController?.error(new Error("request timed out")), timeoutMs);
+      return { response, release };
+    });
+
+    const request = fetchJson("http://127.0.0.1:43123/config", 1_000);
+    const rejection = expect(request).rejects.toThrow("request timed out");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
+    vi.useFakeTimers();
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ timeoutMs }: { timeoutMs: number }) =>
+        await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
+        }),
+    );
+
+    const readiness = waitForGatewayHealthy(
+      { gateway: { baseUrl: "http://127.0.0.1:43123" } } as never,
+      1_000,
+    );
+    const rejection = expect(readiness).rejects.toThrow("timed out after 1000ms");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 1_000 }),
+    );
   });
 
   it("skips config mutations that would not change the snapshot", async () => {

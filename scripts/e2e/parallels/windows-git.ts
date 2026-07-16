@@ -82,17 +82,30 @@ print(best["browser_download_url"])`,
   }
   const zipPath = path.join(tgzDir, name);
   say(`Download ${name}`);
-  run("curl", [
-    "--retry",
-    "5",
-    "--retry-delay",
-    "3",
-    "--retry-all-errors",
-    "-fsSL",
-    url,
-    "-o",
-    zipPath,
-  ]);
+  run(
+    "curl",
+    [
+      "--retry",
+      "5",
+      "--retry-delay",
+      "3",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "--retry-max-time",
+      "120",
+      "-fsSL",
+      url,
+      "-o",
+      zipPath,
+    ],
+    {
+      // curl can start one final 120s transfer at the retry-window edge.
+      timeoutMs: 270_000,
+    },
+  );
   return zipPath;
 }
 

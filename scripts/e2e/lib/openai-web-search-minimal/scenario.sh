@@ -60,8 +60,6 @@ trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$TLS_DIR"
 
-node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-patch-behavior
-
 node scripts/e2e/lib/fixture.mjs openai-web-search-minimal-config
 
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \

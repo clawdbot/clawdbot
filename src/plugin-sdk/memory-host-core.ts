@@ -8,7 +8,22 @@ import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 import { resolveMemoryHostEventLogPath } from "./memory-host-events.js";
 
-export * from "./memory-core-host-runtime-core.js";
+export {
+  buildMemoryPromptSection as buildActiveMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
+  listActiveMemoryPublicArtifacts,
+  registerMemoryCapability,
+  registerMemoryCorpusSupplement,
+} from "../plugins/memory-state.js";
+export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPromptSectionBuilder,
+} from "../plugins/memory-state.js";
+export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+export { resolveSessionAgentId } from "../agents/agent-scope.js";
+export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -36,7 +51,7 @@ async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
 }
 
 /** Lists public memory artifacts for one workspace, including notes and event logs. */
-export async function listMemoryWorkspacePublicArtifacts(params: {
+async function listMemoryWorkspacePublicArtifacts(params: {
   workspaceDir: string;
   agentIds: string[];
 }): Promise<MemoryPluginPublicArtifact[]> {

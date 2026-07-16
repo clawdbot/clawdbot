@@ -618,6 +618,16 @@ describe("cron view editor", () => {
     expect(onceText).toContain("2026");
   });
 
+  it("hides the schedule summary for recurring amounts that cannot produce safe milliseconds", () => {
+    for (const everyAmount of ["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"]) {
+      const container = renderView({
+        createOpen: true,
+        form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount },
+      });
+      expect(container.querySelector(".cron-schedule-summary")).toBeNull();
+    }
+  });
+
   it("renders supported delivery options and normalizes stale announce selection", () => {
     // systemEvent + main session cannot announce; a stale announce selection
     // must render as none and the announce option must disappear.

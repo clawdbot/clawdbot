@@ -57,7 +57,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "\${durationMs}ms" to R.string.native_e0218943388a5872,
     "\${endpoint.host}:\${endpoint.port}" to R.string.native_963e80a1954e4b73,
     "\${entries.size} of \$totalEntries" to R.string.native_93bf9fb90d28b037,
-    "\${firstLine.take(157)}…" to R.string.native_09f0bda624faadd4,
     "\${hours}h" to R.string.native_94f5698f54d7d31a,
     "\${hours}h ago" to R.string.native_f14cd8dd44162255,
     "\${if (tls) \"https\" else \"http\"}://\$displayHost" to R.string.native_71dba3ccde0a371b,

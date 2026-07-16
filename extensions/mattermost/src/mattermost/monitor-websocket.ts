@@ -6,7 +6,7 @@ import {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
@@ -43,10 +43,17 @@ type MattermostWebSocketLike = {
   terminate(): void;
 };
 
-export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+type MattermostWebSocketClientOptions = Pick<ClientOptions, "handshakeTimeout" | "maxPayload">;
+
+export type MattermostWebSocketFactory = (
+  url: string,
+  options: MattermostWebSocketClientOptions,
+) => MattermostWebSocketLike;
 // Mattermost events can include double-encoded post props plus server/plugin metadata.
 // Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
 const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+// A TCP peer can accept without completing the HTTP upgrade; ws has no default deadline.
+const MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
@@ -114,11 +121,11 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
-const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, options) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
   return new WebSocket(url, {
+    ...options,
     ...(agent ? { agent } : {}),
-    maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
   }) as MattermostWebSocketLike;
 };
 
@@ -148,7 +155,10 @@ export function createMattermostConnectOnce(
   const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
   return async () => {
     const flowId = randomUUID();
-    const ws = webSocketFactory(opts.wsUrl);
+    const ws = webSocketFactory(opts.wsUrl, {
+      maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+      handshakeTimeout: MATTERMOST_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
+    });
     const onAbort = () => ws.terminate();
     opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
     const getBotUpdateAt = opts.getBotUpdateAt;

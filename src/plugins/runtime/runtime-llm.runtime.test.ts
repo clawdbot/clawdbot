@@ -567,6 +567,7 @@ describe("runtime.llm.complete", () => {
       ],
       temperature: 0.2,
       maxTokens: 64,
+      reasoning: "ultra",
       purpose: "test-purpose",
     });
 
@@ -590,6 +591,7 @@ describe("runtime.llm.complete", () => {
     expectFields(requireRecord(completionArg.options, "completion options"), {
       maxTokens: 64,
       temperature: 0.2,
+      reasoning: "ultra",
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
@@ -613,6 +615,25 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("preserves the completion options shape when reasoning is omitted", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+    });
+
+    const completionArg = expectSingleCallFirstArg(
+      hoisted.completeWithPreparedSimpleCompletionModel,
+      { cfg },
+    );
+    expect(requireRecord(completionArg.options, "completion options")).not.toHaveProperty(
+      "reasoning",
+    );
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {

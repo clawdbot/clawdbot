@@ -289,7 +289,7 @@ export async function runLegacyMigrationPlans(
         const existingKeys = new Set(storeEntries.map(({ key }) => key));
         const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
         const expectedKeys = new Set(existingKeys);
-        let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
+        const namespaceRemainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         let entries: Awaited<ReturnType<typeof plan.readEntries>>;
         try {
           entries = await plan.readEntries();
@@ -325,6 +325,12 @@ export async function runLegacyMigrationPlans(
           candidateEntries.push({ ...entry, targetKey, existedBefore: false });
           missingEntryCount++;
         }
+        if (missingEntryCount > namespaceRemainingCapacity) {
+          warnings.push(
+            `Skipped migrating ${plan.label} because plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
+          );
+          return;
+        }
         const pluginRemainingCapacity = Math.max(
           0,
           MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
@@ -338,9 +344,6 @@ export async function runLegacyMigrationPlans(
         let imported = 0;
         const changedKeys: string[] = [];
         for (const entry of candidateEntries) {
-          if (!entry.existedBefore && remainingCapacity <= 0) {
-            break;
-          }
           try {
             await store.register(
               entry.targetKey,
@@ -372,9 +375,6 @@ export async function runLegacyMigrationPlans(
             expectedKeys.add(entry.targetKey);
             existingKeys.add(entry.targetKey);
             changedKeys.push(entry.targetKey);
-            if (!entry.existedBefore) {
-              remainingCapacity--;
-            }
             imported++;
           } catch (err) {
             failedTargetKeys.add(entry.targetKey);

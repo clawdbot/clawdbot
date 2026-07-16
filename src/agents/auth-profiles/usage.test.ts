@@ -14,10 +14,14 @@ import {
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  maybeReprobeWhamBlockedProfiles,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
 import { testing as authProfileUsageTesting } from "./usage.test-support.js";
+
+// Mirrors the module-local WHAM half-open reprobe interval contract (45 minutes).
+const WHAM_HALF_OPEN_REPROBE_INTERVAL_MS = 45 * 60 * 1000;
 
 const storeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
@@ -43,6 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   authProfileUsageTesting.setDepsForTest(null);
+  authProfileUsageTesting.resetWhamReprobeStateForTest();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -70,6 +75,16 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
 
 function mockLockedUpdateForStore(store: AuthProfileStore): void {
   storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+      const freshStore = structuredClone(store);
+      lockParams.updater(freshStore);
+      return freshStore;
+    },
+  );
+}
+
+function mockLockedUpdatesForStore(store: AuthProfileStore): void {
+  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
     async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
       const freshStore = structuredClone(store);
       lockParams.updater(freshStore);
@@ -1181,6 +1196,156 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     }
   }
 
+  it("half-opens a stale long WHAM block and clears it when capacity returns", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    });
+    mockWhamResponse(200, { rate_limit: { limit_reached: false } });
+    mockLockedUpdatesForStore(store);
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(store.usageStats?.["openai:default"]?.blockedUntil).toBeUndefined();
+    });
+    expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
+    expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves non-WHAM blocks outside the half-open probe path", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+      },
+    });
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-probe a WHAM block inside the half-open interval", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        lastProbeAt: now - WHAM_HALF_OPEN_REPROBE_INTERVAL_MS + 1,
+      },
+    });
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("re-arms a stale WHAM block from the latest blocked snapshot", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        blockedModel: "gpt-5.5",
+        blockedScope: "model",
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 3_600 },
+      },
+    });
+    mockLockedUpdatesForStore(store);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    try {
+      maybeReprobeWhamBlockedProfiles({
+        store,
+        profileIds: ["openai:default"],
+        forModel: "gpt-5.5",
+        now,
+      });
+      await vi.waitFor(() => {
+        expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(now + 3_600_000);
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+    expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
+    expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.5");
+    expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
+  });
+
+  it("does not apply an available result over a newer WHAM block", async () => {
+    const now = 1_700_000_000_000;
+    const originalUntil = now + 6 * 24 * 60 * 60 * 1000;
+    const newerUntil = originalUntil + 60_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: originalUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        lastFailureAt: now - 1,
+      },
+    });
+    let releaseResponse: ((response: Response) => void) | undefined;
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        releaseResponse = resolve;
+      }),
+    );
+    mockLockedUpdatesForStore(store);
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const stats = store.usageStats?.["openai:default"];
+    if (!stats || !releaseResponse) {
+      throw new Error("expected claimed WHAM probe");
+    }
+    stats.blockedUntil = newerUntil;
+    stats.lastFailureAt = now + 1;
+    releaseResponse(Response.json({ rate_limit: { limit_reached: false } }));
+
+    await vi.waitFor(() => {
+      expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
+    });
+    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(newerUntil);
+  });
+
   it.each([
     {
       label: "burst contention",
@@ -1244,6 +1409,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(headers.originator).toBe("openclaw");
     expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     const stats = store.usageStats?.["openai:default"];
+    expect(stats?.lastProbeAt).toBe(now);
     if (exactBlocked) {
       expect(stats?.blockedUntil).toBe(now + expectedMs);
       expect(stats?.blockedReason).toBe("subscription_limit");

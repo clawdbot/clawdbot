@@ -443,22 +443,23 @@ async function applyWorkspacePatch(params: {
   }
   // Run no-index with discovery disabled so workspace .gitattributes and
   // repository filter config cannot reinterpret authenticated patch bytes.
-  const nonexistentGitDirectory = path.join(
-    os.tmpdir(),
-    `openclaw-no-git-${randomBytes(16).toString("hex")}`,
-  );
-  await requireGit(
-    params.root,
-    [
-      "apply",
-      "--no-index",
-      "--binary",
-      "--whitespace=nowarn",
-      ...(params.reverse ? ["--reverse"] : []),
-    ],
-    params.patch,
-    { GIT_DIR: nonexistentGitDirectory },
-  );
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-git-"));
+  try {
+    await requireGit(
+      params.root,
+      [
+        "apply",
+        "--no-index",
+        "--binary",
+        "--whitespace=nowarn",
+        ...(params.reverse ? ["--reverse"] : []),
+      ],
+      params.patch,
+      { GIT_DIR: path.join(temporary, ".git") },
+    );
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 }
 
 function validateJournalSnapshot(journal: WorkerWorkspaceReconciliationJournal): void {

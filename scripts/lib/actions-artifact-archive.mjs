@@ -3,9 +3,9 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-export const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
-export const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
+const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
+const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_ACTIONS_ARTIFACT_EXPANDED_BYTES = 512 * 1024 * 1024;
 
 const DEFAULT_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;

@@ -24,6 +24,7 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
+import { shouldIncludeSkill } from "./config.js";
 import { buildWorkspaceSkillsPrompt } from "./workspace.js";
 
 vi.mock("./plugin-skills.js", () => ({
@@ -499,6 +500,62 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("hidden-skill");
     expect(prompt).not.toContain("Hidden from the prompt");
     expect(prompt).not.toContain(path.join(hiddenSkillDir, "SKILL.md"));
+  });
+});
+
+describe("shouldIncludeSkill", () => {
+  const envName = "OPENCLAW_TEST_SKILL_REQUIREMENT";
+  const entry = makeSkillEntry("env-skill", {
+    primaryEnv: envName,
+    requires: { env: [envName] },
+  });
+
+  function shouldInclude(config?: OpenClawConfig): boolean {
+    return shouldIncludeSkill({ entry, config, bundledAllowlist: undefined });
+  }
+
+  it("requires non-blank host and configured env values", () => {
+    withClearedEnv([envName], () => {
+      expect(shouldInclude()).toBe(false);
+
+      process.env[envName] = "   ";
+      expect(shouldInclude()).toBe(false);
+
+      process.env[envName] = " example ";
+      expect(shouldInclude()).toBe(true);
+
+      delete process.env[envName];
+      expect(
+        shouldInclude({ skills: { entries: { "env-skill": { env: { [envName]: "   " } } } } }),
+      ).toBe(false);
+      expect(
+        shouldInclude({
+          skills: { entries: { "env-skill": { env: { [envName]: " example " } } } },
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("requires a non-blank primary apiKey", () => {
+    withClearedEnv([envName], () => {
+      expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", "   "))).toBe(false);
+      expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", " example "))).toBe(true);
+      expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(true);
+    });
+  });
+
+  it("keeps always-on skills eligible without credentials", () => {
+    withClearedEnv([envName], () => {
+      expect(
+        shouldIncludeSkill({
+          entry: makeSkillEntry("always-skill", {
+            always: true,
+            requires: { env: [envName] },
+          }),
+          bundledAllowlist: undefined,
+        }),
+      ).toBe(true);
+    });
   });
 });
 

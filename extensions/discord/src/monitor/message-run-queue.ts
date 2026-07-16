@@ -1,14 +1,8 @@
 // Discord plugin module implements message run queue behavior.
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  commitDiscordInboundReplay,
-  createDiscordInboundReplayGuard,
-  DiscordRetryableInboundError,
-  releaseDiscordInboundReplay,
-} from "./inbound-dedupe.js";
+import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -19,7 +13,6 @@ type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  replayGuard?: ClaimableDedupe;
   testing?: DiscordMessageRunQueueTestingHooks;
 };
 
@@ -41,7 +34,6 @@ const loadMessageProcessRuntime = createLazyRuntimeModule(
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   lifecycleSignal?: AbortSignal;
-  replayGuard: ClaimableDedupe;
   testing?: DiscordMessageRunQueueTestingHooks;
 }) {
   const processDiscordMessageImpl =
@@ -53,40 +45,25 @@ async function processDiscordQueuedMessage(params: {
       : (params.job.runtime.abortSignal ?? params.lifecycleSignal);
   try {
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
-    await commitDiscordInboundReplay({
-      replayKeys: params.job.replayKeys,
-      replayGuard: params.replayGuard,
-    });
+    await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
   } catch (error) {
     if (error instanceof DiscordRetryableInboundError) {
-      releaseDiscordInboundReplay({
-        replayKeys: params.job.replayKeys,
-        error,
-        replayGuard: params.replayGuard,
-      });
+      for (const claim of params.job.replayClaims ?? []) {
+        claim.release({ error });
+      }
     } else {
-      await commitDiscordInboundReplay({
-        replayKeys: params.job.replayKeys,
-        replayGuard: params.replayGuard,
-      });
+      await Promise.all(params.job.replayClaims?.map((claim) => claim.commit()) ?? []);
     }
     throw error;
   }
 }
 
-function cleanupSkippedDiscordQueuedMessage(params: {
-  job: DiscordInboundJob;
-  replayGuard: ClaimableDedupe;
-}) {
-  try {
-    // Skipped jobs never reach processDiscordMessage's finally block.
-    // Clean carried typing here before reopening the replay key for retry.
-    params.job.runtime.replyTypingFeedback?.onCleanup?.();
-  } finally {
-    releaseDiscordInboundReplay({
-      replayKeys: params.job.replayKeys,
+function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
+  // Typing feedback is created inside processing after admission, so skipped
+  // jobs only carry replay claims that need reopening for a later retry.
+  for (const claim of params.job.replayClaims ?? []) {
+    claim.release({
       error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
-      replayGuard: params.replayGuard,
     });
   }
 }
@@ -94,7 +71,6 @@ function cleanupSkippedDiscordQueuedMessage(params: {
 export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
-  const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
   const skippedCleanup = new Set<SkippedQueuedMessageCleanup>();
   const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
@@ -128,7 +104,7 @@ export function createDiscordMessageRunQueue(
   return {
     enqueue(job) {
       const cleanupSkipped = () => {
-        cleanupSkippedDiscordQueuedMessage({ job, replayGuard });
+        cleanupSkippedDiscordQueuedMessage({ job });
       };
       if (!lifecycleActive) {
         cleanupSkipped();
@@ -137,12 +113,11 @@ export function createDiscordMessageRunQueue(
       skippedCleanup.add(cleanupSkipped);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
-        // Leaving it in skippedCleanup would double-release replay/typing state.
+        // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);
         await processDiscordQueuedMessage({
           job,
           lifecycleSignal,
-          replayGuard,
           testing: params.testing,
         });
       });

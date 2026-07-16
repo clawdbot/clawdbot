@@ -171,6 +171,8 @@ struct OpenClawMascotPose: Equatable {
     /// 0..1 surprised/yawning "o" (takes over from both mouth channels).
     var mouthRound: CGFloat = 0
     var blush: CGFloat = 0
+    /// 0..1: hard hat drops from above until seated on the head.
+    var hardHat: CGFloat = 0
     /// Degrees around the canvas center.
     var bodyTilt: CGFloat = 0
     /// Vertical squash-and-stretch about the feet; x compensates slightly.
@@ -189,6 +191,12 @@ struct OpenClawMascotPose: Equatable {
             break
         case .thinking:
             pose.gaze = CGSize(width: 0.3, height: -0.5)
+        case .working:
+            pose.hardHat = 1
+            pose.rightClawDegrees = -28
+            pose.gaze = CGSize(width: 0.4, height: 0.35)
+            pose.mouthCurve = 0.15
+            pose.bodyTilt = 2
         case .happy:
             pose.mouthCurve = 0.6
             pose.happyEyes = 0.4
@@ -231,6 +239,7 @@ struct OpenClawMascotPose: Equatable {
         self.mouthOpen = self.mouthOpen.clamped(to: 0...1)
         self.mouthRound = self.mouthRound.clamped(to: 0...1)
         self.blush = self.blush.clamped(to: 0...1)
+        self.hardHat = self.hardHat.clamped(to: 0...1)
         self.bodyTilt = self.bodyTilt.clamped(to: -8...8)
         self.bodyStretch = self.bodyStretch.clamped(to: 0.86...1.05)
         self.dizzy = self.dizzy.clamped(to: 0...1)
@@ -254,6 +263,7 @@ struct OpenClawMascotCanvas: View {
     private static let eyeGlowColor = Color(red: 0, green: 229 / 255, blue: 204 / 255)
     private static let blushColor = Color(red: 1, green: 0.62, blue: 0.68)
     private static let heartColor = Color(red: 1, green: 0.45, blue: 0.55)
+    private static let hatAmber = Color(red: 0.95, green: 0.66, blue: 0.20)
     // Rotation pivots: claws hinge on their body-facing edge, antennae on their own center.
     private static let leftClawPivot = CGPoint(x: 26, y: 53)
     private static let rightClawPivot = CGPoint(x: 94, y: 53)
@@ -371,6 +381,7 @@ struct OpenClawMascotCanvas: View {
             }
         }
 
+        self.drawHardHat(context: context, amount: pose.hardHat)
         self.drawBlush(context: context, pose: pose)
         self.drawEye(context: context, center: self.leftEyeCenter, openness: pose.leftEyeOpenness, pose: pose)
         self.drawEye(context: context, center: self.rightEyeCenter, openness: pose.rightEyeOpenness, pose: pose)
@@ -491,6 +502,38 @@ struct OpenClawMascotCanvas: View {
         }
     }
 
+    private static func drawHardHat(context: GraphicsContext, amount: CGFloat) {
+        guard amount > 0.01 else { return }
+        var dome = Path()
+        dome.move(to: CGPoint(x: 45, y: 15))
+        dome.addCurve(
+            to: CGPoint(x: 60, y: 3),
+            control1: CGPoint(x: 47, y: 7),
+            control2: CGPoint(x: 54, y: 3))
+        dome.addCurve(
+            to: CGPoint(x: 75, y: 15),
+            control1: CGPoint(x: 66, y: 3),
+            control2: CGPoint(x: 73, y: 7))
+        dome.addLine(to: CGPoint(x: 45, y: 15))
+        dome.closeSubpath()
+        let brim = Path(roundedRect: CGRect(x: 41, y: 14, width: 38, height: 5), cornerRadius: 2)
+        var hatContext = context
+        hatContext.opacity = Double(amount)
+        hatContext.translateBy(x: 60, y: 15 - 14 * (1 - amount))
+        hatContext.rotate(by: .degrees(-5))
+        hatContext.translateBy(x: -60, y: -15)
+        hatContext.fill(
+            dome,
+            with: .linearGradient(
+                Gradient(colors: [Color(red: 1, green: 0.84, blue: 0.35), self.hatAmber]),
+                startPoint: CGPoint(x: 60, y: 3),
+                endPoint: CGPoint(x: 60, y: 16)))
+        let outline = Color(red: 0.72, green: 0.45, blue: 0.12).opacity(0.7)
+        hatContext.stroke(dome, with: .color(outline), style: StrokeStyle(lineWidth: 0.8))
+        hatContext.fill(brim, with: .color(self.hatAmber))
+        hatContext.stroke(brim, with: .color(outline), style: StrokeStyle(lineWidth: 0.8))
+    }
+
     private static func drawEffect(
         context: GraphicsContext,
         pose: OpenClawMascotPose,
@@ -552,6 +595,40 @@ struct OpenClawMascotCanvas: View {
                 zContext.opacity = Double(alpha * 0.9)
                 zContext.draw(text, at: position)
             }
+        case .sparks:
+            for index in 0..<5 {
+                let rawPhase = pose.effectPhase - CGFloat(index) * 0.025
+                guard rawPhase >= 0, rawPhase < 0.45 else { continue }
+                let alpha = rawPhase < 0.08 ? rawPhase / 0.08 : 1 - (rawPhase - 0.08) / 0.37
+                let angle = (-160 + CGFloat(index) * 35) * .pi / 180
+                let radius = 5 + 12 * rawPhase / 0.45
+                let particleSize = 2.2 + CGFloat(index % 3) * 0.8
+                let center = CGPoint(
+                    x: (106 + cos(angle) * radius).clamped(to: particleSize...(120 - particleSize)),
+                    y: (66 + sin(angle) * radius).clamped(to: particleSize...(120 - particleSize)))
+                var sparkContext = context
+                sparkContext.opacity = Double(alpha)
+                sparkContext.fill(
+                    self.sparklePath(center: center, size: particleSize),
+                    with: .color(index.isMultiple(of: 2) ? self.eyeGlowColor : self.hatAmber))
+            }
+        case .sweat:
+            let alpha = OpenClawMascotGesture.bell(pose.effectPhase)
+            guard alpha > 0.02 else { return }
+            let center = CGPoint(x: 42, y: 24 + 7 * pose.effectPhase)
+            var drop = Path()
+            drop.move(to: CGPoint(x: center.x, y: center.y - 3))
+            drop.addCurve(
+                to: CGPoint(x: center.x, y: center.y + 3),
+                control1: CGPoint(x: center.x - 4, y: center.y + 1),
+                control2: CGPoint(x: center.x - 2, y: center.y + 3))
+            drop.addCurve(
+                to: CGPoint(x: center.x, y: center.y - 3),
+                control1: CGPoint(x: center.x + 2, y: center.y + 3),
+                control2: CGPoint(x: center.x + 4, y: center.y + 1))
+            var sweatContext = context
+            sweatContext.opacity = Double(alpha)
+            sweatContext.fill(drop, with: .color(Color(red: 0.5, green: 0.83, blue: 1)))
         }
     }
 

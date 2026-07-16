@@ -11,8 +11,6 @@ import {
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 
-export { isResumableClaudeSource } from "./session-catalog-shared.js";
-
 type ClaudeTerminalDependencies = {
   listClaudeSessions: () => Promise<
     Array<{ threadId: string; source?: string; filePath: string; cwd?: string }>
@@ -42,14 +40,11 @@ export function claudeNodeTerminalCapability(node: {
     : {};
 }
 
-export function isLocalClaudeResumable(
-  host: { hostId: string },
-  source: string | undefined,
-): boolean {
+function isLocalClaudeResumable(host: { hostId: string }, source: string | undefined): boolean {
   return host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(source);
 }
 
-export function canOpenClaudeTerminalSession(
+function canOpenClaudeTerminalSession(
   host: { hostId: string; canOpenTerminalClaude?: boolean },
   source: string | undefined,
   localCliAvailable: boolean,

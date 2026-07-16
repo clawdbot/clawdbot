@@ -338,17 +338,6 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
   return undefined;
 }
 
-function hasCodexSyntheticMediaRoute(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-}): boolean {
-  return hasRuntimeAvailableProviderAuth({
-    provider: CODEX_MEDIA_PROVIDER_ID,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-}
-
 /** Resolves the implicit OpenAI image slot without letting OAuth-only auth pick direct OpenAI. */
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
@@ -356,7 +345,7 @@ export function resolveOpenAiImageMediaCandidate(params: {
   agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
-  codexModel?: string;
+  resolveCodexMediaRoute?: () => { model: string } | undefined;
 }): OpenAiImageMediaCandidateDecision {
   const openAiModel = params.openAiModel.trim();
   if (!openAiModel) {
@@ -378,15 +367,13 @@ export function resolveOpenAiImageMediaCandidate(params: {
     };
   }
 
-  const codexModel = params.codexModel?.trim();
-  // Codex's bundled synthetic marker only proves the app-server route exists.
-  // Require canonical OpenAI subscription-style auth too so fresh installs do
-  // not route to Codex media just because the bundled plugin is present.
-  if (
-    codexModel &&
-    hasCanonicalOpenAiCodexAuthSignal(params) &&
-    hasCodexSyntheticMediaRoute(params)
-  ) {
+  // Check canonical subscription auth before resolving plugin capability so a
+  // fresh install cannot route there from bundled-plugin presence alone.
+  if (!hasCanonicalOpenAiCodexAuthSignal(params)) {
+    return { kind: "drop" };
+  }
+  const codexModel = params.resolveCodexMediaRoute?.()?.model.trim();
+  if (codexModel) {
     return {
       kind: "substitute",
       provider: CODEX_MEDIA_PROVIDER_ID,

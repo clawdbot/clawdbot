@@ -132,6 +132,14 @@ type TimedCronRunOutcome = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
+type CronJobRunResult = CronRunOutcome &
+  Pick<CronRunTelemetry, "provider"> & {
+    deliveryError?: string;
+    delivered?: boolean;
+    startedAt: number;
+    endedAt: number;
+  };
+
 export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
@@ -499,14 +507,16 @@ function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
   lastErrorReason?: string;
+  executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
   const retryConfig = resolveRetryConfig(params.cronConfig);
-  const retryHint = resolveCronExecutionRetryHint(
-    params.error,
-    retryConfig.retryOn,
-    params.lastErrorReason,
-  );
+  const retryHint = resolveCronExecutionRetryHint({
+    error: params.error,
+    retryOn: retryConfig.retryOn,
+    classifiedReason: params.lastErrorReason,
+    executionStarted: params.executionStarted,
+  });
   const consecutiveErrors = params.consecutiveErrors ?? 0;
   if (!retryHint.retryable) {
     return {
@@ -707,16 +717,7 @@ function resolveDeliveryState(params: {
 export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
-  result: {
-    status: CronRunStatus;
-    error?: string;
-    deliveryError?: string;
-    diagnostics?: CronRunOutcome["diagnostics"];
-    delivered?: boolean;
-    provider?: string;
-    startedAt: number;
-    endedAt: number;
-  },
+  result: CronJobRunResult,
   opts?: {
     // Preserve recurring "every" anchors for manual force runs.
     preserveSchedule?: boolean;
@@ -869,6 +870,7 @@ export function applyJobResult(
           cronConfig: state.deps.cronConfig,
           error: result.error,
           lastErrorReason: job.state.lastErrorReason,
+          executionStarted: result.executionStarted,
           consecutiveErrors: job.state.consecutiveErrors,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
@@ -910,6 +912,7 @@ export function applyJobResult(
         cronConfig: state.deps.cronConfig,
         error: result.error,
         lastErrorReason: job.state.lastErrorReason,
+        executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
       let normalNext: number | undefined;
@@ -1136,16 +1139,7 @@ function applyOutcomeToStoredJob(
     if (result.status === "ok") {
       // A manual/queued run may finish after the job was removed. Preserve the
       // successful run-history state without resurrecting the job in the store.
-      applyJobResult(state, result.job, {
-        status: result.status,
-        error: result.error,
-        deliveryError: result.deliveryError,
-        diagnostics: result.diagnostics,
-        delivered: result.delivered,
-        provider: result.provider,
-        startedAt: result.startedAt,
-        endedAt: result.endedAt,
-      });
+      applyJobResult(state, result.job, result);
       emitJobFinished(state, result.job, result, result.startedAt);
       state.deps.log.info(
         { jobId: result.jobId },
@@ -1173,16 +1167,7 @@ function applyOutcomeToStoredJob(
     return undefined;
   }
 
-  const shouldDelete = applyJobResult(state, job, {
-    status: result.status,
-    error: result.error,
-    deliveryError: result.deliveryError,
-    diagnostics: result.diagnostics,
-    delivered: result.delivered,
-    provider: result.provider,
-    startedAt: result.startedAt,
-    endedAt: result.endedAt,
-  });
+  const shouldDelete = applyJobResult(state, job, result);
   applyTriggerRunResult(job, result);
   state.pendingCatchupDeferralJobIds.delete(job.id);
 
@@ -1924,6 +1909,7 @@ async function runStartupCatchupCandidate(
       activeJobMarker,
       status: result.status,
       error: result.error,
+      executionStarted: result.executionStarted,
       summary: result.summary,
       diagnostics: result.diagnostics,
       delivered: result.delivered,
@@ -2394,6 +2380,7 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    executionStarted: res.executionStarted,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
     // emit it on the finished event for CLI/UI/API run logs (#95419).

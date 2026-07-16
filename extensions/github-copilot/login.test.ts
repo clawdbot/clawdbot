@@ -1,10 +1,18 @@
 // Github Copilot tests cover device-flow login behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  runGitHubCopilotDeviceFlow,
-  setGitHubCopilotDeviceFlowFetchGuardForTesting,
-  withGithubCopilotDomainConfig,
-} from "./login.js";
+
+const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return { ...actual, fetchWithSsrFGuard: mocks.fetchWithSsrFGuard };
+});
+
+import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
@@ -30,7 +38,7 @@ function guardResponse(body: unknown, status = 200, url = DEVICE_CODE_URL) {
 }
 
 afterEach(() => {
-  setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
+  mocks.fetchWithSsrFGuard.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -39,7 +47,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
     let callIdx = 0;
     const requestTimeouts: Array<number | undefined> = [];
     const controller = new AbortController();
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
       callIdx += 1;
       requestTimeouts.push(params.timeoutMs);
       expect(params.signal).toBe(controller.signal);
@@ -70,7 +78,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
 
   it("returns access_denied when GitHub rejects the authorization", async () => {
     let callIdx = 0;
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
       callIdx += 1;
       if (callIdx === 1) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -86,7 +94,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
 
   it("returns expired when GitHub reports expired_token", async () => {
     let callIdx = 0;
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
       callIdx += 1;
       if (callIdx === 1) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -103,7 +111,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
 
 describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
   it("throws with failureLabel on non-OK device code response", async () => {
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => guardResponse({}, 401));
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => guardResponse({}, 401));
 
     await expect(runGitHubCopilotDeviceFlow({ showCode: vi.fn() })).rejects.toThrow(
       "GitHub device code failed: HTTP 401",
@@ -112,7 +120,7 @@ describe("runGitHubCopilotDeviceFlow — HTTP error propagation", () => {
 
   it("throws with failureLabel on non-OK access token response", async () => {
     let callIdx = 0;
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
       callIdx += 1;
       if (callIdx === 1) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -146,7 +154,7 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
       },
     });
 
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
       response: new Response(oversizedBody, {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -170,7 +178,7 @@ describe("postGitHubDeviceFlowForm — response size bound", () => {
     let canceled = false;
     let callIdx = 0;
 
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => {
       callIdx += 1;
       if (callIdx === 1) {
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -219,7 +227,7 @@ describe("runGitHubCopilotDeviceFlow — data-residency GitHub Enterprise", () =
 
     const urls: string[] = [];
     let callIdx = 0;
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
       urls.push(params.url);
       callIdx += 1;
       if (callIdx === 1) {
@@ -250,7 +258,7 @@ describe("runGitHubCopilotDeviceFlow — data-residency GitHub Enterprise", () =
   });
 
   it("rejects a verification URL whose host does not match the configured domain", async () => {
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () =>
+    mocks.fetchWithSsrFGuard.mockImplementation(async () =>
       guardResponse(
         { ...VALID_DEVICE_CODE_BODY, verification_uri: "https://github.com/login/device" },
         200,
@@ -261,34 +269,5 @@ describe("runGitHubCopilotDeviceFlow — data-residency GitHub Enterprise", () =
     await expect(
       runGitHubCopilotDeviceFlow({ showCode: vi.fn(async () => {}) }, GHE_DOMAIN),
     ).rejects.toThrow("unexpected verification URL");
-  });
-});
-
-describe("withGithubCopilotDomainConfig — shortcut login domain persistence", () => {
-  const tenantConfig = {
-    models: {
-      providers: { "github-copilot": { params: { githubDomain: "acme.ghe.com" } } },
-    },
-  } as never;
-
-  it("persists the tenant domain when the shortcut minted a tenant token", () => {
-    const next = withGithubCopilotDomainConfig({} as never, "acme.ghe.com");
-    expect(
-      (next as { models?: { providers?: Record<string, { params?: Record<string, unknown> }> } })
-        .models?.providers?.["github-copilot"]?.params?.githubDomain,
-    ).toBe("acme.ghe.com");
-  });
-
-  it("clears a stale tenant domain when the shortcut logged in against github.com", () => {
-    const next = withGithubCopilotDomainConfig(tenantConfig, "github.com");
-    const params = (
-      next as { models?: { providers?: Record<string, { params?: Record<string, unknown> }> } }
-    ).models?.providers?.["github-copilot"]?.params;
-    expect(params && "githubDomain" in params).toBe(false);
-  });
-
-  it("leaves config untouched for a public login with no persisted domain", () => {
-    const cfg = {} as never;
-    expect(withGithubCopilotDomainConfig(cfg, "github.com")).toBe(cfg);
   });
 });

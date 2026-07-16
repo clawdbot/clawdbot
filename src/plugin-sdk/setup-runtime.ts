@@ -11,6 +11,7 @@ export type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
   ChannelSetupWizardTextInput,
 } from "../channels/plugins/setup-wizard-types.js";
 
@@ -50,3 +51,4 @@ export {
   createDelegatedTextInputShouldPrompt,
 } from "../channels/plugins/setup-wizard-binary.js";
 export { createDelegatedSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export { baseUrlTextInput, defineTokenCredential } from "./setup-credential.js";

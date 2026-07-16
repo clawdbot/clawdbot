@@ -71,6 +71,14 @@ function detectResult() {
         credentials: true,
       },
     ],
+    unavailableCandidates: [
+      {
+        id: "antigravity-cli",
+        label: "Antigravity CLI",
+        detail: "installed",
+        reason: "tool-free probe unavailable",
+      },
+    ],
     manualProviders: [],
     workspace: "/gateway/workspace",
     setupComplete: false,
@@ -84,6 +92,9 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
       throw new Error("remote guided adapters missing");
     }
     const detection = await guidedDeps.detect();
+    if (detection.unavailableCandidates[0]?.id !== "antigravity-cli") {
+      throw new Error("remote detection dropped unavailable integration metadata");
+    }
     const selected = detection.candidates[0];
     if (!selected) {
       throw new Error("remote detection returned no candidate");

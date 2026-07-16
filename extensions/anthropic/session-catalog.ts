@@ -45,14 +45,6 @@ import type {
 } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
-export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-export type {
-  ClaudeSessionCatalogHost,
-  ClaudeSessionCatalogPage,
-  ClaudeSessionCatalogResult,
-  ClaudeSessionCatalogSession,
-  ClaudeSessionTranscriptPage,
-} from "./session-catalog-types.js";
 export * from "./session-catalog-shared.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
@@ -447,7 +439,7 @@ async function discoverCliRecords(
   }
 }
 
-export async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -857,7 +849,7 @@ function parseGatewayQuery(value: unknown): {
   };
 }
 
-export async function listClaudeSessionCatalog(params: {
+async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
 }): Promise<ClaudeSessionCatalogResult> {
@@ -1066,7 +1058,7 @@ async function readBoundedClaudeHistory(params: {
   return items;
 }
 
-export async function resolveNodeClaudeRecord(params: {
+async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;

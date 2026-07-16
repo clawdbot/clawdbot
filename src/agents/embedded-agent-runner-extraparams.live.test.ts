@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveAuthDrift, isLiveBillingDrift } from "./live-test-provider-drift.js";
+import { isLiveAuthDrift, isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";

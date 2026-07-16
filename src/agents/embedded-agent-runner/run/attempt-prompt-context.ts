@@ -14,6 +14,7 @@ import {
 import {
   resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars,
+  toolResultWarningDedupe,
   truncateOversizedToolResultsInMessages,
 } from "../tool-result-truncation.js";
 import {
@@ -28,8 +29,6 @@ import {
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-const aggregateToolResultPressureWarnings = new Set<string>();
 
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
@@ -139,8 +138,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
       `sessionKey=${sessionLogKey}`;
     if (aggregatePressureEngaged) {
-      if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
-        aggregateToolResultPressureWarnings.add(sessionLogKey);
+      if (!toolResultWarningDedupe.promptPressure.check(sessionLogKey)) {
         log.warn(
           `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
         );

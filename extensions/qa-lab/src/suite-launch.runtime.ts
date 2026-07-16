@@ -1,7 +1,6 @@
 // Qa Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { renderQaMarkdownReport, type QaReportScenario } from "openclaw/plugin-sdk/qa-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -16,6 +15,7 @@ import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
 } from "./qa-transport-registry.js";
+import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,

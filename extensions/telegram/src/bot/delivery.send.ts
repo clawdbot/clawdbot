@@ -1,7 +1,7 @@
 // Telegram plugin module implements delivery.send behavior.
 import type { Bot } from "grammy";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
@@ -35,7 +35,7 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 function createTelegramDeliverySendRetry() {
-  return createTelegramRetryRunner({
+  return createChannelApiRetryRunner({
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
     retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,

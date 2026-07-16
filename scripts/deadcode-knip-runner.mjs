@@ -11,7 +11,7 @@ const KNIP_HEARTBEAT_MS = 60_000;
 /** Maximum buffered Knip output retained for diagnostics. */
 export const KNIP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-export function normalizeRepoPath(value) {
+function normalizeRepoPath(value) {
   return value.replaceAll("\\", "/").replace(/^\.\//u, "");
 }
 
@@ -22,26 +22,14 @@ export function uniqueSorted(values) {
 }
 
 export function isLikelyRepoFilePath(value) {
-  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
-}
-
-/** Compares a detected string list with required and optional baseline entries. */
-export function compareStringListToAllowlist(actualValues, allowlistValues, optionalValues = []) {
-  const actual = uniqueSorted(actualValues);
-  const allowed = uniqueSorted(allowlistValues);
-  const optionalAllowed = uniqueSorted(optionalValues);
-  const allowedOrOptionalSet = new Set([...allowed, ...optionalAllowed]);
-  const actualSet = new Set(actual);
-
-  return {
-    actual,
-    allowed,
-    unexpected: actual.filter((value) => !allowedOrOptionalSet.has(value)),
-    stale: allowed.filter((value) => !actualSet.has(value)),
-    duplicateAllowedCount: allowlistValues.length - new Set(allowlistValues).size,
-    allowlistIsSorted:
-      JSON.stringify(allowlistValues.map(normalizeRepoPath)) === JSON.stringify(allowed),
-  };
+  const normalized = normalizeRepoPath(value);
+  return (
+    !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/u.test(normalized) &&
+    !normalized.startsWith("../") &&
+    !normalized.includes("/../") &&
+    /\.(?:[cm]?[jt]sx?)$/u.test(normalized)
+  );
 }
 
 function spawnErrorCode(error) {

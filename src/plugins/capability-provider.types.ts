@@ -145,10 +145,6 @@ export type SpeechProviderPlugin = {
   listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
 };
 
-export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
-  pluginId: string;
-};
-
 /** Realtime transcription capability registered by a plugin. */
 export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
@@ -164,16 +160,8 @@ export type RealtimeTranscriptionProviderPlugin = {
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
 };
 
-export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProviderPlugin & {
-  pluginId: string;
-};
-
 /** Transcript source capability registered by a channel or meeting plugin. */
 export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
-
-export type PluginTranscriptsSourceProviderEntry = TranscriptSourceProvider & {
-  pluginId: string;
-};
 
 /** Realtime voice capability registered by a plugin. */
 export type RealtimeVoiceProviderPlugin = {
@@ -190,10 +178,6 @@ export type RealtimeVoiceProviderPlugin = {
   createBrowserSession?: (
     req: RealtimeVoiceBrowserSessionCreateRequest,
   ) => Promise<RealtimeVoiceBrowserSession>;
-};
-
-export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
-  pluginId: string;
 };
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;

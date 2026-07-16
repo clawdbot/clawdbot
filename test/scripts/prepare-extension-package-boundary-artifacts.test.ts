@@ -93,7 +93,7 @@ async function waitForProcessExit(
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
-  const timeout = delay(timeoutMs).then(() => {
+  const timeout = delay(timeoutMs, undefined, { ref: false }).then(() => {
     throw new Error(`Process ${child.pid ?? "unknown"} did not exit after ${timeoutMs}ms`);
   });
   return Promise.race([exit, timeout]);

@@ -57,6 +57,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -72,6 +73,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -123,6 +125,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -295,6 +298,9 @@ private val OnboardingHeroMarkSize = 78.dp
 private val OnboardingButtonHeight = 56.dp
 private val OnboardingActionGap = 10.dp
 private val OnboardingBottomInset = 16.dp
+private val OnboardingScannerMaxWidth = 360.dp
+private const val OnboardingFormStackBreakpointDp = 340f
+private const val OnboardingLargeFontScale = 1.3f
 
 private fun onboardingContentPadding() =
   PaddingValues(
@@ -305,6 +311,11 @@ private fun onboardingContentPadding() =
   )
 
 private fun Modifier.onboardingActionButton() = fillMaxWidth().height(OnboardingButtonHeight)
+
+internal fun onboardingFormUsesStackedLayout(
+  availableWidthDp: Float,
+  fontScale: Float,
+): Boolean = availableWidthDp < OnboardingFormStackBreakpointDp || fontScale >= OnboardingLargeFontScale
 
 internal data class OnboardingBackDestination(
   val step: OnboardingStep,
@@ -1260,16 +1271,19 @@ private fun SetupCodeInstructionsScreen(
           }
         }
         item {
-          ScanQrTile(
-            scannerActive = scannerActive,
-            cameraPermissionGranted = cameraPermissionGranted,
-            scanner = scanner,
-            onClick = onScan,
-            onClose = onCloseScanner,
-            onRequestCameraPermission = onRequestCameraPermission,
-            onCodeScanned = onCodeScanned,
-            onCameraError = onCameraError,
-          )
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ScanQrTile(
+              scannerActive = scannerActive,
+              cameraPermissionGranted = cameraPermissionGranted,
+              scanner = scanner,
+              onClick = onScan,
+              onClose = onCloseScanner,
+              onRequestCameraPermission = onRequestCameraPermission,
+              onCodeScanned = onCodeScanned,
+              onCameraError = onCameraError,
+              modifier = Modifier.widthIn(max = OnboardingScannerMaxWidth),
+            )
+          }
         }
       }
       OnboardingActions {
@@ -1681,6 +1695,7 @@ private fun ManualGatewaySetupScreen(
         requestedTls = manualTls,
       )
     }
+  val fontScale = LocalDensity.current.fontScale
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
@@ -1693,9 +1708,18 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Gateway URL")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-              ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-              ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+                }
+              }
             }
             Text(
               text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
@@ -1721,18 +1745,39 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Connection security")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-              TogglePill(
-                text = nativeString("Unencrypted"),
-                selected = !transport.effectiveTls,
-                enabled = !transport.requiresTls,
-                onClick = { onManualTlsChange(false) },
-              )
-              TogglePill(
-                text = nativeString("Secure (TLS)"),
-                selected = transport.effectiveTls,
-                onClick = { onManualTlsChange(true) },
-              )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+              if (stacked) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                  )
+                }
+              }
             }
             transport.helperText?.let { helperText ->
               Text(
@@ -2392,13 +2437,14 @@ private fun OnboardingHeader(
 private fun TogglePill(
   text: String,
   selected: Boolean,
+  modifier: Modifier = Modifier,
   enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.height(34.dp),
+    modifier = modifier.heightIn(min = 34.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,

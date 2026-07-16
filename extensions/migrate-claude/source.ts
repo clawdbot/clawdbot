@@ -12,7 +12,7 @@ type ClaudeArchivePath = {
   relativePath: string;
 };
 
-export type ClaudeAutoMemorySource = {
+type ClaudeAutoMemorySource = {
   id: string;
   label: string;
   path: string;

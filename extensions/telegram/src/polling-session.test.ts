@@ -125,26 +125,27 @@ async function claimSpooledUpdate(update: TelegramSpooledUpdate) {
 
 async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown> {
   type ReplayGuard = Parameters<typeof commitTelegramMessageDispatchReplay>[0]["guard"];
+  type ReplayClaim = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
   const diskError = new Error("dedupe disk write failed");
   const guard: ReplayGuard = {
-    claim: async () => ({ kind: "claimed" }),
-    commit: async (key, options) => {
+    claim: async () => ({ kind: "invalid" }),
+    forget: async (event) => !("keys" in event && event.keys?.[0] === "first"),
+    warmup: async () => 0,
+  };
+  const claims: ReplayClaim[] = ["first", "second"].map((key) => ({
+    keys: [key],
+    commit: async (options) => {
       if (key === "second") {
         options?.onDiskError?.(diskError);
       }
       return true;
     },
-    forget: async (key) => key !== "first",
-    hasRecent: async () => false,
-    warmup: async () => 0,
-    clearMemory: () => undefined,
-    memorySize: () => 0,
     release: () => undefined,
-  };
+  }));
   try {
     await commitTelegramMessageDispatchReplay({
       guard,
-      keys: ["first", "second"],
+      claims,
       requirePersistent: true,
     });
   } catch (error) {

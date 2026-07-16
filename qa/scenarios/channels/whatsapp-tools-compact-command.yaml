@@ -14,10 +14,10 @@ scenario:
     - src/auto-reply/reply/commands-tools.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:mock-default": 34 }
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
       expectedAny: [exec, Use /tools verbose for descriptions]
     summary: Request compact tools through WhatsApp and verify inventory text.

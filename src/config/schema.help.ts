@@ -514,9 +514,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
   "tools.experimental":
-    "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
   "tools.experimental.planTool":
-    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded OpenClaw runs.",
+    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":

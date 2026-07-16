@@ -20,7 +20,6 @@ import {
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 export {
   resetLoadConfigMock,
   setLoadConfigMock,

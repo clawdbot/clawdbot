@@ -20,6 +20,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import {
   formatToolDetail,
+  isInternalCanvasEntryUrl,
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   resolveToolDisplay,
@@ -138,6 +139,14 @@ function handleRawDetailsToggle(event: Event) {
 // preview frames and the height is clamped, so widget code can only resize its
 // own frame within the same bounds the preview contract allows.
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
+const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
+const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+/** Bubbling DOM event re-dispatched from the widget iframe once a prompt passes validation. */
+export const WIDGET_PROMPT_EVENT = "openclaw-widget-prompt";
+export type WidgetPromptEventDetail = { text: string };
+const WIDGET_PROMPT_MAX_CHARS = 4_000;
+const WIDGET_PROMPT_RATE_WINDOW_MS = 60_000;
+const WIDGET_PROMPT_RATE_MAX = 10;
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -147,7 +156,9 @@ const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 // binding, so the template must read the reported height back or it resets.
 const widgetFrameHeightsBySrc = new Map<string, number>();
 const WIDGET_FRAME_HEIGHTS_MAX_ENTRIES = 100;
-let widgetSizeListenerInstalled = false;
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function rememberWidgetFrameHeight(src: string, height: number) {
   if (
@@ -169,11 +180,179 @@ function registerWidgetFrame(event: Event) {
   }
 }
 
-function installWidgetSizeListener() {
-  if (widgetSizeListenerInstalled || typeof window === "undefined") {
+/**
+ * Widget prompts run the normal chat send path, which also interprets slash
+ * commands. Widget code is agent-authored, so accepting a command here would
+ * let a widget approve its own pending actions; plain conversational text only.
+ */
+function resolveWidgetPromptText(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const text = raw.trim();
+  if (!text || text.length > WIDGET_PROMPT_MAX_CHARS || text.startsWith("/")) {
+    return null;
+  }
+  return text;
+}
+
+// Prompt budgets are keyed by frame src (stable per hosted widget document), so
+// a widget cannot reset its budget and the map stays bounded like the heights map.
+const widgetPromptTimestampsBySrc = new Map<string, number[]>();
+
+function allowWidgetPrompt(src: string, nowMs: number): boolean {
+  const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
+  const timestamps = (widgetPromptTimestampsBySrc.get(src) ?? []).filter((ts) => ts > cutoff);
+  if (
+    !widgetPromptTimestampsBySrc.has(src) &&
+    widgetPromptTimestampsBySrc.size >= WIDGET_FRAME_HEIGHTS_MAX_ENTRIES
+  ) {
+    const oldest = widgetPromptTimestampsBySrc.keys().next().value;
+    if (oldest !== undefined) {
+      widgetPromptTimestampsBySrc.delete(oldest);
+    }
+  }
+  if (timestamps.length >= WIDGET_PROMPT_RATE_MAX) {
+    widgetPromptTimestampsBySrc.set(src, timestamps);
+    return false;
+  }
+  timestamps.push(nowMs);
+  widgetPromptTimestampsBySrc.set(src, timestamps);
+  return true;
+}
+
+/**
+ * A prompt must come from a widget the user can currently see and has clicked
+ * into. `isConnected` + visibility drops hidden or collapsed frames, and the
+ * focus requirement is the host-observed stand-in for user activation: the
+ * parent cannot see clicks inside a cross-origin frame, but a click focuses the
+ * iframe element, so a document that merely rendered (or restored from
+ * history) cannot auto-send prompts.
+ */
+function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
+  if (!frame.isConnected) {
+    return false;
+  }
+  const visible =
+    typeof frame.checkVisibility === "function"
+      ? frame.checkVisibility()
+      : frame.getClientRects().length > 0;
+  if (!visible) {
+    return false;
+  }
+  let active: Element | null = frame.ownerDocument.activeElement;
+  while (active?.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
+  return active === frame;
+}
+
+function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
+  const payload = data as { type?: unknown; prompt?: unknown } | null;
+  if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  widgetSizeListenerInstalled = true;
+  const text = resolveWidgetPromptText(payload.prompt);
+  if (!text || !isWidgetFrameInteractable(frame)) {
+    return;
+  }
+  if (!allowWidgetPrompt(frame.getAttribute("src") ?? "", Date.now())) {
+    return;
+  }
+  // Re-dispatch as a bubbling DOM event from the iframe so the owning chat
+  // pane — and only that pane — routes the prompt into its own send path.
+  frame.dispatchEvent(
+    new CustomEvent<WidgetPromptEventDetail>(WIDGET_PROMPT_EVENT, {
+      bubbles: true,
+      composed: true,
+      detail: { text },
+    }),
+  );
+}
+
+// Prompt authority is a MessagePort OFFERED by the trusted bridge script that
+// wraps every hosted widget document. The bridge posts its offer at document
+// parse time — before any widget code can run, steal the endpoint, or navigate
+// the frame — so buffering only the FIRST offer per content window and adopting
+// it once, at the frame's first load, binds the capability to the genuine
+// widget document. A document that navigates away closes its ports with it,
+// externally allowed embed URLs are never adopted, and later offers or loads
+// cannot re-arm a consumed frame.
+const pendingWidgetPromptPorts = new WeakMap<object, MessagePort>();
+const offeredWidgetPromptSources = new WeakSet<object>();
+const promptEligibleFrames = new WeakSet<HTMLIFrameElement>();
+const adoptedWidgetPromptFrames = new WeakSet<HTMLIFrameElement>();
+// Keyed by window, not a module boolean: non-isolated test workers swap the
+// global window between files while module state persists.
+const widgetPromptOfferListenerWindows = new WeakSet<Window>();
+
+function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  const source = frame.contentWindow as unknown as object | null;
+  if (adoptedWidgetPromptFrames.has(frame) || !promptEligibleFrames.has(frame) || !source) {
+    return;
+  }
+  const port = pendingWidgetPromptPorts.get(source);
+  if (!port) {
+    return;
+  }
+  adoptedWidgetPromptFrames.add(frame);
+  pendingWidgetPromptPorts.delete(source);
+  port.addEventListener("message", (message: MessageEvent) => {
+    handleWidgetPromptMessage(frame, message.data);
+  });
+  port.start();
+}
+
+function installWidgetPromptOfferListener() {
+  if (typeof window === "undefined" || widgetPromptOfferListenerWindows.has(window)) {
+    return;
+  }
+  widgetPromptOfferListenerWindows.add(window);
+  window.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { type?: unknown } | null;
+    if (!data || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
+      return;
+    }
+    const source = event.source;
+    const port = event.ports[0];
+    // Hosted widget documents run in an opaque origin; anything else is not a
+    // Canvas widget bridge.
+    if (!source || !port || event.origin !== "null") {
+      return;
+    }
+    if (offeredWidgetPromptSources.has(source as unknown as object)) {
+      // Only the first offer per content window can win; a replacement
+      // document's offer must never displace the genuine bridge's.
+      port.close();
+      return;
+    }
+    offeredWidgetPromptSources.add(source as unknown as object);
+    pendingWidgetPromptPorts.set(source as unknown as object, port);
+    // Posted-message and iframe-load tasks have no guaranteed cross-source
+    // ordering, so the offer may arrive after the eligible frame's load;
+    // adopt for it now instead of stranding the widget without a channel.
+    for (const frame of widgetFrameRegistry) {
+      if (frame.contentWindow === source) {
+        tryAdoptWidgetPromptPort(frame);
+        return;
+      }
+    }
+  });
+}
+
+function adoptWidgetPromptPort(frame: HTMLIFrameElement) {
+  // Eligibility is granted at the frame's first prompt-capable load and the
+  // adoption itself is one-shot; first-offer-wins buffering ensures the port
+  // adopted here always belongs to the frame's original bridge document.
+  promptEligibleFrames.add(frame);
+  tryAdoptWidgetPromptPort(frame);
+}
+
+function installWidgetSizeListener() {
+  if (typeof window === "undefined" || widgetSizeListenerWindows.has(window)) {
+    return;
+  }
+  widgetSizeListenerWindows.add(window);
   window.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (!data || data.type !== WIDGET_SIZE_MESSAGE_TYPE || typeof data.height !== "number") {
@@ -208,12 +387,22 @@ function renderPreviewFrame(params: {
   src?: string;
   height?: number;
   sandbox?: string;
+  promptCapable?: boolean;
 }) {
   installWidgetSizeListener();
   const sandbox = params.sandbox ?? "";
   const src = params.src ?? "";
   const reportedHeight = src ? widgetFrameHeightsBySrc.get(src) : undefined;
   const height = reportedHeight ?? params.height;
+  if (params.promptCapable) {
+    installWidgetPromptOfferListener();
+  }
+  const handleLoad = (event: Event) => {
+    registerWidgetFrame(event);
+    if (params.promptCapable && event.currentTarget instanceof HTMLIFrameElement) {
+      adoptWidgetPromptPort(event.currentTarget);
+    }
+  };
   return keyed(
     `${sandbox}\u0000${src}\u0000${params.height ?? ""}`,
     html`
@@ -223,7 +412,7 @@ function renderPreviewFrame(params: {
         sandbox=${sandbox}
         src=${src || nothing}
         style=${height ? `height:${height}px;min-height:${height}px` : ""}
-        @load=${registerWidgetFrame}
+        @load=${handleLoad}
       ></iframe>
     `,
   );
@@ -299,6 +488,9 @@ export function renderToolPreview(
               ),
               height: preview.preferredHeight,
               sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+              // Only hosted Canvas documents may drive the chat; externally
+              // allowed embed URLs render but never get prompt authority.
+              promptCapable: isInternalCanvasEntryUrl(preview.url),
             })}
       </div>
     </div>

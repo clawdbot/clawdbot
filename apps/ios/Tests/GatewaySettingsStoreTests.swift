@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import Security
 import Testing
 @testable import OpenClaw
 
@@ -465,7 +466,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID) == .empty)
     }
 
-    @Test func `credentialless setup suppresses stored auth until handoff completes`() {
+    @Test func `credentialless setup suppresses stored auth until handoff completes`() throws {
         let instanceID = "credentialless-owner-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let gatewayID = "manual|gateway.example.com|443"
@@ -484,7 +485,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(!pending.hasCredentials)
         #expect(pending.suppressStoredDeviceAuth)
 
-        GatewaySettingsStore.completeGatewayCredentialHandoff(
+        try GatewaySettingsStore.completeGatewayCredentialHandoff(
             instanceId: instanceID,
             gatewayStableID: gatewayID)
         #expect(GatewaySettingsStore.loadGatewayCredentials(
@@ -495,7 +496,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID) == nil)
     }
 
-    @Test func `bootstrap handoff clears bootstrap while enabling stored auth`() {
+    @Test func `bootstrap handoff clears bootstrap while enabling stored auth`() throws {
         let instanceID = "bootstrap-handoff-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let gatewayID = "manual|gateway.example.com|443"
@@ -508,7 +509,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             suppressStoredDeviceAuth: true,
             instanceId: instanceID)
 
-        #expect(GatewaySettingsStore.completeGatewayCredentialHandoff(
+        #expect(try GatewaySettingsStore.completeGatewayCredentialHandoff(
             instanceId: instanceID,
             gatewayStableID: gatewayID))
         let completed = GatewaySettingsStore.loadGatewayCredentials(
@@ -517,6 +518,40 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(completed.token == "shared-token")
         #expect(completed.bootstrapToken == nil)
         #expect(!completed.suppressStoredDeviceAuth)
+    }
+
+    @Test func `credentialless handoff survives deferred keychain deletion after redaction`() throws {
+        let instanceID = "deferred-handoff-cleanup-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+        let gatewayID = "manual|gateway.example.com|443"
+        let bootstrapToken = "one-time-bootstrap"
+
+        #expect(GatewaySettingsStore.saveGatewayCredentials(
+            token: nil,
+            bootstrapToken: bootstrapToken,
+            password: nil,
+            gatewayStableID: gatewayID,
+            suppressStoredDeviceAuth: true,
+            instanceId: instanceID))
+
+        #expect(try GatewaySettingsStore.completeGatewayCredentialHandoff(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID,
+            deleteCredentialBundle: { _, _ in
+                .failure(.init(operation: .delete, status: errSecInteractionNotAllowed))
+            }))
+
+        let completed = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)
+        #expect(completed == .empty)
+        #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: gatewayID)?.suppressStoredDeviceAuth == false)
+        let storageComponent = try #require(GatewayStableIdentifier.storageComponent(gatewayID))
+        let account = "gateway-credentials.\(instanceID).v2.\(storageComponent)"
+        let retainedJSON = KeychainStore.loadString(service: gatewayService, account: account)
+        #expect(retainedJSON?.contains(bootstrapToken) == false)
     }
 
     @Test func `field edits preserve pending bootstrap handoff for the same gateway`() {

@@ -11,7 +11,7 @@ import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-ev
 // Types
 // ---------------------------------------------------------------------------
 
-export type SkillScanSeverity = "info" | "warn" | "critical";
+type SkillScanSeverity = "info" | "warn" | "critical";
 
 export type SkillScanFinding = {
   ruleId: string;
@@ -22,7 +22,7 @@ export type SkillScanFinding = {
   evidence: string;
 };
 
-export type SkillScanSummary = {
+type SkillScanSummary = {
   scannedFiles: number;
   critical: number;
   warn: number;

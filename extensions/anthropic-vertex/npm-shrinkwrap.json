@@ -8,7 +8,9 @@
       "name": "@openclaw/anthropic-vertex-provider",
       "version": "2026.7.2",
       "dependencies": {
-        "@anthropic-ai/vertex-sdk": "0.19.0"
+        "@anthropic-ai/vertex-sdk": "0.19.0",
+        "google-auth-library": "10.9.0",
+        "undici": "8.5.0"
       }
     },
     "node_modules/@anthropic-ai/sdk": {
@@ -362,6 +364,15 @@
       "resolved": "https://registry.npmjs.org/ts-algebra/-/ts-algebra-2.0.0.tgz",
       "integrity": "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==",
       "license": "MIT"
+    },
+    "node_modules/undici": {
+      "version": "8.5.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
+      "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.19.0"
+      }
     },
     "node_modules/web-streams-polyfill": {
       "version": "3.3.3",

@@ -50,6 +50,12 @@ describe("auth monitoring scripts", () => {
     );
   });
 
+  it("bounds ntfy notification requests", () => {
+    const script = readScript(AUTH_MONITOR_PATH);
+
+    expect(script).toContain("curl -s --connect-timeout 5 --max-time 15 -o /dev/null");
+  });
+
   it("keeps mobile reauth wired to local auth status and Claude token setup", () => {
     const script = readScript(MOBILE_REAUTH_PATH);
 

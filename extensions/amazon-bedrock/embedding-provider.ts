@@ -288,11 +288,15 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const testing = {
+const testing = {
   parseCohereBatch,
   parseSingle,
   stripInferenceProfilePrefix,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -449,4 +453,3 @@ export async function hasAwsCredentials(
     return false;
   }
 }
-export { testing as __testing };

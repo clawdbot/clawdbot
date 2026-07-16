@@ -1,7 +1,10 @@
 /**
  * Zod-backed config schema for ClickClack channel accounts.
  */
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
@@ -28,10 +31,9 @@ const ClickClackAccountConfigSchema = z
   })
   .strict();
 
-const ClickClackConfigSchema = ClickClackAccountConfigSchema.extend({
-  accounts: z.record(z.string(), ClickClackAccountConfigSchema.partial()).optional(),
-  defaultAccount: z.string().optional(),
-}).strict();
+const ClickClackConfigSchema = buildMultiAccountChannelSchema(ClickClackAccountConfigSchema, {
+  accountSchema: ClickClackAccountConfigSchema.partial(),
+});
 
 /**
  * Config schema exported to core so `openclaw doctor` and config validation

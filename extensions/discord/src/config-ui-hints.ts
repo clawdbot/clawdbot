@@ -205,11 +205,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
-    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+    help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names used whenever OpenAI agent-proxy Discord realtime voice has an active wake-name gate.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",

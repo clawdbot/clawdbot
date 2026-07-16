@@ -25,6 +25,7 @@ import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definit
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -32,6 +33,8 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  consumeTrackedToolExecutionStarted,
+  resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
@@ -115,8 +118,7 @@ describe("before_tool_call hook integration", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
-    beforeToolCallTesting.adjustedParamsByToolCallId.clear();
-    beforeToolCallTesting.structuredReplaySafeToolCallIds.clear();
+    resetAdjustedParamsByToolCallIdForTests();
     beforeToolCallHook = installBeforeToolCallHook();
   });
 
@@ -138,6 +140,7 @@ describe("before_tool_call hook integration", () => {
       undefined,
       extensionContext,
     );
+    expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
   });
 
   it("records structured replay trust only for concrete core-owned tools", async () => {
@@ -228,6 +231,34 @@ describe("before_tool_call hook integration", () => {
       },
     });
     expect(execute).not.toHaveBeenCalled();
+    expect(consumeTrackedToolExecutionStarted("call-3")).toBeUndefined();
+  });
+
+  it("does not enter the tool body when a slow hook settles after cancellation", async () => {
+    let releaseHook: () => void = () => {};
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        await hookGate;
+        return { params: { mode: "late" } };
+      },
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const controller = new AbortController();
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }));
+    const result = tool.execute("call-late-abort", { cmd: "pwd" }, controller.signal);
+    await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
+    expect(consumeTrackedToolExecutionStarted("call-late-abort")).toBe(false);
+
+    controller.abort(new Error("tool timed out"));
+    releaseHook();
+
+    await expect(result).rejects.toThrow("tool timed out");
+    expect(execute).not.toHaveBeenCalled();
+    expect(consumeTrackedToolExecutionStarted("call-late-abort")).toBeUndefined();
+    expect(consumePreExecutionBlockedToolCall("call-late-abort")).toBe(true);
   });
 
   it("does not execute lower-priority hooks after block=true", async () => {

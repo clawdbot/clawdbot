@@ -234,8 +234,3 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     process.exitCode = await runGatewaySmoke({ token: cli.token, urlRaw: cli.urlRaw });
   }
 }
-
-export const testing = {
-  parseGatewaySmokeCli,
-  usage,
-};

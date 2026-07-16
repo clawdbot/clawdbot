@@ -1,13 +1,16 @@
 // Mattermost tests cover monitor websocket plugin behavior.
 import { once } from "node:events";
+import net from "node:net";
+import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
+import { runWithReconnect } from "./reconnect.js";
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -111,6 +114,32 @@ const testRuntime = (): RuntimeEnv =>
       throw new Error(`exit ${code}`);
     }) as RuntimeEnv["exit"],
   }) as RuntimeEnv;
+
+async function startStalledWebSocketHandshakeServer(): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> {
+  const accepted: net.Socket[] = [];
+  const server = net.createServer((socket) => {
+    accepted.push(socket);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    close: async () => {
+      for (const socket of accepted) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
+}
 
 describe("mattermost websocket monitor", () => {
   beforeEach(() => {
@@ -580,5 +609,115 @@ describe("mattermost websocket monitor", () => {
     socket.emitClose(1000);
     await connected;
     vi.useRealTimers();
+  });
+
+  it("passes bounded payload and handshake options to the websocket factory", async () => {
+    const socket = new FakeWebSocket();
+    let clientOptions: Parameters<MattermostWebSocketFactory>[1] | undefined;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: (_url, options) => {
+        clientOptions = options;
+        queueMicrotask(() => socket.emitClose(1006));
+        return socket;
+      },
+    });
+
+    await expect(connectOnce()).rejects.toMatchObject({
+      name: "WebSocketClosedBeforeOpenError",
+    });
+    expect(clientOptions).toEqual({
+      handshakeTimeout: 30_000,
+      maxPayload: 16 * 1024 * 1024,
+    });
+  });
+
+  it("fails connect when the websocket handshake never completes", async () => {
+    const stalledServer = await startStalledWebSocketHandshakeServer();
+
+    try {
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: stalledServer.url,
+        botToken: "token",
+        runtime: testRuntime(),
+        nextSeq: () => 1,
+        onPosted: async () => {},
+        webSocketFactory: (url, options) =>
+          new WebSocket(url, {
+            ...options,
+            handshakeTimeout: 200,
+          }) as ReturnType<MattermostWebSocketFactory>,
+      });
+
+      const outcome = await connectOnce().then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        // ws surfaces handshake timeout as error then close-before-open (1006).
+        expect(outcome.error).toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
+        console.log(
+          `[mattermost handshake proof] timed_out=true name=${
+            outcome.error instanceof Error ? outcome.error.name : typeof outcome.error
+          } message=${
+            outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+          }`,
+        );
+      }
+    } finally {
+      await stalledServer.close();
+    }
+  });
+
+  it("returns control to reconnect after a stalled handshake", async () => {
+    const stalledServer = await startStalledWebSocketHandshakeServer();
+
+    const runtime = testRuntime();
+    const reconnectDelays: number[] = [];
+    const connectErrors: string[] = [];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: stalledServer.url,
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: (url, options) =>
+        new WebSocket(url, {
+          ...options,
+          handshakeTimeout: 200,
+        }) as ReturnType<MattermostWebSocketFactory>,
+    });
+
+    try {
+      await runWithReconnect(connectOnce, {
+        initialDelayMs: 50,
+        maxDelayMs: 50,
+        jitterRatio: 0,
+        shouldReconnect: ({ attempt }) => attempt < 1,
+        onError: (err) => {
+          connectErrors.push(err instanceof Error ? err.name : String(err));
+        },
+        onReconnect: (delayMs) => {
+          reconnectDelays.push(delayMs);
+        },
+      });
+
+      // attempt 0 times out → reconnect; attempt 1 times out → stop.
+      expect(connectErrors).toEqual([
+        "WebSocketClosedBeforeOpenError",
+        "WebSocketClosedBeforeOpenError",
+      ]);
+      expect(reconnectDelays).toEqual([50]);
+      console.log(
+        `[mattermost handshake reconnect proof] timeout_then_reconnect=true errors=${connectErrors.join(",")} reconnect_delays_ms=${reconnectDelays.join(",")}`,
+      );
+    } finally {
+      await stalledServer.close();
+    }
   });
 });

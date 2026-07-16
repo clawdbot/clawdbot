@@ -23,8 +23,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify an attached image reaches the agent model and the agent can describe what it sees.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       prompt: "Image understanding check: describe the top and bottom colors in the attached image in one short sentence."
       requiredColorGroups:
         - [red, scarlet, crimson]

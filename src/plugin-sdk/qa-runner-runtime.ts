@@ -135,7 +135,6 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
-  scenarioIds?: readonly string[];
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;

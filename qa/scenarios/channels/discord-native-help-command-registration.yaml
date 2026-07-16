@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [discord.native-slash-command-registration]
   execution:
+    profiles: { "discord:adapter": 2, "discord:default": 2 }
     kind: flow
     channel: discord
     timeoutMs: 45000

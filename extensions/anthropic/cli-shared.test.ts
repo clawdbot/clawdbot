@@ -4,10 +4,7 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_CLEAR_ENV,
   normalizeClaudeBackendConfig,
-  normalizeClaudePermissionArgs,
-  normalizeClaudeSettingSourcesArgs,
   resolveClaudeCliAutoCompactEnv,
-  resolveClaudePermissionMode,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
@@ -32,56 +29,92 @@ function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
 }
 
-describe("normalizeClaudePermissionArgs", () => {
+function normalizeClaudeArgs(
+  args: string[],
+  context: Parameters<typeof normalizeClaudeBackendConfig>[1] = {
+    backendId: "claude-cli",
+    config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+  },
+): string[] | undefined {
+  return normalizeClaudeBackendConfig(
+    { command: "claude", args, output: "json", input: "arg" },
+    context,
+  ).args;
+}
+
+describe("Claude backend permission args", () => {
   it("leaves args alone when they omit permission flags", () => {
-    expect(
-      normalizeClaudePermissionArgs(["-p", "--output-format", "stream-json", "--verbose"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
+    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--setting-sources",
+      "user",
+    ]);
   });
 
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
-    expect(
-      normalizeClaudePermissionArgs(["-p", "--dangerously-skip-permissions", "--verbose"]),
-    ).toEqual(["-p", "--verbose"]);
+    expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
+      "-p",
+      "--verbose",
+      "--setting-sources",
+      "user",
+    ]);
   });
 
   it("keeps explicit permission-mode overrides", () => {
-    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode", "acceptEdits"])).toEqual([
+    expect(normalizeClaudeArgs(["-p", "--permission-mode", "acceptEdits"])).toEqual([
       "-p",
       "--permission-mode",
       "acceptEdits",
+      "--setting-sources",
+      "user",
     ]);
-    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode=acceptEdits"])).toEqual([
+    expect(normalizeClaudeArgs(["-p", "--permission-mode=acceptEdits"])).toEqual([
       "-p",
       "--permission-mode=acceptEdits",
+      "--setting-sources",
+      "user",
     ]);
   });
 
   it("drops malformed permission-mode flags in both split and equals forms", () => {
     expect(
-      normalizeClaudePermissionArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json"]);
-    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode="])).toEqual(["-p"]);
-    expect(normalizeClaudePermissionArgs(["-p", "--permission-mode=--output-format"])).toEqual([
-      "-p",
-    ]);
-  });
-});
-
-describe("normalizeClaudeSettingSourcesArgs", () => {
-  it("injects user-only setting sources when args omit the flag", () => {
-    expect(
-      normalizeClaudeSettingSourcesArgs(["-p", "--output-format", "stream-json", "--verbose"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--verbose", "--setting-sources", "user"]);
-  });
-
-  it("forces explicit project or local setting sources back to user-only", () => {
-    expect(normalizeClaudeSettingSourcesArgs(["-p", "--setting-sources", "project"])).toEqual([
+      normalizeClaudeArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
+    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
+    expect(normalizeClaudeArgs(["-p", "--permission-mode="])).toEqual([
       "-p",
       "--setting-sources",
       "user",
     ]);
-    expect(normalizeClaudeSettingSourcesArgs(["-p", "--setting-sources=local,user"])).toEqual([
+    expect(normalizeClaudeArgs(["-p", "--permission-mode=--output-format"])).toEqual([
+      "-p",
+      "--setting-sources",
+      "user",
+    ]);
+  });
+});
+
+describe("Claude backend setting sources", () => {
+  it("injects user-only setting sources when args omit the flag", () => {
+    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--setting-sources",
+      "user",
+    ]);
+  });
+
+  it("forces explicit project or local setting sources back to user-only", () => {
+    expect(normalizeClaudeArgs(["-p", "--setting-sources", "project"])).toEqual([
+      "-p",
+      "--setting-sources",
+      "user",
+    ]);
+    expect(normalizeClaudeArgs(["-p", "--setting-sources=local,user"])).toEqual([
       "-p",
       "--setting-sources=user",
     ]);
@@ -89,12 +122,7 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
 
   it("treats a bare setting-sources flag as malformed and falls back to user-only", () => {
     expect(
-      normalizeClaudeSettingSourcesArgs([
-        "-p",
-        "--setting-sources",
-        "--output-format",
-        "stream-json",
-      ]),
+      normalizeClaudeArgs(["-p", "--setting-sources", "--output-format", "stream-json"]),
     ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
   });
 });
@@ -416,21 +444,18 @@ describe("normalizeClaudeBackendConfig", () => {
   });
 
   it("derives Claude bypass from OpenClaw YOLO policy and disables it for safer policy", () => {
-    expect(resolveClaudePermissionMode({ backendId: "claude-cli" })).toEqual({
-      mode: "bypassPermissions",
-      overrideExisting: false,
-    });
+    expect(normalizeClaudeArgs(["-p"], { backendId: "claude-cli" })).toContain("bypassPermissions");
     expect(
-      resolveClaudePermissionMode({
+      normalizeClaudeArgs(["-p"], {
         backendId: "claude-cli",
         config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
       }),
-    ).toEqual({ overrideExisting: false });
+    ).not.toContain("bypassPermissions");
   });
 
   it("derives Claude bypass from per-agent OpenClaw exec policy", () => {
     expect(
-      resolveClaudePermissionMode({
+      normalizeClaudeArgs(["-p"], {
         backendId: "claude-cli",
         agentId: "safe-agent",
         config: {
@@ -445,9 +470,9 @@ describe("normalizeClaudeBackendConfig", () => {
           },
         },
       }),
-    ).toEqual({ overrideExisting: false });
+    ).not.toContain("bypassPermissions");
     expect(
-      resolveClaudePermissionMode({
+      normalizeClaudeArgs(["-p"], {
         backendId: "claude-cli",
         agentId: "yolo-agent",
         config: {
@@ -462,10 +487,7 @@ describe("normalizeClaudeBackendConfig", () => {
           },
         },
       }),
-    ).toEqual({
-      mode: "bypassPermissions",
-      overrideExisting: false,
-    });
+    ).toContain("bypassPermissions");
   });
 
   it("does not infer live stdio when explicit transport overrides are incompatible", () => {

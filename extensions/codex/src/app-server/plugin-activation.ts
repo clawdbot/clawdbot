@@ -160,14 +160,14 @@ async function refreshCodexPluginRuntimeState(params: {
 }): Promise<CodexPluginRuntimeRefreshResult> {
   const diagnostics: CodexPluginActivationDiagnostic[] = [];
   await listCuratedCodexPluginMetadata(params);
-  await params.request("skills/list", {
+  await (params.request("skills/list", {
     cwds: [],
     forceReload: true,
-  } satisfies v2.SkillsListParams);
+  } satisfies v2.SkillsListParams) as Promise<v2.SkillsListResponse>);
   try {
-    await params.request("hooks/list", {
+    await (params.request("hooks/list", {
       cwds: [],
-    } satisfies v2.HooksListParams);
+    } satisfies v2.HooksListParams) as Promise<v2.HooksListResponse>);
   } catch (error) {
     diagnostics.push({
       message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,

@@ -371,7 +371,7 @@ function aggregateHistory(params: {
   };
 }
 
-export async function fetchAnthropicAdminUsage(params: {
+async function fetchAnthropicAdminUsage(params: {
   apiKey: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
@@ -462,7 +462,7 @@ export async function resolveAnthropicUsageAuth(
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
-export function formatClaudePlanLabel(
+function formatClaudePlanLabel(
   subscriptionType?: string,
   rateLimitTier?: string,
 ): string | undefined {

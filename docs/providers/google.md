@@ -22,6 +22,9 @@ Choose your preferred auth method and follow the setup steps.
     **Best for:** standard Gemini API access through Google AI Studio.
 
     <Steps>
+      <Step title="Get an API key">
+        Create a free key in [Google AI Studio](https://aistudio.google.com/apikey).
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice gemini-api-key
@@ -61,7 +64,7 @@ Choose your preferred auth method and follow the setup steps.
   </Tab>
 
   <Tab title="Gemini CLI (OAuth)">
-    **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
+    **Best for:** signing in with your Google account through Gemini CLI OAuth instead of using a separate API key.
 
     <Warning>
     The `google-gemini-cli` provider is an unofficial integration. Some users
@@ -115,6 +118,10 @@ Choose your preferred auth method and follow the setup steps.
     If login fails before the browser flow starts, make sure the local `gemini`
     command is installed and on `PATH`.
     </Note>
+
+    Onboarding auto-detection lists an existing Gemini CLI login but never
+    auto-tests it because Gemini CLI has no tool-free probe. Choose Gemini CLI
+    OAuth or a Gemini API key to continue.
 
     `google-gemini-cli/*` model refs are legacy compatibility aliases. New
     configs should use `google/*` model refs plus the `google-gemini-cli`

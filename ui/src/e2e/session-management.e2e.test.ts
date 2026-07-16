@@ -41,6 +41,9 @@ function sessionRow(
     hasActiveRun?: boolean;
     status?: string;
     spawnedBy?: string;
+    startedAt?: number;
+    endedAt?: number;
+    childSessions?: string[];
     execNode?: string;
     worktree?: { branch?: string; repoRoot?: string };
   } = {},
@@ -189,6 +192,84 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await page.locator('[data-session-section="category:Recovered group"]').waitFor({
         state: "visible",
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("expands child sessions inline and opens a child chat", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const parentKey = "agent:main:release-plan";
+    const childOneKey = "agent:main:research-sources";
+    const childTwoKey = "agent:main:verify-tests";
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { spawnedBy: parentKey },
+              response: sessionsListResponse([
+                sessionRow(childOneKey, "Research sources", baseTime - 1_000, {
+                  hasActiveRun: true,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 61_000,
+                  status: "running",
+                }),
+                sessionRow(childTwoKey, "Verify tests", baseTime - 2_000, {
+                  endedAt: baseTime - 2_000,
+                  spawnedBy: parentKey,
+                  startedAt: baseTime - 62_000,
+                  status: "done",
+                }),
+              ]),
+            },
+            {
+              response: sessionsListResponse([
+                sessionRow(parentKey, "Plan release", baseTime, {
+                  childSessions: [childOneKey, childTwoKey],
+                }),
+              ]),
+            },
+          ],
+        },
+      },
+      sessionKey: parentKey,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat?session=${encodeURIComponent(parentKey)}`);
+      const parent = page.locator(`[data-session-key="${parentKey}"]`);
+      await parent.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
+      await captureUiProof(page, "child-sessions-collapsed.png");
+
+      await parent.getByRole("button", { name: "Show 2 child sessions for Plan release" }).click();
+      await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list")).some(
+            (request) => requireRecord(request.params).spawnedBy === parentKey,
+          ),
+        )
+        .toBe(true);
+
+      const childRows = page.locator(".sidebar-recent-session--child");
+      await expect.poll(() => childRows.count()).toBe(2);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
+      await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
+      await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+      await captureUiProof(page, "child-sessions-expanded.png");
+
+      await childRows.nth(1).getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(childTwoKey);
     } finally {
       await context.close();
     }

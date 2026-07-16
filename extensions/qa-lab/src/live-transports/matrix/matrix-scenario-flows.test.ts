@@ -38,7 +38,7 @@ function readModuleBinding(
 describe("Matrix QA Lab scenario flows", () => {
   const catalog = readQaBootstrapScenarioCatalog();
   const scenarios = catalog.scenarios.filter((scenario) => {
-    if (scenario.execution.kind !== "flow") {
+    if (scenario.execution.kind !== "flow" || scenario.execution.channel !== "matrix") {
       return false;
     }
     return scenario.execution.flow?.steps.some((step) =>

@@ -1,5 +1,9 @@
 // Line plugin module implements channel behavior.
 import {
+  buildDmGroupAccountAllowlistAdapter,
+  createFlatAllowlistOverrideResolver,
+} from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
@@ -11,6 +15,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
+import { lineConfigAdapter } from "./config-adapter.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
@@ -46,6 +51,22 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     groups: {
       resolveRequireMention: resolveLineGroupRequireMention,
     },
+    allowlist: buildDmGroupAccountAllowlistAdapter({
+      channelId: "line",
+      resolveAccount: ({ cfg, accountId }) =>
+        resolveLineAccount({ cfg, accountId: accountId ?? undefined }),
+      normalize: ({ cfg, accountId, values }) =>
+        lineConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolveDmAllowFrom: (account) => account.config.allowFrom,
+      resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+      resolveDmPolicy: (account) => account.config.dmPolicy,
+      resolveGroupPolicy: (account) => account.config.groupPolicy,
+      resolveGroupOverrides: createFlatAllowlistOverrideResolver({
+        resolveRecord: (account) => account.config.groups,
+        label: (groupId) => groupId,
+        resolveEntries: (groupCfg) => groupCfg?.allowFrom,
+      }),
+    }),
     messaging: {
       targetPrefixes: ["line"],
       normalizeTarget: normalizeLineMessagingTarget,

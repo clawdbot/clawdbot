@@ -126,7 +126,6 @@ export function readQaSuiteSummary(summaryPath: unknown):
       diagnosticDetail: null;
       summary: unknown;
     };
-export function schemaHasRequiredFields(schema: unknown, seen?: Set<unknown>): boolean;
 export function selectPluginEntries<T extends PluginGatewayEntry>(
   entries: T[],
   options?: { ids?: string[]; shardIndex?: number; shardTotal?: number },

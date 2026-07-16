@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 

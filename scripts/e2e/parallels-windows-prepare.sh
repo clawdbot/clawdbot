@@ -93,6 +93,22 @@ require_host_tools() {
   done
 }
 
+fetch_host_metadata() {
+  # Keep host metadata lookups bounded like the guest download paths below.
+  local attempt output
+  for attempt in 1 2 3; do
+    if output="$(curl -fsSL --connect-timeout 10 --max-time 120 "$@")"; then
+      printf '%s' "$output"
+      return 0
+    fi
+    output=""
+    if [[ "$attempt" != "3" ]]; then
+      sleep "$attempt"
+    fi
+  done
+  return 1
+}
+
 vm_exists() {
   prlctl status "$VM_NAME" >/dev/null 2>&1
 }
@@ -409,7 +425,7 @@ ensure_wsl_features() {
 
 resolve_wsl_msi_url() {
   local arch="$1"
-  curl -fsSL https://api.github.com/repos/microsoft/WSL/releases/latest | python3 -c '
+  fetch_host_metadata https://api.github.com/repos/microsoft/WSL/releases/latest | python3 -c '
 import json, re, sys
 arch = sys.argv[1].lower()
 data = json.load(sys.stdin)
@@ -455,7 +471,7 @@ resolve_winget_manifest() {
   local package_id="$1"
   local package_path versions_json version version_json installer_url
   package_path="$(python3 -c 'import sys; package=sys.argv[1]; print(package[0].lower() + "/" + package.replace(".", "/"))' "$package_id")"
-  versions_json="$(curl -fsSL "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/${package_path}")"
+  versions_json="$(fetch_host_metadata "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/${package_path}")"
   version="$(python3 -c '
 import json, re, sys
 items = json.load(sys.stdin)
@@ -464,7 +480,7 @@ def key(value):
     return tuple((0, int(part)) if part.isdigit() else (1, part.lower()) for part in re.split(r"[._+-]", value))
 print(max(versions, key=key))
 ' <<<"$versions_json")"
-  version_json="$(curl -fsSL "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/${package_path}/${version}")"
+  version_json="$(fetch_host_metadata "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/${package_path}/${version}")"
   installer_url="$(python3 -c '
 import json, sys
 for item in json.load(sys.stdin):
@@ -473,7 +489,7 @@ for item in json.load(sys.stdin):
         raise SystemExit(0)
 raise SystemExit("installer manifest not found")
 ' <<<"$version_json")"
-  curl -fsSL "$installer_url" | ruby -ryaml -rdate -e '
+  fetch_host_metadata "$installer_url" | ruby -ryaml -rdate -e '
 manifest = YAML.safe_load(STDIN.read, permitted_classes: [Date], aliases: false)
 arch = ARGV[0]
 installers = manifest.fetch("Installers")

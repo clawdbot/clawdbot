@@ -57,6 +57,30 @@ describe("boolean config validation", () => {
     const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  it.each([
+    ["root", true, "mcp.servers.example.disabled", "enabled: false"],
+    ["root", false, "mcp.servers.example.disabled", "enabled: true"],
+    ["node-host", true, "nodeHost.mcp.servers.example.disabled", "enabled: false"],
+  ])(
+    'rejects %s MCP server "disabled: %s" with the inverse canonical value',
+    (scope, disabled, path, replacement) => {
+      const server = { command: "example-mcp", disabled };
+      const config =
+        scope === "root"
+          ? { mcp: { servers: { example: server } } }
+          : { nodeHost: { mcp: { servers: { example: server } } } };
+      const result = validateConfigObjectRaw(config);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected disabled MCP server config to fail validation");
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path, message: expect.stringContaining(replacement) }),
+      );
+    },
+  );
 });
 
 describe("agent timeoutSeconds config", () => {

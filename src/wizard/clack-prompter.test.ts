@@ -1,5 +1,16 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
+import type { SpinnerOptions } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const themeMocks = vi.hoisted(() => ({
+  isRich: vi.fn(() => false),
+}));
+
+const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+
+function stubStdoutIsTTY(value: boolean): void {
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
+}
 
 const clackMocks = vi.hoisted(() => ({
   autocomplete: vi.fn(),
@@ -13,7 +24,7 @@ const clackMocks = vi.hoisted(() => ({
   password: vi.fn(),
   select: vi.fn(),
   settings: { actions: new Set(["left", "right"]) },
-  spinner: vi.fn(() => ({
+  spinner: vi.fn((_options?: SpinnerOptions) => ({
     start: vi.fn(),
     message: vi.fn(),
     clear: vi.fn(),
@@ -31,6 +42,14 @@ const navigationPromptMocks = vi.hoisted(() => ({
   selectWithNavigationFooter: vi.fn(),
   textWithNavigationFooter: vi.fn(),
 }));
+
+vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
+  return {
+    ...actual,
+    isRich: themeMocks.isRich,
+  };
+});
 
 vi.mock("@clack/prompts", () => ({
   autocomplete: clackMocks.autocomplete,
@@ -59,12 +78,20 @@ vi.mock("./clack-navigation-prompts.js", () => ({
   textWithNavigationFooter: navigationPromptMocks.textWithNavigationFooter,
 }));
 
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
 import { WizardNavigationError } from "./prompts.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  if (stdoutIsTTYDescriptor) {
+    Object.defineProperty(process.stdout, "isTTY", stdoutIsTTYDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+  themeMocks.isRich.mockReturnValue(false);
   clackMocks.settings.actions = new Set(["left", "right"]);
 });
 
@@ -102,6 +129,34 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
+  it("uses the claw spinner on rich interactive terminals", () => {
+    stubStdoutIsTTY(true);
+    vi.stubEnv("CI", "");
+    vi.stubEnv("VITEST", "");
+    themeMocks.isRich.mockReturnValue(true);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    expect(clackMocks.spinner).toHaveBeenCalledWith({
+      frames: ["(\\/)", "(||)", "(--)", "(||)"],
+      delay: 120,
+      styleFrame: theme.accent,
+    });
+  });
+
+  it("keeps Clack's default spinner on non-rich terminals", () => {
+    stubStdoutIsTTY(true);
+    vi.stubEnv("CI", "");
+    vi.stubEnv("VITEST", "");
+    themeMocks.isRich.mockReturnValue(false);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    expect(clackMocks.spinner).toHaveBeenCalledWith();
+  });
+
   it("prints plain output without note framing", async () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const prompter = createClackPrompter();

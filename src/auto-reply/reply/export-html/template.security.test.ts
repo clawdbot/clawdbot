@@ -586,6 +586,38 @@ describe("export html security hardening", () => {
     expect(elementId.startsWith("entry-")).toBe(true);
   });
 
+  it("truncates tree node text without splitting surrogate pairs", async () => {
+    const emoji = "😀";
+    const prefix = "x".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-surrogate-truncation", timestamp: now() },
+      entries: [
+        {
+          id: "surrogate-user",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: `${prefix}${emoji}tail` },
+        },
+      ],
+      leafId: "surrogate-user",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const treeText =
+      Array.from(document.querySelectorAll(".tree-content")).find((node) =>
+        node.textContent?.includes("user:"),
+      )?.textContent ?? "";
+
+    expect(treeText).toContain(`user: ${prefix}...`);
+    expect(treeText).not.toContain(emoji);
+    expect(treeText).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
     // IDs with characters that need HTML escaping but should round-trip correctly
     const specialId = `msg-with"quotes&amp's`;

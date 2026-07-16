@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [channels.group-messages]
   execution:
+    profiles: { "discord:adapter": 0, "discord:default": 0 }
     kind: flow
     channel: discord
     timeoutMs: 45000

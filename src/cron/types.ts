@@ -187,6 +187,8 @@ export type CronRunDiagnostics = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** True once agent execution begins; retries after this point can replay side effects. */
+  executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
@@ -231,6 +233,11 @@ export type CronFailureAlert = {
   mode?: "announce" | "webhook";
   /** Account ID for multi-account channel configurations. */
   accountId?: string;
+};
+
+/** Partial failure-alert update; null clears an inherited field override. */
+export type CronFailureAlertPatch = {
+  [K in keyof CronFailureAlert]?: CronFailureAlert[K] | null;
 };
 
 /** Payload variants cron can execute in main-session or detached modes. */
@@ -416,6 +423,7 @@ export type CronJobPatch = Partial<
     | "state"
     | "payload"
     | "delivery"
+    | "failureAlert"
     | "declarationKey"
     | "displayName"
     | "owner"
@@ -425,5 +433,6 @@ export type CronJobPatch = Partial<
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
+  failureAlert?: CronFailureAlertPatch | false | null;
   state?: Partial<CronJobState>;
 };

@@ -101,6 +101,8 @@ jobs:
 
           oidc_json="$(
             curl --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=openclaw-release-telegram-qa"
           )"

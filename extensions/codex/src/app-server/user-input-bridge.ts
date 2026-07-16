@@ -25,6 +25,7 @@ type PendingUserInput = {
   turnId: string;
   itemId: string;
   questions: AgentHarnessUserInputQuestion[];
+  claimed: boolean;
   resolve: (value: JsonValue) => void;
   cleanup: () => void;
 };
@@ -34,6 +35,12 @@ type CodexUserInputBridge = {
     id: number | string;
     params?: JsonValue;
   }) => Promise<JsonValue | undefined>;
+  claimPendingRequest: () =>
+    | {
+        answer: (text: string) => boolean;
+        cancel: () => boolean;
+      }
+    | undefined;
   handleQueuedMessage: (text: string) => boolean;
   handleNotification: (notification: CodexServerNotification) => void;
   cancelPending: () => void;
@@ -56,6 +63,14 @@ export function createCodexUserInputBridge(params: {
     pending = undefined;
     current.cleanup();
     current.resolve(value);
+  };
+
+  const resolvePendingIfCurrent = (current: PendingUserInput, value: JsonValue): boolean => {
+    if (pending !== current) {
+      return false;
+    }
+    resolvePending(value);
+    return true;
   };
 
   return {
@@ -82,6 +97,7 @@ export function createCodexUserInputBridge(params: {
           turnId: requestParams.turnId,
           itemId: requestParams.itemId,
           questions: requestParams.questions,
+          claimed: false,
           resolve,
           cleanup,
         };
@@ -97,9 +113,21 @@ export function createCodexUserInputBridge(params: {
         );
       });
     },
+    claimPendingRequest() {
+      const current = pending;
+      if (!current || current.claimed) {
+        return undefined;
+      }
+      current.claimed = true;
+      return {
+        answer: (text) =>
+          resolvePendingIfCurrent(current, buildUserInputResponse(current.questions, text)),
+        cancel: () => resolvePendingIfCurrent(current, emptyUserInputResponse()),
+      };
+    },
     handleQueuedMessage(text) {
       const current = pending;
-      if (!current) {
+      if (!current || current.claimed) {
         return false;
       }
       resolvePending(buildUserInputResponse(current.questions, text));

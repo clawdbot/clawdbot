@@ -32,6 +32,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
+  createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
@@ -208,6 +209,7 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -268,7 +270,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 

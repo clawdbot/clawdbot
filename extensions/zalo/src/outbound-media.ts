@@ -10,6 +10,7 @@ import {
   type HostedOutboundMediaMetaRecord,
   type HostedOutboundMediaStore,
 } from "openclaw/plugin-sdk/outbound-media";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { getZaloRuntime } from "./runtime.js";
 
@@ -160,7 +161,7 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  if (url.searchParams.get("token") !== entry.metadata.token) {
+  if (!safeEqualSecret(url.searchParams.get("token"), entry.metadata.token)) {
     res.statusCode = 401;
     res.end("Unauthorized");
     return true;

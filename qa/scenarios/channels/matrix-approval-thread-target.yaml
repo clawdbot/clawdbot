@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.native-approval-prompts
   execution:
+    profiles: { "matrix:all": 29, "matrix:transport": 28 }
     kind: flow
     channel: matrix
     timeoutMs: 75000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         approvalForwarding:
           exec: true

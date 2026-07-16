@@ -28,7 +28,10 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
 RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
-  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -; \
+  installer="$(mktemp)"; \
+  curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://deb.nodesource.com/setup_24.x; \
+  bash "$installer"; \
+  rm -f "$installer"; \
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs
 
 RUN useradd -m -s /bin/bash app \

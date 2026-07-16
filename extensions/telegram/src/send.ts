@@ -19,7 +19,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -719,7 +719,7 @@ function createTelegramRequestWithDiag(params: {
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const request = createChannelApiRetryRunner({
     retry: params.retry,
     configRetry: params.account.config.retry,
     verbose: params.verbose,

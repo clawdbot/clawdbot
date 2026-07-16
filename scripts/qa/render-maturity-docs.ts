@@ -1121,7 +1121,7 @@ function renderTaxonomy({
           "",
           docs || "No linked docs",
           "",
-          "    </div>",
+          "</div>",
           "  </div>",
         );
       }

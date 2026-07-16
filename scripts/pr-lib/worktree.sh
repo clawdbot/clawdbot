@@ -53,7 +53,18 @@ enter_worktree() {
       git checkout -B "temp/pr-$pr" origin/main
     fi
   else
-    git worktree add "$dir" -b "temp/pr-$pr" origin/main
+    local resolved_parent=""
+    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
+    local resolved_dir=""
+    if [ -n "$resolved_parent" ]; then
+      resolved_dir="$resolved_parent/$(basename "$dir")"
+    fi
+    if [ ! -e "$dir" ] && [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; then
+      echo "Pruning stale worktree registration for $dir"
+      git worktree prune
+    fi
+    # Per-PR locking makes resetting this script-owned branch namespace safe.
+    git worktree add "$dir" -B "temp/pr-$pr" origin/main
     cd "$dir"
   fi
 

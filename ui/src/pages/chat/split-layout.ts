@@ -1,3 +1,4 @@
+import type { UiCommand } from "@openclaw/gateway-protocol";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 
 export type ChatSplitPane = { id: string; sessionKey: string };
@@ -178,6 +179,36 @@ export function setActivePane(layout: ChatSplitLayout, paneId: string): ChatSpli
     next.activePaneId = paneId;
   }
   return next;
+}
+
+type UiSplitLayoutCommand = Extract<UiCommand, { kind: "split" | "close-pane" | "focus" }>;
+
+export function applyUiCommandToSplitLayout(
+  layout: ChatSplitLayout,
+  command: UiSplitLayoutCommand,
+  sourceSessionKey?: string,
+): ChatSplitLayout | undefined {
+  if (command.kind === "split") {
+    const sourcePane = sourceSessionKey
+      ? panesOf(layout).find((entry) => entry.sessionKey === sourceSessionKey)
+      : undefined;
+    if (sourceSessionKey && !sourcePane) {
+      return layout;
+    }
+    return insertPane(
+      layout,
+      sourcePane?.id ?? layout.activePaneId,
+      command.sessionKey,
+      command.direction,
+    );
+  }
+  const pane = panesOf(layout).find((entry) => entry.sessionKey === command.sessionKey);
+  if (!pane) {
+    return layout;
+  }
+  return command.kind === "close-pane"
+    ? closePane(layout, pane.id)
+    : setActivePane(layout, pane.id);
 }
 
 function resizePair(weights: number[], boundaryIndex: number, pairRatio: number): number[] {

@@ -1579,6 +1579,12 @@ async function runWithModelFallbackInternal<T>(
         store: authStore,
         provider: candidate.provider,
       });
+      authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
+      });
       const isAnyProfileAvailable = profileIds.some(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
       );

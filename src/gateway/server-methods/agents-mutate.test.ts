@@ -400,7 +400,7 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
     name?: string;
     workspace?: string;
     agentDir?: string;
-    model?: string;
+    model?: string | null;
     identity?: MockIdentity;
   }) ?? { agentId: "" };
   const list = getAgentList(config);
@@ -415,6 +415,9 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
     ...(params.model ? { model: params.model } : {}),
     ...(params.identity ? { identity: { ...base.identity, ...params.identity } } : {}),
   };
+  if (params.model === null) {
+    delete nextEntry.model;
+  }
   if (index >= 0) {
     list[index] = nextEntry;
   } else {
@@ -816,6 +819,34 @@ describe("agents.update", () => {
     await promise;
 
     expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("clears an existing model override", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6-luna" } },
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      model: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), { model: null });
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    const [agent] = agents.list as MockAgentEntry[];
+    expect(agent).not.toHaveProperty("model");
   });
 
   it("ensures workspace when workspace changes", async () => {

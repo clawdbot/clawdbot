@@ -7,6 +7,4 @@ export {
   assertNoSymlinkParentsSync,
   sameFileIdentity,
   sanitizeUntrustedFileName,
-  writeViaSiblingTempPath,
-  type AssertNoSymlinkParentsOptions,
 } from "@openclaw/fs-safe/advanced";

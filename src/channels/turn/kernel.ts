@@ -39,7 +39,6 @@ export {
 export type {
   DurableInboundReplyDeliveryOptions,
   DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
 } from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,

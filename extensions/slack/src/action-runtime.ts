@@ -801,7 +801,13 @@ export async function handleSlackAction(
             (message as { ts?: unknown }).ts,
           ),
         );
-        return jsonResult({ ok: true, messages, hasMore: result.hasMore });
+        return jsonResult({
+          ok: true,
+          channelId,
+          ...(threadId ? { threadId } : {}),
+          messages,
+          hasMore: result.hasMore,
+        });
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });

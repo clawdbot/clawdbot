@@ -36,7 +36,11 @@ import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import {
+  loadSkillsFromDirSafe,
+  readSkillFrontmatterSafe,
+  type LocalSkillLoadDiagnostic,
+} from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
@@ -170,6 +174,17 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 
 function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
+}
+
+function warnInvalidSkillFrontmatter(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+  skillsLogger.warn("Skipping skill with invalid frontmatter.", {
+    source,
+    filePath: diagnostic.path,
+    error: diagnostic.message,
+    consoleMessage:
+      `Skipping skill with invalid frontmatter: ` +
+      `file=${compactPathForConsoleMessage(diagnostic.path)} error=${diagnostic.message}`,
+  });
 }
 
 function filterSkillEntries(
@@ -622,6 +637,7 @@ function loadContainedSkillRecords(params: {
     dir: params.skillDir,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
+    onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
   });
   const records = unwrapLoadedSkillRecords(loaded).filter(
     (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
@@ -1802,5 +1818,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

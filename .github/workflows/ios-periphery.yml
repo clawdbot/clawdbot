@@ -120,8 +120,12 @@ jobs:
       - name: Install iOS Swift tooling
         run: |
           brew update
-          brew install xcodegen periphery
+          brew install periphery
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          # Homebrew's xcodegen bottle can arrive corrupted on runner images;
+          # use the repo's pinned, checksummed release installer like ci.yml.
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          "$swift_tools_dir/xcodegen" --version
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
           "$swift_tools_dir/swiftformat" --version

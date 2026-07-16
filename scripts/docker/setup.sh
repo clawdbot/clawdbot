@@ -792,13 +792,19 @@ echo "==> Fixing data-directory permissions"
 # Use -xdev to restrict chown to the config-dir mount only — without it,
 # the recursive chown would cross into the workspace bind mount and rewrite
 # ownership of all user project files on Linux hosts.
+# Run a no-dereference chown from each entry's directory. This keeps ownership
+# repair for sockets/FIFOs while preventing a swapped symlink leaf from
+# redirecting the root operation outside the mounted tree.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   chown node:node /home/node/.config; \
-   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
+   /usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   /usr/bin/chown -h node:node /home/node/.config; \
+   /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
+     /usr/bin/find -P /home/node/.openclaw/workspace/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   fi || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

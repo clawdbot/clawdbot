@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -913,12 +914,11 @@ describe("session MCP runtime", () => {
 
     try {
       await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-      const result = await Promise.race([
+      const result = await withTestTimeout(
         catalogResult,
-        new Promise<{ status: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
-        }),
-      ]);
+        LIST_TOOLS_TEST_DEADLINE_MS,
+        "timed out waiting for bundle MCP catalog timeout",
+      );
 
       expect(result.status).toBe("resolved");
       if (result.status === "resolved") {
@@ -927,12 +927,11 @@ describe("session MCP runtime", () => {
       }
     } finally {
       await runtime.dispose();
-      await Promise.race([
+      await withTestTimeout(
         catalogResult,
-        new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        }),
-      ]);
+        1_000,
+        "timed out waiting for bundle MCP catalog cleanup",
+      );
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

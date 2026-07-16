@@ -599,7 +599,7 @@ async function waitForProcessExit(
       child.once("error", reject);
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for wrapper process exit");
     }),
   ]);

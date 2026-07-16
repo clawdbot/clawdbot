@@ -25,7 +25,7 @@ import type {
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
 
-export type CanonicalInboundMessageHookContext = {
+type CanonicalInboundMessageHookContext = {
   from: string;
   to?: string;
   content: string;
@@ -80,7 +80,7 @@ export type CanonicalInboundMessageHookContext = {
   callDepth?: number;
 };
 
-export type CanonicalSentMessageHookContext = {
+type CanonicalSentMessageHookContext = {
   to: string;
   content: string;
   success: boolean;

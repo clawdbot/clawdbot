@@ -28,7 +28,7 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviders>[0];
 }>;
 
-export type OpenAICodexProviderAuthContractOptions = {
+type OpenAICodexProviderAuthContractOptions = {
   expectedCodexDefaultModel: string;
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
 };

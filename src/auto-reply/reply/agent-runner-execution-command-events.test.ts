@@ -24,7 +24,13 @@ describe("runAgentTurnWithFallback: command events", () => {
           phase: "update",
           title: "Assistant proposed a plan",
           explanation: "Inspect code, patch it, run tests.",
-          steps: ["Inspect code", "Patch code", "Run tests"],
+          steps: [
+            { step: "Inspect code", status: "completed" },
+            { step: "Patch code", status: "in_progress" },
+            { step: "Run tests", status: "pending" },
+            { step: "Malformed", status: "unknown" },
+            "legacy string",
+          ],
         },
       });
       await params.onAgentEvent?.({
@@ -97,7 +103,13 @@ describe("runAgentTurnWithFallback: command events", () => {
       phase: "update",
       title: "Assistant proposed a plan",
       explanation: "Inspect code, patch it, run tests.",
-      steps: ["Inspect code", "Patch code", "Run tests"],
+      steps: ["Inspect code", "Patch code", "Run tests", "legacy string"],
+      planSteps: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Patch code", status: "in_progress" },
+        { step: "Run tests", status: "pending" },
+        { step: "legacy string", status: "pending" },
+      ],
       source: undefined,
     });
     expect(onApprovalEvent).toHaveBeenCalledWith({

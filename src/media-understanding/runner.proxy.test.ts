@@ -35,7 +35,7 @@ vi.mock("../infra/net/proxy-fetch.js", () => ({
 }));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
+let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
 let runCapability: typeof import("./runner.js").runCapability;
 
 function createOpenAiAudioCfg(providerOverrides: Record<string, unknown> = {}): OpenClawConfig {
@@ -105,8 +105,8 @@ async function runAudioCapabilityWithFetchCapture(params: {
 
 describe("runCapability proxy fetch passthrough", () => {
   beforeAll(async () => {
-    ({ buildProviderRegistry, clearMediaUnderstandingBinaryCacheForTests, runCapability } =
-      await import("./runner.js"));
+    ({ buildProviderRegistry, runCapability } = await import("./runner.js"));
+    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.test-support.js"));
   });
 
   beforeEach(() => {

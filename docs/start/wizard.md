@@ -73,8 +73,11 @@ key-free. Configure this later with `openclaw configure --section web`. Docs:
 Plain `openclaw onboard` follows this path:
 
 1. Accept the security notice.
-2. Detect configured models, API-key environment variables, and supported local
-   AI CLIs.
+2. Detect configured models, API-key environment variables, supported local AI
+   CLIs, and already installed tool-capable models from reachable Ollama or LM
+   Studio servers on the Gateway host. This read-only pass never downloads a
+   model. Gemini CLI and Antigravity installs are reported but not auto-tested
+   because they cannot enforce a tool-free probe.
 3. Test the first detected candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
 4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or

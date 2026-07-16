@@ -33,6 +33,7 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
@@ -123,6 +124,17 @@ const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
   return await resolveModelAsync(...args);
 };
 
+function resolveRegisteredMediaUnderstandingProvider(params: {
+  providerId: string;
+  cfg?: OpenClawConfig;
+}): MediaUnderstandingProvider | undefined {
+  return resolvePluginCapabilityProvider({
+    key: "mediaUnderstandingProviders",
+    providerId: params.providerId,
+    cfg: params.cfg,
+  });
+}
+
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
@@ -132,6 +144,7 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync: resolveModelAsyncDefault,
+  resolveRegisteredMediaUnderstandingProvider,
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
@@ -195,6 +208,7 @@ const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: ResolveModelAsync;
+    resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
     resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
@@ -214,6 +228,9 @@ const testing = {
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync =
       overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
+    imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
+      overrides?.resolveRegisteredMediaUnderstandingProvider ??
+      resolveRegisteredMediaUnderstandingProvider;
     imageToolProviderDeps.resolveImageCompressionPolicy =
       overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
@@ -257,14 +274,24 @@ function resolveImageModelConfigForTool(params: {
 
   const primary = resolveDefaultModelRef(params.cfg);
   let verifiedSubstituteProvider: string | undefined;
-  const resolveCodexImageModel = () =>
-    imageToolProviderDeps.resolveDefaultMediaModel({
+  const resolveCodexMediaRoute = () => {
+    const provider = imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+      providerId: "codex",
+      cfg: params.cfg,
+    });
+    if (!provider?.capabilities?.includes("image")) {
+      return undefined;
+    }
+    const model = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       providerId: "codex",
       capability: "image",
+      providerRegistry: new Map([[provider.id, provider]]),
       includeConfiguredImageModels: false,
     });
+    return model ? { model } : undefined;
+  };
   const resolveImplicitOpenAiImageCandidate = (openAiModel: string): string | null => {
     const decision = resolveOpenAiImageMediaCandidate({
       cfg: params.cfg,
@@ -272,7 +299,7 @@ function resolveImageModelConfigForTool(params: {
       agentDir: params.agentDir,
       authStore: params.authStore,
       openAiModel,
-      codexModel: resolveCodexImageModel(),
+      resolveCodexMediaRoute,
     });
     if (decision.kind === "substitute") {
       verifiedSubstituteProvider = decision.provider;

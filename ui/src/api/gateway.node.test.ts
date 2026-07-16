@@ -423,10 +423,12 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });

@@ -82,6 +82,23 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
+  it("applyAgentConfig clears a model override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6-luna" } },
+        list: [{ id: "work", workspace: "/work-ws", model: "anthropic/claude" }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, { agentId: "work", model: null });
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+
+    expect(work).not.toHaveProperty("model");
+    expect(requireAgentSummary(buildAgentSummaries(next), "work").model).toBe(
+      "openai/gpt-5.6-luna",
+    );
+  });
+
   it("applyAgentConfig merges identity with existing", () => {
     const cfg: OpenClawConfig = {
       agents: {

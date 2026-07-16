@@ -17,7 +17,6 @@ import {
   createRealtimeVoiceTurnContextTracker,
   matchRealtimeVoiceActivationName,
   matchRealtimeVoiceConsultQuestions,
-  normalizeSupportedRealtimeVoiceActivationName,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -39,12 +38,17 @@ import {
   type RealtimeVoiceOutputActivityTracker,
   type RealtimeVoiceTurnContextHandle,
   type RealtimeVoiceTurnContextTracker,
-  sortRealtimeVoiceActivationNames,
   type RealtimeVoiceActivationNameTranscriptResult,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asBoolean, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isDiscordRealtimeWakeNameRequired,
+  resolveDiscordRealtimeWakeNamePolicy,
+  resolveDiscordRealtimeWakeNames,
+  type DiscordRealtimeWakeNamePolicy,
+} from "./activation.js";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
   createDiscordOpusEncodeStream,
@@ -314,34 +318,6 @@ function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function resolveDiscordRealtimeWakeNames(params: {
-  config: DiscordRealtimeVoiceConfig;
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string[] {
-  const rawConfigured = params.config?.wakeNames;
-  if (rawConfigured) {
-    const configured = rawConfigured
-      .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
-      .filter((name): name is string => Boolean(name));
-    return sortRealtimeVoiceActivationNames(uniqueStrings(configured));
-  }
-  const agent = params.cfg.agents?.list?.find((candidate) => candidate.id === params.agentId);
-  const configuredAgentNames = [agent?.name, agent?.identity?.name]
-    .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
-    .filter((name): name is string => Boolean(name));
-  const productWakeNames = [normalizeSupportedRealtimeVoiceActivationName("OpenClaw")].filter(
-    (name): name is string => Boolean(name),
-  );
-  const defaults =
-    configuredAgentNames.length > 0
-      ? [...configuredAgentNames, ...productWakeNames]
-      : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), ...productWakeNames].filter(
-          (name): name is string => Boolean(name),
-        );
-  return sortRealtimeVoiceActivationNames(uniqueStrings(defaults));
-}
-
 function matchesPendingAgentProxyQuestion(
   consultMessage: string | undefined,
   question: string | undefined,
@@ -357,7 +333,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
   private consultPolicy: "auto" | "always" = "auto";
-  private requireWakeName = false;
+  private wakeNamePolicy: DiscordRealtimeWakeNamePolicy = "never";
   private wakeNames: string[] = [];
   private readonly forcedConsults: RealtimeVoiceForcedConsultCoordinator<AgentProxyConsultState> =
     createRealtimeVoiceForcedConsultCoordinator<AgentProxyConsultState>({
@@ -414,6 +390,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
       bootstrapContextInstructions?: string;
+      getHumanParticipantCount?: () => number;
       runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
     },
   ) {
@@ -464,21 +441,24 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.consultToolsAllow = resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy);
     const consultPolicy = this.realtimeConfig?.consultPolicy ?? (isAgentProxy ? "always" : "auto");
     this.consultPolicy = consultPolicy;
-    const supportsWakeNameGate = resolved.provider.id === "openai";
-    this.requireWakeName =
-      this.realtimeConfig?.requireWakeName === true && isAgentProxy && supportsWakeNameGate;
-    this.wakeNames = this.requireWakeName
-      ? resolveDiscordRealtimeWakeNames({
-          config: this.realtimeConfig,
-          cfg: this.params.cfg,
-          agentId: this.params.entry.route.agentId,
-        })
-      : [];
+    this.wakeNamePolicy = resolveDiscordRealtimeWakeNamePolicy({
+      isAgentProxy,
+      providerId: resolved.provider.id,
+      requireWakeName: this.realtimeConfig?.requireWakeName,
+    });
+    this.wakeNames =
+      this.wakeNamePolicy !== "never"
+        ? resolveDiscordRealtimeWakeNames({
+            config: this.realtimeConfig,
+            cfg: this.params.cfg,
+            agentId: this.params.entry.route.agentId,
+          })
+        : [];
     const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const autoRespondToAudio =
-      !this.requireWakeName && (!isAgentProxy || consultPolicy !== "always");
+      this.wakeNamePolicy === "never" && (!isAgentProxy || consultPolicy !== "always");
     const interruptResponseOnInputAudio =
-      !this.requireWakeName &&
+      this.wakeNamePolicy === "never" &&
       resolveDiscordRealtimeInterruptResponseOnInputAudio({
         realtimeConfig: this.realtimeConfig,
         providerId: resolved.provider.id,
@@ -563,8 +543,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const resolvedModel =
       readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
     const resolvedVoice = readProviderConfigString(resolved.providerConfig, "voice");
+    const humanParticipantCount = this.humanParticipantCount();
     logger.info(
-      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} requireWakeName=${this.requireWakeName} wakeNames=${this.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${resolveDiscordRealtimeBargeIn(
+      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${resolveDiscordRealtimeBargeIn(
         {
           realtimeConfig: this.realtimeConfig,
           providerId: resolved.provider.id,
@@ -705,7 +686,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   isBargeInEnabled(): boolean {
-    if (this.requireWakeName) {
+    if (this.isWakeNameRequired()) {
       return false;
     }
     const providerId = this.realtimeProviderId ?? this.realtimeConfig?.provider ?? "openai";
@@ -722,6 +703,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
     return this.params.discordConfig.voice?.realtime;
+  }
+
+  private humanParticipantCount(): number {
+    return this.params.getHumanParticipantCount?.() ?? 0;
+  }
+
+  private isWakeNameRequired(humanParticipantCount = this.humanParticipantCount()): boolean {
+    return isDiscordRealtimeWakeNameRequired(this.wakeNamePolicy, humanParticipantCount);
   }
 
   private sendOutputAudio(realtimePcm24kMono: Buffer): void {
@@ -1262,7 +1251,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.partialUserTranscript = "";
     const transcriptsTurn = this.peekPendingSpeakerTurn();
     let transcriptAttribution = this.transcriptAttributionFromTurn(transcriptsTurn);
-    const wakeNameResult = this.resolveWakeNameTranscript(trimmed);
+    const humanParticipantCount = this.humanParticipantCount();
+    const requireWakeName = this.isWakeNameRequired(humanParticipantCount);
+    const wakeNameResult = this.resolveWakeNameTranscript(trimmed, requireWakeName);
     let forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined;
     if (!wakeNameResult.allowed) {
       const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
@@ -1271,7 +1262,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         this.recordTranscriptUtterance(trimmed, transcriptAttribution);
         this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
         logger.info(
-          `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.wakeNames.join(",") || "none"}`,
+          `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} humanParticipants=${humanParticipantCount} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.wakeNames.join(",") || "none"}`,
         );
         return;
       }
@@ -1330,7 +1321,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   private handlePartialUserTranscript(text: string): void {
-    if (!this.requireWakeName || this.wakeNameAckedForTurn) {
+    if (!this.isWakeNameRequired() || this.wakeNameAckedForTurn) {
       return;
     }
     this.partialUserTranscript = mergeRealtimePartialTranscript(this.partialUserTranscript, text);
@@ -1350,8 +1341,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.wakeNameAckedForTurn = false;
   }
 
-  private resolveWakeNameTranscript(text: string): RealtimeVoiceActivationNameTranscriptResult {
-    if (!this.requireWakeName) {
+  private resolveWakeNameTranscript(
+    text: string,
+    requireWakeName: boolean,
+  ): RealtimeVoiceActivationNameTranscriptResult {
+    if (!requireWakeName) {
       return {
         allowed: true,
         text,
@@ -1421,7 +1415,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     transcript: string,
     speakerContext?: DiscordRealtimeSpeakerContext,
   ): AgentProxyConsultHandle | undefined {
-    if (this.consultPolicy !== "always" && !this.requireWakeName) {
+    if (this.consultPolicy !== "always" && this.wakeNamePolicy === "never") {
       return undefined;
     }
     const question = transcript.trim();
@@ -1482,7 +1476,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       `discord voice: realtime forced agent consult starting chars=${question.length} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}`,
     );
     logger.debug(
-      `discord voice: realtime forced agent consult reason=${DISCORD_REALTIME_FORCED_CONSULT_REASON} consultPolicy=${this.consultPolicy} requireWakeName=${this.requireWakeName} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel}`,
+      `discord voice: realtime forced agent consult reason=${DISCORD_REALTIME_FORCED_CONSULT_REASON} consultPolicy=${this.consultPolicy} wakeNamePolicy=${this.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired()} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel}`,
     );
     if (this.hasInterruptibleOutputAudio()) {
       logger.info(

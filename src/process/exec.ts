@@ -15,7 +15,6 @@ export type { CommandOptions } from "./exec-runner.js";
 export { isPlainCommandExitFailure, resolveProcessExitCode } from "./exec-result.js";
 export type { SpawnResult } from "./exec-result.js";
 export { resolveCommandEnv, shouldSpawnWithShell, spawnCommand } from "./exec-spawn.js";
-export type { SpawnCommandOptions } from "./exec-spawn.js";
 
 const DEFAULT_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
 

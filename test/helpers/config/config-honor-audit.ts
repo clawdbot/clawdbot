@@ -27,7 +27,7 @@ type ConfigHonorProofKey =
   | "testPaths";
 
 /** Result of auditing one config honor inventory. */
-export type ConfigHonorAuditResult = {
+type ConfigHonorAuditResult = {
   schemaKeys: string[];
   missingKeys: string[];
   extraKeys: string[];

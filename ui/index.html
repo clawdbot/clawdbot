@@ -339,14 +339,25 @@
           recoveryInFlight = true;
           recoveryAttempt += 1;
           documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          var recoveryController = new AbortController();
+          var requestTimer = window.setTimeout(function () {
+            recoveryController.abort();
+          }, delay);
           window
-            .fetch(documentUrl.href, { cache: "no-store", credentials: "same-origin" })
+            .fetch(documentUrl.href, {
+              cache: "no-store",
+              credentials: "same-origin",
+              signal: recoveryController.signal,
+            })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
               window.location.replace(documentUrl.href);
             })
             .catch(function () {
               finishRecoveryAttempt();
+            })
+            .finally(function () {
+              window.clearTimeout(requestTimer);
             });
         }
 

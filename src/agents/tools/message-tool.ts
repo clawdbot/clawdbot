@@ -57,6 +57,7 @@ import {
   getToolResult,
   runMessageAction,
   type MessageActionRunResult,
+  type MessageActionRunnerGateway,
 } from "../../infra/outbound/message-action-runner.js";
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
@@ -417,6 +418,13 @@ function sanitizePresentationTextFieldsResult(
               if (sanitized.text) {
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
+              } else if (
+                sanitizedAction.type === "web-app" &&
+                typeof sanitizedAction.widgetId === "string" &&
+                sanitizedAction.widgetId.trim()
+              ) {
+                delete sanitizedAction.url;
+                sanitizedButton.action = sanitizedAction;
               } else {
                 // Explicit typed actions own the control. If sanitization removes
                 // the target, legacy shadow fields must not become active fallbacks.
@@ -578,6 +586,12 @@ const presentationButtonActionSchema = Type.Union([
   Type.Object({
     type: Type.Literal("web-app"),
     url: Type.String(),
+    widgetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    type: Type.Literal("web-app"),
+    url: Type.Optional(Type.String()),
+    widgetId: Type.String(),
   }),
 ]);
 
@@ -1419,6 +1433,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const params = { ...(args as Record<string, unknown>) };
       // `final` is a Codex app-server-only source-delivery control. It must
       // not be dispatched to a provider or participate in idempotency.
+      const requestedSourceReplyFinal =
+        typeof params.final === "boolean" ? params.final : undefined;
       delete params.final;
 
       // Sanitize outbound text fields in three layers:
@@ -1483,6 +1499,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               sessionId: options.sessionId,
             })
           : undefined;
+      if (normalizeOptionalString(options?.messageActionTurnCapability) && !trustedTurnContext) {
+        throw new Error("message action turn capability is no longer active");
+      }
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&
@@ -1578,11 +1597,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
+      const callerOwnsTerminalReceipt =
+        gatewayResolved.target === "remote" ||
+        normalizeOptionalString(gatewayOpts.gatewayUrl) !== undefined ||
+        normalizeOptionalString(gatewayOpts.gatewayToken) !== undefined;
       // Direct tool invocations already execute inside the authenticated
       // Gateway request. Keep their authority operation-local by dispatching
       // channel actions in-process instead of laundering it through a new
       // backend connection.
-      const gateway =
+      const gateway: MessageActionRunnerGateway | undefined =
         options?.conversationReadOrigin === "direct-operator"
           ? undefined
           : {
@@ -1592,13 +1615,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               clientDisplayName: "agent",
               mode: GATEWAY_CLIENT_MODES.BACKEND,
-              resolveAgentRuntimeIdentityToken: () =>
+              ...(callerOwnsTerminalReceipt
+                ? { terminalSourceReplyReceiptOwner: "caller" as const }
+                : {}),
+              resolveAgentRuntimeIdentityToken: (context) =>
                 resolveMessageActionAgentRuntimeIdentityToken({
                   opts: gatewayOpts,
                   target: gatewayResolved.target,
                   turnCapability: options?.messageActionTurnCapability,
                   runId: options?.runId,
                   sessionId: options?.sessionId,
+                  sourceReplyFinal: context?.sourceReplyFinal,
+                  sourceReplyToolCallId: context?.sourceReplyToolCallId,
+                  callerOwnsTerminalReceipt,
                 }),
             };
       const hasCurrentMessageId =
@@ -1652,6 +1681,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const actionParams = actionIdempotencyKey
         ? { ...params, idempotencyKey: actionIdempotencyKey }
         : params;
+      const hasExactSourceTurn =
+        action === "send" &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
       let result: MessageActionRunResult;
       try {
         result = await runMessageActionForTool({
@@ -1675,6 +1708,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+          // Only an admitted channel source can arm terminal restart reconciliation.
+          // Source-less scheduled and ambient sends remain ordinary message actions.
+          sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
+          sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,

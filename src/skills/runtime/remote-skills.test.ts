@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { buildWorkspaceSkillSnapshot, loadWorkspaceSkillEntries } from "../loading/workspace.js";
@@ -36,6 +38,24 @@ function localEntry(name: string): SkillEntry {
 beforeEach(() => {
   resetRemoteNodeSkillsForTests();
 });
+
+afterEach(() => {
+  setLoggerOverride(null);
+  loggingState.rawConsole = null;
+  resetLogger();
+});
+
+function captureWarningLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+  const warn = vi.fn();
+  loggingState.rawConsole = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn,
+    error: vi.fn(),
+  };
+  return warn;
+}
 
 describe("node-hosted skill snapshots", () => {
   it("appears while connected, includes the locator note, and disappears on disconnect", () => {
@@ -222,7 +242,44 @@ describe("node-hosted skill snapshots", () => {
     expect(command?.dispatch).toBeUndefined();
   });
 
+  it("accepts JSON5-style metadata from node skills", () => {
+    recordRemoteSkillNodeInfo({
+      nodeId: "node-1",
+      connId: "conn-1",
+      commands: ["system.run"],
+    });
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      skills: [
+        {
+          name: "json5-metadata",
+          description: "JSON5-style metadata",
+          content: `---
+name: json5-metadata
+description: JSON5-style metadata
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "env": ["EXAMPLE_VAR"],
+          },
+      },
+  }
+---
+`,
+        },
+      ],
+    });
+
+    const [entry] = mergeRemoteNodeSkillEntries([], { canExec: true });
+    expect(entry?.skill.name).toBe("json5-metadata");
+    expect(entry?.frontmatter?.metadata).toContain("EXAMPLE_VAR");
+  });
+
   it("drops content that fails existing frontmatter parsing", () => {
+    const warn = captureWarningLogger();
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
@@ -240,6 +297,9 @@ describe("node-hosted skill snapshots", () => {
     });
 
     expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+    expect(warningText).toContain("node://node-1/skills/broken-skill/SKILL.md");
+    expect(warningText).toContain("BAD_INDENT");
   });
 
   it("replaces a node catalog and invalidates the snapshot", () => {

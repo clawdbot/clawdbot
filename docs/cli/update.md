@@ -174,6 +174,13 @@ Package-manager updates additionally verify the restarted Gateway reports the
 expected package version; git-checkout updates verify gateway health and
 service readiness after the rebuild.
 
+Package-manager updates normally keep using the Node binary recorded in the
+managed service. If that Node cannot run the target release, but the current
+CLI Node can and the service is proven to belong to the package being updated,
+a restart-enabled update uses the current Node for finalization and rewrites
+the service metadata to that runtime. `--no-restart` cannot repair service
+metadata, so the same runtime mismatch stops before package mutation.
+
 On macOS, the post-update check also verifies the LaunchAgent is
 loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
@@ -277,7 +284,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (for example an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`. When a failed update leaves a managed plugin unusable, OpenClaw disables its runtime entry and resets active slots without changing the operator-authored `plugins.allow` or `plugins.deny` policy.
 
 After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway restarts: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly declared `main` exists). Failures from this pass, and an invalid config snapshot, return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json`. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here (mirroring the `skipDisabledPlugins` policy used by the missing-payload check), so a stale disabled plugin record cannot block an otherwise valid update.
 

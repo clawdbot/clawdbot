@@ -103,6 +103,7 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "reaction",
   "react",
   "typing",
+  "update_plan",
 ]);
 
 export function isChannelProgressDraftWorkToolName(name: string | null | undefined): boolean {
@@ -178,6 +179,62 @@ export type ChannelProgressLineOptions = {
 
 export type ChannelProgressDraftRenderMode = "text" | "rich";
 
+export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
+
+export type AgentPlanStep = {
+  step: string;
+  status: AgentPlanStepStatus;
+};
+
+/**
+ * Plan-event ingress shape for the SDK deprecation window: shipped producers
+ * through 2026.7.x sent `steps: string[]`. Remove with the string form.
+ */
+export type AgentPlanStepInput = AgentPlanStep | string;
+
+function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
+  return value === "pending" || value === "in_progress" || value === "completed";
+}
+
+/**
+ * Normalizes plan-event steps at public ingress boundaries. Legacy string
+ * steps become pending typed steps; malformed entries are dropped.
+ */
+/**
+ * Builds both plan-step payload fields for `onPlanUpdate` during the SDK
+ * deprecation window: canonical `planSteps` plus the shipped pre-2026.8
+ * `steps: string[]` form. Collapse to `planSteps` when the window closes.
+ */
+export function buildPlanUpdateStepFields(value: unknown): {
+  steps?: string[];
+  planSteps?: AgentPlanStep[];
+} {
+  const planSteps = normalizeAgentPlanSteps(value);
+  if (!planSteps) {
+    return {};
+  }
+  return { steps: planSteps.map((entry) => entry.step), planSteps };
+}
+
+export function normalizeAgentPlanSteps(value: unknown): AgentPlanStep[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.flatMap((entry) => {
+    if (typeof entry === "string") {
+      const step = entry.trim();
+      return step ? [{ step, status: "pending" as const }] : [];
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const rawStep = (entry as { step?: unknown }).step;
+    const status = (entry as { status?: unknown }).status;
+    const step = typeof rawStep === "string" ? rawStep.trim() : "";
+    return step && isAgentPlanStepStatus(status) ? [{ step, status }] : [];
+  });
+}
+
 const EMOJI_PREFIX_RE = /^\p{Extended_Pictographic}/u;
 
 export type ChannelProgressDraftLineInput =
@@ -207,7 +264,7 @@ export type ChannelProgressDraftLineInput =
       phase?: string;
       title?: string;
       explanation?: string;
-      steps?: string[];
+      steps?: readonly AgentPlanStepInput[];
     }
   | {
       event: "approval";
@@ -566,7 +623,11 @@ export function buildChannelProgressDraftLine(
       return buildNamedProgressLine(
         input.event,
         "update_plan",
-        [input.explanation, input.steps?.[0], input.title ?? "planning"],
+        [
+          input.explanation,
+          normalizeAgentPlanSteps(input.steps)?.[0]?.step,
+          input.title ?? "planning",
+        ],
         options,
       );
     }
@@ -1002,6 +1063,62 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
   return repairCompactedProgressMarkdown(compactPlainProgressLine(normalized, maxChars));
 }
 
+export function formatPlanChecklistLines(
+  steps: readonly AgentPlanStep[],
+  options: { maxLines: number; maxLineChars: number },
+): string[] {
+  const normalizedSteps = steps
+    .map((entry, index) => ({ ...entry, step: entry.step.replace(/\s+/g, " ").trim(), index }))
+    .filter((entry) => entry.step);
+  if (normalizedSteps.length === 0 || options.maxLines <= 0) {
+    return [];
+  }
+  const maxLines = Math.max(1, options.maxLines);
+  const marker = (status: AgentPlanStepStatus) =>
+    status === "completed" ? "✅" : status === "in_progress" ? "▸" : "▢";
+  const formatStep = (entry: (typeof normalizedSteps)[number]) =>
+    compactChannelProgressDraftLine(`${marker(entry.status)} ${entry.step}`, options.maxLineChars);
+  if (normalizedSteps.length <= maxLines) {
+    return normalizedSteps.map(formatStep);
+  }
+
+  const availableSteps = maxLines - 1;
+  if (availableSteps === 0) {
+    const completedCount = normalizedSteps.filter((entry) => entry.status === "completed").length;
+    return [
+      compactChannelProgressDraftLine(
+        `✅ ${completedCount}/${normalizedSteps.length} done`,
+        options.maxLineChars,
+      ),
+    ];
+  }
+  const pendingSteps = normalizedSteps.filter((entry) => entry.status !== "completed");
+  const activeStep = pendingSteps.find((entry) => entry.status === "in_progress");
+  const pendingSlots = Math.max(0, availableSteps - (activeStep ? 1 : 0));
+  // slice(-0) would return the whole array and blow past the line cap.
+  const pendingTail =
+    pendingSlots === 0
+      ? []
+      : pendingSteps.filter((entry) => entry !== activeStep).slice(-pendingSlots);
+  const visiblePending = [...(activeStep ? [activeStep] : []), ...pendingTail];
+  const completedSlots = Math.max(0, availableSteps - visiblePending.length);
+  const recentCompleted =
+    completedSlots > 0
+      ? normalizedSteps.filter((entry) => entry.status === "completed").slice(-completedSlots)
+      : [];
+  const visibleSteps = [...recentCompleted, ...visiblePending].toSorted(
+    (a, b) => a.index - b.index,
+  );
+  const completedCount = normalizedSteps.length - pendingSteps.length;
+  return [
+    compactChannelProgressDraftLine(
+      `✅ ${completedCount}/${normalizedSteps.length} done`,
+      options.maxLineChars,
+    ),
+    ...visibleSteps.map(formatStep),
+  ];
+}
+
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
   if (typeof line === "string") {
     return line;
@@ -1152,9 +1269,17 @@ export function formatChannelProgressDraftText(params: {
   bullet?: string;
   /** Short narration paragraph; when present it replaces the tool lines. */
   narration?: string;
+  /** Latest full plan snapshot, rendered independently from rolling tool lines. */
+  plan?: readonly AgentPlanStep[];
 }): string {
   const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
   const progress = resolveChannelProgressDraftConfig(params.entry);
+  const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
+  const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
+  const formatLine = params.formatLine ?? ((line: string) => line);
+  const planLines = formatPlanChecklistLines(params.plan ?? [], { maxLines, maxLineChars }).map(
+    formatLine,
+  );
   const hasConfiguredLabel = progress.label !== undefined || progress.labels !== undefined;
   const resolvedLabel =
     narration && !hasConfiguredLabel
@@ -1165,16 +1290,23 @@ export function formatChannelProgressDraftText(params: {
           random: params.random,
         });
   if (narration) {
-    const formatted = (params.formatLine ?? ((line: string) => line))(narration);
-    return resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;
+    const formatted = formatLine(narration);
+    const status = resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;
+    return planLines.length > 0 ? `${status}\n\n${planLines.join("\n")}` : status;
   }
-  const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
-  const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
-  const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
+  const toolLineBudget = planLines.length > 0 ? Math.max(0, maxLines - planLines.length) : maxLines;
+  const visibleToolLines =
+    planLines.length === 0
+      ? params.lines
+      : toolLineBudget === 0
+        ? []
+        : params.lines.slice(-toolLineBudget);
   const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
-    ? [{ draftLabel: resolvedLabel }, ...params.lines]
-    : params.lines;
+    ? [{ draftLabel: resolvedLabel }, ...visibleToolLines]
+    : visibleToolLines;
+  const rollingLineLimit =
+    planLines.length > 0 ? toolLineBudget + (resolvedLabel ? 1 : 0) : maxLines;
   const lines = rawLines
     .map((line) => {
       const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
@@ -1191,7 +1323,7 @@ export function formatChannelProgressDraftText(params: {
     .filter((line): line is { text: string; isLabelLine: boolean; prefix: boolean } =>
       Boolean(line),
     )
-    .slice(-maxLines)
+    .slice(-rollingLineLimit)
     .map(({ text, isLabelLine, prefix }) => {
       const formatted = isLabelLine ? text : formatLine(text);
       return {
@@ -1203,6 +1335,9 @@ export function formatChannelProgressDraftText(params: {
       };
     });
   const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
+  if (planLines.length > 0) {
+    renderedLines.push(...planLines);
+  }
   if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
     return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
   }

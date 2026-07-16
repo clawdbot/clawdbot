@@ -88,14 +88,20 @@ export function scanNodeHostedSkills(
   const loadedSkills: ReturnType<typeof loadSkillsFromDirSafe>["skills"] = [];
   const frontmatterByFilePath = new Map<string, Record<string, string>>();
   for (const candidate of candidates) {
+    let invalidFrontmatter = false;
+    const candidatePath = path.resolve(candidate);
     const loaded = loadSkillsFromDirSafe({
       dir: path.dirname(candidate),
       source: "openclaw-node",
       maxBytes: NODE_SKILL_MAX_CONTENT_BYTES,
+      onDiagnostic: (diagnostic) => {
+        if (path.resolve(diagnostic.path) === candidatePath) {
+          invalidFrontmatter = true;
+        }
+        warn(`node host skill skipped (${diagnostic.path}): ${diagnostic.message}`);
+      },
     });
-    const skill = loaded.skills.find(
-      (entry) => path.resolve(entry.filePath) === path.resolve(candidate),
-    );
+    const skill = loaded.skills.find((entry) => path.resolve(entry.filePath) === candidatePath);
     if (skill) {
       loadedSkills.push(skill);
       const frontmatter = loaded.frontmatterByFilePath.get(skill.filePath);
@@ -111,11 +117,14 @@ export function scanNodeHostedSkills(
       warn(`node host skill skipped (${candidate}): ${String(error)}`);
       continue;
     }
-    const reason =
-      typeof size === "number" && size > NODE_SKILL_MAX_CONTENT_BYTES
+    const reason = invalidFrontmatter
+      ? null
+      : typeof size === "number" && size > NODE_SKILL_MAX_CONTENT_BYTES
         ? `exceeds ${NODE_SKILL_MAX_CONTENT_BYTES} bytes`
         : "has invalid or missing frontmatter";
-    warn(`node host skill skipped (${candidate}): ${reason}`);
+    if (reason) {
+      warn(`node host skill skipped (${candidate}): ${reason}`);
+    }
   }
 
   const descriptors: NodeSkillDescriptor[] = [];

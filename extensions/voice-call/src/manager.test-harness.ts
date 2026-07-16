@@ -92,7 +92,7 @@ function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   };
 }
 
-export function installVoiceCallStateRuntimeForTests(): void {
+function installVoiceCallStateRuntimeForTests(): void {
   setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
 }
 

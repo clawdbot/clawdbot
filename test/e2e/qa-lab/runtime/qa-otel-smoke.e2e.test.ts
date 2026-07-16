@@ -331,13 +331,13 @@ describe("qa-otel-smoke receiver bounds", () => {
 
       await Promise.race([
         receiver.close(),
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("receiver close timed out");
         }),
       ]);
       await Promise.race([
         socketClosed,
-        delay(1_000).then(() => {
+        delay(1_000, undefined, { ref: false }).then(() => {
           throw new Error("socket close timed out");
         }),
       ]);

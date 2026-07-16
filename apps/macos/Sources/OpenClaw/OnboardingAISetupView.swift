@@ -109,7 +109,7 @@ struct OnboardingAISetupView: View {
                     .font(.callout.weight(.semibold))
                 Text(self.model.waitingForPendingActivationDeadline
                     ? "OpenClaw will check again before changing any inference settings."
-                    : "Checking for Claude Code, Codex, Gemini, and saved API keys.")
+                    : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -137,11 +137,15 @@ struct OnboardingAISetupView: View {
             self.noCandidatesIntro
         }
 
+        if !self.model.unavailableCandidates.isEmpty {
+            self.unavailableCandidatesSection
+        }
+
         if let detectError = model.detectError {
             OnboardingErrorCard(
                 title: self.model.configuredGatewayProbeUnavailable
                     ? "Couldn’t check this Gateway for AI accounts"
-                    : "Couldn’t check this Mac for AI accounts",
+                    : "Couldn’t check this Gateway for AI access",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
@@ -246,12 +250,12 @@ struct OnboardingAISetupView: View {
 
     private var noCandidatesIntro: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("No AI accounts found on this Mac")
+            Text("No usable AI access found on this Gateway")
                 .font(.headline)
             Text(
                 "That’s fine — you can connect one with an API key or token. " +
-                    "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
-                    "sign in there first and hit “Check again”.")
+                    "You can also sign in to Claude Code or Codex, or start Ollama or LM Studio " +
+                    "with a suitable model, then hit “Check again”.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -260,6 +264,28 @@ struct OnboardingAISetupView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var unavailableCandidatesSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Detected, but not auto-tested")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(self.model.unavailableCandidates) { candidate in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(candidate.label) — \(candidate.detail)")
+                            .font(.caption.weight(.semibold))
+                        Text(candidate.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .padding(.vertical, 4)
     }

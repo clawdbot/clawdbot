@@ -30,14 +30,18 @@ vi.mock("node-edge-tts", () => ({
   },
 }));
 
-import {
-  buildMicrosoftSpeechProvider,
-  isCjkDominant,
-  listMicrosoftVoices,
-} from "./speech-provider.js";
+import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 import * as ttsModule from "./tts.js";
 
 const TEST_CFG = {} as OpenClawConfig;
+
+async function listVoicesThroughProvider() {
+  const listVoices = buildMicrosoftSpeechProvider().listVoices;
+  if (!listVoices) {
+    throw new Error("expected Microsoft voice listing support");
+  }
+  return await listVoices({ providerConfig: {} });
+}
 
 function requireFirstEdgeTtsCall(edgeSpy: ReturnType<typeof vi.spyOn>): {
   config?: unknown;
@@ -83,7 +87,7 @@ describe("listMicrosoftVoices", () => {
       ),
     ) as unknown as typeof globalThis.fetch;
 
-    const voices = await listMicrosoftVoices();
+    const voices = await listVoicesThroughProvider();
 
     expect(voices).toEqual([
       {
@@ -108,7 +112,7 @@ describe("listMicrosoftVoices", () => {
         new Response("nope", { status: 503 }),
       ) as unknown as typeof globalThis.fetch;
 
-    await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+    await expect(listVoicesThroughProvider()).rejects.toThrow("Microsoft voices API error (503)");
   });
 
   it("prefers the configured provider request timeout", async () => {
@@ -149,7 +153,7 @@ describe("listMicrosoftVoices", () => {
       sourceProcess: "openclaw",
     });
 
-    await listMicrosoftVoices();
+    await listVoicesThroughProvider();
 
     await vi.waitFor(() => {
       const events = store.getSessionEvents("ms-voices-session", 10);
@@ -188,7 +192,7 @@ describe("listMicrosoftVoices", () => {
     initializeDebugProxyCapture("test");
 
     try {
-      await listMicrosoftVoices();
+      await listVoicesThroughProvider();
 
       let events: Array<Record<string, unknown>> = [];
       await vi.waitFor(() => {
@@ -203,28 +207,6 @@ describe("listMicrosoftVoices", () => {
       globalThis.fetch = proxyReset.originalFetch;
       finalizeDebugProxyCapture();
     }
-  });
-});
-
-describe("isCjkDominant", () => {
-  it("returns true for Chinese text", () => {
-    expect(isCjkDominant("你好世界")).toBe(true);
-  });
-
-  it("returns true for mixed text with majority CJK", () => {
-    expect(isCjkDominant("你好，这是一个测试 hello")).toBe(true);
-  });
-
-  it("returns false for English text", () => {
-    expect(isCjkDominant("Hello, this is a test")).toBe(false);
-  });
-
-  it("returns false for empty string", () => {
-    expect(isCjkDominant("")).toBe(false);
-  });
-
-  it("returns false for mostly English with a few CJK chars", () => {
-    expect(isCjkDominant("This is a long English sentence with one 字")).toBe(false);
   });
 });
 

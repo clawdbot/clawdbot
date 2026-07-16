@@ -2,33 +2,34 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+type AnthropicCatalogModel = {
+  id?: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  mediaInput?: {
+    image?: {
+      maxSidePx?: number;
+      preferredSidePx?: number;
+      tokenMode?: string;
+    };
+  };
+  contextWindow?: number;
+  maxTokens?: number;
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+  };
+  thinkingLevelMap?: Record<string, string | null>;
+};
+
 type AnthropicManifest = {
   modelCatalog?: {
     providers?: {
-      anthropic?: {
-        models?: Array<{
-          id?: string;
-          name?: string;
-          reasoning?: boolean;
-          input?: string[];
-          mediaInput?: {
-            image?: {
-              maxSidePx?: number;
-              preferredSidePx?: number;
-              tokenMode?: string;
-            };
-          };
-          contextWindow?: number;
-          maxTokens?: number;
-          cost?: {
-            input?: number;
-            output?: number;
-            cacheRead?: number;
-            cacheWrite?: number;
-          };
-          thinkingLevelMap?: Record<string, string | null>;
-        }>;
-      };
+      anthropic?: { models?: AnthropicCatalogModel[] };
+      "claude-cli"?: { models?: AnthropicCatalogModel[] };
     };
     discovery?: Record<string, string>;
   };
@@ -53,6 +54,27 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+  });
+
+  it("declares direct API limits without overstating bare Claude CLI context", () => {
+    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
+    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
+      expect(models.find((model) => model.id === id)).toMatchObject({
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+    }
+    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    for (const id of ["claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6"]) {
+      expect(cliModels.find((model) => model.id === id)).toMatchObject({
+        contextWindow: 200_000,
+        maxTokens: 128_000,
+      });
+    }
+    expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
+      contextWindow: 200_000,
+      maxTokens: 128_000,
     });
   });
 

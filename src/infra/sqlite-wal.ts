@@ -300,6 +300,15 @@ function readJournalModeResult(row: unknown): string | null {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
+function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
+  const rows = db.prepare("PRAGMA database_list;").all() as Array<{
+    file?: unknown;
+    name?: unknown;
+  }>;
+  const main = rows.find((row) => row.name === "main");
+  return main?.file === "";
+}
+
 function readCheckpointBusyResult(row: unknown): boolean {
   if (!row || typeof row !== "object") {
     return false;
@@ -322,14 +331,31 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
-function enableWalJournalMode(db: DatabaseSync, retryTimeoutMs: number): void {
+function enableWalJournalMode(
+  db: DatabaseSync,
+  retryTimeoutMs: number,
+  options: SqliteWalMaintenanceOptions,
+): boolean {
   const deadline = Date.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
       try {
         db.exec("PRAGMA journal_mode = WAL;");
-        return;
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        if (journalMode === "wal") {
+          return true;
+        }
+        // SQLite's in-memory databases cannot use WAL and correctly retain
+        // journal_mode=memory. They have no sidecars or checkpoint work.
+        if (journalMode === "memory" && hasInMemoryMainDatabase(db)) {
+          return false;
+        }
+        const label = options.databaseLabel ?? "sqlite database";
+        const location = options.databasePath ? ` at ${options.databasePath}` : "";
+        throw new Error(
+          `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
+        );
       } catch (error) {
         const remainingMs = deadline - Date.now();
         if (!isSqliteLockError(error) || remainingMs <= 0) {
@@ -408,7 +434,12 @@ export function configureSqliteWalMaintenance(
       close: () => true,
     };
   }
-  enableWalJournalMode(db, busyTimeoutMs);
+  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+    return {
+      checkpoint: () => true,
+      close: () => true,
+    };
+  }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 

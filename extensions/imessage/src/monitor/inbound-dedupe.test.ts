@@ -1,14 +1,9 @@
 // Imessage tests cover inbound dedupe + stale-backlog age fence behavior.
-import { beforeEach, describe, expect, it } from "vitest";
-import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
+import { describe, expect, it } from "vitest";
 import {
   buildIMessageInboundReplayKey,
-  claimIMessageInboundReplay,
-  commitIMessageInboundReplay,
-  createIMessageInboundReplayGuard,
   IMESSAGE_STALE_INBOUND_THRESHOLD_MS,
   isStaleIMessageBacklog,
-  releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -103,75 +98,5 @@ describe("isStaleIMessageBacklog", () => {
   it("fails open when the send date is missing or unparseable", () => {
     expect(isStaleIMessageBacklog(payload({ created_at: undefined }), now)).toBe(false);
     expect(isStaleIMessageBacklog(payload({ created_at: "not-a-date" }), now)).toBe(false);
-  });
-});
-
-describe("createIMessageInboundReplayGuard claim/commit/release", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-  });
-
-  it("claims a key, and a committed key blocks a later claim as a duplicate", async () => {
-    const guard = createIMessageInboundReplayGuard();
-    const message = payload({ guid: "GUID-DEDUPE" });
-    const first = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(first.claimed).toBe(true);
-    expect(first.key).toBe("default:guid:GUID-DEDUPE");
-    await commitIMessageInboundReplay({
-      guard,
-      accountId: "default",
-      keys: first.key ? [first.key] : [],
-    });
-    const second = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(second.claimed).toBe(false);
-  });
-
-  it("a released claim is reclaimable so a transient failure can retry", async () => {
-    const guard = createIMessageInboundReplayGuard();
-    const message = payload({ guid: "GUID-RETRY" });
-    const first = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(first.claimed).toBe(true);
-    releaseIMessageInboundReplay({
-      guard,
-      accountId: "default",
-      keys: first.key ? [first.key] : [],
-    });
-    const second = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(second.claimed).toBe(true);
-  });
-
-  it("a held (uncommitted) claim reports a concurrent duplicate as not claimed", async () => {
-    const guard = createIMessageInboundReplayGuard();
-    const message = payload({ guid: "GUID-INFLIGHT" });
-    const first = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(first.claimed).toBe(true);
-    // Second claim while the first is still in flight (not yet committed).
-    const second = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(second.claimed).toBe(false);
-  });
-
-  it("round-trips the composite claim key for a GUID-less row", async () => {
-    // Regression guard: the exact claimed key (composite, no GUID) must be the
-    // one committed, or a GUID-less coalesced row would leak an in-flight claim.
-    const guard = createIMessageInboundReplayGuard();
-    const message = payload({ guid: undefined });
-    const first = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(first.claimed).toBe(true);
-    expect(first.key).toBe(buildIMessageInboundReplayKey({ accountId: "default", message }));
-    await commitIMessageInboundReplay({
-      guard,
-      accountId: "default",
-      keys: first.key ? [first.key] : [],
-    });
-    const second = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(second.claimed).toBe(false);
-  });
-
-  it("fails open: an unidentifiable message claims with no key", async () => {
-    const guard = createIMessageInboundReplayGuard();
-    const message = payload({ guid: undefined, sender: undefined });
-    const res = await claimIMessageInboundReplay({ guard, accountId: "default", message });
-    expect(res.claimed).toBe(true);
-    expect(res.key).toBeNull();
   });
 });

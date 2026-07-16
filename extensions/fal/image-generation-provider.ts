@@ -155,8 +155,14 @@ type FalNetworkPolicy = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.falTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, { ...api, setImageFetchGuard: setFalFetchGuardForTesting });
 }
 
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {

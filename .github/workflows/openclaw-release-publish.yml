@@ -1323,7 +1323,14 @@ jobs:
             fi
             published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
             published_tarball_path="${manifest_dir}/published.tgz"
-            curl -fsSL --retry 3 -o "${published_tarball_path}" "${published_tarball_url}"
+            # Keep registry identity verification bounded if a connected
+            # tarball endpoint stops transferring during a release resume.
+            curl -fsSL \
+              --connect-timeout 10 \
+              --max-time 120 \
+              --retry 3 \
+              --retry-max-time 180 \
+              -o "${published_tarball_path}" "${published_tarball_url}"
             published_sha="$(sha256sum "${published_tarball_path}" | awk '{print $1}')"
             if [[ "${published_sha}" != "${manifest_tarball_sha}" ]]; then
               {

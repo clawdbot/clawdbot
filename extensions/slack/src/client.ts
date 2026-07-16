@@ -29,6 +29,17 @@ export function createSlackWebClient(token: string, options: WebClientOptions = 
   return new WebClient(token, resolveSlackWebClientOptions(options));
 }
 
+export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
+  // Startup degrades after auth.test fails, so terminate this one-shot request without
+  // imposing the same short deadline on Bolt's long-lived client.
+  return createSlackWebClient(token, {
+    ...options,
+    rejectRateLimitedCalls: true,
+    retryConfig: { retries: 0 },
+    timeout: 10_000,
+  });
+}
+
 export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
   return new WebClient(token, resolveSlackLookupClientOptions(options));
 }

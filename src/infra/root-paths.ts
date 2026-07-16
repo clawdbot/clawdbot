@@ -5,9 +5,6 @@ import "./fs-safe-defaults.js";
 // traversal outside the configured root.
 export {
   resolveExistingPathsWithinRoot,
-  resolvePathsWithinRoot,
-  resolvePathWithinRoot,
   resolveStrictExistingPathsWithinRoot,
-  resolveWritablePathWithinRoot,
 } from "@openclaw/fs-safe/advanced";
 export { pathScope } from "@openclaw/fs-safe/advanced";

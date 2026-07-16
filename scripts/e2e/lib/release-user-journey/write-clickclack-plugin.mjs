@@ -103,6 +103,7 @@ async function requestJson(account, method, pathname, body) {
       ...(body == null ? {} : { "content-type": "application/json" }),
     },
     ...(body == null ? {} : { body: JSON.stringify(body) }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     throw new Error(\`ClickClack fixture \${response.status}: \${await response.text()}\`);

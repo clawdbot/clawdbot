@@ -223,7 +223,9 @@ async function startDeviceFlow(
 }
 
 /**
- * Sleep that can be interrupted by an AbortSignal
+ * Sleep that can be interrupted by an AbortSignal.
+ * Resolve and abort both settle once and remove the abort listener so
+ * multi-round device polling cannot accumulate listeners on a shared signal.
  */
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -232,16 +234,28 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
       return;
     }
 
-    const timeout = setTimeout(resolve, ms);
+    let settled = false;
+    const timeout = setTimeout(() => {
+      settle(resolve);
+    }, ms);
 
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
+    const onAbort = () => {
+      settle(() => {
         reject(new Error("Login cancelled"));
-      },
-      { once: true },
-    );
+      });
+    };
+
+    function settle(action: () => void) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      action();
+    }
+
+    signal?.addEventListener("abort", onAbort);
   });
 }
 

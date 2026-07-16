@@ -19,6 +19,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -255,7 +256,7 @@ async function readRecentTranscriptTailLinesAsync(
   const handle = await fs.promises.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(readLen);
-    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    const bytesRead = await readFileWindowFully(handle, buffer, readStart);
     if (bytesRead <= 0) {
       return [];
     }
@@ -995,7 +996,7 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
 
 function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
   const buf = Buffer.alloc(maxBytes);
-  const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+  const bytesRead = readFileWindowFullySync(fd, buf, 0);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1007,7 +1008,7 @@ async function readTranscriptHeadChunkAsync(
   maxBytes = 8192,
 ): Promise<string | null> {
   const buffer = Buffer.alloc(maxBytes);
-  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  const bytesRead = await readFileWindowFully(handle, buffer, 0);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1174,9 +1175,12 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
   const buf = Buffer.alloc(readLen);
-  fs.readSync(params.fd, buf, 0, readLen, readStart);
+  const bytesRead = readFileWindowFullySync(params.fd, buf, readStart);
+  if (bytesRead <= 0) {
+    return null;
+  }
 
-  const chunk = buf.toString("utf-8");
+  const chunk = buf.toString("utf-8", 0, bytesRead);
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
   return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
@@ -1188,7 +1192,7 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
   const buffer = Buffer.alloc(readLen);
-  const { bytesRead } = await params.handle.read(buffer, 0, readLen, readStart);
+  const bytesRead = await readFileWindowFully(params.handle, buffer, readStart);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1556,7 +1560,7 @@ export function readRecentSessionUsageFromTranscript(
     const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
     const readStart = Math.max(0, stat.size - readLen);
     const buf = Buffer.alloc(readLen);
-    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    const bytesRead = readFileWindowFullySync(fd, buf, readStart);
     if (bytesRead <= 0) {
       return null;
     }
@@ -1730,9 +1734,9 @@ function readRecentMessagesFromTranscript(
     const readStart = Math.max(0, size - readBytes);
     const readLen = Math.min(size, readBytes);
     const buf = Buffer.alloc(readLen);
-    fs.readSync(fd, buf, 0, readLen, readStart);
+    const bytesRead = readFileWindowFullySync(fd, buf, readStart);
 
-    const chunk = buf.toString("utf-8");
+    const chunk = buf.toString("utf-8", 0, bytesRead);
     const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
     const tailLines = lines.slice(-PREVIEW_MAX_LINES);
 

@@ -29,6 +29,8 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  blockedCodexModelIdentities?: readonly string[];
 };
 
 export type DoctorHealthFlowContext = {
@@ -652,6 +654,9 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    ...(ctx.configResult.blockedCodexModelIdentities?.length
+      ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
   });
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -1327,6 +1332,28 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       ctx.runtime.log(
         `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
       );
+    }
+  }
+  if (ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true) {
+    // Two-phase safety: replaceConfigFile above persists ctx.cfg itself
+    // (cfgForPersistence is only the flow-start change-detection clone), and
+    // when no write was scheduled ctx.cfg still mirrors disk because the
+    // required runtime policy was already persisted. Either way ctx.cfg is the
+    // durable config, so the cron rewrite below validates against real state.
+    const { repairCronCodexModelRefsAfterConfigWrite } =
+      await import("../commands/doctor/cron/legacy-repair.js");
+    const result = await repairCronCodexModelRefsAfterConfigWrite({
+      cfg: ctx.cfg,
+      ...(ctx.configResult.blockedCodexModelIdentities?.length
+        ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+        : {}),
+    });
+    const { note } = await loadNoteModule();
+    if (result.changes.length > 0) {
+      note(result.changes.join("\n"), "Doctor changes");
+    }
+    if (result.warnings.length > 0) {
+      note(result.warnings.join("\n"), "Doctor warnings");
     }
   }
 }

@@ -36,7 +36,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 1048576,
+            "contextWindow": 200000,
             "maxTokens": 128000
           },
           {
@@ -48,7 +48,7 @@
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
-            "maxTokens": 64000
+            "maxTokens": 128000
           },
           {
             "id": "claude-sonnet-4-6",
@@ -59,7 +59,7 @@
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
-            "maxTokens": 64000
+            "maxTokens": 128000
           },
           {
             "id": "claude-opus-4-6",
@@ -70,7 +70,7 @@
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
             "contextWindow": 200000,
-            "maxTokens": 64000
+            "maxTokens": 128000
           }
         ]
       },
@@ -139,7 +139,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 1048576,
+            "contextWindow": 1000000,
             "maxTokens": 128000
           },
           {
@@ -150,8 +150,8 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 200000,
-            "maxTokens": 64000
+            "contextWindow": 1000000,
+            "maxTokens": 128000
           },
           {
             "id": "claude-haiku-4-5",
@@ -183,8 +183,8 @@
             "mediaInput": {
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
-            "contextWindow": 200000,
-            "maxTokens": 64000
+            "contextWindow": 1000000,
+            "maxTokens": 128000
           },
           {
             "id": "claude-opus-4-6",
@@ -194,8 +194,8 @@
             "mediaInput": {
               "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
             },
-            "contextWindow": 200000,
-            "maxTokens": 64000
+            "contextWindow": 1000000,
+            "maxTokens": 128000
           }
         ]
       }
@@ -262,7 +262,7 @@
       "choiceId": "anthropic-cli",
       "deprecatedChoiceIds": ["claude-cli"],
       "choiceLabel": "Anthropic Claude CLI",
-      "choiceHint": "Reuse a local Claude CLI login on this host",
+      "choiceHint": "Keep using an existing Claude Code CLI login on this host",
       "assistantPriority": -20,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
@@ -275,7 +275,7 @@
       "choiceId": "setup-token",
       "appGuidedSecret": true,
       "choiceLabel": "Anthropic setup-token",
-      "choiceHint": "Manual token path",
+      "choiceHint": "Token created by running 'claude setup-token' in your terminal",
       "assistantPriority": 40,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",

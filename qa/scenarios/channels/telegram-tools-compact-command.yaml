@@ -14,6 +14,13 @@ scenario:
     - src/auto-reply/reply/commands-tools.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 5,
+        "telegram:all": 4,
+        "telegram:mock-release": 4,
+        "telegram:release": 4,
+      }
     kind: flow
     channel: telegram
     summary: Request compact tools through Telegram and verify inventory text.

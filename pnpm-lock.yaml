@@ -136,6 +136,9 @@ importers:
       hosted-git-info:
         specifier: 10.1.1
         version: 10.1.1
+      iconv-lite:
+        specifier: 0.7.2
+        version: 0.7.2
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -236,9 +239,6 @@ importers:
       '@copilotkit/aimock':
         specifier: 1.35.0
         version: 1.35.0(vitest@4.1.9)
-      '@grammyjs/types':
-        specifier: 3.28.0
-        version: 3.28.0
       '@lit-labs/signals':
         specifier: 0.3.0
         version: 0.3.0
@@ -290,9 +290,15 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.9
         version: 4.1.9(@vitest/browser@4.1.9)(vitest@4.1.9)
+      acorn:
+        specifier: 8.17.0
+        version: 8.17.0
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
+      fast-glob:
+        specifier: 3.3.3
+        version: 3.3.3
       jscpd:
         specifier: 4.2.4
         version: 4.2.4
@@ -311,6 +317,9 @@ importers:
       oxlint-tsgolint:
         specifier: 0.24.0
         version: 0.24.0
+      playwright:
+        specifier: 1.61.1
+        version: 1.61.1
       shiki:
         specifier: 4.3.0
         version: 4.3.0
@@ -329,6 +338,9 @@ importers:
       unrun:
         specifier: 0.3.1
         version: 0.3.1
+      vite:
+        specifier: 8.1.3
+        version: 8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -423,6 +435,12 @@ importers:
       '@anthropic-ai/vertex-sdk':
         specifier: 0.19.0
         version: 0.19.0(zod@4.4.3)
+      google-auth-library:
+        specifier: 10.9.0
+        version: 10.9.0
+      undici:
+        specifier: 8.5.0
+        version: 8.5.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -435,6 +453,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/azure-speech:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/baseten:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -595,9 +619,6 @@ importers:
         specifier: 1.0.5
         version: 1.0.5
     devDependencies:
-      '@github/copilot':
-        specifier: 1.0.68
-        version: 1.0.68
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1260,12 +1281,18 @@ importers:
         specifier: 1.3.3
         version: 1.3.3
     devDependencies:
+      '@microsoft/teams.common':
+        specifier: 2.0.13
+        version: 2.0.13
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       jose:
         specifier: 6.2.3
         version: 6.2.3
+      jwks-rsa:
+        specifier: 3.2.2
+        version: 3.2.2
       openclaw:
         specifier: workspace:*
         version: link:../..
@@ -1458,18 +1485,18 @@ importers:
 
   extensions/qa-lab:
     dependencies:
-      '@openclaw/crabline':
-        specifier: 0.1.11
-        version: 0.1.11
-      '@openclaw/matrix':
-        specifier: workspace:*
-        version: link:../matrix
       '@copilotkit/aimock':
         specifier: 1.35.0
         version: 1.35.0(vitest@4.1.9)
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@openclaw/crabline':
+        specifier: 0.1.11
+        version: 0.1.11
+      '@openclaw/matrix':
+        specifier: workspace:*
+        version: link:../matrix
       p-limit:
         specifier: 7.3.0
         version: 7.3.0
@@ -1507,6 +1534,9 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+      vite:
+        specifier: 8.1.3
+        version: 8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
 
   extensions/qianfan:
     devDependencies:
@@ -1578,6 +1608,9 @@ importers:
       '@noble/hashes':
         specifier: 2.2.0
         version: 2.2.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -2094,6 +2127,10 @@ importers:
       p-map:
         specifier: 7.0.5
         version: 7.0.5
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   packages/model-catalog-core:
     dependencies:
@@ -2242,12 +2279,18 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@vitest/browser':
+        specifier: 4.1.9
+        version: 4.1.9(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
       '@vitest/browser-playwright':
         specifier: 4.1.9
         version: 4.1.9(playwright@1.61.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
       jsdom:
         specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.2.0)
+      openclaw:
+        specifier: workspace:*
+        version: link:..
       playwright:
         specifier: 1.61.1
         version: 1.61.1

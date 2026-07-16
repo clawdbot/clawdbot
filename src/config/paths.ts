@@ -293,6 +293,15 @@ export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string 
   return path.join(base, suffix);
 }
 
+/**
+ * Queue-owned copies of outbound attachments that have not been delivered yet,
+ * held outside the media store so its TTL sweep cannot reclaim an attachment a
+ * durable row still has to send.
+ */
+export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
+  return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
+}
+
 const OAUTH_FILENAME = "oauth.json";
 
 /**

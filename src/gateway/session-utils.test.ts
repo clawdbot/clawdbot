@@ -820,6 +820,33 @@ describe("gateway session utils", () => {
     expect(lockedCodex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
   });
 
+  test("reports observed locked runtime from agentHarnessId instead of configured intent", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "observed-codex",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      } as SessionEntry,
+    });
+
+    expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
+  });
+
   test.each(["xhigh", "max"] as const)(
     "preserves catalog-less persisted %s in session change projections",
     (thinkingLevel) => {

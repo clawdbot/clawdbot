@@ -120,7 +120,15 @@ describe("gateway agent handler", () => {
       const childSessionKey = "agent:work:subagent:plugin-helper";
       const cfg = {
         session: { mainKey: "main", scope: "per-sender" },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
       };
       mocks.listAgentIds.mockReturnValue(["main", "work"]);
       mocks.loadConfigReturn = cfg;
@@ -157,7 +165,7 @@ describe("gateway agent handler", () => {
         },
       };
 
-      await invokeAgent(
+      const respond = await invokeAgent(
         {
           message: "background plugin subagent task",
           sessionKey: childSessionKey,
@@ -169,6 +177,22 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+
+      const acceptedPayload = respond.mock.calls.find(
+        ([ok, payload]) =>
+          ok === true &&
+          typeof payload === "object" &&
+          payload !== null &&
+          "status" in payload &&
+          payload.status === "accepted",
+      )?.[1];
+      expect(acceptedPayload).toMatchObject({
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+      });
 
       await waitForAssertion(() => {
         const tasks = listTaskRecords().filter((task) => task.runId === runId);

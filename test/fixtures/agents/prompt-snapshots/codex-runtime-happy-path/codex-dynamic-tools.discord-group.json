@@ -474,7 +474,6 @@
                   "description": "Idempotent declaration key.",
                   "maxLength": 200,
                   "minLength": 1,
-                  "pattern": "\\S",
                   "type": "string"
                 },
                 "deleteAfterRun": {

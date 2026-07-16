@@ -63,6 +63,50 @@ describe("Codex app-server user input bridge", () => {
     });
   });
 
+  it("does not let a captured handle settle a replacement request", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const question = {
+      id: "answer",
+      header: "Answer",
+      question: "Continue?",
+      isOther: true,
+      isSecret: false,
+      options: null,
+    };
+    const firstResponse = bridge.handleRequest({
+      id: "input-first",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-first",
+        questions: [question],
+      },
+    });
+    const firstHandle = bridge.claimPendingRequest();
+    expect(firstHandle).toBeDefined();
+
+    const secondResponse = bridge.handleRequest({
+      id: "input-second",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-second",
+        questions: [question],
+      },
+    });
+
+    await expect(firstResponse).resolves.toEqual({ answers: {} });
+    expect(firstHandle?.cancel()).toBe(false);
+    expect(bridge.claimPendingRequest()).toBeDefined();
+    bridge.cancelPending();
+    await expect(secondResponse).resolves.toEqual({ answers: {} });
+  });
+
   it("maps keyed multi-question replies to Codex answer ids", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({

@@ -6,12 +6,11 @@ scenario:
     primary:
       - channels.message-actions
   execution:
+    profiles: { "matrix:all": 49, "matrix:transport": 48 }
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
-    config:
-      requiredChannelDriver: live
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-edit.js

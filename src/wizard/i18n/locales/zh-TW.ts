@@ -272,6 +272,8 @@ export const zh_TW = {
       testFailed: "AI 檢查失敗。",
       testFailure: "✗ {label}：{reason}\n{detail}",
       testPassed: "AI 檢查通過。",
+      unavailableTitle: "已偵測到但未自動測試",
+      unavailableCandidate: "{label} — {detail}。{reason}",
       testingCandidate: "正在測試 {label}（{modelRef}）— 真實 completion，並非 ping…",
       testingManualProvider: "正在測試 {label} — 真實 completion，並非 ping…",
       tryCandidate: "嘗試 {label}（{detail}）",

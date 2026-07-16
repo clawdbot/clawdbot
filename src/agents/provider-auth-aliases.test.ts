@@ -53,10 +53,8 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  resetProviderAuthAliasMapCacheForTest,
-  resolveProviderIdForAuth,
-} from "./provider-auth-aliases.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resetProviderAuthAliasMapCacheForTest } from "./provider-auth-aliases.test-support.js";
 
 function createPluginManifestRecord(
   plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,

@@ -299,6 +299,9 @@ SECRET_PLACEHOLDER_VALUES = {
     "clawrouter-e2e-secret",
     "very-long-browser-token-0123456789",
 }
+SYNTHETIC_SECRET_PREFIXES = frozenset(
+    {"dummy", "example", "fake", "fixture", "mock", "sample", "test"}
+)
 FETCH_CREDENTIAL_MODE_VALUES = {"include", "omit", "same-origin"}
 URI_PASSWORD_PLACEHOLDER_VALUES = {
     "clawrouter-e2e-secret",
@@ -3874,6 +3877,28 @@ def fallback_secret_risk(
     )
 
 
+def synthetic_secret_fixture(value: str, key: str) -> bool:
+    normalized = value.casefold()
+    if normalized in SECRET_PLACEHOLDER_VALUES:
+        return True
+    if len(normalized) > 80:
+        return False
+    camel_split_key = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "-",
+        key.strip("\"'"),
+    )
+    normalized_key = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        camel_split_key.casefold(),
+    ).strip("-")
+    return any(
+        normalized == f"{prefix}-{normalized_key}"
+        for prefix in SYNTHETIC_SECRET_PREFIXES
+    )
+
+
 def safe_secret_assignment_suffix(
     text: str,
     end: int,
@@ -5216,7 +5241,7 @@ def secret_text_risk(
             )
         ):
             continue
-        if value.lower() in SECRET_PLACEHOLDER_VALUES:
+        if synthetic_secret_fixture(value, key):
             if safe_secret_assignment_suffix(
                 text,
                 match.end(),

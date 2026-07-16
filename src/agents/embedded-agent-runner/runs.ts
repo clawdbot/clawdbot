@@ -64,6 +64,7 @@ type EmbeddedAgentQueueFailureReason =
   | "not_streaming"
   | "stale_run"
   | "compacting"
+  | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"

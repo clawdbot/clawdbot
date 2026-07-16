@@ -1524,7 +1524,7 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
     argv;
   const pluginIndex = readNonNegativeInt(pluginIndexRaw, 0, "bundled plugin runtime index");

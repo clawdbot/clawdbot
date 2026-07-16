@@ -5,6 +5,8 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
@@ -214,6 +216,7 @@ type ChannelManagerOptions = {
   getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
   deferStartupAccountStartsUntil?: Promise<void>;
+  getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
 };
 
 type StopChannelOptions = {
@@ -612,6 +615,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   cfg,
                   accountId: id,
                   channelRuntime: channelRuntimeForTask,
+                  gatewayRuntime: opts.getNativeApprovalRuntime?.(),
                   logger: log,
                 }),
             );
@@ -649,20 +653,22 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   channelRunDurationMs = Date.now() - startedAt;
                 };
                 try {
-                  return startAccount({
-                    cfg,
-                    accountId: id,
-                    account,
-                    runtime,
-                    abortSignal: abort.signal,
-                    log,
-                    getStatus: () => getRuntime(channelId, id),
-                    setStatus: (next) =>
-                      isCurrentTask()
-                        ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
-                        : getRuntime(channelId, id),
-                    ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-                  }).finally(recordDuration);
+                  return withGatewayNativeApprovalRuntime(opts.getNativeApprovalRuntime?.(), () =>
+                    startAccount({
+                      cfg,
+                      accountId: id,
+                      account,
+                      runtime,
+                      abortSignal: abort.signal,
+                      log,
+                      getStatus: () => getRuntime(channelId, id),
+                      setStatus: (next) =>
+                        isCurrentTask()
+                          ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
+                          : getRuntime(channelId, id),
+                      ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                    }),
+                  ).finally(recordDuration);
                 } catch (error) {
                   recordDuration();
                   throw error;

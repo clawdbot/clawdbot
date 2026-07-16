@@ -19,6 +19,7 @@ import {
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   resolveEmbeddingProviderAdapterId,
@@ -94,6 +95,7 @@ const META_KEY = MEMORY_INDEX_META_KEY;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
+const EMBEDDING_CACHE_SEED_BATCH_SIZE = 1_000;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
@@ -581,62 +583,63 @@ export abstract class MemoryManagerSyncBase {
     if (!this.cache.enabled) {
       return;
     }
-    let transactionStarted = false;
-    try {
-      const rows = sourceDb
-        .prepare(
-          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
-        )
-        .iterate() as IterableIterator<{
-        provider: string;
-        model: string;
-        provider_key: string;
-        hash: string;
-        embedding: string;
-        dims: number | null;
-        updated_at: number;
-      }>;
-      let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
-      for (const row of rows) {
-        if (!insert) {
-          insert = this.db.prepare(
-            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-               embedding=excluded.embedding,
-               dims=excluded.dims,
-               updated_at=excluded.updated_at`,
-          );
-          this.db.exec("BEGIN");
-          transactionStarted = true;
-        }
-        insert.run(
-          row.provider,
-          row.model,
-          row.provider_key,
-          row.hash,
-          row.embedding,
-          row.dims,
-          row.updated_at,
-        );
-        rowCount += 1;
-        if (rowCount % 1000 === 0) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-        }
+    type CacheRow = {
+      rowid: number;
+      provider: string;
+      model: string;
+      provider_key: string;
+      hash: string;
+      embedding: string;
+      dims: number | null;
+      updated_at: number;
+    };
+    const selectBatch = sourceDb.prepare(
+      `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at
+       FROM ${EMBEDDING_CACHE_TABLE}
+       WHERE rowid > ?
+       ORDER BY rowid
+       LIMIT ?`,
+    );
+    const insert = this.db.prepare(
+      `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+         embedding=excluded.embedding,
+         dims=excluded.dims,
+         updated_at=excluded.updated_at`,
+    );
+    let lastRowid = 0;
+    while (true) {
+      // Materialize each source page so neither a read cursor nor a write
+      // transaction remains open when control returns to the event loop.
+      const batch = selectBatch.all(lastRowid, EMBEDDING_CACHE_SEED_BATCH_SIZE) as CacheRow[];
+      if (batch.length === 0) {
+        return;
       }
-      if (transactionStarted) {
-        this.db.exec("COMMIT");
+      runSqliteImmediateTransactionSync(
+        this.db,
+        () => {
+          for (const row of batch) {
+            insert.run(
+              row.provider,
+              row.model,
+              row.provider_key,
+              row.hash,
+              row.embedding,
+              row.dims,
+              row.updated_at,
+            );
+          }
+        },
+        { operationLabel: "memory.embedding-cache.seed" },
+      );
+      lastRowid = batch[batch.length - 1]?.rowid ?? lastRowid;
+      if (batch.length < EMBEDDING_CACHE_SEED_BATCH_SIZE) {
+        return;
       }
-    } catch (err) {
-      if (transactionStarted) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {}
-      }
-      throw err;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
   }
 

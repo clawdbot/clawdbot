@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  type AgentPlanStep,
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
@@ -69,6 +70,8 @@ import {
   buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
+  reconcileSlackNativeTaskChunks,
+  type SlackNativeTaskSnapshot,
 } from "../../progress-blocks.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -1161,13 +1164,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const completionChunks =
         useNativeProgressStreaming &&
         !nativeProgressCompletionSent &&
-        previewToolProgressLines.length > 0
-          ? buildSlackProgressStreamCompletionChunks({
-              title: explicitProgressTitle,
-              lines: previewToolProgressLines,
-              maxLineChars: progressDraftMaxLineChars,
-              finalInProgressStatus: params.payload.isError ? "error" : "complete",
-            })
+        (previewToolProgressLines.length > 0 ||
+          Boolean(latestPlan?.length) ||
+          Boolean(latestPlanExplanation) ||
+          [...nativeTaskState.values()].some(
+            (task) => task.status !== "complete" && task.status !== "error",
+          ))
+          ? reconcileSlackNativeTaskChunks({
+              previousTasks: nativeTaskState,
+              chunks: buildSlackProgressStreamCompletionChunks({
+                title: resolveNativeProgressTitle(),
+                lines: resolveNativeProgressLines(),
+                plan: resolveNativeProgressPlan(),
+                maxLineChars: progressDraftMaxLineChars,
+                finalInProgressStatus: params.payload.isError ? "error" : "complete",
+              }),
+            }).chunks
           : undefined;
       if (useNativeProgressStreaming) {
         if (completionChunks?.length) {
@@ -1542,6 +1554,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: ChannelProgressDraftLine[] = [];
   let lastNonEmptyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];
+  let latestPlan: AgentPlanStep[] | undefined;
+  let latestPlanExplanation: string | undefined;
+  // Last task rows emitted to the native stream; reconciliation terminalizes
+  // ids that drop out (plan shrinks, tool-line <-> plan source switches).
+  let nativeTaskState: SlackNativeTaskSnapshot = new Map();
   let appendRenderedText = "";
   let appendSourceText = "";
   let reasoningProgressRawText = "";
@@ -1567,6 +1584,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       lines: progressLines,
       seed: progressSeed,
       formatLine: escapeSlackMrkdwn,
+      narration: latestPlanExplanation,
+      plan: latestPlan,
     });
     if (!previewText) {
       return;
@@ -1575,6 +1594,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ? buildSlackProgressDraftBlocks({
           title: explicitProgressTitle,
           lines: progressLines,
+          plan: latestPlan,
+          narration: latestPlanExplanation,
           maxLineChars: resolveChannelProgressDraftMaxLineChars(account.config),
         })
       : undefined;
@@ -1602,16 +1623,44 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     return !streamFailed;
   };
 
+  // Empty/cleared plans fall back to line-derived tasks; the reconciler
+  // terminalizes any previously emitted plan rows on that switch.
+  const resolveNativeProgressPlan = (): AgentPlanStep[] | undefined =>
+    latestPlan?.length ? latestPlan : undefined;
+
+  const resolveNativeProgressLines = (): ChannelProgressDraftLine[] => {
+    if (latestPlan?.length || !latestPlanExplanation) {
+      return previewToolProgressLines;
+    }
+    const explanationLine = buildChannelProgressDraftLine({
+      event: "plan",
+      phase: "update",
+      explanation: latestPlanExplanation,
+    });
+    return explanationLine
+      ? [...previewToolProgressLines, explanationLine]
+      : previewToolProgressLines;
+  };
+
+  // A configured title must not hide the model's plan explanation: typed-plan
+  // chunks carry no narration field, so the title is its only native surface.
+  const resolveNativeProgressTitle = () =>
+    explicitProgressTitle && latestPlanExplanation
+      ? `${explicitProgressTitle} — ${latestPlanExplanation}`
+      : (explicitProgressTitle ?? latestPlanExplanation);
+
   const buildNativeProgressChunks = () =>
     streamSession
       ? buildSlackProgressStreamUpdateChunks({
-          title: explicitProgressTitle,
-          lines: previewToolProgressLines,
+          title: resolveNativeProgressTitle(),
+          lines: resolveNativeProgressLines(),
+          plan: resolveNativeProgressPlan(),
           maxLineChars: progressDraftMaxLineChars,
         })
       : buildSlackProgressStreamStartChunks({
-          title: explicitProgressTitle,
-          lines: previewToolProgressLines,
+          title: resolveNativeProgressTitle(),
+          lines: resolveNativeProgressLines(),
+          plan: resolveNativeProgressPlan(),
           maxLineChars: progressDraftMaxLineChars,
         });
 
@@ -1686,14 +1735,28 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const updateNativeProgressStream = async () => {
-    if (!useNativeProgressStreaming || streamFailed || previewToolProgressLines.length === 0) {
+    const hasRetirableNativeTasks = [...nativeTaskState.values()].some(
+      (task) => task.status !== "complete" && task.status !== "error",
+    );
+    if (
+      !useNativeProgressStreaming ||
+      streamFailed ||
+      (previewToolProgressLines.length === 0 &&
+        !latestPlan?.length &&
+        !latestPlanExplanation &&
+        !hasRetirableNativeTasks)
+    ) {
       return;
     }
     const canContinue = await waitForNativeProgressStreamStart();
     if (!canContinue) {
       return;
     }
-    const chunks = buildNativeProgressChunks();
+    const reconciled = reconcileSlackNativeTaskChunks({
+      previousTasks: nativeTaskState,
+      chunks: buildNativeProgressChunks(),
+    });
+    const chunks = reconciled.chunks;
     if (!chunks?.length) {
       return;
     }
@@ -1704,9 +1767,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     try {
       if (!streamSession) {
         await startNativeProgressStream(chunks, chunkKey);
-        return;
+      } else {
+        await appendNativeProgressStream(chunks, chunkKey);
       }
-      await appendNativeProgressStream(chunks, chunkKey);
+      // Commit only after Slack accepted the chunks; a failed emit must retry
+      // the same reconciliation against the previous snapshot.
+      nativeTaskState = reconciled.tasks;
     } catch (err) {
       runtime.error?.(
         danger(
@@ -1720,6 +1786,43 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: useNativeProgressStreaming ? updateNativeProgressStream : renderProgressDraft,
   });
+
+  const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
+    if (previewToolProgressSuppressed) {
+      return;
+    }
+    // Keep an empty snapshot distinct from "no plan": empty switches the
+    // native task source back to lines and reconciliation retires plan rows.
+    latestPlan = steps ? steps.map((entry) => ({ ...entry })) : undefined;
+    latestPlanExplanation = explanation?.replace(/\s+/g, " ").trim() || undefined;
+    if (!draftStream && !useNativeProgressStreaming) {
+      return;
+    }
+    if (streamMode !== "status_final" && !useNativeProgressStreaming) {
+      const text = formatChannelProgressDraftText({
+        entry: account.config,
+        lines: previewToolProgressLines,
+        seed: progressSeed,
+        formatLine: escapeSlackMrkdwn,
+        narration: latestPlanExplanation,
+        plan: latestPlan,
+      });
+      if (text) {
+        draftStream?.update(text);
+        hasStreamedMessage = true;
+      }
+      // Empty render after a cleared plan intentionally keeps the prior draft:
+      // clear() would kill the stream for the rest of the turn, and an empty
+      // retraction only occurs with label:false plus a zero-step snapshot,
+      // which bundled plan producers cannot emit (minItems: 1).
+      return;
+    }
+    const alreadyStarted = progressDraftGate.hasStarted;
+    await progressDraftGate.startNow();
+    if (alreadyStarted && progressDraftGate.hasStarted) {
+      await refreshStartedProgressDraft();
+    }
+  };
 
   const refreshStartedProgressDraft = async () => {
     if (useNativeProgressStreaming) {
@@ -1905,6 +2008,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deliveryTracker = createSlackEventDeliveryTracker();
         resetDraftDeliveryState();
         resetDraftProgressState();
+        // Queued follow-ups start a new visible reply; the previous request's
+        // checklist and native row high-water mark must not leak into it.
+        latestPlan = undefined;
+        latestPlanExplanation = undefined;
+        nativeTaskState = new Map();
       };
 
   let dispatchError: unknown;
@@ -2015,15 +2123,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (payload.phase !== "update") {
             return;
           }
-          await pushPreviewProgress(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase,
-              title: payload.title,
-              explanation: payload.explanation,
-              steps: payload.steps,
-            }),
-          );
+          await pushPlanProgress(payload.planSteps, payload.explanation);
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {
@@ -2100,13 +2200,22 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const completionChunks =
         useNativeProgressStreaming &&
         !nativeProgressCompletionSent &&
-        previewToolProgressLines.length > 0
-          ? buildSlackProgressStreamCompletionChunks({
-              title: explicitProgressTitle,
-              lines: previewToolProgressLines,
-              maxLineChars: progressDraftMaxLineChars,
-              finalInProgressStatus: dispatchError ? "error" : "complete",
-            })
+        (previewToolProgressLines.length > 0 ||
+          Boolean(latestPlan?.length) ||
+          Boolean(latestPlanExplanation) ||
+          [...nativeTaskState.values()].some(
+            (task) => task.status !== "complete" && task.status !== "error",
+          ))
+          ? reconcileSlackNativeTaskChunks({
+              previousTasks: nativeTaskState,
+              chunks: buildSlackProgressStreamCompletionChunks({
+                title: resolveNativeProgressTitle(),
+                lines: resolveNativeProgressLines(),
+                plan: resolveNativeProgressPlan(),
+                maxLineChars: progressDraftMaxLineChars,
+                finalInProgressStatus: dispatchError ? "error" : "complete",
+              }),
+            }).chunks
           : undefined;
       if (completionChunks?.length) {
         nativeProgressCompletionSent = true;

@@ -12,7 +12,6 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-reply-delivery-shape",
     title: "WhatsApp direct Gateway send chunks long replies",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_REPLY_SHAPE_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -75,7 +74,6 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-stream-final-message-accounting",
     title: "WhatsApp streamed final response has exactly the final chunks",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     buildRun: () => ({
       configMode: "allowlist",
@@ -106,7 +104,6 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-status-reactions",
-    standardId: "reaction-observation",
     title: "WhatsApp status reactions are observable",
     timeoutMs: 60_000,
     configOverrides: {
@@ -133,7 +130,6 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-status-reaction-lifecycle",
     title: "WhatsApp status reaction lifecycle updates the triggering message",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       statusReactions: {
@@ -170,7 +166,6 @@ export const WHATSAPP_QA_DELIVERY_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-group-allowlist-block",
-    standardId: "allowlist-block",
     title: "WhatsApp group outside allowlist stays quiet",
     timeoutMs: 8_000,
     configOverrides: {

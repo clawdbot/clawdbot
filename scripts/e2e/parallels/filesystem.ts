@@ -1,5 +1,5 @@
 // Filesystem script supports OpenClaw repository automation.
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { access, mkdir, open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { repoRoot } from "./host-command.ts";
@@ -20,7 +20,7 @@ export async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
 
-export async function readTextFileTail(
+async function readTextFileTail(
   filePath: string,
   maxBytes = DEFAULT_TEXT_FILE_TAIL_BYTES,
 ): Promise<string> {
@@ -85,8 +85,4 @@ export async function writeSummaryMarkdown(input: {
     "utf8",
   );
   return markdownPath;
-}
-
-export function writeExecutable(filePath: string, content: string): void {
-  writeFileSync(filePath, content, { encoding: "utf8", mode: 0o755 });
 }

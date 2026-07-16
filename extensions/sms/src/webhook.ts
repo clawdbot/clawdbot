@@ -5,6 +5,7 @@ import {
   createFixedWindowRateLimiter,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import {
   buildTwilioInboundMessage,
@@ -175,13 +176,17 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       return true;
     }
 
-    void dispatchSmsInboundEvent({
-      cfg: params.cfg,
-      account: params.account,
-      msg,
-      channelRuntime: params.channelRuntime,
-      log: params.log,
-    }).catch((err: unknown) => {
+    // Reserve the detached task before the HTTP admission is released;
+    // otherwise later queue work inherits a released admission root.
+    void runDetachedWebhookWork(() =>
+      dispatchSmsInboundEvent({
+        cfg: params.cfg,
+        account: params.account,
+        msg,
+        channelRuntime: params.channelRuntime,
+        log: params.log,
+      }),
+    ).catch((err: unknown) => {
       params.log?.error?.(
         `SMS webhook dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
       );

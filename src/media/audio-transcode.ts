@@ -103,7 +103,7 @@ export async function transcodeAudioBufferToOpus(params: {
 }
 
 /** Outcome for lightweight container transcodes that may be unsupported or intentionally skipped. */
-export type AudioContainerTranscodeOutcome =
+type AudioContainerTranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
       ok: false;

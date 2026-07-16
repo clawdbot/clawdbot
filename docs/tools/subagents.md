@@ -48,6 +48,10 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
+In the Control UI, parent sessions with recent child runs have an expandable
+sidebar row. The nested rows show child status and runtime, and selecting one
+opens that child's chat while preserving the parent hierarchy.
+
 ### Thread binding controls
 
 These commands work on channels with persistent thread bindings. See

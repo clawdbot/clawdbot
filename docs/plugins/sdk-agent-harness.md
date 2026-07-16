@@ -435,6 +435,39 @@ yourself.
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
 
+### Terminal tool outcomes
+
+`AgentHarnessAttemptParams.observeToolTerminal` is the host-owned terminal
+outcome accumulator. A harness that executes OpenClaw dynamic tools or native
+tools must call it when each tool reaches one terminal outcome, before the
+attempt result is finalized. Harnesses that do not execute tools do not need to
+call it.
+
+Report facts from the execution boundary:
+
+- Pass the protocol call id when one exists, the canonical tool name, and the
+  arguments that actually reached the tool after preparation or hook rewrites.
+- Set `executionStarted: false` when validation, approval, or another guard
+  stopped the call before the tool implementation began. Once dispatch may
+  have happened, report `true` conservatively.
+- Report `outcome: "success"` or `outcome: "failure"`. Include the structured
+  failure fields available from the runtime instead of inferring failure from
+  display text.
+- Use `nativeMutation` only for native tools that do not use an OpenClaw tool
+  definition. Supply protocol-owned mutation and replay facts there; do not
+  copy OpenClaw's mutation classifier into the harness.
+
+The callback returns the canonical resolution for that call. Carry its
+`lastToolError` into `AgentHarnessAttemptResult` and use its execution,
+arguments, and side-effect facts in the harness projection instead of deriving
+parallel state. The host keeps an unresolved mutating failure across unrelated
+successful tools and clears it only after the matching action succeeds.
+
+The callback remains optional for source compatibility with older experimental
+harnesses. Optional does not mean ignorable for a harness that executes tools:
+without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
+across later tool calls, including quiet heartbeat completion.
+
 ## Current limitations
 
 - The public import path is generic, but some attempt/result type aliases

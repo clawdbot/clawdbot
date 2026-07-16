@@ -10,6 +10,7 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  runDetachedWebhookWork,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -127,9 +128,11 @@ export function createLineNodeWebhookHandler(params: {
 
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        void Promise.resolve()
-          .then(() => params.bot.handleWebhook(body))
-          .catch((err: unknown) => logLineWebhookDispatchError(params.runtime, err));
+        // Detach event processing from the request admission before the ack
+        // releases it; an inherited released admission refuses queue work.
+        void runDetachedWebhookWork(() => params.bot.handleWebhook(body)).catch((err: unknown) =>
+          logLineWebhookDispatchError(params.runtime, err),
+        );
       }
     } catch (err) {
       await receiveContext?.nack(err);

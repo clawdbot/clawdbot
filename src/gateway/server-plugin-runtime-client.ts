@@ -21,7 +21,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   scopes?: string[];
-}): GatewayRequestOptions["client"] {
+}): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
     typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
       ? params.pluginRuntimeOwnerId.trim()

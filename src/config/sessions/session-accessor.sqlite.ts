@@ -54,7 +54,9 @@ export { previewSqliteSessionDiskBudget } from "./session-accessor.sqlite-mainte
 export {
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
+  loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

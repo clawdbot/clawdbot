@@ -141,7 +141,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */
-export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
   mode?: string;
   overrideExisting: boolean;
 } {
@@ -151,7 +151,7 @@ export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigC
 }
 
 /** Normalize Claude permission arguments, removing legacy skip-permissions flags. */
-export function normalizeClaudePermissionArgs(
+function normalizeClaudePermissionArgs(
   args?: string[],
   options?: { mode?: string; overrideExisting?: boolean },
 ): string[] | undefined {
@@ -204,7 +204,7 @@ export function normalizeClaudePermissionArgs(
 }
 
 /** Ensure Claude CLI setting sources stay restricted to user settings. */
-export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
+function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefined {
   if (!args) {
     return args;
   }

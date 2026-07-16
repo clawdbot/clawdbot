@@ -5,6 +5,7 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { AgentPlanStep } from "../channels/streaming.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
@@ -121,6 +122,10 @@ export type CliThinkingDelta = {
 
 export type CliThinkingProgress = {
   progressTokens: number;
+};
+
+export type CliPlanUpdate = {
+  steps: AgentPlanStep[];
 };
 
 /** Tool-call start event reconstructed from CLI stream output. */
@@ -1199,6 +1204,7 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -1320,6 +1326,23 @@ export function createCliJsonlStreamingParser(params: {
     }
 
     const item = isRecord(parsed.item) ? parsed.item : null;
+    if (item?.type === "todo_list" && Array.isArray(item.items)) {
+      const steps = item.items.flatMap((entry) => {
+        if (!isRecord(entry) || typeof entry.text !== "string") {
+          return [];
+        }
+        return [
+          {
+            step: entry.text,
+            // codex exec JSONL exposes only a completed boolean for todo items.
+            status: entry.completed === true ? ("completed" as const) : ("pending" as const),
+          },
+        ];
+      });
+      if (steps.length > 0) {
+        params.onPlanUpdate?.({ steps });
+      }
+    }
     if (item && typeof item.text === "string") {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {

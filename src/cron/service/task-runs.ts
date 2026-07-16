@@ -24,6 +24,7 @@ import {
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToTriggerEval,
+  resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
 import type { CronJob, CronRunStatus } from "../types.js";
@@ -130,8 +131,7 @@ function findLatestCronTaskRunForRecovery(
     .toSorted(
       (left, right) =>
         Number(left.endedAt !== undefined) - Number(right.endedAt !== undefined) ||
-        (right.endedAt ?? right.lastEventAt ?? right.createdAt) -
-          (left.endedAt ?? left.lastEventAt ?? left.createdAt) ||
+        resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
         right.createdAt - left.createdAt ||
         right.taskId.localeCompare(left.taskId),
     )[0];

@@ -977,6 +977,18 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("does not select Codex from a non-OpenAI model name", () => {
+    registerSuccessfulCodexHarness();
+
+    expect(resolveAgentHarnessPolicy({ provider: "custom", modelId: "gpt-5.4-codex" })).toEqual({
+      runtime: "auto",
+      runtimeSource: "implicit",
+    });
+    expect(selectAgentHarness({ provider: "custom", modelId: "gpt-5.4-codex" }).id).toBe(
+      "openclaw",
+    );
+  });
+
   it("auto-selects plugin support by default", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({

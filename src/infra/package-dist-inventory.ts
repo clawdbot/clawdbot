@@ -13,7 +13,6 @@ const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const OMITTED_QA_EXTENSION_PREFIXES = [
   `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
   `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
-  "dist/extensions/qa-matrix/",
 ];
 const OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES = [
   `dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
@@ -72,7 +71,6 @@ const OMITTED_PLUGIN_SDK_TEST_PREFIXES = [
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   /^dist\/plugin-sdk\/src(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),

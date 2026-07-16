@@ -24,6 +24,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [Baseten (Inkling + Model APIs)](/providers/baseten)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)

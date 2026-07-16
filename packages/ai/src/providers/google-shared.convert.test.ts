@@ -402,4 +402,25 @@ describe("google-shared convertMessages", () => {
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );
   });
+
+  it("does not emit inline data or media placeholders for payload-less tool images", () => {
+    const model = makeModel("gemini-3-flash");
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_husk",
+          toolName: "screenshot",
+          content: [{ type: "image", mimeType: "image/png", data: "" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context);
+
+    const serialized = JSON.stringify(contents);
+    expect(serialized).toContain('"output":""');
+    expect(serialized).not.toContain("inlineData");
+    expect(serialized).not.toContain("see attached image");
+  });
 });

@@ -7,6 +7,7 @@ import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
@@ -67,7 +68,7 @@ type CodexAppServerClientStartMetadata = {
 };
 
 /** Successful physical process identity, excluding environment and credentials. */
-export type CodexAppServerClientProcessIdentity = {
+type CodexAppServerClientProcessIdentity = {
   clientId: string;
   command: string;
   argsFingerprint: string;
@@ -78,7 +79,7 @@ export type CodexAppServerClientProcessIdentity = {
   userAgent?: string;
 };
 
-export type CodexAppServerSpawnIdentity = Omit<
+type CodexAppServerSpawnIdentity = Omit<
   CodexAppServerClientProcessIdentity,
   "clientId" | "serverVersion" | "userAgent"
 >;
@@ -159,7 +160,7 @@ export function resolveCodexAppServerSpawnIdentity(
   };
 }
 
-export class CodexAppServerStartSelectionChangedError extends Error {
+class CodexAppServerStartSelectionChangedError extends Error {
   readonly code = "CODEX_APP_SERVER_START_SELECTION_CHANGED";
 
   constructor() {
@@ -454,11 +455,14 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
   const signal = params.signal ?? params.options?.abandonSignal;
   const requestOptions = () => {
     if (signal?.aborted) {
-      throw new Error("Codex app-server selection retry aborted");
+      throw new CodexAppServerStartupError("aborted", "Codex app-server selection retry aborted");
     }
     const remainingTimeoutMs = deadline - Date.now();
     if (remainingTimeoutMs <= 0) {
-      throw new Error("Codex app-server selection retry timed out");
+      throw new CodexAppServerStartupError(
+        "timed_out",
+        "Codex app-server selection retry timed out",
+      );
     }
     return {
       timeoutMs: remainingTimeoutMs,
@@ -507,7 +511,7 @@ async function acquireSharedCodexAppServerClient(
   leaseOptions?: { leased: true },
 ): Promise<{ client: CodexAppServerClient; release?: () => void }> {
   if (options?.abandonSignal?.aborted) {
-    throw new Error("codex app-server initialize aborted");
+    throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
@@ -653,14 +657,20 @@ async function withCodexAppServerAcquireDeadline<T>(
   timeoutMessage = "codex app-server initialize timed out",
 ): Promise<T> {
   if (signal?.aborted) {
-    throw new Error("codex app-server initialize aborted");
+    throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
-  const timed = withTimeout(promise, timeoutMs, timeoutMessage);
+  const timed = withTimeout(
+    promise,
+    timeoutMs,
+    timeoutMessage,
+    () => new CodexAppServerStartupError("timed_out", timeoutMessage),
+  );
   if (!signal) {
     return await timed;
   }
   return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new Error("codex app-server initialize aborted"));
+    const onAbort = () =>
+      reject(new CodexAppServerStartupError("aborted", "codex app-server initialize aborted"));
     signal.addEventListener("abort", onAbort, { once: true });
     timed.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
@@ -672,7 +682,7 @@ function resolveRemainingAcquireTimeout(timeoutMs: number, startedAt: number): n
   }
   const remaining = timeoutMs - (Date.now() - startedAt);
   if (remaining <= 0) {
-    throw new Error("codex app-server initialize timed out");
+    throw new CodexAppServerStartupError("timed_out", "codex app-server initialize timed out");
   }
   return remaining;
 }
@@ -738,7 +748,7 @@ export async function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
   if (options?.abandonSignal?.aborted) {
-    throw new Error("codex app-server initialize aborted");
+    throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;

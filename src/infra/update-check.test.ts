@@ -235,6 +235,51 @@ describe("resolveNpmChannelTag", () => {
     });
   });
 
+  it("times out when the public registry response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("missing registry request signal");
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resultPromise = Promise.race([
+        fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 50 }),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("registry response body exceeded timeoutMs")), 2000);
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        target: "latest",
+        version: null,
+        nodeEngine: null,
+        error: "TimeoutError: request timed out",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://registry.npmjs.org/openclaw/latest",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels public registry HTTP failure bodies", async () => {
     const cancel = vi.spyOn(ReadableStream.prototype, "cancel");
     mockHttp.intercept({

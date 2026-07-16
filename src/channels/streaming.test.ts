@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildChannelProgressDraftLine,
+  buildPlanUpdateStepFields,
   formatChannelProgressDraftText,
+  formatPlanChecklistLines,
+  normalizeAgentPlanSteps,
+  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
@@ -12,6 +16,10 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
+  it("suppresses update_plan from generic work-tool progress", () => {
+    expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
+  });
+
   it("omits generic completed status from successful command output with title", () => {
     const line = buildChannelProgressDraftLine(
       {
@@ -94,6 +102,32 @@ describe("buildChannelProgressDraftLine", () => {
   });
 });
 
+describe("normalizeAgentPlanSteps", () => {
+  it("normalizes legacy strings and typed entries, dropping blanks", () => {
+    expect(
+      normalizeAgentPlanSteps([
+        "Inspect",
+        "  ",
+        { step: "  Patch  ", status: "in_progress" },
+        { step: "   ", status: "pending" },
+        { step: "Test", status: "bogus" },
+      ]),
+    ).toEqual([
+      { step: "Inspect", status: "pending" },
+      { step: "Patch", status: "in_progress" },
+    ]);
+    expect(normalizeAgentPlanSteps(undefined)).toBeUndefined();
+  });
+
+  it("builds both deprecation-window payload fields", () => {
+    expect(buildPlanUpdateStepFields([{ step: "Inspect", status: "completed" }])).toEqual({
+      steps: ["Inspect"],
+      planSteps: [{ step: "Inspect", status: "completed" }],
+    });
+    expect(buildPlanUpdateStepFields(undefined)).toEqual({});
+  });
+});
+
 describe("streaming config resolution", () => {
   // Flat delivery keys remain external SDK compatibility fallbacks. Bundled
   // schemas are nested-only; mode-family aliases stay doctor-only.
@@ -143,6 +177,72 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it("renders plan markers and keeps the checklist under narration", () => {
+    const plan = [
+      { step: "Inspect", status: "completed" as const },
+      { step: "Patch", status: "in_progress" as const },
+      { step: "Test", status: "pending" as const },
+    ];
+
+    expect(formatPlanChecklistLines(plan, { maxLines: 5, maxLineChars: 80 })).toEqual([
+      "✅ Inspect",
+      "▸ Patch",
+      "▢ Test",
+    ]);
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        lines: ["🛠️ hidden"],
+        narration: "Working through the plan.",
+        plan,
+      }),
+    ).toBe("Working through the plan.\n\n✅ Inspect\n▸ Patch\n▢ Test");
+  });
+
+  it("summarizes overflowing plans and prioritizes unfinished steps", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "One", status: "completed" },
+          { step: "Two", status: "completed" },
+          { step: "Three", status: "in_progress" },
+          { step: "Four", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80 },
+      ),
+    ).toEqual(["✅ 2/4 done", "▸ Three", "▢ Four"]);
+  });
+
+  it("keeps the active step when later pending work fills the checklist", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Done", status: "completed" },
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+          { step: "Later", status: "pending" },
+          { step: "Last", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80 },
+      ),
+    ).toEqual(["✅ 1/5 done", "▸ Active", "▢ Last"]);
+  });
+
+  it("shares the line budget between tool progress and the checklist", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: {
+          streaming: { mode: "progress", progress: { label: false, maxLines: 3 } },
+        },
+        lines: ["tool one", "tool two", "tool three"],
+        plan: [
+          { step: "Active", status: "in_progress" },
+          { step: "Next", status: "pending" },
+        ],
+      }),
+    ).toBe("• tool three\n▸ Active\n▢ Next");
+  });
+
   it("omits the implicit progress label when narration is available", () => {
     const text = formatChannelProgressDraftText({
       entry: { streaming: { mode: "progress" } },

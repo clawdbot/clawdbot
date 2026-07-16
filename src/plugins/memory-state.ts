@@ -32,7 +32,7 @@ export type MemoryCorpusSearchResult = {
   updatedAt?: string;
 };
 
-export type MemoryCorpusGetResult = {
+type MemoryCorpusGetResult = {
   corpus: string;
   path: string;
   title?: string;
@@ -65,7 +65,7 @@ export type MemoryCorpusSupplement = {
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
-export type MemoryCorpusSupplementRegistration = {
+type MemoryCorpusSupplementRegistration = {
   pluginId: string;
   supplement: MemoryCorpusSupplement;
 };

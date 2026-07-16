@@ -9,8 +9,8 @@ import type {
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
-export type WebSearchProviderId = string;
-export type WebFetchProviderId = string;
+type WebSearchProviderId = string;
+type WebFetchProviderId = string;
 
 export type WebSearchProviderToolDefinition = {
   description: string;
@@ -27,7 +27,7 @@ export type WebFetchProviderToolDefinition = {
   execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 };
 
-export type WebSearchProviderContext = {
+type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
@@ -38,7 +38,7 @@ export type WebSearchProviderToolExecutionContext = {
   signal?: AbortSignal;
 };
 
-export type WebFetchProviderContext = {
+type WebFetchProviderContext = {
   config?: OpenClawConfig;
   fetchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebFetchMetadata;
@@ -56,7 +56,7 @@ type WebFetchProviderConfiguredCredentialFallback = {
   value: unknown;
 };
 
-export type WebSearchRuntimeMetadataContext = {
+type WebSearchRuntimeMetadataContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
@@ -77,7 +77,7 @@ export type WebSearchProviderSetupContext = {
 
 export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
-export type WebFetchRuntimeMetadataContext = {
+type WebFetchRuntimeMetadataContext = {
   config?: OpenClawConfig;
   fetchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebFetchMetadata;

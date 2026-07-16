@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
+import type { AgentPlanStep } from "../channels/streaming.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
@@ -241,7 +242,14 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
+    /**
+     * @deprecated Shipped pre-2026.8 shape: plain step text without statuses.
+     * Still populated for existing consumers; migrate to `planSteps` and
+     * remove with the deprecation window.
+     */
     steps?: string[];
+    /** Canonical typed checklist snapshot; replaces `steps`. */
+    planSteps?: AgentPlanStep[];
     source?: string;
   }) => Promise<void> | void;
   /** Called when an approval becomes pending or resolves. */

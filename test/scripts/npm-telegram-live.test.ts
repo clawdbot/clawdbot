@@ -138,10 +138,13 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('package_install_source="openclaw@$(read_package_version');
     expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
     expect(script).toContain(
-      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+      '-v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"',
+    );
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"',
     );
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
-    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs");
     expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
     expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
   });
@@ -156,9 +159,12 @@ describe("package Telegram live Docker E2E", () => {
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
     );
     expect(script).toContain(
-      'OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"',
+      'OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"',
     );
-    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(script).toContain('OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"');
+    expect(script).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
     expect(script).not.toContain(
       'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
@@ -204,7 +210,10 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;');
     expect(script).toContain('mkdir -p "$OUTPUT_DIR_HOST"');
-    expect(dockerEnv).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
+    expect(dockerEnv).toContain(
+      '-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"',
+    );
+    expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"');
     expect(dockerEnv).not.toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
     expect(script).toContain('-v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER"');
   });
@@ -240,10 +249,18 @@ describe("package Telegram live Docker E2E", () => {
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/runtime-api.ts"),
       "utf8",
     );
+    const qaHarnessSources = [
+      "extensions/qa-lab/api.ts",
+      "extensions/qa-lab/src/self-check.ts",
+      "extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts",
+      "extensions/qa-lab/src/suite-launch.runtime.ts",
+      "extensions/qa-lab/src/suite.ts",
+    ].map((relativePath) => readFileSync(path.resolve(TEST_DIR, "../..", relativePath), "utf8"));
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
     expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro"');
     expect(script).not.toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
     expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
     expect(script).toContain("/app/node_modules/openclaw/package.json");
@@ -251,6 +268,9 @@ describe("package Telegram live Docker E2E", () => {
     expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
+    for (const source of qaHarnessSources) {
+      expect(source).not.toContain('from "openclaw/plugin-sdk/qa-runtime"');
+    }
   });
 
   it("exposes installed package dependencies to the mounted QA harness", () => {

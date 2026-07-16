@@ -11,6 +11,7 @@ type ConvertToolOptions = Pick<
   "abortSignal" | "beforeExecute" | "onToolCompleted"
 > & {
   onAgentToolResult?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["onAgentToolResult"];
+  observeToolTerminal?: NonNullable<CopilotToolBridgeInput["attemptParams"]>["observeToolTerminal"];
 };
 
 type FakeTool = AnyAgentTool & {
@@ -89,9 +90,15 @@ async function convertOpenClawToolToSdkToolForTest(
     abortSignal: options.abortSignal,
     agentId: "agent-1",
     allowModelTools: true,
-    attemptParams: options.onAgentToolResult
-      ? { onAgentToolResult: options.onAgentToolResult }
-      : undefined,
+    attemptParams:
+      options.onAgentToolResult || options.observeToolTerminal
+        ? {
+            ...(options.onAgentToolResult ? { onAgentToolResult: options.onAgentToolResult } : {}),
+            ...(options.observeToolTerminal
+              ? { observeToolTerminal: options.observeToolTerminal }
+              : {}),
+          }
+        : undefined,
     beforeExecute: options.beforeExecute,
     createOpenClawCodingTools: async () => [sourceTool],
     modelId: "gpt-test",
@@ -1590,6 +1597,45 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
+  it("reports direct tool failures and matching recovery to the host terminal observer", async () => {
+    const error = new Error("delivery failed");
+    const execute = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({
+        content: [{ text: "delivered", type: "text" }],
+        details: { status: "ok" },
+      });
+    const observeToolTerminal = vi.fn(() => ({
+      executionStarted: true,
+      sideEffectEvidence: true,
+    }));
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool({ execute, name: "message" }),
+      { observeToolTerminal },
+    );
+    const args = { action: "send", message: "hello", target: "room-1" };
+
+    await runSdkTool(sdkTool, args, makeInvocation({ toolCallId: "send-1" }));
+    await runSdkTool(sdkTool, args, makeInvocation({ toolCallId: "send-2" }));
+
+    expect(observeToolTerminal).toHaveBeenNthCalledWith(1, {
+      toolCallId: "send-1",
+      toolName: "message",
+      arguments: args,
+      executionStarted: true,
+      outcome: "failure",
+      failure: { error: "delivery failed" },
+    });
+    expect(observeToolTerminal).toHaveBeenNthCalledWith(2, {
+      toolCallId: "send-2",
+      toolName: "message",
+      arguments: args,
+      executionStarted: true,
+      outcome: "success",
+    });
+  });
+
   it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
     const onToolCompleted = vi.fn();
@@ -1617,6 +1663,71 @@ describe("createCopilotToolBridge tool conversion", () => {
         result: sourceResult,
       }),
     );
+  });
+
+  it("reports catalog tool failures to the host terminal observer", async () => {
+    type CatalogExecutor = (params: {
+      tool: AnyAgentTool;
+      toolName: string;
+      source: "openclaw";
+      sourceName: string;
+      toolCallId: string;
+      parentToolCallId: string;
+      input: unknown;
+    }) => Promise<unknown>;
+    let catalogExecutor: CatalogExecutor | undefined;
+    const observeToolTerminal = vi.fn(() => ({
+      executionStarted: true,
+      sideEffectEvidence: true,
+    }));
+    await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        observeToolTerminal,
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools: async (options: unknown) => {
+        catalogExecutor = (options as { toolSearchCatalogExecutor?: CatalogExecutor })
+          .toolSearchCatalogExecutor;
+        return [makeTool({ name: "tool_search_code" })];
+      },
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+    const target = makeTool({
+      execute: vi.fn(async () => {
+        throw new Error("catalog delivery failed");
+      }),
+      name: "message",
+    });
+    const args = { action: "send", message: "hello", target: "room-1" };
+
+    await expect(
+      expectDefined(
+        catalogExecutor,
+        "Copilot catalog executor",
+      )({
+        tool: target,
+        toolName: "message",
+        source: "openclaw",
+        sourceName: "core",
+        toolCallId: "catalog-send-1",
+        parentToolCallId: "tool-search-1",
+        input: args,
+      }),
+    ).rejects.toThrow("catalog delivery failed");
+
+    expect(observeToolTerminal).toHaveBeenCalledWith({
+      toolCallId: "catalog-send-1",
+      toolName: "message",
+      arguments: args,
+      executionStarted: true,
+      outcome: "failure",
+      failure: { error: "catalog delivery failed" },
+    });
   });
 
   it("joins multiple text blocks with newlines", async () => {

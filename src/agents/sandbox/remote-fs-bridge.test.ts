@@ -11,6 +11,35 @@ import {
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 
+function shellResult(stdout: string) {
+  return { stdout: Buffer.from(stdout), stderr: Buffer.alloc(0), code: 0 };
+}
+
+function createStatRuntime(
+  workspaceDir: string,
+  outputs: { hardlinks: (script: string) => string; stat: (script: string) => string },
+): RemoteShellSandboxHandle {
+  return {
+    remoteWorkspaceDir: workspaceDir,
+    remoteAgentWorkspaceDir: workspaceDir,
+    runRemoteShellScript: async (command) => {
+      if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
+        return shellResult("1\n");
+      }
+      if (command.script.includes('readlink -f -- "$cursor"')) {
+        return shellResult(`${workspaceDir}/note.txt\n`);
+      }
+      if (command.script.includes('stat -c "%F|%h"')) {
+        return shellResult(`${outputs.hardlinks(command.script)}\n`);
+      }
+      if (command.script.includes('stat -c "%F|%s|%y"')) {
+        return shellResult(`${outputs.stat(command.script)}\n`);
+      }
+      throw new Error(`unexpected remote script: ${command.script}`);
+    },
+  };
+}
+
 function createLocalRemoteRuntime(params: {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
@@ -188,43 +217,17 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
-  it("saturates unsafe stat size output without returning NaN", async () => {
+  it("normalizes stat output locale and saturates unsafe sizes", async () => {
     // Remote stat output is untrusted shell text; unsafe numeric fields should
     // clamp to deterministic values instead of leaking NaN into callers.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
-      const runtime: RemoteShellSandboxHandle = {
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-        runRemoteShellScript: async (command) => {
-          if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
-            return { stdout: Buffer.from("1\n"), stderr: Buffer.alloc(0), code: 0 };
-          }
-          if (command.script.includes('readlink -f -- "$cursor"')) {
-            return {
-              stdout: Buffer.from(`${workspaceDir}/note.txt\n`),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (command.script.includes('stat -c "%F|%h"')) {
-            return {
-              stdout: Buffer.from("regular file|1\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (command.script.includes('stat -c "%F|%s|%y"')) {
-            return {
-              stdout: Buffer.from("regular file|9007199254740992|8640000000001\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          throw new Error(`unexpected remote script: ${command.script}`);
-        },
-      };
+      const runtime = createStatRuntime(workspaceDir, {
+        hardlinks: () => "regular file|1",
+        stat: (script) =>
+          `${script.includes('LC_ALL=C stat -c "%F|%s|%y"') ? "regular file" : "reguläre Datei"}|9007199254740992|8640000000001`,
+      });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
           workspaceDir,
@@ -241,41 +244,35 @@ describe("remote sandbox fs bridge", () => {
     });
   });
 
+  it("rejects hardlinked files under localized remote shells", async () => {
+    await withTempDir("openclaw-remote-fs-bridge-hardlink-locale-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const runtime = createStatRuntime(workspaceDir, {
+        hardlinks: (script) =>
+          `${script.includes('LC_ALL=C stat -c "%F|%h"') ? "regular file" : "reguläre Datei"}|2`,
+        stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
+      });
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+        runtime,
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow(/Hardlinked path/);
+    });
+  });
+
   it("does not reject malformed non-decimal hardlink counts", async () => {
     await withTempDir("openclaw-remote-fs-bridge-hardlink-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
-      const runtime: RemoteShellSandboxHandle = {
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-        runRemoteShellScript: async (command) => {
-          if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
-            return { stdout: Buffer.from("1\n"), stderr: Buffer.alloc(0), code: 0 };
-          }
-          if (command.script.includes('readlink -f -- "$cursor"')) {
-            return {
-              stdout: Buffer.from(`${workspaceDir}/note.txt\n`),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (command.script.includes('stat -c "%F|%h"')) {
-            return {
-              stdout: Buffer.from("regular file|0x2\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (command.script.includes('stat -c "%F|%s|%y"')) {
-            return {
-              stdout: Buffer.from("regular file|12|2026-05-29 12:00:00.000000000 +0000\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          throw new Error(`unexpected remote script: ${command.script}`);
-        },
-      };
+      const runtime = createStatRuntime(workspaceDir, {
+        hardlinks: () => "regular file|0x2",
+        stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
+      });
       const bridge = createRemoteShellSandboxFsBridge({
         sandbox: createSandbox({
           workspaceDir,

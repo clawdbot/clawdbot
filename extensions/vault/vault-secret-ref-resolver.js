@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { parseVaultSecretId } from "./vault-secret-id.js";
 
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
@@ -55,6 +55,20 @@ function normalizeOptionalString(value) {
   return value?.trim() || undefined;
 }
 
+function readVaultCredentialFile(filePath, label, emptyMessage) {
+  try {
+    return readSecretFileSync(filePath, label, { rejectHardlinks: false });
+  } catch (error) {
+    if (error?.code === "not-found" && error.cause) {
+      throw error.cause;
+    }
+    if (error?.code === "invalid-path" && error.message?.endsWith(" is empty.")) {
+      throw new Error(emptyMessage, { cause: error });
+    }
+    throw error;
+  }
+}
+
 function resolveVaultAuthMethod() {
   const method = normalizeOptionalString(process.env.OPENCLAW_VAULT_AUTH_METHOD) ?? "token";
   if (
@@ -76,16 +90,16 @@ function resolveVaultTokenEnv() {
   return token;
 }
 
-async function resolveVaultTokenFile() {
+function resolveVaultTokenFile() {
   const tokenFile = normalizeOptionalString(process.env.VAULT_TOKEN_FILE);
   if (!tokenFile) {
     throw new Error("VAULT_TOKEN_FILE is required.");
   }
-  const token = (await readFile(tokenFile, "utf8")).trim();
-  if (!token) {
-    throw new Error("VAULT_TOKEN_FILE did not contain a token.");
-  }
-  return token;
+  return readVaultCredentialFile(
+    tokenFile,
+    "Vault token",
+    "VAULT_TOKEN_FILE did not contain a token.",
+  );
 }
 
 function resolveKvMount() {
@@ -164,18 +178,18 @@ function resolveVaultAuthRole(method) {
   return role;
 }
 
-async function resolveVaultJwt(method) {
+function resolveVaultJwt(method) {
   const jwtFile =
     normalizeOptionalString(process.env.OPENCLAW_VAULT_JWT_FILE) ??
     (method === "kubernetes" ? KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH : undefined);
   if (!jwtFile) {
     throw new Error("OPENCLAW_VAULT_JWT_FILE is required for jwt auth.");
   }
-  const jwt = (await readFile(jwtFile, "utf8")).trim();
-  if (!jwt) {
-    throw new Error("OPENCLAW_VAULT_JWT_FILE did not contain a JWT.");
-  }
-  return jwt;
+  return readVaultCredentialFile(
+    jwtFile,
+    "Vault JWT",
+    "OPENCLAW_VAULT_JWT_FILE did not contain a JWT.",
+  );
 }
 
 function readVaultLoginToken(payload, method) {
@@ -197,7 +211,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     headers,
     body: JSON.stringify({
       role: resolveVaultAuthRole(method),
-      jwt: await resolveVaultJwt(method),
+      jwt: resolveVaultJwt(method),
     }),
   });
   if (!response.ok) {
@@ -211,7 +225,7 @@ async function resolveVaultClientToken(baseUrl) {
     case "token":
       return resolveVaultTokenEnv();
     case "token_file":
-      return await resolveVaultTokenFile();
+      return resolveVaultTokenFile();
     case "jwt":
       return await resolveVaultTokenFromJwt(baseUrl, "jwt");
     case "kubernetes":

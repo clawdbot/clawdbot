@@ -783,6 +783,7 @@ export function buildAgentSystemPrompt(params: {
     web_fetch: "Fetch/extract URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control browser",
+    screen: "Drive operator web UI",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
     cron: "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context.",
@@ -820,6 +821,7 @@ export function buildAgentSystemPrompt(params: {
     "web_search",
     "web_fetch",
     "browser",
+    "screen",
     "canvas",
     "nodes",
     "cron",
@@ -1081,6 +1083,9 @@ export function buildAgentSystemPrompt(params: {
             "Large work: `sessions_spawn`; completion push-based.",
             '`sessions_spawn`: omit `context`; transcript needed => `context:"fork"`.',
             ...(hasSessionsSpawn ? ["`visible:true` only web/app user or asked."] : []),
+            ...(availableTools.has("screen")
+              ? ["`screen` present: web/app turn may drive UI; messaging turn: don't."]
+              : []),
           ]
         : []),
       ...nativeCommandGuidanceLines,

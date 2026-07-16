@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mjs";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
@@ -54,6 +55,14 @@ describe("CI changed Node test plan", () => {
       false,
     );
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
+    // Build-input classification: only sources and the build pipeline can
+    // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
+    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mjs"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange(["qa/scenarios/index.yaml"])).toBe(false);
+    expect(hasBuildArtifactAffectingChange(["ui/src/app.ts"])).toBe(false);
     expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
     expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(true);
     // Inside the packaged CLI's import graph -> the smoke scenarios can see it.
@@ -70,6 +79,34 @@ describe("CI changed Node test plan", () => {
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
     // Deleted source files cannot be graphed; fail safe to running QA smoke.
     expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
+  });
+
+  it("classifies prompt-snapshot impact by surface and generator import graph", () => {
+    // Inside the generator's import graph -> regenerated output can change.
+    expect(hasPromptSnapshotAffectingChange(["src/auto-reply/reply/prompt-prelude.ts"])).toBe(true);
+    // The codex extension loads through a dynamic bundled-plugin module id the
+    // graph walk cannot see; it stays on the always-run surface.
+    expect(hasPromptSnapshotAffectingChange(["extensions/codex/src/index.ts"])).toBe(true);
+    expect(
+      hasPromptSnapshotAffectingChange([
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/README.md",
+      ]),
+    ).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/generate-prompt-snapshots.ts"])).toBe(true);
+    // The gate's own orchestration must not be able to skip the gated lane.
+    expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
+    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(
+      true,
+    );
+    // Outside the surface and the generator graph -> the lane may skip.
+    expect(hasPromptSnapshotAffectingChange(["ui/src/app.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["docs/index.md"])).toBe(false);
+    expect(hasPromptSnapshotAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(
+      false,
+    );
+    // Deleted source files cannot be graphed; fail safe to running the check.
+    expect(hasPromptSnapshotAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
   it("fails safe to the full plan for broad changes", () => {

@@ -15,6 +15,11 @@ import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatch,
+  startModelSetupFirstRunRedirect,
+} from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
@@ -51,7 +56,7 @@ function normalizeInitialApplicationLocation(
   sessionKey: string,
 ) {
   const routeId = routeIdFromPath(location.pathname, basePath);
-  if ((routeId !== null && routeId !== "chat") || !sessionKey.trim()) {
+  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
     return location;
   }
 
@@ -261,6 +266,12 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialLocation = documentMode
     ? startup.location
     : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
+  const firstRunDefaultLanding =
+    documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
+  const expectedDefaultLanding = {
+    ...initialLocation,
+    pathname: pathForRoute("chat", basePath),
+  };
   const currentLocation = history.location();
   if (
     currentLocation.pathname !== initialLocation.pathname ||
@@ -398,6 +409,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
+  const stopModelSetupRedirect = firstRunDefaultLanding
+    ? startModelSetupFirstRunRedirect({
+        context,
+        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+      })
+    : () => undefined;
   return {
     context,
     router,
@@ -416,6 +433,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       await routerStart;
     },
     stop: () => {
+      stopModelSetupRedirect();
       stopConfigRefresh();
       router.stop();
       gateway.stop();

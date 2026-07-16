@@ -4,6 +4,11 @@
 import { chmodSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import {
+  configureSqliteConnectionPragmas,
+  migrateSqliteSchemaToStrict,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import type {
   LogbookBatch,
   LogbookBatchStatus,
@@ -23,7 +28,22 @@ function loadNodeSqlite(): SqliteModule {
   return req("node:sqlite") as SqliteModule;
 }
 
+const LOGBOOK_SCHEMA_VERSION = 1;
+const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day TEXT NOT NULL,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'error')),
+  error TEXT,
+  frame_count INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  created_ms INTEGER NOT NULL,
+  updated_ms INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
 CREATE TABLE IF NOT EXISTS frames (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   captured_at_ms INTEGER NOT NULL,
@@ -34,32 +54,19 @@ CREATE TABLE IF NOT EXISTS frames (
   height INTEGER,
   byte_size INTEGER NOT NULL DEFAULT 0,
   content_hash TEXT NOT NULL,
-  idle INTEGER NOT NULL DEFAULT 0,
-  batch_id INTEGER
-);
+  idle INTEGER NOT NULL DEFAULT 0 CHECK (idle IN (0, 1)),
+  batch_id INTEGER REFERENCES batches(id) ON DELETE SET NULL
+) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_frames_day ON frames (day, captured_at_ms);
 CREATE INDEX IF NOT EXISTS idx_logbook_frames_unbatched ON frames (batch_id) WHERE batch_id IS NULL;
-CREATE TABLE IF NOT EXISTS batches (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  day TEXT NOT NULL,
-  start_ms INTEGER NOT NULL,
-  end_ms INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  error TEXT,
-  frame_count INTEGER NOT NULL DEFAULT 0,
-  model TEXT,
-  created_ms INTEGER NOT NULL,
-  updated_ms INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
 CREATE TABLE IF NOT EXISTS observations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  batch_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
   day TEXT NOT NULL,
   start_ms INTEGER NOT NULL,
   end_ms INTEGER NOT NULL,
   text TEXT NOT NULL
-);
+) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_observations_day ON observations (day, start_ms);
 CREATE TABLE IF NOT EXISTS cards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,15 +80,15 @@ CREATE TABLE IF NOT EXISTS cards (
   app_primary TEXT,
   app_secondary TEXT,
   distractions TEXT NOT NULL DEFAULT '[]',
-  keyframe_id INTEGER,
+  keyframe_id INTEGER REFERENCES frames(id) ON DELETE SET NULL,
   updated_ms INTEGER NOT NULL
-);
+) STRICT;
 CREATE INDEX IF NOT EXISTS idx_logbook_cards_day ON cards (day, start_ms);
 CREATE TABLE IF NOT EXISTS standups (
   day TEXT PRIMARY KEY,
   text TEXT NOT NULL,
   updated_ms INTEGER NOT NULL
-);
+) STRICT;
 `;
 
 type FrameRow = {
@@ -195,6 +202,7 @@ export function dayKeyFor(ms: number): string {
 
 export class LogbookStore {
   private readonly db: Database;
+  private readonly walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
   readonly framesDir: string;
 
   constructor(readonly dataDir: string) {
@@ -207,15 +215,47 @@ export class LogbookStore {
     chmodSync(this.framesDir, 0o700);
     const { DatabaseSync } = loadNodeSqlite();
     const dbPath = path.join(dataDir, "logbook.sqlite");
-    this.db = new DatabaseSync(dbPath);
-    // WAL/SHM sidecars inherit the main DB file's permissions.
-    chmodSync(dbPath, 0o600);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 1000");
-    this.db.exec(SCHEMA);
+    const db = new DatabaseSync(dbPath);
+    let walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
+    try {
+      // WAL/SHM sidecars inherit the main DB file's permissions.
+      chmodSync(dbPath, 0o600);
+      walMaintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "logbook",
+        databasePath: dbPath,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      const versionRow = db.prepare("PRAGMA user_version").get() as
+        | { user_version?: unknown }
+        | undefined;
+      const schemaVersion = Number(versionRow?.user_version ?? 0);
+      if (schemaVersion > LOGBOOK_SCHEMA_VERSION) {
+        throw new Error(
+          `Logbook database uses newer schema version ${schemaVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
+        );
+      }
+      db.exec(SCHEMA);
+      if (schemaVersion < LOGBOOK_SCHEMA_VERSION) {
+        migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: dbPath });
+        db.exec(`PRAGMA user_version = ${LOGBOOK_SCHEMA_VERSION};`);
+      }
+    } catch (error) {
+      walMaintenance?.close();
+      db.close();
+      throw error;
+    }
+    if (!walMaintenance) {
+      db.close();
+      throw new Error("Logbook SQLite maintenance failed to initialize");
+    }
+    this.db = db;
+    this.walMaintenance = walMaintenance;
   }
 
   close(): void {
+    this.walMaintenance.close();
     this.db.close();
   }
 
@@ -302,19 +342,43 @@ export class LogbookStore {
   }
 
   createBatch(params: { day: string; startMs: number; endMs: number; frameIds: number[] }): number {
-    const now = Date.now();
-    const result = this.db
-      .prepare(
-        `INSERT INTO batches (day, start_ms, end_ms, status, frame_count, created_ms, updated_ms)
-         VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-      )
-      .run(params.day, params.startMs, params.endMs, params.frameIds.length, now, now);
-    const batchId = Number(result.lastInsertRowid);
-    const assign = this.db.prepare(`UPDATE frames SET batch_id = ? WHERE id = ?`);
-    for (const frameId of params.frameIds) {
-      assign.run(batchId, frameId);
+    if (params.frameIds.length === 0) {
+      throw new Error("Logbook batch requires at least one frame");
     }
-    return batchId;
+    const now = Date.now();
+    const insertBatch = this.db.prepare(
+      `INSERT INTO batches (day, start_ms, end_ms, status, frame_count, created_ms, updated_ms)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+    );
+    const assignFrame = this.db.prepare(
+      `UPDATE frames SET batch_id = ? WHERE id = ? AND batch_id IS NULL`,
+    );
+    return runSqliteImmediateTransactionSync(
+      this.db,
+      () => {
+        const result = insertBatch.run(
+          params.day,
+          params.startMs,
+          params.endMs,
+          params.frameIds.length,
+          now,
+          now,
+        );
+        const batchId = Number(result.lastInsertRowid);
+        for (const frameId of params.frameIds) {
+          const assignment = assignFrame.run(batchId, frameId);
+          if (assignment.changes !== 1) {
+            throw new Error(`Logbook frame ${frameId} is missing or already batched`);
+          }
+        }
+        return batchId;
+      },
+      {
+        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "logbook",
+        operationLabel: "logbook.batch.create",
+      },
+    );
   }
 
   setBatchStatus(
@@ -387,20 +451,24 @@ export class LogbookStore {
     day: string,
     segments: Array<{ startMs: number; endMs: number; text: string }>,
   ): void {
-    this.db.exec("BEGIN");
-    try {
-      this.db.prepare(`DELETE FROM observations WHERE batch_id = ?`).run(batchId);
-      const insert = this.db.prepare(
-        `INSERT INTO observations (batch_id, day, start_ms, end_ms, text) VALUES (?, ?, ?, ?, ?)`,
-      );
-      for (const segment of segments) {
-        insert.run(batchId, day, segment.startMs, segment.endMs, segment.text);
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    const deleteBatch = this.db.prepare(`DELETE FROM observations WHERE batch_id = ?`);
+    const insert = this.db.prepare(
+      `INSERT INTO observations (batch_id, day, start_ms, end_ms, text) VALUES (?, ?, ?, ?, ?)`,
+    );
+    runSqliteImmediateTransactionSync(
+      this.db,
+      () => {
+        deleteBatch.run(batchId);
+        for (const segment of segments) {
+          insert.run(batchId, day, segment.startMs, segment.endMs, segment.text);
+        }
+      },
+      {
+        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "logbook",
+        operationLabel: "logbook.observations.replace",
+      },
+    );
   }
 
   observationsInRange(day: string, startMs: number, endMs: number): LogbookObservation[] {
@@ -459,36 +527,40 @@ export class LogbookStore {
     drafts: LogbookCardDraft[],
   ): void {
     const now = Date.now();
-    this.db.exec("BEGIN");
-    try {
-      this.db
-        .prepare(`DELETE FROM cards WHERE day = ? AND end_ms > ? AND start_ms < ?`)
-        .run(day, startMs, endMs);
-      const insert = this.db.prepare(
-        `INSERT INTO cards (day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id, updated_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const draft of drafts) {
-        insert.run(
-          draft.day,
-          draft.startMs,
-          draft.endMs,
-          draft.title,
-          draft.summary,
-          draft.detail,
-          draft.category,
-          draft.appPrimary ?? null,
-          draft.appSecondary ?? null,
-          JSON.stringify(draft.distractions),
-          draft.keyframeId ?? null,
-          now,
-        );
-      }
-      this.db.exec("COMMIT");
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    }
+    const deleteWindow = this.db.prepare(
+      `DELETE FROM cards WHERE day = ? AND end_ms > ? AND start_ms < ?`,
+    );
+    const insert = this.db.prepare(
+      `INSERT INTO cards (day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id, updated_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    runSqliteImmediateTransactionSync(
+      this.db,
+      () => {
+        deleteWindow.run(day, startMs, endMs);
+        for (const draft of drafts) {
+          insert.run(
+            draft.day,
+            draft.startMs,
+            draft.endMs,
+            draft.title,
+            draft.summary,
+            draft.detail,
+            draft.category,
+            draft.appPrimary ?? null,
+            draft.appSecondary ?? null,
+            JSON.stringify(draft.distractions),
+            draft.keyframeId ?? null,
+            now,
+          );
+        }
+      },
+      {
+        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "logbook",
+        operationLabel: "logbook.cards.replace",
+      },
+    );
   }
 
   listDays(): Array<{ day: string; cards: number; firstMs: number; lastMs: number }> {
@@ -552,32 +624,56 @@ export class LogbookStore {
 
   /** Deletes frame rows and files older than the retention window. */
   pruneFrames(olderThanMs: number): number {
-    const rows = this.db
-      .prepare(`SELECT id, path, day FROM frames WHERE captured_at_ms < ?`)
-      .all(olderThanMs) as Array<{ id: number; path: string; day: string }>;
+    const selectExpired = this.db.prepare(
+      `SELECT id, path, day FROM frames WHERE captured_at_ms < ?`,
+    );
+    const rows = selectExpired.all(olderThanMs) as Array<{
+      id: number;
+      path: string;
+      day: string;
+    }>;
     if (rows.length === 0) {
       return 0;
     }
     const days = new Set<string>();
     for (const row of rows) {
+      // Keep metadata until every file operation succeeds. A later retry can
+      // then find rows whose earlier files were already removed with force.
       rmSync(row.path, { force: true });
       days.add(row.day);
     }
-    // Cards outlive their frames; a dangling keyframe_id would make the UI
-    // retry a preview fetch forever, so detach it before the rows disappear.
-    this.db
-      .prepare(
-        `UPDATE cards SET keyframe_id = NULL
-         WHERE keyframe_id IN (SELECT id FROM frames WHERE captured_at_ms < ?)`,
-      )
-      .run(olderThanMs);
-    this.db.prepare(`DELETE FROM frames WHERE captured_at_ms < ?`).run(olderThanMs);
+    const selectCurrent = this.db.prepare(`SELECT path FROM frames WHERE id = ?`);
+    const deleteById = this.db.prepare(`DELETE FROM frames WHERE id = ?`);
+    const deleted = runSqliteImmediateTransactionSync(
+      this.db,
+      () => {
+        let count = 0;
+        for (const row of rows) {
+          const current = selectCurrent.get(row.id) as { path: string } | undefined;
+          if (!current) {
+            continue;
+          }
+          if (current.path !== row.path) {
+            throw new Error(`Logbook frame ${row.id} changed path while pruning`);
+          }
+          // keyframe_id uses ON DELETE SET NULL, so the same commit cannot
+          // leave surviving cards pointed at removed frame rows.
+          count += Number(deleteById.run(row.id).changes);
+        }
+        return count;
+      },
+      {
+        busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: "logbook",
+        operationLabel: "logbook.frames.prune",
+      },
+    );
     for (const day of days) {
       // Best-effort: removes now-empty day directories, keeps non-empty ones.
       try {
         rmdirSync(path.join(this.framesDir, day));
       } catch {}
     }
-    return rows.length;
+    return deleted;
   }
 }

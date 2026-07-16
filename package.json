@@ -81,6 +81,7 @@
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/arcee/**",
+    "!dist/extensions/baseten/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
@@ -129,7 +130,6 @@
     "!dist/extensions/pixverse/**",
     "!dist/extensions/qa-channel/**",
     "!dist/extensions/qa-lab/**",
-    "!dist/extensions/qa-matrix/**",
     "!dist/extensions/openshell/**",
     "!dist/extensions/qwen/**",
     "!dist/extensions/searxng/**",
@@ -1149,10 +1149,6 @@
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
     },
-    "./plugin-sdk/qa-live-transport-scenarios": {
-      "types": "./dist/plugin-sdk/qa-live-transport-scenarios.d.ts",
-      "default": "./dist/plugin-sdk/qa-live-transport-scenarios.js"
-    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"
@@ -1445,6 +1441,10 @@
       "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
+    "./plugin-sdk/widget-html": {
+      "types": "./dist/plugin-sdk/widget-html.d.ts",
+      "default": "./dist/plugin-sdk/widget-html.js"
+    },
     "./plugin-sdk/tool-plugin": {
       "types": "./dist/plugin-sdk/tool-plugin.d.ts",
       "default": "./dist/plugin-sdk/tool-plugin.js"
@@ -1589,10 +1589,11 @@
     "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
-    "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
+    "deadcode:dependencies": "pnpm deadcode:full",
     "deadcode:exports": "node scripts/check-deadcode-exports.mjs",
+    "deadcode:full": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --no-config-hints --exclude duplicates && pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.all-exports.config.ts --no-progress --reporter compact --no-config-hints --exclude duplicates",
     "deadcode:knip": "pnpm --config.minimum-release-age=0 dlx --package knip@6.8.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
-    "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:exports",
+    "deadcode:report": "pnpm deadcode:full; pnpm deadcode:exports",
     "deadcode:unused-files": "node scripts/check-deadcode-unused-files.mjs",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
@@ -1631,7 +1632,7 @@
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
     "format": "oxfmt --write --threads=1",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check --threads=1",
+    "format:check": "oxfmt --check",
     "format:diff": "oxfmt --write --threads=1 && git --no-pager diff",
     "format:docs": "node scripts/format-docs.mjs",
     "format:docs:check": "node scripts/format-docs.mjs --check",
@@ -1964,7 +1965,7 @@
     "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/test-projects.mjs --watch",
-    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:windows:ci": "node scripts/test-projects.mjs src/shared/runtime-import.test.ts src/process/exec.windows.test.ts src/process/windows-command.test.ts src/infra/windows-install-roots.test.ts src/node-host/invoke-system-run-allowlist.test.ts src/daemon/schtasks.startup-fallback.test.ts extensions/lobster/src/lobster-runner.test.ts test/scripts/format-generated-module.test.ts test/scripts/npm-runner.test.ts test/scripts/openclaw-cross-os-installer.windows.test.ts test/scripts/openclaw-cross-os-release-workflow.test.ts test/scripts/pnpm-runner.test.ts test/scripts/run-with-env.test.ts test/scripts/ts-topology.test.ts test/scripts/ui.test.ts test/scripts/vitest-process-group.test.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -2038,6 +2039,7 @@
     "grammy": "1.44.0",
     "highlight.js": "11.11.1",
     "hosted-git-info": "10.1.1",
+    "iconv-lite": "0.7.2",
     "ignore": "7.0.5",
     "jiti": "2.7.0",
     "json5": "2.2.3",
@@ -2073,7 +2075,6 @@
   "devDependencies": {
     "@a2ui/lit": "0.10.1",
     "@copilotkit/aimock": "1.35.0",
-    "@grammyjs/types": "3.28.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@mdx-js/mdx": "3.1.1",
@@ -2091,19 +2092,23 @@
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.9",
+    "acorn": "8.17.0",
     "esbuild": "0.28.1",
+    "fast-glob": "3.3.3",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
     "oxfmt": "0.58.0",
     "oxlint": "1.73.0",
     "oxlint-tsgolint": "0.24.0",
+    "playwright": "1.61.1",
     "shiki": "4.3.0",
     "signal-utils": "0.21.1",
     "sigstore": "4.1.1",
     "tsdown": "0.22.1",
     "tsx": "4.22.4",
     "unrun": "0.3.1",
+    "vite": "8.1.3",
     "vitest": "4.1.9"
   },
   "optionalDependencies": {

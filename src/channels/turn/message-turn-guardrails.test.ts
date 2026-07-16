@@ -32,7 +32,7 @@ const historyWindowFiles = [
   "extensions/feishu/src/bot.ts",
   "extensions/imessage/src/monitor/inbound-processing.ts",
   "extensions/line/src/bot-handlers.ts",
-  "extensions/line/src/bot-message-context.ts",
+  "extensions/line/src/group-history.ts",
   "extensions/mattermost/src/mattermost/monitor.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
   "extensions/qqbot/src/bridge/sdk-adapter.ts",

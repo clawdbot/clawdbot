@@ -1,10 +1,7 @@
 // Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import {
-  createMantleAnthropicStreamFn,
-  resolveMantleAnthropicBaseUrl,
-} from "./mantle-anthropic.runtime.js";
+import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
 function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
@@ -266,14 +263,5 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.maxTokens).toBe(1_000);
     expect(streamOptions).not.toHaveProperty("thinkingBudgetTokens");
     expect(streamOptions.temperature).toBeUndefined();
-  });
-
-  it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {
-    expect(resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/v1")).toBe(
-      "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-    );
-    expect(
-      resolveMantleAnthropicBaseUrl("https://bedrock-mantle.us-east-1.api.aws/anthropic/"),
-    ).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
   });
 });

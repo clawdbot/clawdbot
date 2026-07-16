@@ -181,6 +181,17 @@ describe("synology-chat account resolution", () => {
     expect(listAccountIds(cfg)).toEqual(["default"]);
   });
 
+  it("does not list an implicit default account for a blank env token", () => {
+    process.env.SYNOLOGY_CHAT_TOKEN = "   ";
+    const cfg = {
+      channels: {
+        "synology-chat": { accounts: { office: {} } },
+      },
+    };
+
+    expect(listAccountIds(cfg)).toEqual(["office"]);
+  });
+
   it("lists named and default accounts together", () => {
     const cfg = {
       channels: {

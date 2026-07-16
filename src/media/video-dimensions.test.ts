@@ -1,6 +1,6 @@
 // Video dimension tests cover ffprobe parsing and fallback behavior.
 import { describe, expect, it, vi } from "vitest";
-import { parseFfprobeVideoDimensions, probeVideoDimensions } from "./video-dimensions.js";
+import { probeVideoDimensions } from "./video-dimensions.js";
 
 const { runFfprobe } = vi.hoisted(() => ({
   runFfprobe: vi.fn(),
@@ -9,30 +9,6 @@ const { runFfprobe } = vi.hoisted(() => ({
 vi.mock("./ffmpeg-exec.js", () => ({
   runFfprobe,
 }));
-
-describe("parseFfprobeVideoDimensions", () => {
-  it("returns positive integer dimensions from ffprobe JSON", () => {
-    expect(
-      parseFfprobeVideoDimensions(JSON.stringify({ streams: [{ width: 720, height: 1280 }] })),
-    ).toEqual({ width: 720, height: 1280 });
-  });
-
-  it("ignores missing or invalid dimensions", () => {
-    expect(parseFfprobeVideoDimensions(JSON.stringify({ streams: [] }))).toBeUndefined();
-    expect(
-      parseFfprobeVideoDimensions(JSON.stringify({ streams: [{ width: 0, height: 1280 }] })),
-    ).toBeUndefined();
-    expect(
-      parseFfprobeVideoDimensions(JSON.stringify({ streams: [{ width: 720.5, height: 1280 }] })),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined for malformed JSON instead of throwing", () => {
-    for (const stdout of ["{", "", "not json", "null", "42", '"text"', '{"streams":{}}']) {
-      expect(parseFfprobeVideoDimensions(stdout)).toBeUndefined();
-    }
-  });
-});
 
 describe("probeVideoDimensions", () => {
   it("probes video dimensions through ffprobe stdin", async () => {

@@ -23,6 +23,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -909,16 +910,6 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
-    name: "sidecars.subagent-recovery",
-    log: params.log,
-    run: async () => {
-      const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-      scheduleSubagentOrphanRecovery();
-    },
-  });
-
   if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
     postReadySidecars.push(
       schedulePostReadySidecarTask({
@@ -1125,6 +1116,7 @@ export async function startGatewayPostAttachRuntime(
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    recoveryRuntime: GatewayRecoveryRuntime;
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -1319,9 +1311,18 @@ export async function startGatewayPostAttachRuntime(
         try {
           const { scheduleRestartAbortedMainSessionRecovery } =
             await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfgAtStart });
+          scheduleRestartAbortedMainSessionRecovery({
+            cfg: params.cfgAtStart,
+            gatewayRuntime: params.recoveryRuntime,
+          });
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+        }
+        try {
+          const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
+          scheduleSubagentOrphanRecovery();
+        } catch (err) {
+          params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
         }
         // Capture the orphan-recovery cutoff before new startup-gated agent
         // work can create sessions that the recovery scan must leave alone.

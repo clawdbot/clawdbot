@@ -495,7 +495,6 @@ const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
   "provider-web-search",
   "provider-web-search-config-contract",
   "provider-web-search-contract",
-  "qa-live-transport-scenarios",
   "qa-runner-runtime",
   "realtime-bootstrap-context",
   "realtime-transcription",

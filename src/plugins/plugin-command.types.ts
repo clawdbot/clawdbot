@@ -122,7 +122,7 @@ export type PluginCommandResult = ReplyPayload & {
 /**
  * Handler function for plugin commands.
  */
-export type PluginCommandHandler = (
+type PluginCommandHandler = (
   ctx: PluginCommandContext,
 ) => PluginCommandResult | Promise<PluginCommandResult>;
 

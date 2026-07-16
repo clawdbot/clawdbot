@@ -2,7 +2,7 @@
 
 type EnvMap = Record<string, string | undefined>;
 
-export type VitestProcessStats = {
+type VitestProcessStats = {
   otherVitestRootCount: number;
   otherVitestWorkerCount: number;
   otherVitestCpuPercent: number;

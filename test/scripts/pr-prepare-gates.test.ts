@@ -603,17 +603,51 @@ describe("GraphQL fork publication", () => {
 });
 
 describe("fork publication transport", () => {
+  it("keeps the PR push URL process-local", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "resolve_head_push_url() { printf '%s\\n' https://github.com/contributor/repo.git; }",
+        "git() { touch .local/git-called; return 99; }",
+        "setup_prhead_remote",
+        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
+        "test ! -e .local/git-called",
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("preserves an HTTPS fallback for the later push", () => {
+    const { repoDir } = makeRetryRepo();
+    const result = runGatesBash(
+      [
+        "PRHEAD_REMOTE_URL=ssh://git@example.test/contributor/repo.git",
+        "resolve_head_push_url_https() { printf '%s\\n' https://github.com/contributor/repo.git; }",
+        'git() { if [ "$1" = ls-remote ] && [ "$2" = https://github.com/contributor/repo.git ]; then printf \'hosted\\trefs/heads/topic\\n\'; fi; }',
+        "resolve_prhead_remote_sha topic",
+        'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
+        'test "$PRHEAD_REMOTE_SHA" = hosted',
+      ].join("\n"),
+      { cwd: repoDir, sourcePush: true },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("uses git transport automatically for a verified signed prep commit", () => {
     const { repoDir } = makeRetryRepo();
     const result = runGatesBash(
       [
         "PR_HEAD_OWNER=contributor",
         "PR_HEAD_REPO_NAME=repo",
+        "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "git() { printf '%s\\n' \"$*\" >> .local/git-calls; case \"$1\" in rev-list) printf '%s\\n' prepared;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; return 99; }",
         "push_prep_head_once topic hosted prepared",
         "grep -F 'verify-commit prepared' .local/git-calls",
-        "grep -F 'push --force-with-lease=refs/heads/topic:hosted prhead prepared:refs/heads/topic' .local/git-calls",
+        "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
         "test ! -e .local/graphql-called",
       ].join("\n"),
       { cwd: repoDir, sourcePush: true },
@@ -629,6 +663,7 @@ describe("fork publication transport", () => {
       [
         "PR_HEAD_OWNER=contributor",
         "PR_HEAD_REPO_NAME=repo",
+        "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
         "git() { case \"$1\" in rev-list) printf '%s\\n' prepared;; verify-commit) return 1;; esac; return 0; }",
         "graphql_push_to_fork() { touch .local/graphql-called; printf '%s\\n' signed-head; }",
         "push_prep_head_once topic hosted prepared",

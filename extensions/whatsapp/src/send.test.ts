@@ -84,7 +84,10 @@ describe("web outbound", () => {
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
       await import("./send.js"));
-    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+    const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
+      await import("openclaw/plugin-sdk/runtime-env");
+    resetLogger = loadedResetLogger;
+    setLoggerOverride = loadedSetLoggerOverride;
   });
 
   beforeEach(() => {

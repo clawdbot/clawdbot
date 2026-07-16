@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { constants as fsConstants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,17 +14,27 @@ import {
   pathExists,
   removeEmptyParents,
   requireGit,
-  requireGitRaw,
+  requireGitBuffer,
   runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import {
+  hasUnsnapshotableProvisionedFiles,
+  provisionIncludedFiles,
+  restoreProvisionedFiles,
+  snapshotProvisionedFiles,
+} from "./provisioned-files.js";
+import {
+  clearRegistryWorktreeProvisionedChunks,
   deleteRegistryWorktree,
   findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
+  getRegistryWorktreeProvisionedLedger,
+  getRegistryWorktreeProvisionedPaths,
+  getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
   listRegistryWorktrees,
   updateRegistryWorktree,
@@ -137,76 +147,6 @@ async function resolveRepository(repoRoot: string): Promise<{
     .digest("hex")
     .slice(0, 16);
   return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
-}
-
-async function ensureNoSymlinkDirectory(root: string, relativePath: string): Promise<boolean> {
-  const segments = relativePath.split(/[\\/]/).filter(Boolean);
-  let current = root;
-  for (const segment of segments.slice(0, -1)) {
-    current = path.join(current, segment);
-    try {
-      const stat = await fs.lstat(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        return false;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return true;
-}
-
-async function copyIncludedFiles(repoRoot: string, worktreePath: string): Promise<void> {
-  const includePath = path.join(repoRoot, ".worktreeinclude");
-  if (!(await pathExists(includePath))) {
-    return;
-  }
-  const candidatesRaw = await requireGitRaw(repoRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "-z",
-  ]);
-  const includedRaw = await requireGitRaw(repoRoot, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    `--exclude-from=${includePath}`,
-    "-z",
-  ]);
-  const included = new Set(includedRaw.split("\0").filter(Boolean));
-  for (const relativePath of candidatesRaw.split("\0").filter(Boolean)) {
-    if (!included.has(relativePath) || path.isAbsolute(relativePath)) {
-      continue;
-    }
-    const normalized = path.normalize(relativePath);
-    if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
-      continue;
-    }
-    if (
-      !(await ensureNoSymlinkDirectory(repoRoot, normalized)) ||
-      !(await ensureNoSymlinkDirectory(worktreePath, normalized))
-    ) {
-      continue;
-    }
-    const source = path.join(repoRoot, normalized);
-    const destination = path.join(worktreePath, normalized);
-    const sourceStat = await fs.lstat(source).catch(() => undefined);
-    if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
-      continue;
-    }
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-    });
-    await fs.chmod(destination, sourceStat.mode);
-  }
 }
 
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
@@ -333,7 +273,76 @@ async function directorySizeBytes(root: string): Promise<number> {
   return total;
 }
 
-async function snapshotWorktree(record: ManagedWorktreeRecord, reason: string): Promise<string> {
+async function containsGitMarker(root: string, checkoutRoot = false): Promise<boolean> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.name === ".git") {
+      if (!checkoutRoot) {
+        return true;
+      }
+      continue;
+    }
+    if (entry.isDirectory() && (await containsGitMarker(path.join(root, entry.name), false))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function splitNullBuffer(input: Buffer): Buffer[] {
+  const fields: Buffer[] = [];
+  let start = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    if (input[index] !== 0) {
+      continue;
+    }
+    if (index > start) {
+      fields.push(input.subarray(start, index));
+    }
+    start = index + 1;
+  }
+  if (start < input.length) {
+    fields.push(input.subarray(start));
+  }
+  return fields;
+}
+
+function gitPathKey(gitPath: Buffer): string {
+  return gitPath.toString("hex");
+}
+
+function checkoutPathFromGitBytes(checkoutRoot: string, gitPath: Buffer): string | Buffer {
+  if (process.platform === "win32") {
+    return path.join(checkoutRoot, ...gitPath.toString("utf8").split("/"));
+  }
+  return Buffer.concat([Buffer.from(checkoutRoot), Buffer.from(path.sep), gitPath]);
+}
+
+async function rawPathExists(target: string | Buffer): Promise<boolean> {
+  try {
+    await fs.lstat(target);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function snapshotWorktree(
+  record: ManagedWorktreeRecord,
+  reason: string,
+  provisionedPaths: readonly string[],
+): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-index-"));
   const indexPath = path.join(tempDir, "index");
   const snapshotRef = `${SNAPSHOT_REF_PREFIX}/${record.id}`;
@@ -343,12 +352,97 @@ async function snapshotWorktree(record: ManagedWorktreeRecord, reason: string): 
     GIT_AUTHOR_EMAIL: "openclaw@localhost",
     GIT_COMMITTER_NAME: "OpenClaw",
     GIT_COMMITTER_EMAIL: "openclaw@localhost",
+    ...(process.platform === "win32"
+      ? {}
+      : {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "core.filemode",
+          GIT_CONFIG_VALUE_0: "true",
+        }),
   };
   try {
+    if (await containsGitMarker(record.path, true)) {
+      throw new Error("nested git repositories cannot be snapshotted losslessly");
+    }
+    const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
+    const snapshotPaths = new Map<string, Buffer>();
+    const addSnapshotPath = (entry: Buffer) => {
+      const key = gitPathKey(entry);
+      if (!provisioned.has(key)) {
+        snapshotPaths.set(key, entry);
+      }
+    };
+    const sparseConfig = await runGit(record.path, ["config", "--bool", "core.sparseCheckout"]);
+    if (sparseConfig.code !== 0 && sparseConfig.code !== 1) {
+      throw commandError("git config --bool core.sparseCheckout", sparseConfig);
+    }
+    const sparseCheckout = sparseConfig.code === 0 && sparseConfig.stdout.trim() === "true";
+    const sparseCandidates: Buffer[] = [];
+    for (const entry of splitNullBuffer(
+      await requireGitBuffer(record.path, ["ls-files", "-v", "-z"]),
+    )) {
+      if (entry.length < 3) {
+        continue;
+      }
+      const tag = String.fromCharCode(entry[0] ?? 0).toUpperCase();
+      const trackedPath = entry.subarray(2);
+      if (
+        tag !== "S" ||
+        (await rawPathExists(checkoutPathFromGitBytes(record.path, trackedPath))) ||
+        !sparseCheckout
+      ) {
+        addSnapshotPath(trackedPath);
+      } else {
+        sparseCandidates.push(trackedPath);
+      }
+    }
+    if (sparseCandidates.length > 0) {
+      const included = await requireGitBuffer(
+        record.path,
+        ["sparse-checkout", "check-rules", "-z"],
+        {
+          input: Buffer.concat(sparseCandidates.flatMap((entry) => [entry, Buffer.from([0])])),
+        },
+      );
+      for (const entry of splitNullBuffer(included)) {
+        // Missing paths included by the active rules are deletions, even if their
+        // index skip-worktree bit is stale. Truly sparse omissions stay at HEAD.
+        addSnapshotPath(entry);
+      }
+    }
+    for (const args of [
+      ["diff-index", "--cached", "--name-only", "-z", "HEAD", "--"],
+      ["ls-files", "-z", "--others", "--exclude-standard"],
+    ]) {
+      for (const entry of splitNullBuffer(await requireGitBuffer(record.path, args))) {
+        addSnapshotPath(entry);
+      }
+    }
     await requireGit(record.path, ["read-tree", "HEAD"], { env });
-    // Ignored files stay outside the repository object database; provisioning recreates them.
-    await requireGit(record.path, ["add", "-A"], { env });
+    // This index came from a tree, so it has no checkout-local skip-worktree
+    // bits and update-index is independent of the source worktree's sparse cone.
+    await requireGit(record.path, ["update-index", "--add", "--remove", "-z", "--stdin"], {
+      env,
+      input:
+        snapshotPaths.size > 0
+          ? Buffer.concat([...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]))
+          : Buffer.alloc(0),
+    });
     const tree = await requireGit(record.path, ["write-tree"], { env });
+    for (const provisionedPath of provisionedPaths) {
+      const overlap = await requireGit(record.path, [
+        "--literal-pathspecs",
+        "ls-tree",
+        "-r",
+        "--name-only",
+        tree,
+        "--",
+        provisionedPath,
+      ]);
+      if (overlap) {
+        throw new Error(`provisioned path entered Git snapshot: ${provisionedPath}`);
+      }
+    }
     const treeEntries = await requireGit(record.path, ["ls-tree", "-r", tree]);
     // Gitlinks omit nested worktree files, so accepting one would violate the full-tree snapshot.
     if (treeEntries.split("\n").some((entry) => entry.startsWith("160000 "))) {
@@ -445,8 +539,9 @@ export class ManagedWorktreeService {
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
+    let provisionedPaths: string[];
     try {
-      await copyIncludedFiles(repository.sourceRoot, worktreePath);
+      provisionedPaths = await provisionIncludedFiles(repository.sourceRoot, worktreePath);
       if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
@@ -472,7 +567,7 @@ export class ManagedWorktreeService {
       createdAt,
       lastActiveAt: createdAt,
     };
-    insertRegistryWorktree(this.env, record);
+    insertRegistryWorktree(this.env, record, { provisionedPaths });
     return record;
   }
 
@@ -639,10 +734,31 @@ export class ManagedWorktreeService {
       let snapshotRef = record.snapshotRef;
       let snapshotError: string | undefined;
       try {
-        snapshotRef = await snapshotWorktree(record, params.reason);
-        updateRegistryWorktree(this.env, record.id, { snapshotRef });
+        const provisionedState = await snapshotProvisionedFiles(
+          this.env,
+          record.id,
+          record.path,
+          getRegistryWorktreeProvisionedPaths(this.env, record.id),
+        );
+        snapshotRef = await snapshotWorktree(
+          record,
+          params.reason,
+          provisionedState.map((entry) => entry.path),
+        );
+        updateRegistryWorktree(this.env, record.id, {
+          snapshotRef,
+          provisionedState,
+        });
       } catch (error) {
         snapshotError = error instanceof Error ? error.message : String(error);
+        try {
+          clearRegistryWorktreeProvisionedChunks(this.env, record.id);
+        } catch (cleanupError) {
+          throw new WorktreeSnapshotError(
+            `${snapshotError}; provisioned snapshot cleanup failed: ${String(cleanupError)}`,
+            { cause: cleanupError },
+          );
+        }
         if (!force) {
           throw new WorktreeSnapshotError(snapshotError, { cause: error });
         }
@@ -692,13 +808,28 @@ export class ManagedWorktreeService {
       record.snapshotRef,
     ]);
     let branchCreated = false;
+    let restoredProvisionedPaths: string[];
     try {
       // Branch history stays at the original commit; the snapshot is restored as working state.
       await requireGit(record.repoRoot, ["branch", record.branch, parent]);
       branchCreated = true;
       await requireGit(record.path, ["symbolic-ref", "HEAD", `refs/heads/${record.branch}`]);
       await requireGit(record.path, ["reset"]);
-      await copyIncludedFiles(record.repoRoot, record.path);
+      const provisionedLedger = getRegistryWorktreeProvisionedLedger(this.env, record.id);
+      if (provisionedLedger.status === "legacy") {
+        // Explicitly removed pre-ledger worktrees retain their historical restore behavior.
+        restoredProvisionedPaths = await provisionIncludedFiles(record.repoRoot, record.path);
+      } else {
+        if (provisionedLedger.status === "invalid") {
+          throw new Error(`worktree ${record.id} has invalid provisioned file metadata`);
+        }
+        const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
+        if (provisionedState === undefined) {
+          throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);
+        }
+        await restoreProvisionedFiles(this.env, record.id, record.path, provisionedState);
+        restoredProvisionedPaths = provisionedState.map((state) => state.path);
+      }
     } catch (error) {
       const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
       const branchDeleted = branchCreated
@@ -713,7 +844,11 @@ export class ManagedWorktreeService {
       throw error;
     }
     const lastActiveAt = this.now();
-    updateRegistryWorktree(this.env, params.id, { removedAt: undefined, lastActiveAt });
+    updateRegistryWorktree(this.env, params.id, {
+      removedAt: undefined,
+      lastActiveAt,
+      provisionedPaths: restoredProvisionedPaths,
+    });
     // Clear any lease rows or removal marker stranded by a crash between git removal
     // and finalize so the restored worktree admits runs again.
     finalizeWorktreeRemoval(this.env, params.id);
@@ -741,7 +876,11 @@ export class ManagedWorktreeService {
         "--remotes",
         "--oneline",
       ]);
-      if (status || unpushed) {
+      const ignoredDrift = await hasUnsnapshotableProvisionedFiles(
+        record.path,
+        getRegistryWorktreeProvisionedPaths(this.env, record.id),
+      );
+      if (status || unpushed || ignoredDrift) {
         abortWorktreeRemoval(this.env, id, claimToken);
         return false;
       }
@@ -834,6 +973,14 @@ export class ManagedWorktreeService {
       return true;
     }
     if (hasLiveWorktreeRunLease(this.env, record.id)) {
+      return true;
+    }
+    if (
+      await hasUnsnapshotableProvisionedFiles(
+        record.path,
+        getRegistryWorktreeProvisionedPaths(this.env, record.id),
+      )
+    ) {
       return true;
     }
     const state = await lockState(record);

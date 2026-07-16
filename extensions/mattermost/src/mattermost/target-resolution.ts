@@ -143,6 +143,9 @@ export async function resolveMattermostOpaqueTarget(params: {
     params.cfg && (!params.token || !params.baseUrl)
       ? resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId })
       : null;
+  if (account && !account.enabled) {
+    throw new Error(`Mattermost account "${account.accountId}" is disabled`);
+  }
   const token = normalizeOptionalString(params.token) ?? normalizeOptionalString(account?.botToken);
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl ?? account?.baseUrl);
   if (!token || !baseUrl) {

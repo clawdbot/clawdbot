@@ -21,7 +21,7 @@ const OPENROUTER_SHORT_TO_API_MODEL_ID = new Map([
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
 ]);
 
-export function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
+function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
   }

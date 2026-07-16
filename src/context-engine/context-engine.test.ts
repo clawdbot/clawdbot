@@ -22,7 +22,6 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import type { ContextEngineFactory, ContextEngineFactoryContext } from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 import type {
   ContextEngine,
@@ -34,6 +33,9 @@ import type {
   BootstrapResult,
   IngestResult,
 } from "./types.js";
+
+type ContextEngineFactory = Parameters<typeof registerContextEngine>[1];
+type ContextEngineFactoryContext = Parameters<ContextEngineFactory>[0];
 
 const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionDirectMock: vi.fn(),

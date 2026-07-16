@@ -40,6 +40,7 @@
         "grammy": "1.44.0",
         "highlight.js": "11.11.1",
         "hosted-git-info": "10.1.1",
+        "iconv-lite": "0.7.2",
         "ignore": "7.0.5",
         "jiti": "2.7.0",
         "json5": "2.2.3",

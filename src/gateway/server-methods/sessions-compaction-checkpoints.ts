@@ -38,7 +38,7 @@ const MODEL_SELECTION_LOCKED_CHECKPOINT_MESSAGE =
   "Checkpoint branch and restore are unavailable while model selection is locked.";
 
 export const sessionCheckpointHandlers: GatewayRequestHandlers = {
-  "sessions.compaction.branch": async ({ params, respond, context }) => {
+  "sessions.compaction.branch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (
       !assertValidParams(
         params,
@@ -52,6 +52,9 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
     const p = params;
     const key = requireSessionKey(p.key, respond);
     if (!key) {
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "branch", client, isWebchatConnect, respond })) {
       return;
     }
     const checkpointId =

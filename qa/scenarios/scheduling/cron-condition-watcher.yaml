@@ -28,8 +28,7 @@ scenario:
   execution:
     kind: flow
     summary: Poll a stateful headless condition, prove quiet ticks stay artifact-free, then observe one natural fired command payload and once disarm.
-    config:
-      requiredChannelDriver: qa-channel
+    channel: qa-channel
 
 flow:
   steps:

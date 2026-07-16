@@ -29,14 +29,14 @@
       "approve": true
     },
     {
-      "id": "telegram-token",
-      "message": "config set-ref channels.telegram.botToken env {telegramEnv}",
+      "id": "discord-token",
+      "message": "config set-ref channels.discord.token env {discordEnv}",
       "expectOutput": "[openclaw] done: config.setRef",
       "approve": true
     },
     {
-      "id": "telegram-enabled",
-      "message": "config set channels.telegram.enabled true",
+      "id": "discord-enabled",
+      "message": "config set channels.discord.enabled true",
       "expectOutput": "[openclaw] done: config.set",
       "approve": true
     },

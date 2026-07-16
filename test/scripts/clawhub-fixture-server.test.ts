@@ -37,7 +37,7 @@ async function stopServer(child: FixtureServerChild) {
     child.once("exit", () => resolve());
   });
   child.kill("SIGTERM");
-  await Promise.race([exited, delay(1_000)]);
+  await Promise.race([exited, delay(1_000, undefined, { ref: false })]);
   if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
     await exited;

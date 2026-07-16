@@ -152,7 +152,11 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
-      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      caps: [
+        GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      ],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,

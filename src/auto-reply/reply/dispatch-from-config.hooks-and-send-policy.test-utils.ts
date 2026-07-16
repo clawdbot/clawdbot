@@ -61,6 +61,28 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(false);
   });
 
+  it("does not start the reply lifecycle when before_dispatch silently handles the turn", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
+    const dispatcher = createDispatcher();
+    const onReplyStart = vi.fn(async () => {});
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      return { text: "model reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onReplyStart },
+    });
+
+    expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalledTimes(1);
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
   it("uses canonical hook metadata and shared routed final delivery", async () => {
     ttsMocks.state.synthesizeFinalAudio = true;
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });

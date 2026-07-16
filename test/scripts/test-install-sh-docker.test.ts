@@ -59,6 +59,87 @@ function extractNonrootNodePreflight(): string {
   return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
+function extractInstallE2eInstallerFunction(): string {
+  const script = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+  const startMarker = "run_official_installer() (\n";
+  const endMarker = "\n\nverify_installed_version()";
+  const start = script.indexOf(startMarker);
+  const end = script.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end <= start) {
+    throw new Error("install E2E installer function was not found");
+  }
+  return script.slice(start, end);
+}
+
+function runInstallE2eInstallerFixture(params: {
+  curlExitCode?: number;
+  installTag: string;
+  installerBody: string;
+}) {
+  const root = tempDirs.make("openclaw-install-e2e-download-");
+  const binDir = join(root, "bin");
+  const curlPath = join(binDir, "curl");
+  const curlArgsPath = join(root, "curl-args.txt");
+  const installerSourcePath = join(root, "installer-source.sh");
+  const markerPath = join(root, "installer-marker.txt");
+  const outputPathCapture = join(root, "curl-output-path.txt");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(installerSourcePath, params.installerBody);
+  writeFileSync(
+    curlPath,
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'printf \'%s\\n\' "$*" >"$CURL_ARGS_PATH"',
+      'output=""',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then',
+      "    shift",
+      '    output="$1"',
+      "  fi",
+      "  shift",
+      "done",
+      'cp "$FAKE_INSTALLER_SOURCE" "$output"',
+      'printf "%s" "$output" >"$OUTPUT_PATH_CAPTURE"',
+      'exit "$FAKE_CURL_EXIT"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CURL_ARGS_PATH: curlArgsPath,
+    FAKE_CURL_EXIT: String(params.curlExitCode ?? 0),
+    FAKE_INSTALLER_SOURCE: installerSourcePath,
+    INSTALL_MARKER: markerPath,
+    OUTPUT_PATH_CAPTURE: outputPathCapture,
+    PATH: `${binDir}:${process.env.PATH ?? ""}`,
+  };
+  delete env.OPENCLAW_BETA;
+  delete env.OPENCLAW_VERSION;
+
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      [
+        "set -u",
+        extractInstallE2eInstallerFunction(),
+        'INSTALL_URL="https://installer.example.test/install.sh"',
+        `INSTALL_TAG=${JSON.stringify(params.installTag)}`,
+        "run_official_installer",
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env,
+    },
+  );
+
+  return { curlArgsPath, markerPath, outputPathCapture, result };
+}
+
 function runNonrootNodePreflight(
   version: string,
   options: { sqlite?: boolean; sqliteVersion?: string } = {},
@@ -463,6 +544,13 @@ describe("test-install-sh-docker", () => {
     expect(nonrootDockerfile).toContain("USER app");
     expect(nonrootDockerfile).toContain("WORKDIR /home/app");
     expect(nonrootDockerfile).toContain("NPM_CONFIG_UPDATE_NOTIFIER=false");
+    expect(nonrootDockerfile).toContain('installer="$(mktemp)"');
+    expect(nonrootDockerfile).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" https://deb.nodesource.com/setup_24.x',
+    );
+    expect(nonrootDockerfile).toContain('bash "$installer"');
+    expect(nonrootDockerfile).toContain('rm -f "$installer"');
+    expect(nonrootDockerfile).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });
 
   it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
@@ -835,6 +923,27 @@ printf 'status=%s\\n' "$status"
     expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
+  it("downloads the OpenShell installer completely before execution", () => {
+    const workflow = parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8"));
+    const steps = workflow.jobs.validate_special_e2e.steps as Array<{
+      name?: string;
+      run?: string;
+    }>;
+    const installStep = expectDefined(
+      steps.find((step) => step.name === "Install OpenShell CLI"),
+      "OpenShell install step",
+    );
+    const run = expectDefined(installStep.run, "OpenShell install command");
+
+    expect(run).toContain('installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"');
+    expect(run).toContain("curl -LsSf --connect-timeout 10 --max-time 120 \\");
+    expect(run).toContain('-o "$installer_path"');
+    expect(run).toContain('sh "$installer_path"');
+    expect(run).toContain("trap 'rm -f \"$installer_path\"' EXIT");
+    expect(run.indexOf('-o "$installer_path"')).toBeLessThan(run.indexOf('sh "$installer_path"'));
+    expect(run).not.toContain("install.sh | sh");
+  });
+
   it("prints package size audits for release smoke tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -932,6 +1041,40 @@ printf 'status=%s\\n' "$status"
 });
 
 describe("install-sh E2E runner", () => {
+  it("does not execute a partial installer after a bounded download fails", () => {
+    const fixture = runInstallE2eInstallerFixture({
+      curlExitCode: 28,
+      installerBody: 'touch "$INSTALL_MARKER"\n',
+      installTag: "latest",
+    });
+
+    expect(fixture.result.status).toBe(28);
+    expect(readFileSync(fixture.curlArgsPath, "utf8")).toContain(
+      "-fsSL --connect-timeout 10 --max-time 120 https://installer.example.test/install.sh -o",
+    );
+    expect(existsSync(fixture.markerPath)).toBe(false);
+    expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
+  });
+
+  it.each([
+    ["latest", "|"],
+    ["beta", "1|"],
+    ["2026.7.1", "|2026.7.1"],
+  ])(
+    "executes a complete %s installer with the expected tag environment",
+    (installTag, expected) => {
+      const fixture = runInstallE2eInstallerFixture({
+        installTag,
+        installerBody:
+          'printf "%s|%s" "${OPENCLAW_BETA-}" "${OPENCLAW_VERSION-}" >"$INSTALL_MARKER"\n',
+      });
+
+      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      expect(readFileSync(fixture.markerPath, "utf8")).toBe(expected);
+      expect(existsSync(readFileSync(fixture.outputPathCapture, "utf8"))).toBe(false);
+    },
+  );
+
   it("normalizes Docker wrapper timing and toggle knobs before forwarding", () => {
     const wrapper = readFileSync(INSTALL_E2E_DOCKER_PATH, "utf8");
 

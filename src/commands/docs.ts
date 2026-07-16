@@ -80,7 +80,12 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
       onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
     });
-    const payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+    let payload: DocsSearchResponse;
+    try {
+      payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+    } catch (cause) {
+      throw new Error("Docs search response is malformed JSON", { cause });
+    }
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);

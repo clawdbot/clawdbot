@@ -29,6 +29,7 @@ export type ProviderAuthChoiceMetadata = {
   cliOption?: string;
   cliDescription?: string;
   appGuidedSecret?: boolean;
+  appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
@@ -108,6 +109,7 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
     ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };

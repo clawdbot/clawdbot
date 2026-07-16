@@ -1,6 +1,6 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Deepinfra tests cover surface model catalogs plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetDeepInfraModelCacheForTest } from "./provider-models.js";
 import {
   listDeepInfraImageGenCatalog,
   listDeepInfraVideoGenCatalog,
@@ -8,7 +8,7 @@ import {
 } from "./surface-model-catalogs.js";
 
 beforeEach(() => {
-  resetDeepInfraModelCacheForTest();
+  clearLiveCatalogCacheForTests();
 });
 
 function makeCtx(overrides: Partial<Parameters<typeof listDeepInfraImageGenCatalog>[0]> = {}) {

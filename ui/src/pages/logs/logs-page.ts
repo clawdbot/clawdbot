@@ -8,6 +8,12 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -40,7 +46,7 @@ class LogsPage extends OpenClawLightDomElement {
   @state() private client: GatewayBrowserClient | null = null;
   @state() private connected = false;
   @state() private logsLoading = false;
-  @state() private logsError: string | null = null;
+  @state() private logsStatus = createPanelRefreshStatus();
   @state() private logsFile: string | null = null;
   @state() private logsEntries: LogEntry[] = [];
   @state() private logsFilterText = "";
@@ -147,7 +153,7 @@ class LogsPage extends OpenClawLightDomElement {
 
   private resetServerState() {
     this.logsLoading = false;
-    this.logsError = null;
+    this.logsStatus = createPanelRefreshStatus();
     this.logsFile = null;
     this.logsEntries = [];
     this.logsTruncated = false;
@@ -212,7 +218,7 @@ class LogsPage extends OpenClawLightDomElement {
     if (!quiet) {
       this.logsLoading = true;
     }
-    this.logsError = null;
+    this.logsStatus = beginPanelRefresh(this.logsStatus, { clearError: !quiet });
     try {
       const res = await scope.client.request("logs.tail", {
         cursor: opts?.reset ? undefined : (this.logsCursor ?? undefined),
@@ -240,6 +246,7 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsCursor = typeof payload.cursor === "number" ? payload.cursor : this.logsCursor;
       this.logsFile = typeof payload.file === "string" ? payload.file : this.logsFile;
       this.logsTruncated = Boolean(payload.truncated);
+      this.logsStatus = completePanelRefresh();
       return true;
     } catch (err) {
       if (!isCurrentOperation()) {
@@ -247,9 +254,12 @@ class LogsPage extends OpenClawLightDomElement {
       }
       if (isMissingOperatorReadScopeError(err)) {
         this.logsEntries = [];
-        this.logsError = formatMissingOperatorReadScopeMessage("logs");
+        this.logsStatus = failPanelRefresh(
+          createPanelRefreshStatus(),
+          formatMissingOperatorReadScopeMessage("logs"),
+        );
       } else {
-        this.logsError = String(err);
+        this.logsStatus = failPanelRefresh(this.logsStatus, String(err));
       }
       return true;
     } finally {
@@ -324,7 +334,7 @@ class LogsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderLogs({
       loading: this.logsLoading,
-      error: this.logsError,
+      status: this.logsStatus,
       file: this.logsFile,
       entries: this.logsEntries,
       filterText: this.logsFilterText,

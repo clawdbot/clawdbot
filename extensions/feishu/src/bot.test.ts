@@ -1,5 +1,9 @@
 // Feishu tests cover bot plugin behavior.
-import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import type {
+  ensureConfiguredBindingRouteReady,
+  getSessionBindingService,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
@@ -12,13 +16,11 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
-type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
+type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type BoundConversation = ReturnType<
-  ReturnType<typeof ConversationRuntime.getSessionBindingService>["resolveByConversation"]
+  ReturnType<typeof getSessionBindingService>["resolveByConversation"]
 >;
-type BindingReadiness = Awaited<
-  ReturnType<typeof ConversationRuntime.ensureConfiguredBindingRouteReady>
->;
+type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
 type ReplyDispatcher = Parameters<
   PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
 >[0]["dispatcher"];
@@ -4506,7 +4508,6 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
       resolveDebounceText: ({ event }) =>
         (JSON.parse(event.message.content) as { text: string }).text,
       hasProcessedMessage: vi.fn(async () => false),
-      recordProcessedMessage: vi.fn(async () => true),
     });
 
     await handler(createTextEvent("msg-text-first", "1710000000000", "first"));
@@ -4567,7 +4568,6 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
       handleMessage,
       resolveDebounceText: () => "",
       hasProcessedMessage: vi.fn(async () => false),
-      recordProcessedMessage: vi.fn(async () => true),
     });
 
     const firstEvent = createAudioEvent("file_audio_receive_first");
@@ -4579,16 +4579,16 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(handleMessage).toHaveBeenCalledTimes(2);
     const firstCall = mockCallArg<{
       event?: FeishuMessageEvent;
-      processingClaimHeld?: boolean;
+      processingClaim?: { commit: () => Promise<boolean> };
     }>(handleMessage, 0, 0);
     expect(firstCall.event).toEqual(firstEvent);
-    expect(firstCall.processingClaimHeld).toBe(true);
+    expect(firstCall.processingClaim?.commit).toBeTypeOf("function");
     const secondCall = mockCallArg<{
       event?: FeishuMessageEvent;
-      processingClaimHeld?: boolean;
+      processingClaim?: { commit: () => Promise<boolean> };
     }>(handleMessage, 1, 0);
     expect(secondCall.event).toEqual(secondEvent);
-    expect(secondCall.processingClaimHeld).toBe(true);
+    expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

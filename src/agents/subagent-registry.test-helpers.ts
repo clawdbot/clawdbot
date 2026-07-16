@@ -36,6 +36,9 @@ type RegistryTestApi = {
 
 type RegistryDeps = {
   callGateway: typeof import("../gateway/call.js").callGateway;
+  getGatewayRecoveryRuntime: () =>
+    | import("../gateway/server-instance-runtime.types.js").GatewayRecoveryRuntime
+    | undefined;
   captureSubagentCompletionReply: typeof import("./subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForRead;

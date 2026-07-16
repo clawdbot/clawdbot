@@ -822,13 +822,20 @@ describe("resolveDriveCommentEventTurn", () => {
 });
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {
+  let processingClaim: dedup.FeishuMessageProcessingClaim;
   beforeEach(() => {
     lastRuntime = createNonExitingRuntimeEnv();
     handleFeishuCommentEventMock.mockClear();
     createFeishuClientMock.mockReset().mockReturnValue(makeOpenApiClient({}) as never);
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
-    vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
-    vi.spyOn(dedup, "releaseFeishuMessageProcessing").mockImplementation(() => {});
+    processingClaim = {
+      keys: ["drive-comment:test"],
+      commit: vi.fn(async () => true),
+      release: vi.fn(),
+    };
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue({
+      kind: "claimed",
+      handle: processingClaim,
+    });
   });
 
   afterEach(() => {
@@ -910,7 +917,7 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
   });
 
   it("drops duplicate comment events before dispatch", async () => {
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("duplicate");
+    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue({ kind: "duplicate" });
     const onComment = await setupCommentMonitorHandler();
 
     await onComment(makeDriveCommentEvent());
@@ -925,23 +932,12 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     await onComment(makeDriveCommentEvent());
 
     await vi.waitFor(() => {
-      expect(dedup.recordProcessedFeishuMessage).toHaveBeenCalledTimes(1);
-      expect(dedup.releaseFeishuMessageProcessing).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-      );
+      expect(processingClaim.commit).toHaveBeenCalledTimes(1);
+      expect(processingClaim.release).not.toHaveBeenCalled();
       expect(lastRuntime?.error).toHaveBeenCalledWith(
         "feishu[default]: error handling drive comment notice: Error: post-send failure",
       );
     });
-    const [recordedMessageId, recordedNamespace, recordedLogger] = mockCallAt(
-      dedup.recordProcessedFeishuMessage as ReturnType<typeof vi.fn>,
-      0,
-      "Feishu processed-message record",
-    );
-    expect(recordedMessageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
-    expect(recordedNamespace).toBe("default");
-    expect(typeof recordedLogger).toBe("function");
   });
 
   it("releases comment replay without recording when failure is explicitly retryable", async () => {
@@ -955,11 +951,10 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
     await onComment(makeDriveCommentEvent());
 
     await vi.waitFor(() => {
-      expect(dedup.recordProcessedFeishuMessage).not.toHaveBeenCalled();
-      expect(dedup.releaseFeishuMessageProcessing).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-      );
+      expect(processingClaim.commit).not.toHaveBeenCalled();
+      expect(processingClaim.release).toHaveBeenCalledWith({
+        error: expect.objectContaining({ message: "retry me" }),
+      });
       expect(lastRuntime?.error).toHaveBeenCalledWith(
         "feishu[default]: error handling drive comment notice: FeishuRetryableSyntheticEventError: retry me",
       );

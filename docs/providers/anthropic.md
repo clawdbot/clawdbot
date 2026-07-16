@@ -127,6 +127,18 @@ OpenClaw release:
     [OpenAI Codex](/providers/openai).
     </Warning>
 
+    ### Get a setup token
+
+    Run `claude setup-token` on any machine with Claude Code installed. It prints
+    a long-lived token starting with `sk-ant-oat01-`.
+
+    During onboarding, paste the token in the macOS app by choosing
+    **Anthropic setup-token** under **Connect with an API key or token**, or use:
+
+    ```bash
+    openclaw models auth login --provider anthropic --method setup-token
+    ```
+
     ### Config example
 
     Prefer the canonical Anthropic model ref plus a CLI runtime override:

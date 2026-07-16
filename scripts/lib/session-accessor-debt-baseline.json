@@ -12,7 +12,6 @@
     "src/config/sessions/session-accessor.entry.ts": 2,
     "src/config/sessions/store-load.ts": 3,
     "src/config/sessions/store.ts": 10,
-    "src/config/sessions/test-helpers.ts": 2,
     "src/config/sessions/transcript.ts": 2
   },
   "sessionAccessorWrite": {

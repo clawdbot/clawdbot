@@ -377,6 +377,50 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  it("counts an instance-local approval subscriber as a delivery route", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-internal-route");
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const publishRequested = vi.fn(() => 1);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+        approvalEvents: {
+          publishRequested,
+          publishResolved: vi.fn(),
+        },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(publishRequested).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: record.id }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted", deliveryRoute: "approval-client" }),
+      undefined,
+    );
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
   it("checks plugin turn-source routes with plugin approval kind", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -390,6 +434,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     const decisionPromise = manager.register(record, 60_000);
     const respond = vi.fn();
+    const getApprovalClientConnIds = vi.fn(() => new Set<string>());
     const requestPromise = handlePendingApprovalRequest({
       manager,
       record,
@@ -397,6 +442,8 @@ describe("handlePendingApprovalRequest", () => {
       respond,
       context: {
         broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getApprovalClientConnIds,
         hasExecApprovalClients: () => false,
       } as unknown as GatewayRequestContext,
       requestEventName: "plugin.approval.requested",
@@ -412,6 +459,9 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
+    expect(getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "plugin" }),
+    );
     expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
       turnSourceChannel: "whatsapp",
       turnSourceAccountId: "default",
@@ -1101,6 +1151,7 @@ describe("handlePendingApprovalRequest", () => {
     const respond = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1226,6 +1277,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1284,6 +1336,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1343,6 +1396,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1404,6 +1458,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1457,6 +1512,7 @@ describe("handlePendingApprovalRequest", () => {
     const visibleConnIds = new Set(["conn-owner-approval"]);
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1615,6 +1671,7 @@ describe("handlePendingApprovalRequest", () => {
 
     try {
       await handleApprovalResolve({
+        approvalKind: "exec",
         manager,
         inputId: record.id,
         decision: "deny",

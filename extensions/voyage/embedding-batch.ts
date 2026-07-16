@@ -339,8 +339,12 @@ export async function runVoyageEmbeddingBatches(
   });
 }
 
-export const testing = {
+const testing = {
   fetchVoyageBatchStatus,
   readVoyageBatchError,
   VOYAGE_BATCH_RESPONSE_MAX_BYTES,
 } as const;
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.voyageEmbeddingBatchTestApi"), testing);
+}

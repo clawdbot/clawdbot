@@ -78,7 +78,16 @@ type MessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | { type: "url"; url: string }
-  | { type: "web-app"; url: string };
+  | {
+      type: "web-app";
+      url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
+    };
 
 type MessagePresentationButton = {
   label: string;
@@ -128,7 +137,11 @@ Button semantics:
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
 - `action.type: "url"` opens a normal link.
-- `action.type: "web-app"` launches a channel-native web app.
+- `action.type: "web-app"` launches a channel-native web app. Set `url` for a
+  URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
+  mechanics are owned by the channel; at least one is required. When both are
+  present, a channel can prefer its native hosted-widget launch and use the URL
+  where that mechanism is unavailable.
 - `value` is the legacy opaque callback value. New controls should use `action`
   so channel plugins can map commands and callbacks without guessing from text.
 - `url`, `webApp`, and `web_app` remain accepted as deprecated boundary inputs.
@@ -501,9 +514,10 @@ keeping opaque callback data private:
 - **`approval`-typed actions** render label-only. Approval IDs and decisions are
   transport data and are not exposed through generic scalar helpers or fallback
   text.
-- **`url` / `web-app` actions** and deprecated **`url` / `webApp` / `web_app`**
-  inputs render the URL text alongside the button label, since the URL is
-  user-facing.
+- **`url` actions**, URL-backed **`web-app` actions**, and deprecated **`url` /
+  `webApp` / `web_app`** inputs render the URL text alongside the button label,
+  since the URL is user-facing. Hosted-widget-only actions render label-only on
+  channels without a native widget launch.
 - **Select options** render as label-only. The underlying option value is not
   exposed in fallback text.
 

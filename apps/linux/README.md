@@ -26,6 +26,10 @@ cargo build
 
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
+## Updates
+
+The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files.
+
 ## Canvas bridge
 
 The running app gives the headless `openclaw node run` host a single Canvas WebView. The bundled `linux-canvas` plugin advertises `canvas.*` only while the app socket exists. The app listens at `$XDG_RUNTIME_DIR/openclaw-canvas.sock` (or `/tmp/openclaw-canvas-$UID.sock`) with mode `0600`; a headless Linux node without the app does not advertise Canvas.

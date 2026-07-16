@@ -352,7 +352,16 @@ Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenCl
 | `cliFlag`             | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                            |
 | `cliOption`           | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                              |
 | `cliDescription`      | No       | `string`                                                              | Description used in CLI help.                                                                             |
+| `appGuidedSecret`     | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                              |
+| `appGuidedDiscovery`  | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                 |
+| `appGuidedAuth`       | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                        |
 | `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.  |
+
+When `appGuidedDiscovery` is true, the matching provider auth method must expose
+`appGuidedSetup.detect` and `appGuidedSetup.prepare`. Detection must be
+read-only: no login, model pull, download, or config write. Preparation rechecks
+the exact selected model and returns a config proposal; OpenClaw live-tests that
+proposal in isolation and commits it only after success.
 
 ## commandAliases reference
 
@@ -1198,7 +1207,7 @@ Runtime entrypoint fields do not override package-boundary checks for source ent
 
 Use it when setup, doctor, status, or read-only presence flows need a cheap yes/no auth probe before the full channel plugin loads. Persisted auth state is not configured channel state: do not use this metadata to auto-enable plugins, repair runtime dependencies, or decide whether a channel runtime should load. The target export should be a small function that reads persisted state only; do not route it through the full channel runtime barrel.
 
-`openclaw.channel.configuredState` follows the same shape for cheap env-only configured checks:
+`openclaw.channel.configuredState` supports cheap configured checks. Prefer declarative env metadata when environment variables are sufficient:
 
 ```json
 {
@@ -1206,15 +1215,16 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
     "channel": {
       "id": "telegram",
       "configuredState": {
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        "env": {
+          "allOf": ["TELEGRAM_BOT_TOKEN"]
+        }
       }
     }
   }
 }
 ```
 
-Use it when a channel can answer configured-state from env or other tiny non-runtime inputs. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 

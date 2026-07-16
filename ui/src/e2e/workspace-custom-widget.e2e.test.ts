@@ -63,7 +63,7 @@ function frameMethodResponse() {
   };
 }
 
-function workspaceDoc(version: number, status: "pending" | "approved") {
+function workspaceDoc(version: number, status: "pending" | "approved", title = "Revenue Chart") {
   return {
     doc: {
       schemaVersion: 1,
@@ -78,7 +78,7 @@ function workspaceDoc(version: number, status: "pending" | "approved") {
             {
               id: "w_custom",
               kind: "custom:revenue-chart",
-              title: "Revenue Chart",
+              title,
               grid: { x: 0, y: 0, w: 6, h: 4 },
               collapsed: false,
               createdBy: "agent:main",
@@ -169,6 +169,15 @@ async function newPage(): Promise<Page> {
   return context.newPage();
 }
 
+async function waitForTwoAnimationFrames(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
 describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -215,6 +224,97 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
       // Sandbox attribute is EXACTLY "allow-scripts".
       expect(await frame.getAttribute("sandbox")).toBe("allow-scripts");
       expect(await frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    } finally {
+      await page.context().close();
+    }
+  });
+
+  it("keeps the newest workspace when older reloads succeed or fail last", async () => {
+    const page = await newPage();
+    const gateway = await installMockGateway(page, {
+      ...workspaceGatewayScenario(),
+      methodResponses: {
+        "workspaces.get": workspaceDoc(1, "pending", "Initial"),
+      },
+    });
+    try {
+      await gotoWorkspaces(page, server);
+      const title = page.locator(".workspace-widget__title");
+      await expect.poll(() => title.textContent()).toBe("Initial");
+      await waitForTwoAnimationFrames(page);
+      const initialRequestCount = (await gateway.getRequests("workspaces.get")).length;
+
+      await gateway.deferNext("workspaces.get");
+      await gateway.emitGatewayEvent("plugin.workspaces.changed", { workspaceVersion: 2 });
+      await expect
+        .poll(async () => (await gateway.getRequests("workspaces.get")).length)
+        .toBe(initialRequestCount + 1);
+
+      await gateway.deferNext("workspaces.get");
+      await gateway.emitGatewayEvent("plugin.workspaces.changed", { workspaceVersion: 3 });
+      await expect
+        .poll(async () => (await gateway.getRequests("workspaces.get")).length)
+        .toBe(initialRequestCount + 2);
+
+      const requests = await gateway.getRequests("workspaces.get");
+      const olderRequest = requests.at(-2);
+      const newerRequest = requests.at(-1);
+      expect(olderRequest?.id).toEqual(expect.any(String));
+      expect(newerRequest?.id).toEqual(expect.any(String));
+
+      await gateway.deliverLatest({
+        type: "res",
+        id: newerRequest?.id,
+        ok: true,
+        payload: workspaceDoc(3, "pending", "Newest"),
+      });
+      await expect.poll(() => title.textContent()).toBe("Newest");
+
+      await gateway.deliverLatest({
+        type: "res",
+        id: olderRequest?.id,
+        ok: true,
+        payload: workspaceDoc(2, "pending", "Stale"),
+      });
+      await waitForTwoAnimationFrames(page);
+
+      expect(await title.textContent()).toBe("Newest");
+
+      await gateway.deferNext("workspaces.get");
+      await gateway.emitGatewayEvent("plugin.workspaces.changed", { workspaceVersion: 4 });
+      await expect
+        .poll(async () => (await gateway.getRequests("workspaces.get")).length)
+        .toBe(initialRequestCount + 3);
+
+      await gateway.deferNext("workspaces.get");
+      await gateway.emitGatewayEvent("plugin.workspaces.changed", { workspaceVersion: 5 });
+      await expect
+        .poll(async () => (await gateway.getRequests("workspaces.get")).length)
+        .toBe(initialRequestCount + 4);
+
+      const failureRequests = await gateway.getRequests("workspaces.get");
+      const olderFailedRequest = failureRequests.at(-2);
+      const newerSuccessfulRequest = failureRequests.at(-1);
+      expect(olderFailedRequest?.id).toEqual(expect.any(String));
+      expect(newerSuccessfulRequest?.id).toEqual(expect.any(String));
+
+      await gateway.deliverLatest({
+        type: "res",
+        id: newerSuccessfulRequest?.id,
+        ok: true,
+        payload: workspaceDoc(5, "pending", "Newest after error"),
+      });
+      await expect.poll(() => title.textContent()).toBe("Newest after error");
+
+      await gateway.deliverLatest({
+        type: "res",
+        id: olderFailedRequest?.id,
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "stale failure" },
+      });
+      await waitForTwoAnimationFrames(page);
+
+      expect(await title.textContent()).toBe("Newest after error");
     } finally {
       await page.context().close();
     }
@@ -270,14 +370,86 @@ describeControlUiE2e("Control UI custom-widget host mocked Gateway E2E", () => {
       // Post a spoofed data message from the PARENT window (event.source !== the
       // iframe's contentWindow). The bridge must ignore it: #value stays the
       // legitimate value and never shows the injected marker.
-      await page.evaluate(() => {
-        window.postMessage(
-          { v: 1, type: "workspace:data", requestId: "x", bindingId: "value", data: "SPOOFED" },
-          "*",
-        );
+      await frame.locator("#value").evaluate((node) => {
+        type SpoofObservationWindow = Window & {
+          openclawSawSpoofed?: boolean;
+          openclawSpoofObserver?: MutationObserver;
+        };
+        const targetWindow = window as SpoofObservationWindow;
+        const valueNode = node as HTMLElement;
+        const recordSpoof = () => {
+          if (valueNode.textContent?.includes("SPOOFED")) {
+            targetWindow.openclawSawSpoofed = true;
+          }
+        };
+        targetWindow.openclawSawSpoofed = false;
+        targetWindow.openclawSpoofObserver?.disconnect();
+        targetWindow.openclawSpoofObserver = new MutationObserver(recordSpoof);
+        targetWindow.openclawSpoofObserver.observe(valueNode, {
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        recordSpoof();
       });
-      await page.waitForTimeout(300);
-      expect(await frame.locator("#value").textContent()).not.toContain("SPOOFED");
+      await page.evaluate(async () => {
+        await new Promise<void>((resolve) => {
+          const onMessage = (event: MessageEvent) => {
+            const data = event.data as { requestId?: string } | undefined;
+            if (event.source !== window || data?.requestId !== "x") {
+              return;
+            }
+            window.removeEventListener("message", onMessage);
+            resolve();
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage(
+            { v: 1, type: "workspace:data", requestId: "x", bindingId: "value", data: "SPOOFED" },
+            "*",
+          );
+        });
+      });
+      await frame.locator("#value").evaluate(async () => {
+        type WidgetBridge = {
+          postMessage: (message: unknown) => void;
+          addEventListener: (type: "message", listener: (event: MessageEvent) => void) => void;
+          removeEventListener: (type: "message", listener: (event: MessageEvent) => void) => void;
+        };
+        const bridge = (window as Window & { openclawWorkspaceBridge?: WidgetBridge })
+          .openclawWorkspaceBridge;
+        if (!bridge) {
+          throw new Error("workspace bridge unavailable");
+        }
+        await new Promise<void>((resolve) => {
+          const onMessage = (event: MessageEvent) => {
+            const data = event.data as { requestId?: string } | undefined;
+            if (data?.requestId !== "after-spoof") {
+              return;
+            }
+            bridge.removeEventListener("message", onMessage);
+            resolve();
+          };
+          bridge.addEventListener("message", onMessage);
+          const barrierRequest = {
+            v: 1,
+            type: "workspace:getData",
+            requestId: "after-spoof",
+            bindingId: "value",
+          };
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- This is a MessagePort-style widget bridge, not Window.postMessage.
+          bridge.postMessage(barrierRequest);
+        });
+      });
+      const sawSpoofed = await frame.locator("#value").evaluate((node) => {
+        type SpoofObservationWindow = Window & {
+          openclawSawSpoofed?: boolean;
+          openclawSpoofObserver?: MutationObserver;
+        };
+        const targetWindow = window as SpoofObservationWindow;
+        targetWindow.openclawSpoofObserver?.disconnect();
+        return targetWindow.openclawSawSpoofed === true || node.textContent?.includes("SPOOFED");
+      });
+      expect(sawSpoofed).toBe(false);
     } finally {
       await page.context().close();
     }

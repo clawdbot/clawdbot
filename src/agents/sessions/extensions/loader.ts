@@ -22,8 +22,34 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
 } from "../../../plugins/sdk-alias.js";
-import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
-import * as bundledAgentCore from "../../runtime/index.js";
+import { isBunBinary } from "../../config.js";
+import {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+} from "../../runtime/index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
 import type { ExecOptions } from "../exec.js";
 import { execCommand } from "../exec.js";
@@ -43,6 +69,34 @@ import type {
 } from "./types.js";
 
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
+const bundledAgentCore = {
+  Agent,
+  bashExecutionToText,
+  buildSessionContext,
+  calculateContextTokens,
+  collectEntriesForBranchSummaryFromBranches,
+  compact,
+  estimateContextTokens,
+  estimateTokens,
+  findCutPoint,
+  findTurnStartIndex,
+  generateBranchSummary,
+  generateSummary,
+  getLastAssistantUsage,
+  openClawAgentCoreRuntime,
+  prepareBranchEntries,
+  prepareCompaction,
+  runAgentLoop,
+  serializeConversation,
+  shouldCompact,
+  uuidv7,
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  DEFAULT_COMPACTION_SETTINGS,
+};
+
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
@@ -557,164 +611,4 @@ export async function loadExtensions(
     errors,
     runtime,
   };
-}
-
-interface ResourceManifest {
-  extensions?: string[];
-  themes?: string[];
-  skills?: string[];
-  prompts?: string[];
-}
-
-function readResourceManifest(packageJsonPath: string): ResourceManifest | null {
-  try {
-    const content = fs.readFileSync(packageJsonPath, "utf-8");
-    const pkg = JSON.parse(content);
-    if (pkg.openclaw && typeof pkg.openclaw === "object") {
-      return pkg.openclaw as ResourceManifest;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function isExtensionFile(name: string): boolean {
-  return name.endsWith(".ts") || name.endsWith(".js");
-}
-
-/**
- * Resolve extension entry points from a directory.
- *
- * Checks for:
- * 1. package.json with "openclaw.extensions" field -> returns declared paths
- * 2. index.ts or index.js -> returns the index file
- *
- * Returns resolved paths or null if no entry points found.
- */
-function resolveExtensionEntries(dir: string): string[] | null {
-  // Check for package.json with "openclaw" field first
-  const packageJsonPath = path.join(dir, "package.json");
-  if (fs.existsSync(packageJsonPath)) {
-    const manifest = readResourceManifest(packageJsonPath);
-    if (manifest?.extensions?.length) {
-      const entries: string[] = [];
-      for (const extPath of manifest.extensions) {
-        const resolvedExtPath = path.resolve(dir, extPath);
-        if (fs.existsSync(resolvedExtPath)) {
-          entries.push(resolvedExtPath);
-        }
-      }
-      if (entries.length > 0) {
-        return entries;
-      }
-    }
-  }
-
-  // Check for index.ts or index.js
-  const indexTs = path.join(dir, "index.ts");
-  const indexJs = path.join(dir, "index.js");
-  if (fs.existsSync(indexTs)) {
-    return [indexTs];
-  }
-  if (fs.existsSync(indexJs)) {
-    return [indexJs];
-  }
-
-  return null;
-}
-
-/**
- * Discover extensions in a directory.
- *
- * Discovery rules:
- * 1. Direct files: `extensions/*.ts` or `*.js` → load
- * 2. Subdirectory with index: `extensions/* /index.ts` or `index.js` → load
- * 3. Subdirectory with package.json: `extensions/* /package.json` with "openclaw" field → load what it declares
- *
- * No recursion beyond one level. Complex packages must use package.json manifest.
- */
-function discoverExtensionsInDir(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const discovered: string[] = [];
-
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-
-      // 1. Direct files: *.ts or *.js
-      if ((entry.isFile() || entry.isSymbolicLink()) && isExtensionFile(entry.name)) {
-        discovered.push(entryPath);
-        continue;
-      }
-
-      // 2 & 3. Subdirectories
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        const entriesLocal = resolveExtensionEntries(entryPath);
-        if (entriesLocal) {
-          discovered.push(...entriesLocal);
-        }
-      }
-    }
-  } catch {
-    return [];
-  }
-
-  return discovered;
-}
-
-/**
- * Discover and load extensions from standard locations.
- */
-export async function discoverAndLoadExtensions(
-  configuredPaths: string[],
-  cwd: string,
-  agentDir: string = getAgentDir(),
-  eventBus?: EventBus,
-): Promise<LoadExtensionsResult> {
-  const allPaths: string[] = [];
-  const seen = new Set<string>();
-
-  const addPaths = (paths: string[]) => {
-    for (const p of paths) {
-      const resolved = path.resolve(p);
-      if (!seen.has(resolved)) {
-        seen.add(resolved);
-        allPaths.push(p);
-      }
-    }
-  };
-
-  // 1. Project-local extensions: cwd/${CONFIG_DIR_NAME}/extensions/
-  const localExtDir = path.join(cwd, CONFIG_DIR_NAME, "extensions");
-  addPaths(discoverExtensionsInDir(localExtDir));
-
-  // 2. Global extensions: agentDir/extensions/
-  const globalExtDir = path.join(agentDir, "extensions");
-  addPaths(discoverExtensionsInDir(globalExtDir));
-
-  // 3. Explicitly configured paths
-  for (const p of configuredPaths) {
-    const resolved = resolvePath(p, cwd);
-    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      // Check for package.json with OpenClaw manifest or index.ts
-      const entries = resolveExtensionEntries(resolved);
-      if (entries) {
-        addPaths(entries);
-        continue;
-      }
-      // No explicit entries - discover individual files in directory
-      addPaths(discoverExtensionsInDir(resolved));
-      continue;
-    }
-
-    addPaths([resolved]);
-  }
-
-  return loadExtensions(allPaths, cwd, eventBus);
 }

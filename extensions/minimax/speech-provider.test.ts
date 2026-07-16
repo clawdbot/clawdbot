@@ -147,6 +147,11 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
 
+    it("returns false when MINIMAX_API_KEY env var is blank", () => {
+      process.env.MINIMAX_API_KEY = "   ";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
+
     it("returns true when a MiniMax Token Plan env var is set", () => {
       expect(tokenPlanEnvConfigured).toBe(true);
     });
@@ -606,6 +611,22 @@ describe("buildMinimaxSpeechProvider", () => {
           timeoutMs: 30000,
         }),
       ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not send a request for a blank environment API key", async () => {
+      process.env.MINIMAX_API_KEY = "   ";
+
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS auth missing");
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it("throws on API error with response body", async () => {

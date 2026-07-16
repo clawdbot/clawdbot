@@ -33,11 +33,12 @@ type IndexTermShape = {
 };
 
 /** Comparable SQLite schema summary used by generated-schema tests. */
-export type SqliteSchemaShape = Record<
+type SqliteSchemaShape = Record<
   string,
   {
     columns: ColumnShape[];
     indexes: IndexShape[];
+    strict: number;
   }
 >;
 
@@ -100,9 +101,20 @@ export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
       {
         columns: collectColumns(db, table.name),
         indexes: collectIndexes(db, table.name),
+        strict: collectStrictFlag(db, table.name),
       },
     ]),
   );
+}
+
+function collectStrictFlag(db: DatabaseSync, tableName: string): number {
+  const row = db
+    .prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+    .get(tableName) as { strict?: unknown } | undefined;
+  if (typeof row?.strict !== "number") {
+    throw new Error(`SQLite table ${tableName} has no table_list entry`);
+  }
+  return row.strict;
 }
 
 function collectColumns(db: DatabaseSync, tableName: string): ColumnShape[] {

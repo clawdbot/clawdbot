@@ -489,6 +489,15 @@ type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNod
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
+function findPendingNodePairingDevice(
+  pairedByDeviceId: Record<string, PairedDevice>,
+  requestId: string,
+): PairedDevice | undefined {
+  return Object.values(pairedByDeviceId).find(
+    (device) => device.pendingNodeSurface?.requestId === requestId,
+  );
+}
+
 /** Approve a pending node request when caller scopes cover the requested command surface. */
 export async function approveNodePairing(
   requestId: string,
@@ -496,9 +505,7 @@ export async function approveNodePairing(
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
   return await withPairedDeviceRecords<ApproveNodePairingResult>(baseDir, (pairedByDeviceId) => {
-    const device = Object.values(pairedByDeviceId).find(
-      (entry) => entry.pendingNodeSurface?.requestId === requestId,
-    );
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
     const pending = device?.pendingNodeSurface;
     if (!device || !pending) {
       return { value: null, persist: false };
@@ -548,14 +555,26 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    const device = Object.values(pairedByDeviceId).find(
-      (entry) => entry.pendingNodeSurface?.requestId === requestId,
-    );
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
     if (!device) {
       return { value: null, persist: false };
     }
     delete device.pendingNodeSurface;
     return { value: { requestId, nodeId: device.deviceId }, persist: true };
+  });
+}
+
+/** Return the owning node id for a pending node pairing request, or null if none. */
+export async function getPendingNodePairing(
+  requestId: string,
+  baseDir?: string,
+): Promise<{ requestId: string; nodeId: string } | null> {
+  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = findPendingNodePairingDevice(pairedByDeviceId, requestId);
+    if (!device?.pendingNodeSurface) {
+      return { value: null, persist: false };
+    }
+    return { value: { requestId, nodeId: device.deviceId }, persist: false };
   });
 }
 

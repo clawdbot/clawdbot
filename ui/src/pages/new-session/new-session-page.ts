@@ -700,6 +700,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         agentId: this.agentId,
         message: cloudProfileId ? "" : message,
         model: this.modelControl.selected,
+        thinkingLevel: this.modelControl.thinkingLevel,
         attachments: cloudProfileId ? undefined : apiAttachments,
         worktree: this.worktree,
         baseRef: this.baseRef,
@@ -1288,7 +1289,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           ? renderDraftError(t("newSession.createOutcomeUnknown"))
           : nothing}
         ${renderNewSessionDraftComposer({
-          agentDefaultModel: this.selectedAgent()?.model?.primary,
+          agent: this.selectedAgent(),
           agentId: this.agentId,
           attachmentDraft: this.attachmentDraft,
           canSubmit: this.canSubmit(),

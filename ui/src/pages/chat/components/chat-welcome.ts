@@ -1,12 +1,7 @@
 // Control UI chat module implements chat welcome behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
-import {
-  canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
-  renderLobsterSvg,
-} from "../../../components/lobster-pet.ts";
+import "../../../components/openclaw-mascot.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../../lib/avatar.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -96,20 +91,10 @@ function selectWelcomeRecentSessions(
   );
 }
 
-// The default Clawd mascot: same species as the sidebar lobster pet, rendered
-// big and borderless with its own gentle idle loop (see layout.css).
 function renderWelcomeClawd() {
-  const palette =
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
-    expectDefined(LOBSTER_PET_PALETTES[0], "welcome lobster palette");
-  const look = canonicalLobsterLook(palette);
   return html`
-    <div
-      class="agent-chat__welcome-clawd"
-      style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
-      aria-hidden="true"
-    >
-      ${renderLobsterSvg(look)}
+    <div class="agent-chat__welcome-clawd" aria-hidden="true">
+      <openclaw-mascot mood="idle" .size=${112}></openclaw-mascot>
     </div>
   `;
 }

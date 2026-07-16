@@ -1,10 +1,10 @@
 // Chutes tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChutesModelDefinition,
   CHUTES_MODEL_CATALOG,
-  clearChutesModelCacheForTests,
   discoverChutesModels,
 } from "./models.js";
 
@@ -86,7 +86,7 @@ function requireChutesModel(
 
 describe("chutes-models", () => {
   beforeEach(() => {
-    clearChutesModelCacheForTests();
+    clearLiveCatalogCacheForTests();
   });
 
   it("buildChutesModelDefinition returns config with required fields", () => {

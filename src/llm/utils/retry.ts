@@ -1,4 +1,7 @@
-import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import {
+  extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
+} from "../../shared/assistant-error-format.js";
 import type { AssistantMessage } from "../types.js";
 import { classifyRateLimitWindow } from "./rate-limit-window.js";
 
@@ -67,7 +70,9 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) {
     return false;
   }
-  const status = extractLeadingHttpStatus(errorMessage)?.code;
+  const status =
+    extractLeadingHttpStatus(errorMessage)?.code ??
+    extractProviderWrappedHttpStatus(errorMessage)?.code;
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
     return true;
   }

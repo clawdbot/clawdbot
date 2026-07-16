@@ -30,7 +30,7 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers
 // Prompt composition scenarios for system/body prompt stability tests.
 
 /** One turn in a prompt composition scenario. */
-export type PromptScenarioTurn = {
+type PromptScenarioTurn = {
   id: string;
   label: string;
   systemPrompt: string;

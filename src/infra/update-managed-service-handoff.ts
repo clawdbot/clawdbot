@@ -25,6 +25,7 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
+const HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -123,6 +124,7 @@ function openStateDatabase() {
     const sqlite = require("node:sqlite");
     fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
     const db = new sqlite.DatabaseSync(params.stateDatabasePath);
+    db.exec("PRAGMA busy_timeout = ${HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS};");
     db.exec([
       "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
       "sentinel_key TEXT NOT NULL PRIMARY KEY,",
@@ -141,7 +143,7 @@ function openStateDatabase() {
       "stats_json TEXT,",
       "payload_json TEXT NOT NULL,",
       "updated_at_ms INTEGER NOT NULL",
-      ");",
+      ") STRICT;",
       "CREATE INDEX IF NOT EXISTS idx_gateway_restart_sentinel_ts",
       "ON gateway_restart_sentinel(ts DESC, sentinel_key);",
     ].join(" "));

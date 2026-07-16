@@ -275,6 +275,8 @@ export const en = {
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",
+      unavailableTitle: "Detected but not auto-tested",
+      unavailableCandidate: "{label} — {detail}. {reason}",
       testingCandidate: "Testing {label} ({modelRef}) — real completion, not a ping…",
       testingManualProvider: "Testing {label} — real completion, not a ping…",
       tryCandidate: "Try {label} ({detail})",

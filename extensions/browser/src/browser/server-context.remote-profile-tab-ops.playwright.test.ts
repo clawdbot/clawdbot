@@ -84,6 +84,22 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid labels before Playwright creates a page", async () => {
+    const createPageViaPlaywright = vi.fn(async () => page("NEVER"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
+
+    await expect(remote.openTab("https://example.com", { label: "not allowed" })).rejects.toThrow(
+      /tab label/i,
+    );
+
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.profiles.get("remote")?.tabAliases).toBeUndefined();
+  });
+
   it("assigns stable tab ids and resolves labels", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       page("A", "https://example.com"),

@@ -10,7 +10,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
 import { resolveTelegramMessageCachePath } from "./message-cache.js";
 import {
@@ -478,7 +478,9 @@ describe("telegram state migrations", () => {
     }
   });
 
-  it("cleans up expired Telegram TTL cache sidecars with no importable entries", async () => {
+  it("cleans up expired and boundary Telegram TTL cache sidecars", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
     const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
     const storePath = resolveStorePath(undefined, { env });
@@ -488,9 +490,10 @@ describe("telegram state migrations", () => {
       namespace: "ops",
     });
     const expiredAt = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    const boundaryAt = Date.now() - 24 * 60 * 60 * 1000;
     try {
       await mkdir(path.dirname(sentMessagePath), { recursive: true });
-      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: expiredAt } }));
+      await writeFile(sentMessagePath, JSON.stringify({ 7: { 42: expiredAt, 43: boundaryAt } }));
       await writeFile(
         dispatchPath,
         JSON.stringify({ [JSON.stringify(["message", "7", 42])]: expiredAt }),
@@ -523,6 +526,7 @@ describe("telegram state migrations", () => {
         expect(await plan.readEntries()).toStrictEqual([]);
       }
     } finally {
+      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });

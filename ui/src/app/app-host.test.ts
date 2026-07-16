@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import "./app-host.ts";
 import type {
@@ -55,6 +56,10 @@ type ShellLazySurfaceState = ShellKeyboardState & {
   handleDeferredBrowserToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
   terminalPanelElement: TestOptionalCustomElement;
+};
+
+type ShellUiCommandState = ShellKeyboardState & {
+  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
 };
 
 let lazyElementSequence = 0;
@@ -402,6 +407,65 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
     });
+  });
+
+  it("routes UI commands to navigation, panels, and chat fallback", () => {
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    const uiCommandEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = {
+      context: {
+        navigation: { update },
+        gateway: { setSessionKey },
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: { command: { kind: "sidebar", visible: false } },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "panel", panel: "terminal", open: false, dock: "right" },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "focus", sessionKey: "agent:main:other" },
+        sessionKey: "agent:main:source",
+      },
+    });
+
+    expect(update).toHaveBeenCalledWith({ navCollapsed: true });
+    expect(panelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { open: false, dock: "right" } }),
+    );
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:other");
+    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Aother" });
+    expect(uiCommandEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: {
+          command: { kind: "focus", sessionKey: "agent:main:other" },
+          sessionKey: "agent:main:source",
+        },
+      }),
+    );
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });
 
   it("opens Settings with Shift-Command-Comma", () => {

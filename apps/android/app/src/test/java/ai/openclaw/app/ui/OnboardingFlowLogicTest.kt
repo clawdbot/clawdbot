@@ -142,6 +142,21 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun standardPortraitWidthKeepsOnboardingFieldsInline() {
+    assertFalse(onboardingFormUsesStackedLayout(availableWidthDp = 342f, fontScale = 1f))
+  }
+
+  @Test
+  fun narrowWidthStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 320f, fontScale = 1f))
+  }
+
+  @Test
+  fun largeFontScaleStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 600f, fontScale = 1.3f))
+  }
+
+  @Test
   fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
     assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false))
     assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true))

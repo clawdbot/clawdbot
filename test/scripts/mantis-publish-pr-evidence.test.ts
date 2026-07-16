@@ -108,15 +108,22 @@ describe("scripts/mantis/publish-pr-evidence", () => {
 
   it("uploads manifest artifacts to R2-compatible object storage", async () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
-    const requests: Array<{ body: Buffer; headers: HeadersInit; method: string; url: string }> = [];
+    const requests: Array<{
+      body: Buffer;
+      headers: HeadersInit;
+      method: string;
+      signal: AbortSignal;
+      url: string;
+    }> = [];
     const fetchImpl = async (
       url: URL,
-      init: { body: Buffer; headers: HeadersInit; method: string },
+      init: { body: Buffer; headers: HeadersInit; method: string; signal: AbortSignal },
     ) => {
       requests.push({
         body: init.body,
         headers: init.headers,
         method: init.method,
+        signal: init.signal,
         url: url.toString(),
       });
       return new Response("", { status: 200 });
@@ -142,6 +149,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       treeUrl: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/index.json",
     });
     expect(requests.map((request) => request.method)).toEqual(["PUT", "PUT", "PUT", "PUT", "PUT"]);
+    expect(requests.every((request) => request.signal instanceof AbortSignal)).toBe(true);
     expect(requests.map((request) => request.url)).toEqual([
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png",
       "https://example.r2.cloudflarestorage.com/qa-artifacts/mantis/discord/pr-1/run-1/candidate.png",
@@ -159,6 +167,37 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(String(requests[4]?.body)).toContain(
       '"url": "https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline.png"',
     );
+  });
+
+  it("aborts a stalled artifact upload after the per-object timeout", async () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    let observedSignal: AbortSignal | undefined;
+
+    const upload = publishArtifactFiles({
+      artifactRoot: "mantis/discord/pr-1/run-1",
+      fetchImpl: (_url, init) => {
+        observedSignal = init.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        });
+      },
+      manifest,
+      storageConfig: {
+        accessKeyId: "access",
+        bucket: "qa-artifacts",
+        endpoint: "https://example.r2.cloudflarestorage.com",
+        publicBaseUrl: "https://qa.openclaw.ai",
+        region: "auto",
+        secretAccessKey: "secret",
+      },
+      timeoutMs: 5,
+    });
+
+    await expect(upload).rejects.toMatchObject({
+      cause: { name: "TimeoutError" },
+      message: "Timed out uploading Mantis artifact baseline.png after 5ms.",
+    });
+    expect(observedSignal?.aborted).toBe(true);
   });
 
   it("allows failure manifests to omit optional visual artifacts", () => {

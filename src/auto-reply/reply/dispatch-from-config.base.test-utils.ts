@@ -48,6 +48,7 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -79,6 +80,49 @@ describe("dispatchReplyFromConfig", () => {
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
       ),
     );
+  });
+
+  it("drops a durable source duplicate before before_dispatch hooks", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:discord:direct:123";
+    const sourceTurnId = expectDefined(
+      buildChannelSourceTurnId({
+        provider: "discord",
+        conversationId: "channel:123",
+        messageId: "message-1",
+      }),
+      "source turn id",
+    );
+    sessionStoreMocks.currentEntry = {
+      sessionId: "session-1",
+      status: "running",
+      updatedAt: Date.now(),
+      restartRecoveryDeliveryRunId: "recovery-1",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+    };
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
+    );
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: sessionKey,
+      OriginatingTo: "channel:123",
+      MessageSid: "message-1",
+      MessageSidFull: "   ",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(result).toMatchObject({ queuedFinal: false });
+    expect(hookMocks.runner.runBeforeDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("returns session metadata changes marked during reply resolution", async () => {

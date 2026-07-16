@@ -7,6 +7,13 @@ type CronRetryHint = {
   category?: CronRetryOn;
 };
 
+type CronRetryHintInput = {
+  error: string | undefined;
+  retryOn?: CronRetryOn[];
+  classifiedReason?: string | null;
+  executionStarted?: boolean;
+};
+
 // A bare 5xx-looking number embedded in prose is not an HTTP server error: cron
 // failure messages routinely contain such numbers ("context limit 512 exceeded",
 // "exited with 503 lines", "pid 511 killed", a "...-540.sock" path), and
@@ -18,8 +25,8 @@ type CronRetryHint = {
 const SERVER_ERROR_PATTERN =
   /\b(?:https?|status(?:[ _]code)?|response(?:[ _]code)?|http(?:[ _]status)?)\b[\s:=#"']{0,4}5\d{2}\b|\b5\d{2}\b[\s:)\].,-]*(?:internal server error|server error|bad gateway|service unavailable|gateway time-?out)\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\b5xx\b|^\s*5\d{2}\s*$/i;
 
-// Lifecycle claims can lose a race before provider execution. Retry the run;
-// treating the conflict as permanent disables one-shot jobs without running them.
+// Lifecycle claims can lose a race before provider execution. Retry only before
+// execution starts; afterward, tools may have produced non-idempotent effects.
 const SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN =
   /^(?:(?:CronSessionLifecycleClaimError|Error): )?Session "[^"\n]+" (?:changed|was deleted) while starting work\. Retry\.$/;
 
@@ -35,16 +42,13 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
 };
 
 /** Classifies cron execution errors against the configured retryable transient categories. */
-export function resolveCronExecutionRetryHint(
-  error: string | undefined,
-  retryOn?: CronRetryOn[],
-  classifiedReason?: string | null,
-): CronRetryHint {
+export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRetryHint {
+  const { error, retryOn, classifiedReason, executionStarted } = input;
   if (!error || typeof error !== "string") {
     return { retryable: false };
   }
   if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
-    return { retryable: true };
+    return { retryable: executionStarted !== true };
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;

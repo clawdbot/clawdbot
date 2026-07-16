@@ -128,6 +128,11 @@ import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -479,6 +484,7 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+  beforeAgentReply?: (admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>;
 };
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
@@ -1438,6 +1444,24 @@ export async function runPreparedReply(
     },
     entry: preparedSessionState.sessionEntry,
   });
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: replyRoute.channel,
+    // Prefer Provider over Surface for fallback channel identity.
+    // Surface can carry relayed metadata while Provider owns reply routing.
+    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+  });
+  const sourceMessageId =
+    normalizeOptionalString(sessionCtx.MessageSidFull) ??
+    normalizeOptionalString(sessionCtx.MessageSid);
+  const sourceTurnId =
+    readChannelSourceTurnId(sessionCtx) ??
+    buildChannelSourceTurnId({
+      provider: messageProvider,
+      accountId: replyRoute.accountId,
+      conversationId: replyRoute.to,
+      messageId: sourceMessageId,
+    });
+  setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
@@ -1450,6 +1474,7 @@ export async function runPreparedReply(
       ? {
           text: userTurnTranscriptText,
           senderIsOwner: command.senderIsOwner,
+          ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
@@ -1501,12 +1526,6 @@ export async function runPreparedReply(
             : undefined,
         })
       : undefined);
-  const messageProvider = resolveOriginMessageProvider({
-    originatingChannel: replyRoute.channel,
-    // Prefer Provider over Surface for fallback channel identity.
-    // Surface can carry relayed metadata while Provider owns reply routing.
-    provider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
-  });
   const replyPolicyChannel =
     (replyRoute.channel as OriginatingChannelType | undefined) ??
     (messageProvider as OriginatingChannelType | undefined);
@@ -1698,6 +1717,7 @@ export async function runPreparedReply(
     replyThreadingOverride,
     isContinuationWake,
     replyOperation: providedReplyOperation,
+    beforeAgentReply: params.beforeAgentReply,
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

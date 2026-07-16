@@ -5,10 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type RestartRecoveryRun,
@@ -22,10 +19,13 @@ import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restar
 import {
   applySessionEntryReplacements,
   listSessionEntriesByStatus,
+  persistSessionTranscriptTurn,
+  type SessionTranscriptTurnExpectedState,
+  type SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import {
@@ -44,6 +44,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../sessions/session-lifecycle-admission.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
@@ -56,6 +57,9 @@ import {
   type ExpectedRestartRecoveryClaim,
 } from "./main-session-restart-claim.js";
 import {
+  hasRestartRecoveryMessageActionAuthority,
+  requiresRestartRecoveryMessageActionAuthority,
+  resolveRestartRecoveryResumeBlockReason,
   resolveRestartRecoveryDeliveryContext,
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
@@ -401,12 +405,300 @@ function getMessageRole(message: unknown): string | undefined {
   return typeof role === "string" ? role : undefined;
 }
 
+function findSourceTurnRange(params: {
+  continuationRunId?: string;
+  messages: readonly unknown[];
+  sourceTurnId: string;
+}): { startIndex: number; endIndex: number } | undefined {
+  const sourceUserTurnId = buildRunUserTurnIdempotencyKey(params.sourceTurnId);
+  const sourceTurnIds = new Set([params.sourceTurnId, sourceUserTurnId]);
+  const continuationTurnId = params.continuationRunId
+    ? buildRunUserTurnIdempotencyKey(params.continuationRunId)
+    : undefined;
+  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
+    const message = params.messages[index];
+    if (
+      getMessageRole(message) === "user" &&
+      message &&
+      typeof message === "object" &&
+      sourceTurnIds.has(
+        normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ?? "",
+      )
+    ) {
+      let endIndex = params.messages.length;
+      for (let nextIndex = index + 1; nextIndex < params.messages.length; nextIndex += 1) {
+        const nextMessage = params.messages[nextIndex];
+        if (getMessageRole(nextMessage) !== "user") {
+          continue;
+        }
+        const nextIdempotencyKey =
+          nextMessage && typeof nextMessage === "object"
+            ? normalizeOptionalString((nextMessage as { idempotencyKey?: unknown }).idempotencyKey)
+            : undefined;
+        // Late media and the exact restart continuation extend the same logical source turn.
+        if (
+          nextIdempotencyKey === `${params.sourceTurnId}:late-media` ||
+          nextIdempotencyKey === continuationTurnId ||
+          (continuationTurnId !== undefined &&
+            nextIdempotencyKey === `${continuationTurnId}:late-media`)
+        ) {
+          continue;
+        }
+        endIndex = nextIndex;
+        break;
+      }
+      return { startIndex: index, endIndex };
+    }
+  }
+  return undefined;
+}
+
+function readToolCallId(message: Record<string, unknown>): string | undefined {
+  return [
+    message.toolCallId,
+    message.toolUseId,
+    message.tool_call_id,
+    message.tool_use_id,
+    message.callId,
+    message.call_id,
+  ]
+    .map(normalizeOptionalString)
+    .find(Boolean);
+}
+
+function findMessageToolCallIndexInSourceTurn(params: {
+  messages: readonly unknown[];
+  sourceTurnRange: { startIndex: number; endIndex: number };
+  toolCallId: string;
+}): number | undefined {
+  for (
+    let index = params.sourceTurnRange.endIndex - 1;
+    index > params.sourceTurnRange.startIndex;
+    index -= 1
+  ) {
+    const message = params.messages[index];
+    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+      continue;
+    }
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    const matched = content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const record = block as Record<string, unknown>;
+      const type = normalizeOptionalString(record.type);
+      return (
+        (type === "toolCall" || type === "toolUse" || type === "tool_use") &&
+        normalizeOptionalString(record.id) === params.toolCallId &&
+        normalizeOptionalString(record.name) === "message"
+      );
+    });
+    if (matched) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function hasSiblingAssistantToolCalls(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+    return true;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return true;
+  }
+  let toolCallCount = 0;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = normalizeOptionalString((block as { type?: unknown }).type);
+    if (type === "toolCall" || type === "toolUse" || type === "tool_use") {
+      toolCallCount += 1;
+    }
+  }
+  return toolCallCount !== 1;
+}
+
+function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): boolean {
+  const role = getMessageRole(message);
+  if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  return (
+    readToolCallId(record) === toolCallId &&
+    normalizeOptionalString(record.toolName) === "message" &&
+    record.isError !== true
+  );
+}
+
+function findSuccessfulMessageToolResultIndex(params: {
+  messages: readonly unknown[];
+  sourceTurnRange: { startIndex: number; endIndex: number };
+  toolCallId: string;
+  toolCallIndex: number;
+}): number | undefined {
+  for (let index = params.toolCallIndex + 1; index < params.sourceTurnRange.endIndex; index += 1) {
+    if (isSuccessfulMessageToolResult(params.messages[index], params.toolCallId)) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function isExactMessageToolDeliveryMirror(params: {
+  message: unknown;
+  sourceTurnId: string;
+  toolCallId: string;
+}): boolean {
+  if (!params.message || typeof params.message !== "object") {
+    return false;
+  }
+  const marker = (params.message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
+  if (!marker || typeof marker !== "object") {
+    return false;
+  }
+  const delivery = marker as Record<string, unknown>;
+  return (
+    delivery.kind === "message-tool-source-reply" &&
+    delivery.final === true &&
+    normalizeOptionalString(delivery.sourceTurnId) === params.sourceTurnId &&
+    normalizeOptionalString(delivery.toolCallId) === params.toolCallId
+  );
+}
+
+function isSafeTerminalDeliveryTailMessage(params: {
+  message: unknown;
+  sourceTurnId: string;
+  toolCallId: string;
+}): boolean {
+  if (isExactMessageToolDeliveryMirror(params)) {
+    return true;
+  }
+  // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
+  return isRestartAbortTailArtifact(params.message);
+}
+
+function isTerminalSilentAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+    return false;
+  }
+  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "stop") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  const textParts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = normalizeOptionalString((block as { type?: unknown }).type);
+    if (type === "thinking") {
+      continue;
+    }
+    if (type !== "text") {
+      return false;
+    }
+    const text = normalizeOptionalString((block as { text?: unknown }).text);
+    if (text) {
+      textParts.push(text);
+    }
+  }
+  return isSilentReplyPayloadText(textParts.join("\n"), SILENT_REPLY_TOKEN);
+}
+
+function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
+  messages: readonly unknown[];
+  sourceTurnId: string;
+  sourceTurnRange: { startIndex: number; endIndex: number };
+  toolCallId: string;
+  toolCallIndex: number;
+  successfulToolResultIndex?: number;
+}): boolean {
+  if (params.sourceTurnRange.endIndex !== params.messages.length) {
+    return false;
+  }
+  for (
+    let messageIndex = params.toolCallIndex + 1;
+    messageIndex < params.sourceTurnRange.endIndex;
+    messageIndex += 1
+  ) {
+    if (messageIndex === params.successfulToolResultIndex) {
+      continue;
+    }
+    const message = params.messages[messageIndex];
+    if (
+      params.successfulToolResultIndex !== undefined &&
+      messageIndex > params.successfulToolResultIndex &&
+      messageIndex === params.sourceTurnRange.endIndex - 1 &&
+      isTerminalSilentAssistantMessage(message)
+    ) {
+      continue;
+    }
+    if (
+      isSafeTerminalDeliveryTailMessage({
+        message,
+        sourceTurnId: params.sourceTurnId,
+        toolCallId: params.toolCallId,
+      })
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
+  return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
+}
+
 function isMeaningfulTailMessage(message: unknown): boolean {
   const role = getMessageRole(message);
   if (!role || role === "system") {
     return false;
   }
   return true;
+}
+
+function readDeliveredTerminalSourceReplyToolCallId(
+  messages: readonly unknown[],
+  expectedSourceTurnId: string | undefined,
+): string | undefined {
+  if (!expectedSourceTurnId) {
+    return undefined;
+  }
+  for (const message of messages.toReversed()) {
+    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+      continue;
+    }
+    const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
+    if (!marker || typeof marker !== "object") {
+      continue;
+    }
+    const delivery = marker as {
+      final?: unknown;
+      kind?: unknown;
+      sourceTurnId?: unknown;
+      toolCallId?: unknown;
+    };
+    if (
+      delivery.kind === "message-tool-source-reply" &&
+      delivery.final === true &&
+      normalizeOptionalString(delivery.sourceTurnId) === expectedSourceTurnId
+    ) {
+      return normalizeOptionalString(delivery.toolCallId);
+    }
+  }
+  return undefined;
 }
 
 function readCodeModeWaitCall(
@@ -628,13 +920,57 @@ function isApprovalPendingToolResult(message: unknown): boolean {
   return (details as { status?: unknown }).status === "approval-pending";
 }
 
+type MainSessionResumePolicy =
+  | {
+      action: "complete";
+      reason: "delivered-terminal" | "delivered-terminal-receipt";
+      toolCallId: string;
+    }
+  | { action: "complete"; reason: "handled-silent" }
+  | { action: "fail"; reason: string }
+  | { action: "resume"; forceRestartSafeTools: boolean };
+
 function resolveMainSessionResumePolicy(
   messages: unknown[],
   forceRestartSafeTools = false,
-): {
-  blockReason: string | null;
-  forceRestartSafeTools: boolean;
-} {
+  expectedSourceTurnId?: string,
+  beforeAgentReplyState?: SessionEntry["restartRecoveryBeforeAgentReplyState"],
+  deliveryReceiptState?: SessionEntry["restartRecoveryDeliveryReceiptState"],
+  deliveryToolCallId?: string,
+): MainSessionResumePolicy {
+  const mirroredToolCallId = readDeliveredTerminalSourceReplyToolCallId(
+    messages,
+    expectedSourceTurnId,
+  );
+  if (mirroredToolCallId) {
+    return { action: "complete", reason: "delivered-terminal", toolCallId: mirroredToolCallId };
+  }
+  if (deliveryReceiptState === "delivered-terminal") {
+    return deliveryToolCallId
+      ? {
+          action: "complete",
+          reason: "delivered-terminal-receipt",
+          toolCallId: deliveryToolCallId,
+        }
+      : { action: "fail", reason: "terminal delivery receipt lacks tool-call correlation" };
+  }
+  if (deliveryReceiptState === "terminal-pending") {
+    return { action: "fail", reason: "terminal source reply delivery outcome is unknown" };
+  }
+  if (beforeAgentReplyState === "handled-silent") {
+    return { action: "complete", reason: "handled-silent" };
+  }
+  if (beforeAgentReplyState === "pending") {
+    return { action: "fail", reason: "before_agent_reply hook outcome is unknown" };
+  }
+  if (beforeAgentReplyState === "handled-reply") {
+    return { action: "fail", reason: "before_agent_reply handled reply is not recoverable" };
+  }
+  if (beforeAgentReplyState === "handled-unrecoverable") {
+    return { action: "fail", reason: "before_agent_reply handled an unrecoverable reply shape" };
+  }
+  // `admitted` means no optional hook started. The dispatch boundary reloads
+  // the current hook set before it permits this transcript to resume.
   const meaningfulMessages = messages.toReversed().filter(isMeaningfulTailMessage);
   if (isRestartAbortTailArtifact(meaningfulMessages[0])) {
     meaningfulMessages.shift();
@@ -644,47 +980,41 @@ function resolveMainSessionResumePolicy(
   }
   const lastMeaningful = meaningfulMessages[0];
   if (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) {
-    return { blockReason: null, forceRestartSafeTools: true };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   if (isRestartAbortedWaitFailure(lastMeaningful)) {
     const waitCall = readCodeModeWaitCall(meaningfulMessages[1]);
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
     return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { blockReason: null, forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true }
       : {
-          blockReason: "failed Code Mode wait cannot be matched to a replay-safe checkpoint",
-          forceRestartSafeTools: false,
+          action: "fail",
+          reason: "failed Code Mode wait cannot be matched to a replay-safe checkpoint",
         };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
   if (waitCall) {
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
     return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { blockReason: null, forceRestartSafeTools: true }
-      : {
-          blockReason: "Code Mode wait checkpoint is not replay-safe",
-          forceRestartSafeTools: false,
-        };
+      ? { action: "resume", forceRestartSafeTools: true }
+      : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
   if (tailCheckpoint) {
     return tailCheckpoint.replaySafe
-      ? { blockReason: null, forceRestartSafeTools: true }
-      : {
-          blockReason: "Code Mode wait checkpoint is not replay-safe",
-          forceRestartSafeTools: false,
-        };
+      ? { action: "resume", forceRestartSafeTools: true }
+      : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
-    return { blockReason: "transcript tail is not resumable", forceRestartSafeTools: false };
+    return { action: "fail", reason: "transcript tail is not resumable" };
   }
   if (isApprovalPendingToolResult(lastMeaningful)) {
     return {
-      blockReason: "transcript tail is a stale approval-pending tool result",
-      forceRestartSafeTools: false,
+      action: "fail",
+      reason: "transcript tail is a stale approval-pending tool result",
     };
   }
-  return { blockReason: null, forceRestartSafeTools: false };
+  return { action: "resume", forceRestartSafeTools: false };
 }
 
 async function markSessionFailed(params: {
@@ -724,6 +1054,7 @@ async function markSessionFailed(params: {
       entry.pendingFinalDeliveryAttemptCount = undefined;
       entry.pendingFinalDeliveryLastError = undefined;
       entry.pendingFinalDeliveryContext = undefined;
+      entry.pendingFinalDeliveryIntentId = undefined;
       Object.assign(
         entry,
         buildRestartRecoveryClaimCleanupPatch({
@@ -743,11 +1074,242 @@ async function markSessionFailed(params: {
   return marked;
 }
 
+type RecoveryCheckpointCompletion =
+  | { outcome: "completed" }
+  | { outcome: "changed" }
+  | { outcome: "unsafe-transcript"; reason: string };
+
+async function markSessionCompletedAfterRecoveryCheckpoint(params: {
+  entry: SessionEntry;
+  messages: readonly unknown[];
+  reason: "delivered-terminal" | "delivered-terminal-receipt" | "handled-silent";
+  storePath: string;
+  sessionKey: string;
+  sourceTurnId?: string;
+  toolCallId?: string;
+}): Promise<RecoveryCheckpointCompletion> {
+  const expectedRecoveryRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
+  const expectedRecoverySourceRunId = normalizeOptionalString(
+    params.entry.restartRecoveryDeliverySourceRunId,
+  );
+  const endedAt = Date.now();
+  const lifecyclePatch: SessionTranscriptTurnLifecyclePatch = {
+    ...buildRestartRecoveryClaimCleanupPatch({
+      entry: params.entry,
+      recordTerminalSource: expectedRecoverySourceRunId !== undefined,
+      terminalSourceRunId: expectedRecoverySourceRunId,
+    }),
+    abortedLastRun: false,
+    endedAt,
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    restartRecoveryRuns: undefined,
+    runtimeMs:
+      typeof params.entry.startedAt === "number"
+        ? Math.max(0, endedAt - params.entry.startedAt)
+        : undefined,
+    status: "done",
+    updatedAt: endedAt,
+  };
+  const sourceTurnId = normalizeOptionalString(params.sourceTurnId);
+  if (params.reason === "handled-silent" && !sourceTurnId) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "handled silent checkpoint lacks its durable source turn",
+    };
+  }
+  const sourceTurnRange = sourceTurnId
+    ? findSourceTurnRange({
+        continuationRunId: expectedRecoveryRunId,
+        messages: params.messages,
+        sourceTurnId,
+      })
+    : undefined;
+  const toolCallId = normalizeOptionalString(params.toolCallId);
+  if (sourceTurnId && sourceTurnRange === undefined) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "recovery checkpoint cannot be matched to its durable source turn",
+    };
+  }
+  if (sourceTurnRange && sourceTurnRange.endIndex !== params.messages.length) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "recovery checkpoint belongs to an earlier transcript turn",
+    };
+  }
+  if (toolCallId && !sourceTurnId) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "terminal delivery lacks its durable source turn",
+    };
+  }
+  const messageToolCallIndex =
+    toolCallId && sourceTurnRange
+      ? findMessageToolCallIndexInSourceTurn({
+          messages: params.messages,
+          sourceTurnRange,
+          toolCallId,
+        })
+      : undefined;
+  if (toolCallId && messageToolCallIndex === undefined) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "terminal delivery cannot be matched to its message tool call",
+    };
+  }
+  if (
+    messageToolCallIndex !== undefined &&
+    hasSiblingAssistantToolCalls(params.messages[messageToolCallIndex])
+  ) {
+    return {
+      outcome: "unsafe-transcript",
+      reason: "terminal message tool call has sibling tool work",
+    };
+  }
+  const recoveryToolResultIdempotencyKey =
+    toolCallId && sourceTurnId
+      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, toolCallId)
+      : undefined;
+  const successfulToolResultIndex =
+    toolCallId && sourceTurnRange && messageToolCallIndex !== undefined
+      ? findSuccessfulMessageToolResultIndex({
+          messages: params.messages,
+          sourceTurnRange,
+          toolCallId,
+          toolCallIndex: messageToolCallIndex,
+        })
+      : undefined;
+  if (
+    toolCallId &&
+    sourceTurnId &&
+    sourceTurnRange !== undefined &&
+    messageToolCallIndex !== undefined &&
+    !canReconcileTerminalDeliveryAtSourceTurnTail({
+      messages: params.messages,
+      sourceTurnId,
+      sourceTurnRange,
+      toolCallId,
+      toolCallIndex: messageToolCallIndex,
+      successfulToolResultIndex,
+    })
+  ) {
+    return {
+      outcome: "unsafe-transcript",
+      reason:
+        successfulToolResultIndex === undefined
+          ? "terminal delivery would require an out-of-order transcript repair"
+          : "terminal delivery result is followed by unfinished transcript work",
+    };
+  }
+  if (
+    toolCallId &&
+    sourceTurnId &&
+    sourceTurnRange !== undefined &&
+    messageToolCallIndex !== undefined &&
+    recoveryToolResultIdempotencyKey &&
+    successfulToolResultIndex === undefined
+  ) {
+    const expectedSessionState: SessionTranscriptTurnExpectedState = {
+      abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
+      restartRecoveryDeliveryRequestFingerprint:
+        params.entry.restartRecoveryDeliveryRequestFingerprint,
+      restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
+      restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired:
+        params.entry.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
+      status: params.entry.status,
+      updatedAt: params.entry.updatedAt,
+    };
+    const persisted = await persistSessionTranscriptTurn(
+      {
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        sessionId: params.entry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      {
+        expectedSessionId: params.entry.sessionId,
+        expectedSessionState,
+        messages: [
+          {
+            idempotencyLookup: "scan",
+            message: {
+              role: "toolResult",
+              toolCallId,
+              toolName: "message",
+              content: [{ type: "text", text: "Message delivered before gateway restart." }],
+              idempotencyKey: recoveryToolResultIdempotencyKey,
+              isError: false,
+              timestamp: endedAt,
+            },
+          },
+        ],
+        sessionLifecyclePatch: lifecyclePatch,
+        updateMode: "none",
+      },
+    );
+    const completed = persisted.sessionEntry?.status === "done";
+    if (completed) {
+      log.info(`reconciled delivered terminal reply after restart: ${params.sessionKey}`);
+    }
+    return { outcome: completed ? "completed" : "changed" };
+  }
+  const marked = await applySessionEntryReplacements({
+    sessionKeys: [params.sessionKey],
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((candidate) => candidate.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== params.entry.sessionId ||
+        entry.status !== "running" ||
+        entry.abortedLastRun !== true ||
+        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
+        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
+          expectedRecoverySourceRunId
+      ) {
+        return { result: false };
+      }
+      Object.assign(entry, lifecyclePatch);
+      return {
+        result: true,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  if (marked) {
+    log.info(
+      params.reason === "delivered-terminal" || params.reason === "delivered-terminal-receipt"
+        ? `reconciled delivered terminal reply after restart: ${params.sessionKey}`
+        : `reconciled handled silent reply after restart: ${params.sessionKey}`,
+    );
+  }
+  return { outcome: marked ? "completed" : "changed" };
+}
+
 async function sendUnresumableSessionNotice(params: {
   deliveryContext: DeliveryContext;
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<void> {
   const messageParams: Record<string, unknown> = {
     to: params.deliveryContext.to,
@@ -771,13 +1333,7 @@ async function sendUnresumableSessionNotice(params: {
   }
 
   try {
-    await callGateway({
-      method: "message.action",
-      params: actionParams,
-      timeoutMs: 10_000,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-    });
+    await params.gatewayRuntime.sendRecoveryNotice(actionParams, 10_000);
     log.info(
       `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
     );
@@ -799,10 +1355,20 @@ async function writeUnresumableSessionNotice(params: {
     expectedSessionId: params.entry.sessionId,
     expectedSessionState: {
       abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryBeforeAgentReplyState: params.entry.restartRecoveryBeforeAgentReplyState,
+      restartRecoveryDeliveryReceiptState: params.entry.restartRecoveryDeliveryReceiptState,
+      restartRecoveryDeliveryToolCallId: params.entry.restartRecoveryDeliveryToolCallId,
       restartRecoveryDeliveryRequestFingerprint:
         params.entry.restartRecoveryDeliveryRequestFingerprint,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
+      restartRecoveryRequesterAccountId: params.entry.restartRecoveryRequesterAccountId,
+      restartRecoveryRequesterSenderId: params.entry.restartRecoveryRequesterSenderId,
+      restartRecoverySameChannelThreadRequired:
+        params.entry.restartRecoverySameChannelThreadRequired,
+      restartRecoverySourceIngress: params.entry.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
     },
@@ -816,6 +1382,55 @@ async function writeUnresumableSessionNotice(params: {
     );
   }
   return result.ok;
+}
+
+async function failUnresumableMainSession(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  expectedRecoverySourceRunId?: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
+  reason: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<"failed" | "skipped"> {
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (
+    !deliveryContext &&
+    !(await writeUnresumableSessionNotice({
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    }))
+  ) {
+    // Keep ownership for another recovery attempt until its terminal notice is durable.
+    return "failed";
+  }
+  const marked = await markSessionFailed({
+    expectedRecoveryRunId: normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId),
+    expectedRecoverySourceRunId: params.expectedRecoverySourceRunId,
+    expectedSessionId: params.entry.sessionId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    reason: params.reason,
+  });
+  if (!marked) {
+    return "skipped";
+  }
+  if (deliveryContext) {
+    await sendUnresumableSessionNotice({
+      deliveryContext,
+      entry: params.entry,
+      gatewayRuntime: params.gatewayRuntime,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+    });
+  }
+  return "failed";
 }
 
 export async function markRestartAbortedMainSessionsFromLocks(params: {
@@ -899,6 +1514,7 @@ async function recoverStore(params: {
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const providedActiveSessionIds =
@@ -971,10 +1587,62 @@ async function recoverStore(params: {
     }
 
     if (
+      requiresRestartRecoveryMessageActionAuthority(entry) &&
+      !hasRestartRecoveryMessageActionAuthority(entry)
+    ) {
+      const disposition = await failUnresumableMainSession({
+        cfg: params.cfg,
+        entry,
+        expectedRecoverySourceRunId: normalizeOptionalString(
+          entry.restartRecoveryDeliverySourceRunId,
+        ),
+        gatewayRuntime: params.gatewayRuntime,
+        reason: "message-tool-only recovery authority is unavailable",
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[disposition]++;
+      continue;
+    }
+
+    const expectedRecoverySourceRunId = normalizeOptionalString(
+      entry.restartRecoveryDeliverySourceRunId,
+    );
+    let resumeBlockReason: string | undefined;
+    let resumeSafetyResolved = false;
+    const failBlockedResume = async (): Promise<boolean> => {
+      if (!resumeSafetyResolved) {
+        resumeSafetyResolved = true;
+        resumeBlockReason = resolveRestartRecoveryResumeBlockReason({
+          cfg: params.cfg,
+          entry,
+          sessionKey,
+        });
+      }
+      if (!resumeBlockReason) {
+        return false;
+      }
+      const disposition = await failUnresumableMainSession({
+        cfg: params.cfg,
+        entry,
+        expectedRecoverySourceRunId,
+        gatewayRuntime: params.gatewayRuntime,
+        reason: resumeBlockReason,
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[disposition]++;
+      return true;
+    };
+
+    if (
       entry.pendingFinalDelivery === true &&
       entry.pendingFinalDeliveryText &&
       entry.restartRecoveryForceSafeTools === true
     ) {
+      if (await failBlockedResume()) {
+        continue;
+      }
       const resumed = await resumeMainSession({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
@@ -984,6 +1652,7 @@ async function recoverStore(params: {
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+        gatewayRuntime: params.gatewayRuntime,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1012,6 +1681,9 @@ async function recoverStore(params: {
       );
     } catch (err) {
       if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+        if (await failBlockedResume()) {
+          continue;
+        }
         log.warn(
           `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
         );
@@ -1023,6 +1695,7 @@ async function recoverStore(params: {
           sessionKey,
           pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+          gatewayRuntime: params.gatewayRuntime,
         });
         if (resumed) {
           params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1038,6 +1711,9 @@ async function recoverStore(params: {
     }
 
     if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      if (await failBlockedResume()) {
+        continue;
+      }
       const resumed = await resumeMainSession({
         canonicalSessionKey: dispatchSessionKey,
         cfg: params.cfg,
@@ -1047,6 +1723,7 @@ async function recoverStore(params: {
         pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+        gatewayRuntime: params.gatewayRuntime,
       });
       if (resumed) {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1057,63 +1734,64 @@ async function recoverStore(params: {
       continue;
     }
 
-    const transcriptResumePolicy = resolveMainSessionResumePolicy(
+    const resumePolicy = resolveMainSessionResumePolicy(
       messages,
       entry.restartRecoveryForceSafeTools === true,
+      expectedRecoverySourceRunId,
+      entry.restartRecoveryBeforeAgentReplyState,
+      entry.restartRecoveryDeliveryReceiptState,
+      entry.restartRecoveryDeliveryToolCallId,
     );
-    const resumePolicy = {
-      ...transcriptResumePolicy,
-      forceRestartSafeTools:
-        entry.restartRecoveryForceSafeTools === true ||
-        transcriptResumePolicy.forceRestartSafeTools,
-    };
-    if (resumePolicy.blockReason) {
-      const deliveryContext = resolveRestartRecoveryDeliveryContext({
-        cfg: params.cfg,
+    if (resumePolicy.action === "complete") {
+      const completion = await markSessionCompletedAfterRecoveryCheckpoint({
         entry,
-        includeSessionDeliveryFallback: true,
-        sessionKey,
-      });
-      // Transcript-only notices are guarded by the interrupted entry snapshot.
-      // External delivery waits until the same ownership is atomically failed.
-      if (
-        !deliveryContext &&
-        !(await writeUnresumableSessionNotice({
-          entry,
-          sessionKey,
-          storePath: params.storePath,
-        }))
-      ) {
-        // Keep the claim recoverable until its user-visible terminal notice is durable.
-        result.failed++;
-        continue;
-      }
-      const failed = await markSessionFailed({
-        expectedRecoveryRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-        expectedRecoverySourceRunId: normalizeOptionalString(
-          entry.restartRecoveryDeliverySourceRunId,
-        ),
-        expectedSessionId: entry.sessionId,
+        messages,
+        reason: resumePolicy.reason,
         storePath: params.storePath,
         sessionKey,
-        reason: resumePolicy.blockReason,
+        sourceTurnId: expectedRecoverySourceRunId,
+        ...(resumePolicy.reason === "handled-silent"
+          ? {}
+          : {
+              toolCallId: resumePolicy.toolCallId,
+            }),
       });
-      if (failed) {
-        if (deliveryContext) {
-          await sendUnresumableSessionNotice({
-            deliveryContext,
-            entry,
-            reason: resumePolicy.blockReason,
-            sessionKey,
-          });
-        }
-        result.failed++;
-      } else {
+      if (completion.outcome === "completed") {
+        params.resumedSessionKeys.add(resumeDedupeKey);
+        result.recovered++;
+      } else if (completion.outcome === "changed") {
         result.skipped++;
+      } else {
+        const disposition = await failUnresumableMainSession({
+          cfg: params.cfg,
+          entry,
+          expectedRecoverySourceRunId,
+          gatewayRuntime: params.gatewayRuntime,
+          reason: completion.reason,
+          sessionKey,
+          storePath: params.storePath,
+        });
+        result[disposition]++;
       }
       continue;
     }
+    if (resumePolicy.action === "fail") {
+      const disposition = await failUnresumableMainSession({
+        cfg: params.cfg,
+        entry,
+        expectedRecoverySourceRunId,
+        gatewayRuntime: params.gatewayRuntime,
+        reason: resumePolicy.reason,
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[disposition]++;
+      continue;
+    }
 
+    if (await failBlockedResume()) {
+      continue;
+    }
     const resumed = await resumeMainSession({
       canonicalSessionKey: dispatchSessionKey,
       cfg: params.cfg,
@@ -1121,8 +1799,10 @@ async function recoverStore(params: {
       storePath: params.storePath,
       sessionKey,
       pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
-      forceRestartSafeTools: resumePolicy.forceRestartSafeTools,
+      forceRestartSafeTools:
+        entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
+      gatewayRuntime: params.gatewayRuntime,
     });
     if (resumed) {
       params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1153,15 +1833,14 @@ async function resolveRestartRecoveryStorePaths(params: {
   return [...storePaths].toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function recoverRestartAbortedMainSessions(
-  params: {
-    cfg?: OpenClawConfig;
-    stateDir?: string;
-    resumedSessionKeys?: Set<string>;
-    activeSessionIds?: Iterable<string>;
-    activeSessionKeys?: Iterable<string>;
-  } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
+export async function recoverRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  resumedSessionKeys?: Set<string>;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
@@ -1172,6 +1851,7 @@ export async function recoverRestartAbortedMainSessions(
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,
+      gatewayRuntime: params.gatewayRuntime,
     });
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
@@ -1195,6 +1875,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   expectedSessionId: string;
   sessionKey: string;
   storePath: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const expectedClaim: ExpectedRestartRecoveryClaim = {
     canonicalSessionKey: params.canonicalSessionKey,
@@ -1232,6 +1913,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
           resumedSessionKeys: new Set<string>(),
           expectedClaim,
           sessionWorkAdmissionHandoffId: handoffId,
+          gatewayRuntime: params.gatewayRuntime,
         }),
     );
   } finally {
@@ -1239,16 +1921,15 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   }
 }
 
-export async function recoverStartupOrphanedMainSessions(
-  params: {
-    cfg?: OpenClawConfig;
-    stateDir?: string;
-    activeSessionIds?: Iterable<string>;
-    activeSessionKeys?: Iterable<string>;
-    updatedBeforeMs?: number;
-    resumedSessionKeys?: Set<string>;
-  } = {},
-): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+export async function recoverStartupOrphanedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  updatedBeforeMs?: number;
+  resumedSessionKeys?: Set<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
   const marked = await markStartupOrphanedMainSessionsForRecovery({
     cfg: params.cfg,
@@ -1263,6 +1944,7 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys: params.resumedSessionKeys,
     activeSessionIds: params.activeSessionIds,
     activeSessionKeys: params.activeSessionKeys,
+    gatewayRuntime: params.gatewayRuntime,
   });
   return {
     marked: marked.marked,
@@ -1272,14 +1954,13 @@ export async function recoverStartupOrphanedMainSessions(
   };
 }
 
-export function scheduleRestartAbortedMainSessionRecovery(
-  params: {
-    cfg?: OpenClawConfig;
-    delayMs?: number;
-    maxRetries?: number;
-    stateDir?: string;
-  } = {},
-): void {
+export function scheduleRestartAbortedMainSessionRecovery(params: {
+  cfg?: OpenClawConfig;
+  delayMs?: number;
+  maxRetries?: number;
+  stateDir?: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): void {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
@@ -1297,6 +1978,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
           stateDir: params.stateDir,
           resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
+          gatewayRuntime: params.gatewayRuntime,
         }),
     )
       .then((result) => {

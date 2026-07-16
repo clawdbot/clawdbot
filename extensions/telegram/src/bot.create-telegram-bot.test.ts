@@ -5,6 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildPluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,10 +20,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
+
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
-const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
@@ -239,7 +248,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     pluginStateTestRuntime.resetPluginStateStoreForTests();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -253,7 +262,7 @@ describe("createTelegramBot", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
     createTelegramBot = (opts) =>
@@ -1711,7 +1720,7 @@ describe("createTelegramBot", () => {
       return { handled: true };
     });
     expect(
-      pluginRuntime.registerPluginInteractiveHandler("openclaw-code-agent", {
+      registerPluginInteractiveHandler("openclaw-code-agent", {
         channel: "telegram",
         namespace: "code-agent",
         handler: pluginHandler,
@@ -5822,17 +5831,14 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const resolvePluginBindingApprovalSpy = vi.spyOn(
-      conversationRuntime,
-      "resolvePluginConversationBindingApproval",
-    );
+    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = {
       update: { update_id: 888 },
       callbackQuery: {
         id: "cbq-plugin-binding-retry-1",
-        data: conversationRuntime.buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
+        data: buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },

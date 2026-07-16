@@ -38,6 +38,99 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges typed CLI plan events", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "pending" },
+          ],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-bridge",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-bridge",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      title: "Plan updated",
+      explanation: undefined,
+      source: "codex-exec",
+      steps: ["Inspect", "Patch"],
+      planSteps: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "pending" },
+      ],
+    });
+  });
+
+  it("normalizes shipped string-step plan events to pending typed steps", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: ["Inspect", "  ", "Patch"],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-legacy",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-legacy",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: ["Inspect", "Patch"],
+        planSteps: [
+          { step: "Inspect", status: "pending" },
+          { step: "Patch", status: "pending" },
+        ],
+      }),
+    );
+  });
+
   it("bridges thinking events to reasoning text and dedupes identical snapshots", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({

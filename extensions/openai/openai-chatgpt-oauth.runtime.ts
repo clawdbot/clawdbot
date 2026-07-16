@@ -1,78 +1,24 @@
 // Openai plugin module implements openai chatgpt oauth behavior.
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
+import {
+  runOpenAIOAuthTlsPreflight,
+  type OpenAIOAuthTlsPreflightResult,
+} from "./openai-chatgpt-oauth-preflight.runtime.js";
 import type { OAuthCredentials } from "./openai-chatgpt-oauth-types.runtime.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
-const openAIAuthProbeUrl =
-  "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
-
-const tlsCertErrorCodes = new Set([
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "CERT_HAS_EXPIRED",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-]);
-
-const tlsCertErrorPatterns = [
-  /unable to get local issuer certificate/i,
-  /unable to verify the first certificate/i,
-  /self[- ]signed certificate/i,
-  /certificate has expired/i,
-];
-
 type OpenAICodexOAuthFailureCode =
   | "callback_timeout"
   | "callback_validation_failed"
   | "unsupported_region";
-
-type PreflightFailureKind = "tls-cert" | "network";
-type OpenAIOAuthTlsPreflightResult =
-  | { ok: true }
-  | {
-      ok: false;
-      kind: PreflightFailureKind;
-      code?: string;
-      message: string;
-    };
-
-function getErrorRecord(error: unknown): Record<string, unknown> | null {
-  return error && typeof error === "object" ? (error as Record<string, unknown>) : null;
-}
-
-function extractFailure(error: unknown): {
-  code?: string;
-  message: string;
-  kind: PreflightFailureKind;
-} {
-  const root = getErrorRecord(error);
-  const rootCause = getErrorRecord(root?.cause);
-  const code = typeof rootCause?.code === "string" ? rootCause.code : undefined;
-  const message =
-    typeof rootCause?.message === "string"
-      ? rootCause.message
-      : typeof root?.message === "string"
-        ? root.message
-        : String(error);
-  const isTlsCertError =
-    (code ? tlsCertErrorCodes.has(code) : false) ||
-    tlsCertErrorPatterns.some((pattern) => pattern.test(message));
-  return {
-    code,
-    message,
-    kind: isTlsCertError ? "tls-cert" : "network",
-  };
-}
 
 function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
   const marker = `${path.sep}Cellar${path.sep}`;
@@ -87,38 +33,6 @@ function resolveCertBundlePath(): string | null {
   const prefix = resolveHomebrewPrefixFromExecPath(process.execPath);
   return prefix ? path.join(prefix, "etc", "openssl@3", "cert.pem") : null;
 }
-
-async function runOpenAIOAuthTlsPreflight(options?: {
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}): Promise<OpenAIOAuthTlsPreflightResult> {
-  const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
-  const fetchImpl = options?.fetchImpl ?? fetch;
-  let response: Response | undefined;
-  try {
-    response = await fetchImpl(openAIAuthProbeUrl, {
-      method: "GET",
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return { ok: true };
-  } catch (error) {
-    const failure = extractFailure(error);
-    return {
-      ok: false,
-      kind: failure.kind,
-      code: failure.code,
-      message: failure.message,
-    };
-  } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
-  }
-}
-
-export const testing = { runOpenAIOAuthTlsPreflight };
-export { testing as __testing };
 
 function formatOpenAIOAuthTlsPreflightFix(
   result: Exclude<OpenAIOAuthTlsPreflightResult, { ok: true }>,

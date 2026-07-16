@@ -16,12 +16,12 @@ scenario:
     - extensions/telegram/src/send.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles: { "telegram:adapter": 14, "telegram:all": 13 }
     kind: flow
     channel: telegram
     summary: Run the scripted quiet-streaming reply and verify one final message.
     config:
       marker: QA-TELEGRAM-STREAM-SINGLE-OK
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
 
 flow:

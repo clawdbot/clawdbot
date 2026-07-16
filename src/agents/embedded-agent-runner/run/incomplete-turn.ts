@@ -56,6 +56,7 @@ type IncompleteTurnAttempt = Pick<
   | "lastToolError"
   | "lastAssistant"
   | "itemLifecycle"
+  | "messagesSnapshot"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
@@ -136,6 +137,8 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -720,6 +723,76 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   }
 
   return REASONING_ONLY_RETRY_INSTRUCTION;
+}
+
+/** Builds a fresh continuation for a clean tool-use terminal turn with settled tool activity. */
+export function resolveToolUseTerminalContinuationInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  payloadCount: number;
+  hasTerminalToolPresentation?: boolean;
+  aborted: boolean;
+  promptError?: unknown;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Idle is not proof of completion: a toolUse terminal whose requested tools never
+  // (or only partially) dispatched must keep the incomplete-turn error, or the model
+  // could claim skipped side effects succeeded. Lifecycle counts are attempt-cumulative
+  // and alias across batches, so completion is proven per tool-call id: every toolCall
+  // in the terminal assistant needs a non-error toolResult in the message snapshot.
+  const requestedToolCallIds = Array.isArray(assistant?.content)
+    ? assistant.content.flatMap((item) => {
+        const block = item as { type?: unknown; id?: unknown } | null;
+        return block?.type === "toolCall" ? [typeof block.id === "string" ? block.id : null] : [];
+      })
+    : [];
+  const completedToolCallIds = new Set(
+    (params.attempt.messagesSnapshot ?? []).flatMap((message) => {
+      const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
+      return result.role === "toolResult" &&
+        result.isError !== true &&
+        typeof result.toolCallId === "string"
+        ? [result.toolCallId]
+        : [];
+    }),
+  );
+  const allToolsProvenComplete =
+    params.attempt.itemLifecycle?.activeCount === 0 &&
+    requestedToolCallIds.length > 0 &&
+    requestedToolCallIds.every((id) => id !== null && completedToolCallIds.has(id));
+  if (
+    params.payloadCount !== 0 ||
+    params.hasTerminalToolPresentation ||
+    params.aborted ||
+    params.promptError != null ||
+    params.timedOut ||
+    assistant?.stopReason !== "toolUse" ||
+    !allToolsProvenComplete ||
+    params.attempt.lastToolError ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt
+  ) {
+    return null;
+  }
+  if (hasMessagingToolDeliveryEvidence(params.attempt)) {
+    return null;
+  }
+  if (
+    !shouldApplyNonVisibleTurnRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      executionContract: params.executionContract,
+    })
+  ) {
+    return null;
+  }
+  return TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 
 /**

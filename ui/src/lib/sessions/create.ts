@@ -15,6 +15,7 @@ export type SessionCreateParams = {
   fork?: boolean;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;

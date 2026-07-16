@@ -24,7 +24,7 @@ type OpenClawTestStateScenario =
   | "gateway-loopback"
   | "external-service";
 
-export type OpenClawTestStateOptions = {
+type OpenClawTestStateOptions = {
   prefix?: string;
   label?: string;
   layout?: OpenClawTestStateLayout;

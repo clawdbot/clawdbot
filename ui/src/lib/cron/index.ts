@@ -24,6 +24,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
@@ -293,8 +294,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    if (parseCronEveryMs(form.everyAmount, form.everyUnit) === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else if (form.scheduleKind === "cron") {
@@ -834,13 +834,11 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
-    const unit = form.everyUnit;
-    const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
-    return { kind: "every" as const, everyMs: amount * mult };
+    return { kind: "every" as const, everyMs };
   }
   const expr = form.cronExpr.trim();
   if (!expr) {
@@ -913,13 +911,14 @@ function normalizePersistedDeliveryChannel(
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existingChannel?: string) {
+function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert"]) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
   if (form.failureAlertMode !== "custom") {
-    return undefined;
+    return existing !== undefined ? null : undefined;
   }
+  const existingConfig = existing && typeof existing === "object" ? existing : undefined;
   const after = toNumber(form.failureAlertAfter.trim(), 0);
   const cooldownRaw = form.failureAlertCooldownSeconds.trim();
   const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
@@ -929,18 +928,23 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
       : undefined;
   const deliveryMode = form.failureAlertDeliveryMode;
   const accountId = form.failureAlertAccountId.trim();
+  const to = form.failureAlertTo.trim();
   const patch: Record<string, unknown> = {
-    after: after > 0 ? Math.floor(after) : undefined,
+    after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingChannel),
+      preserveLastOnUpdate: Boolean(existingConfig?.channel),
     }),
-    to: form.failureAlertTo.trim() || undefined,
-    ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    to: to || (existingConfig?.to ? null : undefined),
+    ...(cooldownMs !== undefined
+      ? { cooldownMs }
+      : existingConfig?.cooldownMs !== undefined
+        ? { cooldownMs: null }
+        : {}),
   };
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
-  patch.accountId = accountId || undefined;
+  patch.accountId = accountId || (existingConfig?.accountId ? null : undefined);
   return patch;
 }
 
@@ -1032,12 +1036,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         : selectedDeliveryMode === "none"
           ? ({ mode: "none" } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(
-      form,
-      editingJob?.failureAlert && typeof editingJob.failureAlert === "object"
-        ? editingJob.failureAlert.channel
-        : undefined,
-    );
+    const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);

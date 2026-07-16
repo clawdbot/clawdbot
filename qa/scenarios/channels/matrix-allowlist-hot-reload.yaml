@@ -15,6 +15,7 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:all": 46, "matrix:release": 1, "matrix:transport": 45 }
     kind: flow
     channel: matrix
     timeoutMs: 75000
@@ -22,7 +23,6 @@ scenario:
     suiteIsolation: isolated
     summary: Exercise Matrix observer-role allowlist hot reload through normalized transport state.
     config:
-      requiredChannelDriver: live
       accountId: sut
 
 flow:

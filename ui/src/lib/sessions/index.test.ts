@@ -684,7 +684,7 @@ describe("createSessionCapability", () => {
   });
 
   it("passes transcript fork parameters to sessions.create", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.create") {
         return { key: "agent:main:forked" };
       }
@@ -724,7 +724,7 @@ describe("createSessionCapability", () => {
   it("keeps background hydration non-blocking and retains an omitted selected row", async () => {
     const secondList = deferred<SessionsListResult>();
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method !== "sessions.list") {
         throw new Error(`Unexpected request: ${method}`);
       }

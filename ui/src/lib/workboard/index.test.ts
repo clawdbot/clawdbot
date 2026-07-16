@@ -25,6 +25,7 @@ import {
   type WorkboardCard,
   type WorkboardTaskSummary,
 } from "./index.ts";
+import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
 
 function createClient(
   responses: Record<string, unknown> | ((method: string, params: unknown) => unknown),
@@ -85,6 +86,39 @@ const sampleTask = {
 describe("workboard controller", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("normalizes open execution engines and preserves unknown runtime metadata", () => {
+    expect(
+      normalizeExecution({
+        id: "exec-claude",
+        engine: "claude-cli",
+        mode: "autonomous",
+        status: "running",
+        model: "anthropic/claude-sonnet-4-6",
+        startedAt: 1,
+        updatedAt: 2,
+      }),
+    ).toMatchObject({
+      engine: "claude-cli",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    const unresolved = normalizeExecution({
+      id: "exec-unresolved",
+      mode: "autonomous",
+      status: "running",
+      startedAt: 1,
+      updatedAt: 2,
+    });
+    expect(unresolved).toBeDefined();
+    expect(unresolved).not.toHaveProperty("engine");
+    expect(unresolved).not.toHaveProperty("model");
+    expect(
+      normalizeMetadata({
+        attempts: [{ id: "attempt-1", engine: "claude-cli", startedAt: 1 }],
+      })?.attempts?.[0]?.engine,
+    ).toBe("claude-cli");
   });
 
   describe("runtime ownership", () => {
@@ -4069,10 +4103,19 @@ describe("workboard controller", () => {
         updatedAt: 10,
       },
     };
-    const client = createClient({
-      agent: { sessionKey: sampleTaskSessionKey, runId: "run-1" },
-      "tasks.list": { tasks: [sampleTask] },
-      "workboard.cards.update": { card: running },
+    let updateCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        return { card: updateCalls === 1 ? { ...sampleCard, status: "running" } : running };
+      }
+      if (method === "agent") {
+        return { sessionKey: sampleTaskSessionKey, runId: "run-1" };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [sampleTask] };
+      }
+      return {};
     });
 
     await startWorkboardCard({
@@ -4107,6 +4150,7 @@ describe("workboard controller", () => {
         patch: expect.objectContaining({
           status: "running",
           execution: expect.objectContaining({
+            id: "card-1:agent-session",
             engine: "codex",
             mode: "autonomous",
             model: "openai/gpt-5.6-sol",

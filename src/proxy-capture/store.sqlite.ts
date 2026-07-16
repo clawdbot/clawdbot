@@ -10,6 +10,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   configureSqliteConnectionPragmas,
@@ -41,6 +42,45 @@ type PathBasedDebugProxyCaptureStore = {
 
 const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
 const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION = 1;
+const DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS capture_sessions (
+    id TEXT PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    mode TEXT NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    proxy_url TEXT,
+    db_path TEXT NOT NULL,
+    blob_dir TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS capture_events (
+    id INTEGER PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    source_scope TEXT NOT NULL,
+    source_process TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    method TEXT,
+    host TEXT,
+    path TEXT,
+    status INTEGER,
+    close_code INTEGER,
+    content_type TEXT,
+    headers_json TEXT,
+    data_text TEXT,
+    data_blob_id TEXT,
+    data_sha256 TEXT,
+    error_text TEXT,
+    meta_json TEXT
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
+  CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
+`;
 
 function isInMemoryDatabasePath(dbPath: string): boolean {
   if (dbPath === ":memory:") {
@@ -101,44 +141,22 @@ function openPathBasedDebugProxyCaptureStore(
       ...(fileBackedPath ? { databasePath: fileBackedPath } : {}),
       foreignKeys: true,
     });
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS capture_sessions (
-        id TEXT PRIMARY KEY,
-        started_at INTEGER NOT NULL,
-        ended_at INTEGER,
-        mode TEXT NOT NULL,
-        source_scope TEXT NOT NULL,
-        source_process TEXT NOT NULL,
-        proxy_url TEXT,
-        db_path TEXT NOT NULL,
-        blob_dir TEXT NOT NULL
+    const versionRow = db.prepare("PRAGMA user_version").get() as
+      | { user_version?: unknown }
+      | undefined;
+    const schemaVersion = Number(versionRow?.user_version ?? 0);
+    if (schemaVersion > DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+      throw new Error(
+        `Legacy debug proxy capture database uses newer schema version ${schemaVersion}; this build supports ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION}`,
       );
-      CREATE TABLE IF NOT EXISTS capture_events (
-        id INTEGER PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        ts INTEGER NOT NULL,
-        source_scope TEXT NOT NULL,
-        source_process TEXT NOT NULL,
-        protocol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        flow_id TEXT NOT NULL,
-        method TEXT,
-        host TEXT,
-        path TEXT,
-        status INTEGER,
-        close_code INTEGER,
-        content_type TEXT,
-        headers_json TEXT,
-        data_text TEXT,
-        data_blob_id TEXT,
-        data_sha256 TEXT,
-        error_text TEXT,
-        meta_json TEXT
-      );
-      CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
-      CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
-    `);
+    }
+    db.exec(DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL);
+    if (schemaVersion < DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION) {
+      migrateSqliteSchemaToStrict(db, DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_SQL, {
+        databaseLabel: fileBackedPath ?? dbPath,
+      });
+      db.exec(`PRAGMA user_version = ${DEBUG_PROXY_CAPTURE_LEGACY_SCHEMA_VERSION};`);
+    }
     if (fileBackedPath) {
       hardenLegacyDatabaseFiles(fileBackedPath);
     }

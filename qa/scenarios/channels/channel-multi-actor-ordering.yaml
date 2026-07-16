@@ -19,6 +19,7 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:adapter": 7, "matrix:all": 48, "matrix:transport": 47 }
     kind: flow
     summary: Preserve actor order across a blocked observer turn and a successful driver turn.
     transportPolicy:

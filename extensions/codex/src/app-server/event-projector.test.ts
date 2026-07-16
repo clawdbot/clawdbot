@@ -23,7 +23,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import { createCodexTestModel } from "./test-support.js";
+import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
@@ -78,6 +78,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(),
     thinkLevel: "medium",
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -163,12 +164,21 @@ function requireArray(value: unknown, label: string): unknown[] {
 
 function expectUsageFields(
   usage: unknown,
-  expected: { input: number; output: number; cacheRead: number; total: number },
+  expected: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite?: number;
+    total: number;
+  },
 ) {
   const record = requireRecord(usage, "usage");
   expect(record.input).toBe(expected.input);
   expect(record.output).toBe(expected.output);
   expect(record.cacheRead).toBe(expected.cacheRead);
+  if (expected.cacheWrite !== undefined) {
+    expect(record.cacheWrite).toBe(expected.cacheWrite);
+  }
   expect(record.total ?? record.totalTokens).toBe(expected.total);
 }
 
@@ -207,7 +217,7 @@ function findAgentEvent(
   throw new Error(`Expected agent event ${params.stream}`);
 }
 
-function findPlanEventWithSteps(mock: unknown, steps: string[]) {
+function findPlanEventWithSteps(mock: unknown, steps: Array<{ step: string; status: string }>) {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
   if (!Array.isArray(calls)) {
     throw new Error("Expected onAgentEvent mock calls");
@@ -222,7 +232,7 @@ function findPlanEventWithSteps(mock: unknown, steps: string[]) {
       return data;
     }
   }
-  throw new Error(`Expected plan event ${steps.join(", ")}`);
+  throw new Error(`Expected plan event ${JSON.stringify(steps)}`);
 }
 
 function forCurrentTurn(
@@ -312,20 +322,15 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", {
-        tokenUsage: {
-          total: {
-            totalTokens: 900_000,
-            inputTokens: 700_000,
-            cachedInputTokens: 100_000,
-            outputTokens: 100_000,
-          },
-          last: {
-            totalTokens: 12,
-            inputTokens: 5,
-            cachedInputTokens: 2,
-            outputTokens: 7,
-          },
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          cacheWriteInputTokens: 1,
+          outputTokens: 7,
+          reasoningOutputTokens: 3,
         },
       }),
     );
@@ -344,12 +349,29 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
     expect(result.currentAttemptAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 3,
+    expectUsageFields(result.attemptUsage, {
+      input: 2,
       output: 7,
       cacheRead: 2,
+      cacheWrite: 1,
       total: 12,
+    });
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+    expectUsageFields(result.lastAssistant?.usage, {
+      input: 2,
+      output: 7,
+      cacheRead: 2,
+      cacheWrite: 1,
+      total: 12,
+    });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -603,10 +625,22 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
-  it("does not treat cumulative-only token usage as fresh context usage", async () => {
+  it("ignores cumulative thread usage after exact response usage", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
     await projector.handleNotification(
       forCurrentTurn("thread/tokenUsage/updated", {
         tokenUsage: {
@@ -623,12 +657,228 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["done"]);
-    expect(result.attemptUsage).toBeUndefined();
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+  });
+
+  it("keeps cumulative-only thread usage unknown", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          total: {
+            totalTokens: 1_000_000,
+            inputTokens: 999_000,
+            cachedInputTokens: 500,
+            outputTokens: 500,
+          },
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["done"]);
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
     expectUsageFields(result.lastAssistant?.usage, {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      total: 0,
+      input: 3,
+      output: 7,
+      cacheRead: 2,
+      total: 12,
+    });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it.each([
+    ["incomplete", { totalTokens: 12 }],
+    [
+      "incoherent total",
+      {
+        totalTokens: 6,
+        inputTokens: 5,
+        cachedInputTokens: 2,
+        outputTokens: 7,
+        reasoningOutputTokens: 0,
+      },
+    ],
+    [
+      "impossible cache counts",
+      {
+        totalTokens: 12,
+        inputTokens: 5,
+        cachedInputTokens: 4,
+        cacheWriteInputTokens: 2,
+        outputTokens: 7,
+        reasoningOutputTokens: 0,
+      },
+    ],
+  ])("keeps %s response usage unknown", async (_label, usage) => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", { responseId: "response-1", usage }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["done"]);
+    expect(result.attemptUsage).toBeUndefined();
+    expect(result.lastAssistant?.usage.contextUsage).toBeUndefined();
+  });
+
+  it("clears prior response usage when the final response omits usage", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", { responseId: "response-2", usage: null }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+  });
+
+  it.each(["failed", "interrupted"])(
+    "invalidates exact response usage when the turn ends %s",
+    async (status) => {
+      const projector = await createProjector();
+
+      await projector.handleNotification(
+        forCurrentTurn("rawResponse/completed", {
+          responseId: "response-1",
+          usage: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+            reasoningOutputTokens: 0,
+          },
+        }),
+      );
+      await projector.handleNotification(turnWithStatus(status));
+
+      expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+    },
+  );
+
+  it("invalidates exact response usage on retryable errors and explicit aborts", async () => {
+    const projector = await createProjector();
+    const exactUsage = {
+      totalTokens: 12,
+      inputTokens: 5,
+      cachedInputTokens: 2,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: exactUsage,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("error", { error: { message: "retry" }, willRetry: true }),
+    );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-2",
+        usage: exactUsage,
+      }),
+    );
+    projector.markAborted();
+    expect(projector.buildResult(buildEmptyToolTelemetry()).attemptUsage).toBeUndefined();
+  });
+
+  it("restores exact response usage after recovering a completed assistant timeout", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-1", text: "done" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: {
+            totalTokens: 12,
+            inputTokens: 5,
+            cachedInputTokens: 2,
+            outputTokens: 7,
+          },
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 12,
+          inputTokens: 5,
+          cachedInputTokens: 2,
+          outputTokens: 7,
+          reasoningOutputTokens: 0,
+        },
+      }),
+    );
+
+    projector.markTimedOut();
+    const timedOut = projector.buildResult(buildEmptyToolTelemetry());
+    expect(timedOut.aborted).toBe(true);
+    expect(timedOut.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+
+    expect(projector.recoverCompletedTerminalAssistantAfterTurnWatchTimeout()).toBe(true);
+    const recovered = projector.buildResult(buildEmptyToolTelemetry());
+    expect(recovered.aborted).toBe(false);
+    expect(recovered.promptError).toBeNull();
+    expect(recovered.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
     });
   });
 
@@ -2512,7 +2762,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
-        plan: [{ step: "patch", status: "in_progress" }],
+        plan: [{ step: "patch", status: "inProgress" }],
       }),
     );
     await projector.handleNotification(
@@ -2546,9 +2796,12 @@ describe("CodexAppServerEventProjector", () => {
       isReasoningSnapshot: true,
     });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
-      "patch (in_progress)",
-    ]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "inspect", status: "pending" }]).steps,
+    ).toEqual([{ step: "inspect", status: "pending" }]);
+    expect(
+      findPlanEventWithSteps(onAgentEvent, [{ step: "patch", status: "in_progress" }]).steps,
+    ).toEqual([{ step: "patch", status: "in_progress" }]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );
@@ -4290,7 +4543,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("orders declined native tool diagnostics after their start event", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const projector = await createProjector({
+      ...(await createParams()),
+      observeToolTerminal,
+    });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
@@ -4370,13 +4627,15 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
+    expect(observeToolTerminal).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        executionStarted: false,
+        nativeMutation: { mutatingAction: false, replaySafe: true },
+        outcome: "failure",
+      }),
+    );
   });
 
   it.each(["failed", "cancelled", "timed_out"] as const)(
@@ -4593,12 +4852,7 @@ describe("CodexAppServerEventProjector", () => {
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
+      mutatingAction: false,
     });
 
     await projector.handleNotification(
@@ -4622,7 +4876,67 @@ describe("CodexAppServerEventProjector", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
-  it("does not clear a declined native tool error with a different action", async () => {
+  it("preserves distinct native mutation failures when only one action recovers", async () => {
+    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const projector = await createProjector({
+      ...(await createParams()),
+      observeToolTerminal,
+    });
+    const commandItem = (
+      id: string,
+      command: string,
+      status: "completed" | "failed",
+      output: string,
+      exitCode: number,
+    ) => ({
+      type: "commandExecution",
+      id,
+      command,
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status,
+      commandActions: [],
+      aggregatedOutput: output,
+      exitCode,
+      durationMs: 1,
+    });
+    const firstCommand = "node scripts/first.js --publish";
+    const secondCommand = "node scripts/second.js --publish";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-failed", firstCommand, "failed", "first failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-failed", secondCommand, "failed", "second failed", 1),
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-second-recovered", secondCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "bash",
+      error: "first failed",
+      actionFingerprint: expect.stringContaining(firstCommand),
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: commandItem("cmd-first-recovered", firstCommand, "completed", "ok", 0),
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+    expect(observeToolTerminal).toHaveBeenCalledTimes(4);
+  });
+
+  it("clears a declined pre-execution error after a later successful action", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
@@ -4660,17 +4974,7 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "bash",
-      meta: "run tests (workspace)",
-      error: "codex native tool blocked",
-      mutatingAction: true,
-      actionFingerprint: JSON.stringify({
-        type: "commandExecution",
-        command: "pnpm test extensions/codex",
-        cwd: "/workspace",
-      }),
-    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
   });
 
   it("emits after_tool_call observations for Codex-native tool item completions", async () => {
@@ -5121,7 +5425,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
-    const projector = await createProjector();
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
 
     projector.recordDynamicToolCall({
       callId: "call-unknown-message",
@@ -5131,6 +5436,14 @@ describe("CodexAppServerEventProjector", () => {
     projector.recordDynamicToolResult({
       callId: "call-unknown-message",
       tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-unknown-message",
+        toolName: "message",
+        arguments: { action: "send", text: "hello" },
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "Unknown OpenClaw tool: message" },
+      }),
       success: false,
       terminalType: "error",
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
@@ -5139,30 +5452,128 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+    expect(result.lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
   });
 
-  it("clears a blocked dynamic tool outcome after the next successful tool", async () => {
-    const projector = await createProjector();
+  it("does not mark a blocked pre-execution dynamic mutation as attempted", async () => {
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
+    const messageArgs = { action: "send", to: "channel:123", message: "hello" };
 
     projector.recordDynamicToolResult({
-      callId: "call-cron-blocked",
-      tool: "cron",
+      callId: "call-message-preflight-blocked",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-preflight-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        executionStarted: false,
+        outcome: "failure",
+        failure: { error: "blocked before execution" },
+      }),
       success: false,
       terminalType: "blocked",
-      contentItems: [{ type: "inputText", text: "blocked by policy" }],
+      contentItems: [{ type: "inputText", text: "blocked before execution" }],
     });
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
-      toolName: "cron",
-      error: "blocked by policy",
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: false,
+    });
+  });
+
+  it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
+    const observeToolTerminal = createCodexTestToolTerminalObserver();
+    const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
+    const messageArgs = {
+      action: "send",
+      provider: "discord",
+      to: "channel:123",
+      message: "deployment ready",
+    };
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-blocked",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-blocked",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "cross-context messaging denied" },
+      }),
+      success: false,
+      terminalType: "blocked",
+      contentItems: [{ type: "inputText", text: "cross-context messaging denied" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      error: "cross-context messaging denied",
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining("tool=message|action=send|to=channel:123"),
     });
 
     projector.recordDynamicToolResult({
-      callId: "call-web-fetch-recovered",
-      tool: "web_fetch",
+      callId: "call-read-failed",
+      tool: "read",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-read-failed",
+        toolName: "read",
+        arguments: { path: "/tmp/missing" },
+        executionStarted: true,
+        outcome: "failure",
+        failure: { error: "file not found" },
+      }),
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "file not found" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-heartbeat-response",
+      tool: "heartbeat_respond",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-heartbeat-response",
+        toolName: "heartbeat_respond",
+        arguments: { notify: false, summary: "nothing else changed" },
+        executionStarted: true,
+        outcome: "success",
+      }),
       success: true,
       terminalType: "completed",
-      contentItems: [{ type: "inputText", text: "fetch ok" }],
+      contentItems: [{ type: "inputText", text: "HEARTBEAT_OK" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      toolName: "message",
+      mutatingAction: true,
+    });
+
+    projector.recordDynamicToolResult({
+      callId: "call-message-retry",
+      tool: "message",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-message-retry",
+        toolName: "message",
+        arguments: messageArgs,
+        meta: "send to channel:123",
+        executionStarted: true,
+        outcome: "success",
+      }),
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "sent" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
@@ -6003,8 +6414,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
-      "step one",
-      "step two",
+      { step: "step one", status: "pending" },
+      { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");

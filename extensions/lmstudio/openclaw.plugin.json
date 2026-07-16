@@ -38,6 +38,7 @@
       "provider": "lmstudio",
       "method": "custom",
       "choiceId": "lmstudio",
+      "appGuidedDiscovery": true,
       "appGuidedSecret": true,
       "choiceLabel": "LM Studio",
       "choiceHint": "Local/self-hosted LM Studio server",

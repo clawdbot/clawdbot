@@ -104,7 +104,7 @@ type XaiTtsStreamServerEvent = {
   message?: string;
 };
 
-export function toXaiTtsWsUrl(params: {
+function toXaiTtsWsUrl(params: {
   baseUrl: string;
   voiceId: string;
   language: string;
@@ -138,7 +138,7 @@ function parseXaiTtsStreamBaseUrl(baseUrl: string): URL {
   }
 }
 
-export function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
+function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   const url = parseXaiTtsStreamBaseUrl(baseUrl);
   if (url.protocol !== "https:") {
     throw new Error(
@@ -157,7 +157,7 @@ export function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   }
 }
 
-export function decodeWebSocketTextMessage(data: RawData): string {
+function decodeWebSocketTextMessage(data: RawData): string {
   if (typeof data === "string") {
     return data;
   }

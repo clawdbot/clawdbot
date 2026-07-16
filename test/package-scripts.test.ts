@@ -169,6 +169,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs cross-OS installer behavior coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/scripts/openclaw-cross-os-installer.windows.test.ts",
+    );
+  });
+
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",

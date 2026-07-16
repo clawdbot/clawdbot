@@ -93,7 +93,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       if (stopped) {
         return;

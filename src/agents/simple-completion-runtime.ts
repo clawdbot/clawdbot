@@ -30,6 +30,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
   getApiKeyForModel,
+  resolveApiKeyForProvider,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -38,9 +39,16 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
+import {
+  buildProviderModelAuthDirectSource,
+  buildProviderModelAuthSourcePlan,
+} from "./provider-model-auth-source-plan.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-secret-egress.js";
+import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
+import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
@@ -56,7 +64,7 @@ type CompletionRuntimeCredential = {
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
-export type SimpleCompletionModelOptions = {
+type SimpleCompletionModelOptions = {
   maxTokens?: number;
   temperature?: number;
   reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
@@ -75,7 +83,7 @@ export type PreparedSimpleCompletionModel =
       auth?: ResolvedProviderAuth;
     };
 
-export type AgentSimpleCompletionSelection = {
+type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
   /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
@@ -84,7 +92,7 @@ export type AgentSimpleCompletionSelection = {
   agentDir: string;
 };
 
-export type PreparedSimpleCompletionModelForAgent =
+type PreparedSimpleCompletionModelForAgent =
   | {
       selection: AgentSimpleCompletionSelection;
       model: Model;
@@ -255,6 +263,19 @@ export async function prepareSimpleCompletionModel(params: {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
     };
   }
+  const initialModel = resolved.model;
+  let resolvedModel = initialModel;
+
+  const routeResolution = resolveOpenAIModelRoutes({
+    provider: initialModel.provider,
+    modelId: initialModel.id,
+    api: initialModel.api,
+    baseUrl: initialModel.baseUrl,
+    config: params.cfg,
+    env: process.env,
+  });
+  const resolvesAuthBeforePhysicalRoute =
+    routeResolution?.kind === "routes" && routeResolution.routes.length > 1;
 
   let auth: ResolvedProviderAuth;
   const authStore = params.bindAuthOwner
@@ -265,20 +286,121 @@ export async function prepareSimpleCompletionModel(params: {
       })
     : undefined;
   try {
-    auth = await getApiKeyForModel({
-      model: resolved.model,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir,
-      profileId: params.profileId,
-      preferredProfile: params.preferredProfile,
-      ...(authStore ? { store: authStore } : {}),
-      ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
-      secretSentinels: true,
-    });
+    auth = resolvesAuthBeforePhysicalRoute
+      ? await resolveApiKeyForProvider({
+          provider: initialModel.provider,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: params.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          modelId: initialModel.id,
+          secretSentinels: true,
+        })
+      : await getApiKeyForModel({
+          model: initialModel,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: params.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          secretSentinels: true,
+        });
+    if (routeResolution?.kind === "routes") {
+      const source = auth.profileId
+        ? {
+            kind: "profile" as const,
+            profileId: auth.profileId,
+            provider: initialModel.provider,
+            mode: auth.mode,
+            readiness: "ready" as const,
+            cooldown: "clear" as const,
+          }
+        : buildProviderModelAuthDirectSource({
+            mode: auth.mode,
+            availability: true,
+            evidence: "runtime",
+          });
+      const routeAuthDecision = selectOpenAIModelRouteAuth({
+        resolution: routeResolution,
+        sourcePlan: buildProviderModelAuthSourcePlan({
+          ownership: { reason: "provider-binding", source },
+          profiles: [],
+        }),
+      });
+      if (routeAuthDecision.kind !== "selected") {
+        throw new Error(
+          routeAuthDecision.kind === "rejected"
+            ? routeAuthDecision.message
+            : "OpenAI route selection unexpectedly deferred after auth was resolved.",
+        );
+      }
+      const route = routeAuthDecision.selection.route;
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: initialModel.provider,
+        modelId: initialModel.id,
+        authProfileProvider: initialModel.provider,
+        authProfileMode: auth.mode,
+        sessionAuthProfileId: auth.profileId,
+        sessionAuthProfileSource: params.profileId ? "user" : "auto",
+        modelRoute: {
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          api: route.api,
+          baseUrl: route.baseUrl,
+          authRequirement: route.authRequirement,
+          requestTransportOverrides: route.requestTransportOverrides,
+          runtimePolicy: route.runtimePolicy,
+        },
+        config: params.cfg,
+        workspaceDir,
+      });
+      resolvedModel =
+        (await materializePreparedRuntimeModel({
+          plan,
+          provider: initialModel.provider,
+          modelId: initialModel.id,
+          config: params.cfg,
+          model: initialModel,
+          resolveModel: ({ config, authProfileId, authProfileMode }) =>
+            (params.modelResolver ?? resolveModelAsync)(
+              initialModel.provider,
+              initialModel.id,
+              params.agentDir,
+              config,
+              {
+                authStorage: resolved.authStorage,
+                modelRegistry: resolved.modelRegistry,
+                skipAgentDiscovery: true,
+                allowBundledStaticCatalogFallback: true,
+                preferBundledStaticCatalogTransport: true,
+                workspaceDir,
+                authProfileId,
+                authProfileMode,
+              },
+            ),
+        })) ?? initialModel;
+      if (resolvesAuthBeforePhysicalRoute) {
+        auth = await getApiKeyForModel({
+          model: resolvedModel,
+          cfg: params.cfg,
+          agentDir: params.agentDir,
+          workspaceDir,
+          profileId: auth.profileId,
+          preferredProfile: params.preferredProfile,
+          ...(authStore ? { store: authStore } : {}),
+          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          secretSentinels: true,
+        });
+      }
+    }
   } catch (err) {
     return {
-      error: `Auth lookup failed for provider "${resolved.model.provider}": ${formatErrorMessage(err)}`,
+      error: `Auth lookup failed for provider "${initialModel.provider}": ${formatErrorMessage(err)}`,
     };
   }
   const rawApiKey = auth.apiKey?.trim();
@@ -290,17 +412,16 @@ export async function prepareSimpleCompletionModel(params: {
     })
   ) {
     return {
-      error: formatMissingAuthError(auth, resolved.model.provider),
+      error: formatMissingAuthError(auth, resolvedModel.provider),
       auth,
     };
   }
 
   let authValue = rawApiKey;
-  let resolvedModel = resolved.model;
   if (rawApiKey) {
     const runtimeCredential = await setRuntimeApiKeyForCompletion({
       authStorage: resolved.authStorage,
-      model: resolved.model,
+      model: resolvedModel,
       apiKey: rawApiKey,
       authMode: auth.mode,
       cfg: params.cfg,

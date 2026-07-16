@@ -3,33 +3,37 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldTestFoundryTextConnection } from "./auth.js";
 import { getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
-  buildFoundryConnectionTest,
-  isValidTenantIdentifier,
   promptApiKeyEndpointAndModel,
   promptEndpointAndModelManually,
   selectFoundryDeployment,
 } from "./onboard.js";
-import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
   extractFoundryEndpoint,
   formatFoundryApiLabel,
-  isAnthropicFoundryDeployment,
   isFoundryMaiImageModel,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
   requiresFoundryEntraIdClaudeAuth,
-  supportsFoundryReasoningContent,
-  supportsFoundryReasoningEffort,
-  supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
+import { microsoftFoundryTesting } from "./test-support.js";
+
+const {
+  buildFoundryConnectionTest,
+  isAnthropicFoundryDeployment,
+  isValidTenantIdentifier,
+  resetFoundryRuntimeAuthCaches,
+  shouldTestFoundryTextConnection,
+  supportsFoundryImageInput,
+  supportsFoundryReasoningContent,
+  supportsFoundryReasoningEffort,
+} = microsoftFoundryTesting;
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());

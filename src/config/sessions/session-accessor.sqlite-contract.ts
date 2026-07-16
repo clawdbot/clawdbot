@@ -81,6 +81,11 @@ export type SessionTranscriptStats = {
   sizeBytes: number;
 };
 
+export type SessionTranscriptEventRow = {
+  event: TranscriptEvent;
+  seq: number;
+};
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
   cwd?: string;

@@ -66,7 +66,7 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
 }
 
 /** Normalize Date, second, millisecond, or parseable string timestamps. */
-export function normalizeTimestamp(
+function normalizeTimestamp(
   raw: unknown,
 ): { timestampMs: number; timestampUtc: string } | undefined {
   if (raw == null) {

@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -87,7 +88,7 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
       }
       const start = stat.size - bytesToRead;
       const buffer = Buffer.allocUnsafe(bytesToRead);
-      const { bytesRead } = await fh.read(buffer, 0, bytesToRead, start);
+      const bytesRead = await readFileWindowFully(fh, buffer, start);
       let text = buffer.toString("utf-8", 0, bytesRead);
       if (start > 0) {
         const firstNewline = text.indexOf("\n");

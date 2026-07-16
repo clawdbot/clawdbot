@@ -1,6 +1,5 @@
 // Qa Lab plugin module implements bus state behavior.
 import { randomUUID } from "node:crypto";
-import { sanitizeQaBusToolCalls } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   buildQaBusSnapshot,
   cloneMessage,
@@ -12,6 +11,7 @@ import {
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore } from "./bus-waiters.js";
+import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
   QaBusAttachment,
   QaBusConversation,

@@ -10,6 +10,7 @@ import {
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
+  resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import {
   hasRetainedManagedNpmInstallMarker,
@@ -744,6 +745,35 @@ describe("installPluginFromNpmSpec", () => {
       error: "npm view failed: registry unavailable",
       code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE,
     });
+  });
+
+  it("continues when the managed generation scan reports ENOTDIR", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "scan-recovery-plugin";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+    });
+    const error = Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+    const readdirSpy = vi.spyOn(fs.promises, "readdir").mockRejectedValueOnce(error);
+
+    try {
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(readdirSpy).toHaveBeenCalledWith(resolvePluginNpmProjectsDir(npmRoot), {
+        withFileTypes: true,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("installs npm pack archives through the managed npm root", async () => {

@@ -59,7 +59,11 @@ import type {
   ReplySessionBinding,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import {
+  hasInboundAudio,
+  hasInboundMedia,
+  hasInboundMediaForUnderstanding,
+} from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -169,6 +173,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
+  processingMode?: "audio-only";
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
@@ -183,6 +188,11 @@ async function applyMediaUnderstandingIfNeeded(params: {
     );
     return undefined;
   }
+}
+
+function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
+  const audio = cfg.tools?.media?.audio;
+  return audio !== undefined && audio.enabled !== false;
 }
 
 function withExtractedFileImages(
@@ -437,9 +447,13 @@ export async function getReplyFromConfig(
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
-    // A durable native-harness lock owns attachment and link interpretation. The
-    // harness receives raw inputs, so unrelated utility models stay outside the turn.
-    if (!utilityModelSelectionLocked) {
+    const shouldApplyLockedAudio =
+      utilityModelSelectionLocked &&
+      hasInboundAudio(finalized) &&
+      hasExplicitAudioUnderstandingConfig(cfg);
+    // Native harnesses own image, video, and file interpretation. They cannot
+    // transcribe audio, so an explicitly configured STT pipeline still runs alone.
+    if (!utilityModelSelectionLocked || shouldApplyLockedAudio) {
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
@@ -448,6 +462,7 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
+          ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
       );
       if (mediaResult?.extractedFileImages.length) {
@@ -1027,6 +1042,12 @@ export async function getReplyFromConfig(
   }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  // Dispatch-owned turns defer this to the runner. Turns that acquire the reply
+  // lane run it after durable admission; active steer/follow-up paths preserve
+  // the hook's existing before-queue boundary.
+  let beforeAgentReply:
+    | ((admitted?: { sessionId?: string }) => Promise<ReplyPayload | undefined>)
+    | undefined;
   if (!useFastTestBootstrap) {
     const { getGlobalHookRunner } = await loadHookRunnerGlobal();
     const hookRunner = getGlobalHookRunner();
@@ -1040,34 +1061,43 @@ export async function getReplyFromConfig(
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
       const hookTrigger = resolveReplyHookTrigger(opts);
-      const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-        hookRunner.runBeforeAgentReply(
-          { cleanedBody },
-          {
-            agentId,
-            sessionKey: agentSessionKey,
-            sessionId,
-            workspaceDir,
-            trigger: hookTrigger,
-            ...buildAgentHookContextChannelFields({
+      beforeAgentReply = async (admitted) => {
+        const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
+          hookRunner.runBeforeAgentReply(
+            { cleanedBody },
+            {
+              agentId,
               sessionKey: agentSessionKey,
-              messageProvider: hookMessageProvider,
-              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              senderId: sessionCtx.SenderId ?? ctx.SenderId,
-            }),
-            ...buildAgentHookContextIdentityFields({
+              sessionId: admitted?.sessionId ?? sessionId,
+              workspaceDir,
               trigger: hookTrigger,
-              senderId: sessionCtx.SenderId,
-              chatId: hookChatId,
-              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
-            }),
-          },
-        ),
-      );
-      if (hookResult?.handled) {
+              ...buildAgentHookContextChannelFields({
+                sessionKey: agentSessionKey,
+                messageProvider: hookMessageProvider,
+                currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+                senderId: sessionCtx.SenderId ?? ctx.SenderId,
+              }),
+              ...buildAgentHookContextIdentityFields({
+                trigger: hookTrigger,
+                senderId: sessionCtx.SenderId,
+                chatId: hookChatId,
+                channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
+              }),
+            },
+          ),
+        );
+        if (!hookResult?.handled) {
+          return undefined;
+        }
         logResolverTiming("completed", "before_agent_reply_hook");
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+      };
+      if (!internalResolvedOpts?.replyOperation) {
+        const hookReply = await beforeAgentReply();
+        if (hookReply) {
+          return hookReply;
+        }
       }
     }
   }
@@ -1139,6 +1169,7 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+      ...(internalResolvedOpts?.replyOperation && beforeAgentReply ? { beforeAgentReply } : {}),
     }),
   );
   logResolverTiming("completed", "prepared_reply");

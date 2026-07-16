@@ -11,7 +11,7 @@ import {
   shouldReplacePersistentDedupeEntry,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
@@ -79,14 +79,6 @@ type TelegramLegacyMessageDispatchDedupeRecord = {
   namespace: string;
   entries: Record<string, number>;
 };
-
-function fileExists(pathValue: string): boolean {
-  try {
-    return !statRegularFileSync(pathValue).missing;
-  } catch {
-    return false;
-  }
-}
 
 function resolveLegacySessionStorePath(params: {
   env: NodeJS.ProcessEnv;

@@ -2732,6 +2732,23 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("bounds Mantis Crabbox source retrieval", () => {
+    const cases = [
+      [MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW, "run_status_reactions"],
+      [MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW, "run_thread_attachment"],
+      [MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "run_slack_desktop"],
+      [MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW, "run_telegram_desktop_proof"],
+      [MANTIS_TELEGRAM_LIVE_WORKFLOW, "run_telegram_live"],
+    ] as const;
+
+    for (const [workflowPath, jobName] of cases) {
+      const installStep = workflowStep(workflowJob(workflowPath, jobName), "Install Crabbox CLI");
+      expect(installStep.run, workflowPath).toMatch(
+        /timeout --signal=TERM --kill-after=10s 120s git (?:clone|-C .* fetch)/u,
+      );
+    }
+  });
+
   it("maps every supported Slack approval checkpoint scenario family", () => {
     const workflow = readFileSync(MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW, "utf8");
 
@@ -2911,6 +2928,8 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
+      'or (.name | startswith("Run QA Lab runtime parity tier ("))',
+      'or .name == "Run QA Lab live Discord lane"',
       "is a package-safety Tideclaw alpha release-check lane",
       '"Run package acceptance" | \\',
       '"Run package acceptance / "*)',
@@ -3484,6 +3503,10 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
     expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
     expect(npmWorkflow).toContain("does not match openclaw");
+    expect(npmWorkflow).toContain("Frozen target does not depend on @openclaw/ai");
+    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
+    expect(npmWorkflow).toContain('verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")');
+    expect(npmWorkflow).toContain("Frozen target without an @openclaw/ai dependency");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
     expect(npmTelegramWorkflow).toContain("preflight-manifest.json");
     expect(npmTelegramWorkflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR");
@@ -4303,6 +4326,25 @@ describe("package artifact reuse", () => {
       releaseWorkflow.lastIndexOf("publish_github_release"),
     );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
+  });
+
+  it("bounds the npm registry tarball download used for release resume", () => {
+    const publishRun =
+      workflowStep(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"), "Dispatch publish workflows")
+        .run ?? "";
+    const resolvePublishState = shellFunctionSource(
+      publishRun,
+      "resolve_openclaw_npm_publish_state",
+    );
+    const registryDownload = resolvePublishState.match(
+      /curl -fsSL[\s\S]*?"\$\{published_tarball_url\}"/u,
+    )?.[0];
+
+    expect(registryDownload).toContain("--connect-timeout 10");
+    expect(registryDownload).toContain("--max-time 120");
+    expect(registryDownload).toContain("--retry 3");
+    expect(registryDownload).toContain("--retry-max-time 180");
+    expect(registryDownload).toContain('-o "${published_tarball_path}"');
   });
 
   it("fails closed when child environment identity or approval mutation fails", () => {

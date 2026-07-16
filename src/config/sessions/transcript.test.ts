@@ -809,6 +809,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("idempotently appends identified message-tool source replies", async () => {
+    await writeTranscriptStore();
+    const deliveryMirror = {
+      kind: "message-tool-source-reply" as const,
+      final: true,
+      sourceTurnId: "channel-user:v1:message-1",
+    };
+
+    const first = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Delivered once",
+      storePath: fixture.storePath(),
+      idempotencyKey: "message-tool:message-1",
+      deliveryMirror,
+    });
+    const replay = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Delivered once",
+      storePath: fixture.storePath(),
+      idempotencyKey: "message-tool:message-1",
+      deliveryMirror,
+    });
+
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    if (first.ok && replay.ok) {
+      expect(replay.messageId).toBe(first.messageId);
+    }
+  });
+
   it("idempotently appends suppressed channel finals by key while preserving source ids", async () => {
     await writeTranscriptStore();
 

@@ -1,10 +1,12 @@
 // Line plugin module implements outbound media behavior.
+import type { messagingApi } from "@line/bot-sdk";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { LineChannelData } from "./types.js";
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
 
-export type LineOutboundMediaResolved = {
+type LineOutboundMediaResolved = {
   mediaUrl: string;
   mediaKind: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -28,10 +30,10 @@ export async function validateLineMediaUrl(url: string): Promise<void> {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`LINE outbound media URL must be a valid URL: ${url}`);
+    throw new Error("LINE outbound media URL must be a valid URL");
   }
   if (parsed.protocol !== "https:") {
-    throw new Error(`LINE outbound media URL must use HTTPS: ${url}`);
+    throw new Error("LINE outbound media URL must use HTTPS");
   }
   if (url.length > 2000) {
     throw new Error(`LINE outbound media URL must be 2000 chars or less (got ${url.length})`);
@@ -93,15 +95,78 @@ export async function resolveLineOutboundMedia(
     };
   }
 
+  let parsed: URL | undefined;
   try {
-    const parsed = new URL(trimmedUrl);
-    if (parsed.protocol !== "https:") {
-      throw new Error(`LINE outbound media URL must use HTTPS: ${trimmedUrl}`);
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith("LINE outbound")) {
-      throw e;
-    }
+    parsed = new URL(trimmedUrl);
+  } catch {
+    // Local paths reach the generic public-HTTPS error below.
+  }
+  if (parsed) {
+    throw new Error("LINE outbound media URL must use HTTPS");
   }
   throw new Error("LINE outbound media currently requires a public HTTPS URL");
+}
+
+function isLineUserTarget(target: string): boolean {
+  const normalized = target
+    .trim()
+    .replace(/^line:(group|room|user):/i, "")
+    .replace(/^line:/i, "");
+  return /^U/i.test(normalized);
+}
+
+export function hasLineSpecificMediaOptions(lineData: LineChannelData): boolean {
+  return (
+    lineData.mediaKind !== undefined ||
+    Boolean(lineData.previewImageUrl?.trim()) ||
+    typeof lineData.durationMs === "number" ||
+    Boolean(lineData.trackingId?.trim())
+  );
+}
+
+function buildLineMediaMessageObject(
+  resolved: LineOutboundMediaResolved,
+  opts?: { allowTrackingId?: boolean },
+): messagingApi.Message {
+  switch (resolved.mediaKind) {
+    case "video": {
+      const previewImageUrl = resolved.previewImageUrl?.trim();
+      if (!previewImageUrl) {
+        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+      }
+      return {
+        type: "video",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl,
+        ...(opts?.allowTrackingId && resolved.trackingId
+          ? { trackingId: resolved.trackingId }
+          : {}),
+      };
+    }
+    case "audio":
+      return {
+        type: "audio",
+        originalContentUrl: resolved.mediaUrl,
+        duration: resolved.durationMs ?? 60000,
+      };
+    default:
+      return {
+        type: "image",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+      };
+  }
+}
+
+// Resolve and build through one leaf so reply-token and inline push delivery
+// cannot drift on media kind, preview, duration, or tracking-id policy.
+export async function buildLineMediaMessage(
+  mediaUrl: string,
+  opts: ResolveLineOutboundMediaOpts,
+  target: string,
+): Promise<messagingApi.Message> {
+  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
+  return buildLineMediaMessageObject(resolved, {
+    allowTrackingId: isLineUserTarget(target),
+  });
 }

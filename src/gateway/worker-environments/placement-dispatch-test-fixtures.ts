@@ -12,9 +12,7 @@ type WorkerDispatchRequest = Parameters<
   ReturnType<typeof createWorkerPlacementDispatchService>["dispatch"]
 >[0];
 export type PlacementStore = ReturnType<typeof createWorkerSessionPlacementStore>;
-export type DispatchEnvironmentRecord = Awaited<
-  ReturnType<WorkerDispatchEnvironmentService["create"]>
->;
+type DispatchEnvironmentRecord = Awaited<ReturnType<WorkerDispatchEnvironmentService["create"]>>;
 export type DispatchStage =
   | "barrier"
   | "workspace"

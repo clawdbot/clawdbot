@@ -53,7 +53,7 @@ send_notification() {
     # Send via ntfy.sh if configured
     if [ -n "$NOTIFY_NTFY" ]; then
         echo "Sending via ntfy.sh to $NOTIFY_NTFY..."
-        curl -s -o /dev/null \
+        curl -s --connect-timeout 5 --max-time 15 -o /dev/null \
             -H "Title: OpenClaw Auth Alert" \
             -H "Priority: $priority" \
             -H "Tags: warning,key" \

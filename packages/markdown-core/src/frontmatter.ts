@@ -1,7 +1,17 @@
 // Markdown Core module implements frontmatter behavior.
-import { isMap, isNode, parseDocument } from "yaml";
+import { isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
+
+export type ParsedFrontmatterBlockResult = {
+  frontmatter: ParsedFrontmatter;
+  issues: FrontmatterParseIssue[];
+};
+
+export type FrontmatterParseIssue = {
+  code: string;
+  message: string;
+};
 
 type ParsedYamlValue = {
   value: string;
@@ -69,17 +79,56 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
-function parseYamlFrontmatter(block: string): ParsedFrontmatter {
-  const fallback = parseLineFrontmatter(block);
+function normalizeFreeformDescription(block: string): string {
+  const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+  if (!isMap(doc.contents)) {
+    return block;
+  }
+  const descriptionPair = doc.contents.items.find(
+    (pair) => isScalar(pair.key) && pair.key.value === "description",
+  );
+  const keyStart = isNode(descriptionPair?.key) ? descriptionPair.key.range?.[0] : undefined;
+  if (keyStart === undefined) {
+    return block;
+  }
+  const lineStart = block.lastIndexOf("\n", keyStart - 1) + 1;
+  const lineEnd = block.indexOf("\n", keyStart);
+  const end = lineEnd === -1 ? block.length : lineEnd;
+  const line = block.slice(lineStart, end);
+  const match = line.match(/^(?:description|"description"|'description'):\s*(.*)$/);
+  const rawValue = match?.[1]?.trim();
+  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
+    return block;
+  }
+  const replacement = `description: ${JSON.stringify(stripQuotes(rawValue))}`;
+  return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
+}
+
+function parseYamlFrontmatterOnce(
+  block: string,
+  fallback: ParsedFrontmatter,
+): ParsedFrontmatterBlockResult {
   try {
     const doc = parseDocument(block, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
-      return fallback;
+      return {
+        frontmatter: fallback,
+        issues:
+          doc.errors.length > 0
+            ? doc.errors.map((error) => ({
+                code: error.code ?? error.name,
+                message: error.message,
+              }))
+            : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      };
     }
 
     const parsed = doc.toJS() as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return fallback;
+      return {
+        frontmatter: fallback,
+        issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      };
     }
 
     const inlineColonKeys = new Set<string>();
@@ -118,10 +167,24 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatter {
         result[key] = value;
       }
     }
-    return result;
-  } catch {
-    return fallback;
+    return { frontmatter: result, issues: [] };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      frontmatter: fallback,
+      issues: [{ code: "YAML_EXCEPTION", message }],
+    };
   }
+}
+
+function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
+  const fallback = parseLineFrontmatter(block);
+  const parsed = parseYamlFrontmatterOnce(block, fallback);
+  if (parsed.issues.length === 0) {
+    return parsed;
+  }
+  const recoveredBlock = normalizeFreeformDescription(block);
+  return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
 }
 
 export type ExtractedFrontmatterBlock = {
@@ -171,6 +234,11 @@ export function stripFrontmatterBlock(content: string): string {
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
 export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
+  return parseFrontmatterBlockResult(content).frontmatter;
+}
+
+/** Parses frontmatter once while retaining recoverable YAML parser issues for owning loaders. */
+export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterBlockResult {
   const block = extractFrontmatterBlock(content)?.block;
-  return block ? parseYamlFrontmatter(block) : {};
+  return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
 }

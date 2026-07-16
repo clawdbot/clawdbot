@@ -5,18 +5,18 @@ import { splitChannelExtensionTestRoots } from "./vitest.extension-channel-split
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
-export const channelTestRoots = ["src/channels", ...splitChannelExtensionTestRoots];
+const channelTestRoots = ["src/channels", ...splitChannelExtensionTestRoots];
 
 const splitChannelExtensionTestRootSet = new Set(splitChannelExtensionTestRoots);
 
-export const extensionChannelTestRoots = channelTestRoots.filter(
+const extensionChannelTestRoots = channelTestRoots.filter(
   (root) =>
     root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) && !splitChannelExtensionTestRootSet.has(root),
 );
-export const coreChannelTestRoots = channelTestRoots.filter(
+const coreChannelTestRoots = channelTestRoots.filter(
   (root) => !root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
 );
-export const channelTestPrefixes = channelTestRoots.map((root) => `${root}/`);
+const channelTestPrefixes = channelTestRoots.map((root) => `${root}/`);
 export const extensionChannelTestInclude = extensionChannelTestRoots.map(
   (root) => `${root}/**/*.test.ts`,
 );

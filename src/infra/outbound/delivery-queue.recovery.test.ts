@@ -1,5 +1,7 @@
 // Covers startup delivery recovery, backoff, permanent failures, unknown-send
 // reconciliation, commit hooks, and retry budget deferral.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -11,6 +13,7 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
+import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
@@ -18,6 +21,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   recoverPendingDeliveries,
+  type DeliverFn,
 } from "./delivery-queue.js";
 import {
   asDeliverFn,
@@ -1221,6 +1225,66 @@ describe("delivery-queue recovery", () => {
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
       expectMockMessageContaining(log.warn, "falling back to direct ack");
+    } finally {
+      vi.doUnmock("./delivery-queue-storage.js");
+      vi.resetModules();
+    }
+  });
+
+  it("retains later media until an early recovery ack finishes the batch", async () => {
+    const spoolDir = path.join(tmpDir(), "delivery-queue-media");
+    const firstArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000001.ogg");
+    const secondArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000002.ogg");
+    await fs.mkdir(spoolDir, { recursive: true });
+    await fs.writeFile(firstArtifact, "first-audio");
+    await fs.writeFile(secondArtifact, "second-audio");
+    const oldArtifactTime = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    await fs.utimes(firstArtifact, oldArtifactTime, oldArtifactTime);
+    await fs.utimes(secondArtifact, oldArtifactTime, oldArtifactTime);
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ mediaUrl: firstArtifact }, { mediaUrl: secondArtifact }],
+      },
+      tmpDir(),
+    );
+    vi.resetModules();
+    vi.doMock("./delivery-queue-storage.js", async () => {
+      const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
+        "./delivery-queue-storage.js",
+      );
+      return {
+        ...actual,
+        markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
+          throw new Error("post-send state db locked");
+        }),
+      };
+    });
+
+    try {
+      const { recoverPendingDeliveries: recoverWithMarkFailure } =
+        await import("./delivery-queue-recovery.js");
+      const firstResult = { channel: "demo-channel-a", messageId: "m1" };
+      const secondResult = { channel: "demo-channel-a", messageId: "m2" };
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        await params.onDeliveryResult?.(firstResult);
+        await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir() });
+        expect(await fs.readFile(secondArtifact, "utf8")).toBe("second-audio");
+        await params.onDeliveryResult?.(secondResult);
+        return [firstResult, secondResult];
+      });
+
+      const summary = await recoverWithMarkFailure({
+        deliver,
+        cfg: baseCfg,
+        stateDir: tmpDir(),
+        log: createRecoveryLog(),
+      });
+
+      expect(summary).toMatchObject({ recovered: 1, failed: 0 });
+      await expect(fs.stat(firstArtifact)).rejects.toThrow();
+      await expect(fs.stat(secondArtifact)).rejects.toThrow();
     } finally {
       vi.doUnmock("./delivery-queue-storage.js");
       vi.resetModules();

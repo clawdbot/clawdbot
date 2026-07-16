@@ -9,9 +9,11 @@ import {
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
+  loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
   readSqliteTranscriptStatsSync,
+  readSqliteTranscriptEventAtSeqSync,
   publishSqliteTranscriptUpdate,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
@@ -26,6 +28,7 @@ import type {
   SessionTranscriptWriteScope,
   TranscriptEvent,
   SessionTranscriptStats,
+  SessionTranscriptEventRow,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
   TranscriptUpdatePayload,
@@ -94,6 +97,23 @@ export function replaceTranscriptEventsSync(
 /** Reads parsed transcript records synchronously from the SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Reads only rows appended after a previously observed SQLite sequence. */
+export function loadTranscriptEventRowsAfterSeqSync(
+  scope: SessionTranscriptReadScope,
+  afterSeq: number,
+  throughSeq?: number,
+): SessionTranscriptEventRow[] {
+  return loadSqliteTranscriptEventRowsAfterSeqSync(scope, afterSeq, throughSeq);
+}
+
+/** Reads one durable SQLite transcript row for incremental checkpoint validation. */
+export function readTranscriptEventAtSeqSync(
+  scope: SessionTranscriptReadScope,
+  seq: number,
+): SessionTranscriptEventRow | undefined {
+  return readSqliteTranscriptEventAtSeqSync(scope, seq);
 }
 
 /** Reads transcript freshness and byte size without materializing event rows. */

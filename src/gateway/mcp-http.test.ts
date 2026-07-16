@@ -998,6 +998,40 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses reserved-harness errors for notifications", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const headers = {
+      "content-type": "application/json",
+      "x-session-key": "agent:main:harness:codex:supervision:native-thread",
+    };
+    const notificationResponse = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+    const mixedResponse = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers,
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+
+    expect(notificationResponse.status).toBe(202);
+    await expect(notificationResponse.text()).resolves.toBe("");
+    expect(mixedResponse.status).toBe(200);
+    await expect(mixedResponse.json()).resolves.toEqual([
+      expect.objectContaining({
+        id: 42,
+        error: { code: -32600, message: expect.stringContaining("reserved") },
+      }),
+    ]);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
   it("allows an existing unlocked legacy harness-prefixed context", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const sessionKey = "agent:main:harness:legacy-notes";
@@ -2845,6 +2879,36 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("does not include notifications in internal-error batch responses", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation(() => {
+      throw new Error("tool resolution exploded");
+    });
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+    const payload = (await response.json()) as Array<{
+      id?: unknown;
+      error?: { code?: number; message?: string };
+    }>;
+
+    expect(response.status).toBe(500);
+    expect(payload).toHaveLength(1);
+    expect(payload[0]).toMatchObject({
+      id: 42,
+      error: {
+        code: -32603,
+        message: "Internal error",
+      },
+    });
+  });
+
   it("returns invalid request errors for malformed batch entries without resetting the request", async () => {
     server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
@@ -2871,6 +2935,97 @@ describe("mcp loopback server", () => {
     });
     expect(payload[1]?.id).toBe(7);
     expect(payload[1]?.result?.tools?.map((tool) => tool.name)).toContain("message");
+  });
+
+  it("returns an invalid request for an empty batch before harness policy", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:harness:codex:supervision:native-thread",
+      },
+      body: "[]",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32600, message: "Invalid Request" },
+    });
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 202 with an empty body for JSON-RPC notifications", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+  });
+
+  it("suppresses internal errors for notification-only requests", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation(() => {
+      throw new Error("tool resolution exploded");
+    });
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns only request responses for mixed batches", async () => {
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", method: "tools/list" },
+        { jsonrpc: "2.0", id: 42, method: "tools/list" },
+      ]),
+    });
+    const payload = (await response.json()) as Array<{ id?: unknown }>;
+
+    expect(response.status).toBe(200);
+    expect(payload).toHaveLength(1);
+    expect(payload[0]?.id).toBe(42);
+  });
+
+  it("dispatches tools/call notifications without returning a response", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "ok" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("returns 413 instead of resetting oversized request bodies", async () => {

@@ -95,6 +95,7 @@ type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
 
 function capitalize(s: string): string {
@@ -177,6 +178,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -197,6 +199,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

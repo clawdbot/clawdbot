@@ -47,9 +47,7 @@
           "allOf": [
             "TELEGRAM_BOT_TOKEN"
           ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
+        }
       }
     }
   }

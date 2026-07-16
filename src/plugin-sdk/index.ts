@@ -5,156 +5,47 @@
 export type {
   ChannelAccountSnapshot,
   ChannelAgentTool,
-  ChannelAgentToolFactory,
-  ChannelCapabilities,
-  ChannelId,
   ChannelMessageActionAdapter,
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-  ChannelStatusIssue,
 } from "../channels/plugins/types.public.js";
 export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
-export type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
+export type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.public.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
-export type {
-  ChannelConfiguredBindingConversationRef,
-  ChannelConfiguredBindingMatch,
-  ChannelConfiguredBindingProvider,
-} from "../channels/plugins/types.adapters.js";
+
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+
+export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
 export type {
-  ConfiguredBindingConversation,
-  ConfiguredBindingResolution,
-  CompiledConfiguredBinding,
-  StatefulBindingTargetDescriptor,
-} from "../channels/plugins/binding-types.js";
-export type {
-  StatefulBindingTargetDriver,
-  StatefulBindingTargetReadyResult,
-  StatefulBindingTargetResetResult,
-  StatefulBindingTargetSessionResult,
-} from "../channels/plugins/stateful-target-drivers.js";
-export type {
-  ChannelSetupWizard,
-  ChannelSetupWizardAllowFromEntry,
-} from "../channels/plugins/setup-wizard-types.js";
-export type {
-  AgentHarness,
   AnyAgentTool,
-  CliBackendPlugin,
-  MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
   PluginLogger,
-  ProviderAuthContext,
-  ProviderAuthResult,
-  ProviderPreparedRuntimeAuth,
-  RealtimeTranscriptionProviderPlugin,
-  SpeechProviderPlugin,
-  UnifiedModelCatalogProviderContext,
-  UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
-export type {
-  PluginHookChannelChatContext,
-  PluginHookChannelContext,
-  PluginHookChannelSenderContext,
-} from "../plugins/types.js";
-export type {
-  UnifiedModelCatalogEntry,
-  UnifiedModelCatalogKind,
-  UnifiedModelCatalogSource,
-} from "@openclaw/model-catalog-core/model-catalog-types";
-export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
-export type {
-  PluginRuntime,
-  RuntimeLogger,
-  SubagentRunParams,
-  SubagentRunResult,
-} from "../plugins/runtime/types.js";
-export type {
-  LlmCompleteCaller,
-  LlmCompleteMessage,
-  LlmCompleteParams,
-  LlmCompleteResult,
-  LlmCompleteUsage,
-} from "../plugins/runtime/types-core.js";
-export type {
-  BoundTaskFlowsRuntime,
-  BoundTaskRunsRuntime,
-  DetachedTaskLifecycleRuntime,
-  PluginRuntimeTaskFlows,
-  PluginRuntimeTaskRuns,
-  PluginRuntimeTasks,
-} from "../plugins/runtime/runtime-tasks.types.js";
-export type {
-  TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
-  TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "../plugins/runtime/task-domain-types.js";
+
+export type { PluginRuntime } from "../plugins/runtime/types.js";
+
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
-/** @deprecated Use OpenClawConfig instead */
-export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";
-export type {
-  MemoryPluginCapability,
-  MemoryPluginPublicArtifact,
-  MemoryPluginPublicArtifactsProvider,
-} from "../plugins/memory-state.js";
-export type { CliBackendConfig } from "../config/types.js";
-export type * from "./image-generation.js";
-export type * from "./music-generation.js";
-export type { SecretInput, SecretRef } from "../config/types.secrets.js";
+
+export type { SecretInput } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
-export type { HookEntry } from "../hooks/types.js";
+
 export type { ReplyPayload } from "./reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export type {
-  ContextEngineFactory,
-  ContextEngineFactoryContext,
-} from "../context-engine/registry.js";
-export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-export type {
-  AssembleResult,
-  BootstrapResult,
-  CompactResult,
-  ContextEngine,
-  ContextEngineHostCapability,
-  ContextEngineHostRequirements,
-  ContextEngineInfo,
-  ContextEngineMaintenanceResult,
-  ContextEngineOperation,
-  ContextEngineRuntimeReasonCode,
-  ContextEngineRuntimeContext,
-  ContextEngineRuntimeMode,
-  ContextEngineRuntimeSettings,
-  ContextEngineSelectionSource,
-  ContextEngineSessionTarget,
-  IngestBatchResult,
-  IngestResult,
-  SubagentEndReason,
-  SubagentSpawnPreparation,
-  TranscriptRewriteReplacement,
-  TranscriptRewriteRequest,
-  TranscriptRewriteResult,
-} from "../context-engine/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export { registerContextEngine } from "../context-engine/registry.js";
-export {
-  ContextEngineRuntimeSettingsUnavailableError,
-  ContextEngineRuntimeSettingsUnsupportedError,
-} from "../context-engine/types.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/string-enum.js";
 export { assertContextEngineHostSupport } from "../context-engine/host-compat.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
+export { registerContextEngine } from "../context-engine/registry.js";
+export {
+  ContextEngineRuntimeSettingsUnavailableError,
+  ContextEngineRuntimeSettingsUnsupportedError,
+} from "../context-engine/types.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
-export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
+/** @deprecated Use OpenClawConfig instead */
+export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";

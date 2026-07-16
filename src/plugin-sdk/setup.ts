@@ -19,6 +19,7 @@ export type {
   ChannelSetupWizardAdapter,
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
   ChannelSetupWizardTextInput,
 } from "../channels/plugins/setup-wizard-types.js";
 
@@ -110,3 +111,4 @@ export {
 } from "../channels/plugins/setup-wizard-binary.js";
 
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { baseUrlTextInput, defineTokenCredential } from "./setup-credential.js";

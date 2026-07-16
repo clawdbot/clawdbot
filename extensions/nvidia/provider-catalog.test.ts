@@ -1,3 +1,4 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Nvidia tests cover provider catalog plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -6,9 +7,10 @@ import {
   buildNvidiaProvider,
   buildSelectableNvidiaProvider,
   buildSelectableLiveNvidiaProvider,
-  clearNvidiaFeaturedModelCacheForTests,
-  NVIDIA_FEATURED_MODELS_URL,
 } from "./provider-catalog.js";
+
+const NVIDIA_FEATURED_MODELS_URL =
+  "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const EXPECTED_FEATURED_MODELS = [
   {
@@ -94,7 +96,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
 
 afterEach(() => {
   vi.useRealTimers();
-  clearNvidiaFeaturedModelCacheForTests();
+  clearLiveCatalogCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
   ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
 });

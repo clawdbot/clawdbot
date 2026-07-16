@@ -283,6 +283,7 @@ type ToolHandlerParams = Pick<
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
+  | "observeToolTerminal"
   | "onToolResult"
   | "config"
   | "messageChannel"

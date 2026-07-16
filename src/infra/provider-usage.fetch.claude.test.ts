@@ -105,6 +105,29 @@ describe("fetchClaudeUsage", () => {
     ]);
   });
 
+  it("omits invalid reset timestamps from usage windows", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        five_hour: { utilization: 18, resets_at: "not-a-date" },
+        limits: [
+          {
+            percent: 27,
+            resets_at: "also-invalid",
+            is_active: true,
+            scope: { model: { display_name: "Fable" } },
+          },
+        ],
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "5h", usedPercent: 18, resetAt: undefined },
+      { label: "Fable", usedPercent: 27, resetAt: undefined },
+    ]);
+  });
+
   it("parses model-scoped limits and extra usage billing", async () => {
     const reset = "2026-01-12T00:00:00Z";
     const mockFetch = createProviderUsageFetch(async () =>

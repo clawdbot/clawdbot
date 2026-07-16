@@ -1016,6 +1016,43 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it.each(["0x10", "1e3", "-1", "-0", "+7", "0.5", "9007199254740993"])(
+    "does not describe malformed RateLimit-Reset values as seconds: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: { "RateLimit-Reset": reset },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+    },
+  );
+
+  it.each(["invalid", "+7", "-0"])(
+    "uses a valid Retry-After hint when RateLimit-Reset is malformed: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: {
+                "RateLimit-Reset": reset,
+                "Retry-After": "7",
+              },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+    },
+  );
+
   it("retries transient ClawHub reads and honors Retry-After", async () => {
     const cancel = vi.fn();
     let attempts = 0;

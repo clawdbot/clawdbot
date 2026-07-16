@@ -46,11 +46,11 @@ import {
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "../agents/live-test-provider-drift.js";
+} from "../agents/live-test-provider-drift.test-support.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -2984,15 +2984,30 @@ function sessionMessagesAfterNextUserTurn(
   expectedUserText?: string,
 ): unknown[] {
   const nextUserOffset = messages.slice(baselineMessageCount).findIndex((message) => {
+    const actualUserText = extractTranscriptMessageText(message);
     return (
       (message as { role?: unknown } | null | undefined)?.role === "user" &&
-      (expectedUserText === undefined || extractTranscriptMessageText(message) === expectedUserText)
+      (expectedUserText === undefined || matchesLiveProbeUserText(actualUserText, expectedUserText))
     );
   });
   if (nextUserOffset < 0) {
     return [];
   }
   return messages.slice(baselineMessageCount + nextUserOffset + 1);
+}
+
+function matchesLiveProbeUserText(actual: string, expected: string): boolean {
+  if (actual === expected) {
+    return true;
+  }
+  const markerIndex = expected.indexOf(`${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_`);
+  if (markerIndex < 0) {
+    return false;
+  }
+  const nonceSuffix = expected.slice(markerIndex + ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL.length);
+  // The embedded Anthropic runtime scrubs the refusal trigger before persisting it.
+  // Its random suffix survives and still uniquely owns this live probe turn.
+  return /^_[a-f0-9]{32}$/.test(nonceSuffix) && actual.endsWith(nonceSuffix);
 }
 
 function sessionAssistantEntriesForLiveProbe(
@@ -3118,6 +3133,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
       model: params.modelKey,
       thinking: params.thinkingLevel,
     }),
+    "Pass only those six arguments. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
     "Wait for the child completion to return before answering.",
     `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
   ].join("\n");
@@ -3297,6 +3313,20 @@ describe("latestAssistantTextAfterBaseline", () => {
       ),
     );
     expect(latestTerminalAssistantTextAfterBaseline(secondEntries, 0)).toBe("second-a second-b");
+  });
+
+  it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const expected = `Reply with ok. ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
+    const scrubbed = `Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+
+    expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
+    expect(
+      matchesLiveProbeUserText(
+        "Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        expected,
+      ),
+    ).toBe(false);
   });
 });
 

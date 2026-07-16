@@ -2,7 +2,6 @@
  * Chutes model catalog, static model definitions, and dynamic model discovery.
  */
 import {
-  clearLiveCatalogCacheForTests,
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -488,11 +487,6 @@ interface ChutesModelEntry {
 }
 
 const CACHE_TTL = 5 * 60 * 1000;
-
-/** Clears the dynamic Chutes model discovery cache for tests. */
-export function clearChutesModelCacheForTests(): void {
-  clearLiveCatalogCacheForTests();
-}
 
 async function fetchChutesModelRows(accessToken?: string): Promise<readonly unknown[]> {
   return await getCachedLiveProviderModelRows({

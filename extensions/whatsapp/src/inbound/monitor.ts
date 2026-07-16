@@ -22,9 +22,9 @@ import {
   parseStrictFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
@@ -58,12 +58,10 @@ import {
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
 import {
-  claimRecentInboundMessageDelivery,
-  commitRecentInboundMessage,
   isRecentOutboundMessage,
-  releaseRecentInboundMessage,
   rememberRecentOutboundMessage,
   WhatsAppRetryableInboundError,
+  whatsAppInboundReplayGuard,
 } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
@@ -453,7 +451,7 @@ export async function attachWebInboxToSocket(
   };
   type QueuedInboundMessageMetadata = {
     admission: AdmittedWebInboundCallbackMessage["admission"];
-    dedupeKey?: string;
+    replayClaim?: ChannelReplayClaimHandle;
     debounceKey?: string;
     durableId?: string;
     readReceipt?: WhatsAppReadReceiptTarget;
@@ -503,9 +501,9 @@ export async function attachWebInboxToSocket(
     entries: QueuedInboundMessage[],
     error?: unknown,
   ): Promise<void> => {
-    const dedupeKeys = uniqueStrings(
-      entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString),
-    );
+    const replayClaims = entries
+      .map((entry) => entry.replayClaim)
+      .filter((claim): claim is ChannelReplayClaimHandle => claim !== undefined);
     const durableEntries = entries.filter(
       (entry): entry is QueuedInboundMessage & { durableId: string } =>
         isNonEmptyString(entry.durableId),
@@ -516,7 +514,9 @@ export async function attachWebInboxToSocket(
     );
     const retryableError = resolveRetryableWhatsAppInboundError(error);
     if (retryableError) {
-      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, retryableError));
+      for (const claim of replayClaims) {
+        claim.release({ error: retryableError });
+      }
       await Promise.all(
         durableEntries.map((entry) =>
           durableInboundJournal.release(entry.durableId, {
@@ -527,7 +527,7 @@ export async function attachWebInboxToSocket(
       return;
     }
     await Promise.all([
-      ...dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)),
+      ...replayClaims.map((claim) => claim.commit()),
       ...durableEntries.map((entry) =>
         durableInboundJournal.complete(
           entry.durableId,
@@ -1235,9 +1235,11 @@ export async function attachWebInboxToSocket(
     }
 
     const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-    const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
-    if (dedupeClaim !== "claimed") {
-      if (dedupeClaim === "duplicate") {
+    const dedupeClaim = dedupeKey
+      ? await whatsAppInboundReplayGuard.claim(dedupeKey)
+      : ({ kind: "invalid" } as const);
+    if (dedupeClaim.kind === "duplicate" || dedupeClaim.kind === "inflight") {
+      if (dedupeClaim.kind === "duplicate") {
         await completeUndeliverableDurableInbound(durableId, durableMetadata);
         await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       }
@@ -1249,6 +1251,7 @@ export async function attachWebInboxToSocket(
       durableId,
       readReceipt: deliveryReadReceipt,
       receiveOrder,
+      ...(dedupeClaim.kind === "claimed" ? { replayClaim: dedupeClaim.handle } : {}),
     });
   };
 
@@ -1361,6 +1364,7 @@ export async function attachWebInboxToSocket(
       durableId?: string;
       readReceipt?: WhatsAppReadReceiptTarget;
       receiveOrder?: number;
+      replayClaim?: ChannelReplayClaimHandle;
     },
   ) => {
     const chatJid = inbound.remoteJid;
@@ -1500,7 +1504,7 @@ export async function attachWebInboxToSocket(
           }
         : undefined,
       group,
-      dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
+      replayClaim: durable.replayClaim,
       durableId: durable.durableId,
       readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,

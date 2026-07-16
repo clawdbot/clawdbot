@@ -42,10 +42,7 @@ import {
 } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
-import {
-  persistSessionEntry,
-  resolveCurrentRunDeliveryContext,
-} from "./command/session-helpers.js";
+import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
@@ -100,7 +97,7 @@ async function agentCommandInternal(
       "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
     );
   }
-  const opts = {
+  let opts: AgentCommandOpts = {
     ...preparedOpts,
     abortSignal: preparedOpts.abortSignal
       ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
@@ -237,6 +234,46 @@ async function agentCommandInternal(
         throw acpResolution.error;
       }
 
+      let currentRunDeliveryPrepared = false;
+      const prepareDeliveryForRun = async (candidateSessionEntry?: SessionEntry) => {
+        if (currentRunDeliveryPrepared || opts.deliver !== true) {
+          return;
+        }
+        currentRunDeliveryPrepared = true;
+        let preparedDelivery: Awaited<ReturnType<typeof prepareCurrentRunDelivery>>;
+        try {
+          preparedDelivery = await prepareCurrentRunDelivery({
+            cfg,
+            opts,
+            agentId: sessionAgentId,
+            currentSessionKey: sessionKey,
+            sessionEntry: candidateSessionEntry,
+          });
+        } catch (error) {
+          if (opts.bestEffortDeliver !== true) {
+            throw error;
+          }
+          log.warn(
+            `delivery preflight failed; continuing session-only because bestEffortDeliver is enabled: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          opts = { ...opts, deliver: false };
+        }
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+        if (preparedDelivery) {
+          currentRunDeliveryContext = preparedDelivery.context;
+          opts = {
+            ...opts,
+            replyChannel: preparedDelivery.context.channel,
+            replyTo: preparedDelivery.context.to,
+            replyAccountId: preparedDelivery.context.accountId,
+            threadId: preparedDelivery.context.threadId,
+            deliveryTargetMode: preparedDelivery.targetMode,
+          };
+        }
+      };
+
       if (
         sessionStore &&
         sessionKey &&
@@ -251,11 +288,13 @@ async function agentCommandInternal(
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
         const entry = isSessionRollover ? clearRotatedSessionMetadata(initialEntry) : initialEntry;
-        currentRunDeliveryContext = await resolveCurrentRunDeliveryContext({
-          cfg,
-          opts,
-          sessionEntry: entry,
-        });
+        await prepareDeliveryForRun(entry);
+        const generatedMediaSourceRunId =
+          opts.internalDeliveryMediaUrls !== undefined &&
+          opts.inputProvenance?.kind === "inter_session" &&
+          isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
+            ? runId
+            : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next: SessionEntry = {
           ...entry,
@@ -270,12 +309,8 @@ async function agentCommandInternal(
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
             runId,
-            sourceRunId:
-              opts.internalDeliveryMediaUrls !== undefined &&
-              opts.inputProvenance?.kind === "inter_session" &&
-              isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)
-                ? runId
-                : undefined,
+            sourceIngress: generatedMediaSourceRunId ? "internal" : undefined,
+            sourceRunId: generatedMediaSourceRunId,
             sourceReplyDeliveryMode: opts.sourceReplyDeliveryMode,
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
@@ -299,6 +334,7 @@ async function agentCommandInternal(
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
+      await prepareDeliveryForRun(sessionEntry);
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

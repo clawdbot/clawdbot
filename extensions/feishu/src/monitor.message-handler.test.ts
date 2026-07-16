@@ -54,7 +54,6 @@ function createHandler() {
     handleMessage,
     resolveDebounceText: () => "hello",
     hasProcessedMessage: vi.fn(async () => false),
-    recordProcessedMessage: vi.fn(async () => true),
     getBotOpenId: () => "ou_bot",
   });
 

@@ -41,6 +41,7 @@ export {
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest,
   type AuthorizedGatewayHttpRequest,
 } from "./http-auth-utils.js";
 

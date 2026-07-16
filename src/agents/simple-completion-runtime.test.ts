@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
   prepareModelForSimpleCompletionMock: vi.fn((params: { model: unknown }) => params.model),
   completeMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
+  getCurrentPluginMetadataSnapshotMock: vi.fn(),
 }));
 
 vi.mock("../llm/stream.js", () => ({
@@ -39,6 +40,11 @@ vi.mock("./auth-profiles/store.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
 }));
 
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
+}));
+
 vi.mock("./simple-completion-transport.js", () => ({
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
@@ -50,6 +56,7 @@ vi.mock("./model-auth.js", () => ({
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
   ),
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
+  resolveApiKeyForProvider: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
@@ -73,6 +80,7 @@ beforeEach(() => {
   hoisted.prepareModelForSimpleCompletionMock.mockReset();
   hoisted.completeMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReset();
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
   hoisted.prepareModelForSimpleCompletionMock.mockImplementation(
@@ -109,6 +117,21 @@ beforeEach(() => {
     },
   );
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+  hoisted.getCurrentPluginMetadataSnapshotMock.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        modelCatalog: {
+          providers: {
+            openai: {
+              defaultUtilityModel: "gpt-5.5",
+              models: [{ id: "gpt-5.5" }],
+            },
+          },
+        },
+      },
+    ],
+  });
 });
 
 function expectPreparedModelResult(
@@ -126,6 +149,28 @@ function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
     throw new Error(`Expected mock call ${index}`);
   }
   return call[0];
+}
+
+function createOpenAIRouteModelResolver(params: {
+  api: "openai-responses" | "openai-chatgpt-responses";
+  baseUrl: string;
+}) {
+  return vi.fn(async (...args: Parameters<typeof resolveModelAsync>) => {
+    const [provider, modelId, , cfg] = args;
+    const configured = cfg?.models?.providers?.openai;
+    return {
+      model: {
+        provider,
+        id: modelId,
+        api: configured?.api ?? params.api,
+        baseUrl: configured?.baseUrl ?? params.baseUrl,
+      } as Model,
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    };
+  });
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -655,51 +700,147 @@ describe("prepareSimpleCompletionModel", () => {
 });
 
 describe("prepareSimpleCompletionModelForAgent", () => {
-  it("uses Codex auth provider for OpenAI model refs with Codex runtime policy", async () => {
+  it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const cfg = {
       agents: {
         defaults: {
-          model: "openai/gpt-5.4-mini",
+          model: "openai/gpt-5.5",
           models: {
-            "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
           },
         },
       },
-    } as OpenClawConfig;
-    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
-      model: {
-        provider: "openai",
-        id: "gpt-5.4-mini",
+    } as unknown as OpenClawConfig;
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "placeholder",
+      profileId: "openai:platform",
+      source: "profile:openai:platform",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: "main",
+      useUtilityModel: true,
+      skipAgentDiscovery: true,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.selection.provider).toBe("openai");
+    expect(result.selection.modelId).toBe("gpt-5.5");
+    expect(result.selection.runtimeProvider).toBe("openai");
+    expect(result.model).toMatchObject({
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    expect(modelResolver).toHaveBeenCalledTimes(2);
+    expect(
+      (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
+    ).toBe("openai-responses");
+  });
+
+  it("keeps the Codex route for OAuth auth", async () => {
+    const cfg = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } as unknown as OpenClawConfig;
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "placeholder",
+      profileId: "openai:chatgpt",
+      source: "profile:openai:chatgpt",
+      mode: "oauth",
+    });
+
+    const result = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: "main",
+      modelRef: "openai/gpt-5.5",
+      skipAgentDiscovery: true,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.selection.modelId).toBe("gpt-5.5");
+    expect(result.model).toMatchObject({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    expect(modelResolver).toHaveBeenCalledTimes(1);
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an authored custom OpenAI route untouched", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://relay.example/v1",
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
       },
-      authStorage: {
-        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
-      },
-      modelRegistry: {},
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    } as unknown as OpenClawConfig;
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "placeholder",
+      source: "models.providers.openai",
+      mode: "api-key",
     });
 
     const result = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       skipAgentDiscovery: true,
-      modelResolver: hoisted.resolveModelAsyncMock,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
-    expect(result.selection.provider).toBe("openai");
-    expect(result.selection.modelId).toBe("gpt-5.4-mini");
-    expect(result.selection.runtimeProvider).toBe("openai");
-    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openai",
-      "gpt-5.4-mini",
-      expect.any(String),
+    expect(result.model).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://relay.example/v1",
+    });
+    expect(modelResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors an explicit model ref while selecting its auth-compatible route", async () => {
+    const cfg = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-6" } },
+    } as unknown as OpenClawConfig;
+    const modelResolver = createOpenAIRouteModelResolver({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "placeholder",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModelForAgent({
       cfg,
-      {
-        skipAgentDiscovery: true,
-      },
-    );
-    expect(
-      (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,
-    ).toBe("openai");
+      agentId: "main",
+      modelRef: "openai/gpt-5.5",
+      skipAgentDiscovery: true,
+      modelResolver: modelResolver as unknown as typeof resolveModelAsync,
+    });
+
+    expectPreparedModelResult(result);
+    expect(result.selection).toMatchObject({ provider: "openai", modelId: "gpt-5.5" });
+    expect(result.model).toMatchObject({ id: "gpt-5.5", api: "openai-responses" });
   });
 });
 

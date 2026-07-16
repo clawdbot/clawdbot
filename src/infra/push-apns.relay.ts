@@ -1,6 +1,9 @@
 // Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -83,7 +86,7 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
   if (raw === undefined || raw === "") {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
-  const parsed = Number(raw);
+  const parsed = typeof raw === "number" ? raw : parseStrictPositiveInteger(raw);
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
 }
 
@@ -116,10 +119,9 @@ function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined
   return undefined;
 }
 
-/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
-export function normalizeApnsRelayBaseUrl(
+function normalizeApnsRelayBaseUrlWithPolicy(
   baseUrl: string,
-  env: NodeJS.ProcessEnv = process.env,
+  allowLoopbackHttpWithoutEnvOptIn: boolean,
 ): { ok: true; value: string } | { ok: false; error: string } {
   try {
     const parsed = new URL(baseUrl);
@@ -130,11 +132,13 @@ export function normalizeApnsRelayBaseUrl(
       throw new Error("host required");
     }
     // Plain HTTP is only for local relay development; production relay URLs must use TLS.
-    if (parsed.protocol === "http:" && !readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP)) {
+    if (parsed.protocol === "http:" && !allowLoopbackHttpWithoutEnvOptIn) {
       throw new Error(
         "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
       );
     }
+    // Persisted development URLs may bypass only the current env opt-in;
+    // the loopback boundary remains mandatory during every decode.
     if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
       throw new Error("http relay URLs are limited to loopback hosts");
     }
@@ -148,6 +152,26 @@ export function normalizeApnsRelayBaseUrl(
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
+}
+
+/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
+export function normalizeApnsRelayBaseUrl(
+  baseUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true; value: string } | { ok: false; error: string } {
+  return normalizeApnsRelayBaseUrlWithPolicy(
+    baseUrl,
+    readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP),
+  );
+}
+
+/** Revalidate a canonical persisted relay URL without reapplying current input policy. */
+export function normalizePersistedApnsRelayBaseUrl(
+  baseUrl: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  // Stored loopback HTTP URLs already passed the explicit development-only
+  // policy before commit; decoding must survive later environment changes.
+  return normalizeApnsRelayBaseUrlWithPolicy(baseUrl, true);
 }
 
 function buildRelayGatewaySignaturePayload(params: {

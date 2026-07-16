@@ -1089,6 +1089,38 @@ describe("parseCliOutput", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it("surfaces codex-exec todo snapshots as typed plan updates", () => {
+    const plans: Array<{ steps: Array<{ step: string; status: string }> }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "codex", output: "jsonl", sessionIdFields: ["thread_id"] },
+      providerId: "codex-cli",
+      onAssistantDelta: () => {},
+      onPlanUpdate: (plan) => plans.push(plan),
+    });
+
+    parser.push(
+      `${JSON.stringify({
+        type: "item.updated",
+        item: {
+          type: "todo_list",
+          items: [
+            { text: "Inspect", completed: true },
+            { text: "Patch", completed: false },
+          ],
+        },
+      })}\n`,
+    );
+
+    expect(plans).toEqual([
+      {
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const sessionIds: string[] = [];

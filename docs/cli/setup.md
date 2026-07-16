@@ -30,6 +30,13 @@ In guided mode, `--workspace <dir>` is the workspace proposed to OpenClaw;
 it is persisted only after you approve that proposal. Baseline, classic, and
 noninteractive setup persist the supplied workspace through their normal flow.
 
+Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
+and macOS app call the same Gateway-owned detector, which checks configured
+models, supported CLI logins, API-key environment variables, and already
+installed Ollama or LM Studio models. Local models are never downloaded by this
+automatic pass; the selected candidate must answer a real completion before its
+provider and model configuration is saved.
+
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
 (`--gateway-port`, `--gateway-bind`, `--gateway-auth`, `--install-daemon`),

@@ -93,7 +93,7 @@ export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
-export const promptText: AsyncUnknownMock = vi.fn();
+const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");

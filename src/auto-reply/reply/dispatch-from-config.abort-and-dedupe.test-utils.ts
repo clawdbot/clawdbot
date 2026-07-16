@@ -63,7 +63,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code.",
-        steps: ["Patch code"],
+        planSteps: [{ step: "Patch code", status: "in_progress" }],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
@@ -82,7 +82,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(1, {
-      text: "1. Patch code",
+      text: "▸ Patch code",
       isStatusNotice: true,
     });
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);

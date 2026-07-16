@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
   type AcpRuntime,
+  type AcpRuntimeCapabilities,
   type AcpRuntimeEvent,
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
@@ -40,6 +41,7 @@ function makeRuntime(
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
     runTurn: AcpRuntime["runTurn"];
+    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -83,6 +85,7 @@ function makeRuntime(
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
           runTurn: AcpRuntime["runTurn"];
+          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -192,14 +195,21 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     );
   });
 
-  it("adds the OpenClaw session key to the managed OpenClaw tools MCP bridge", () => {
+  it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
     };
     const { runtime } = makeRuntime(baseStore, {
+      pluginToolsMcpBridgeEnabled: true,
       openclawToolsMcpBridgeEnabled: true,
       mcpServers: [
+        {
+          name: "openclaw-plugin-tools",
+          command: "node",
+          args: ["dist/mcp/plugin-tools-serve.js"],
+          env: [],
+        },
         {
           name: "openclaw-tools",
           command: "node",
@@ -209,12 +219,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
 
-    const readScopedMcpEnv = (sessionKey: string) => {
+    const readScopedMcpEnv = (sessionKey: string, serverName: string) => {
       const delegate = (
         runtime as unknown as {
-          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+          resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
         }
-      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+      ).resolveManagedToolsDelegateForSession(sessionKey) as {
         options: {
           mcpServers?: Array<{
             env?: Array<{ name: string; value: string }>;
@@ -222,14 +232,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
           }>;
         };
       };
-      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-tools")?.env;
+      return delegate.options.mcpServers?.find((server) => server.name === serverName)?.env;
     };
 
-    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+    expect(readScopedMcpEnv("agent:worker:main", "openclaw-plugin-tools")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:worker:main",
     });
-    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+    expect(readScopedMcpEnv("agent:research:main", "openclaw-tools")).toContainEqual({
       name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
       value: "agent:research:main",
     });
@@ -252,18 +262,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
     const exposedRuntime = runtime as unknown as {
-      openclawToolsSessionDelegates: Map<string, unknown>;
-      resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+      managedToolsSessionDelegates: Map<string, unknown>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): unknown;
     };
 
-    const firstDelegate =
-      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main");
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main");
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
 
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
-    expect(exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main")).toBe(
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    expect(exposedRuntime.resolveManagedToolsDelegateForSession("agent:worker:main")).toBe(
       firstDelegate,
     );
   });
@@ -996,9 +1005,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.4/xhigh",
+      model: "gpt-5.4",
       thinking: "x-high",
-      sessionOptions: { model: "gpt-5.4/xhigh" },
+      sessionOptions: { model: "gpt-5.4" },
     });
   });
 
@@ -1068,7 +1077,41 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("normalizes Codex ACP thinking config controls to reasoning effort", async () => {
+  it("forwards getCapabilities input handles to the ACPX delegate", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const delegateCapabilities: AcpRuntimeCapabilities = {
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["reasoning_effort", "model"],
+    };
+    const getCapabilities = vi
+      .spyOn(delegate, "getCapabilities")
+      .mockResolvedValue(delegateCapabilities);
+
+    const handle: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+    const input = { handle };
+
+    const result = await runtime.getCapabilities?.(input);
+
+    expect(getCapabilities).toHaveBeenCalledWith(input);
+    expect(result).toBe(delegateCapabilities);
+  });
+
+  it.each([
+    { key: "thinking", value: "minimal", expected: "low" },
+    { key: "reasoning_effort", value: "x-high", expected: "xhigh" },
+  ])("normalizes Codex ACP $key=$value to reasoning effort", async ({ key, value, expected }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -1087,14 +1130,52 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     await runtime.setConfigOption({
       handle,
-      key: "thinking",
-      value: "minimal",
+      key,
+      value,
     });
 
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
       key: "reasoning_effort",
-      value: "low",
+      value: expected,
+    });
+  });
+
+  it("forwards unsupported thinking config rejection for non-Codex ACP sessions", async () => {
+    const unsupportedThinkingError = new AcpRuntimeError(
+      "ACP_BACKEND_UNSUPPORTED_CONTROL",
+      "unsupported thinking",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:gemini:acp:test",
+        agentCommand: "gemini --experimental-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi
+      .spyOn(delegate, "setConfigOption")
+      .mockRejectedValue(unsupportedThinkingError);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:gemini:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:gemini:acp:test",
+      acpxRecordId: "agent:gemini:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({
+        handle,
+        key: "thinking",
+        value: "high",
+      }),
+    ).rejects.toBe(unsupportedThinkingError);
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "thinking",
+      value: "high",
     });
   });
 
@@ -1298,13 +1379,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ],
     });
     const exposedRuntime = runtime as unknown as {
-      openclawToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
-      resolveOpenClawToolsDelegateForSession(sessionKey: string): {
+      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): {
         close: AcpRuntime["close"];
       };
     };
-    const scopedDelegate =
-      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:codex:main");
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
     const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
 
     await runtime.close({
@@ -1317,7 +1397,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     expect(close).toHaveBeenCalledOnce();
-    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:codex:main")).toBe(false);
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
   });
 
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {

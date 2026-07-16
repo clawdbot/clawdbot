@@ -12,6 +12,8 @@ function parseStrictPositiveInteger(value: string): number | undefined {
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 /** Default server-side window for gateway preauth handshakes. */
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
+/** Default deadline for a single non-streaming Gateway request. */
+export const DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS = 30_000;
 /** Minimum client watchdog delay for connect challenge setup. */
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 /** Default maximum client watchdog delay, aligned with the preauth server timeout. */

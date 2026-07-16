@@ -397,26 +397,25 @@ function buildPluginRequestStages(params: {
         // Bypass paths come only from activated channel plugins' gateway-auth
         // artifacts (bundled or installed); all other protected plugin routes must
         // produce an AuthorizedGatewayHttpRequest before runtime scopes are derived.
-        const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
-        const requestAuth = await authorizeGatewayHttpRequestOrReply({
+        const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
+        const { resolvePluginRouteRuntimeOperatorScopes } =
+          await getPluginRouteRuntimeScopesModule();
+        const authResult = await authorizePluginGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
           auth: params.resolvedAuth,
           trustedProxies: params.trustedProxies,
           allowRealIpFallback: params.allowRealIpFallback,
           rateLimiter: params.rateLimiter,
+          requestPath: params.requestPath,
+          resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
         });
-        if (!requestAuth) {
+        if (!authResult) {
           return true;
         }
         pluginGatewayAuthSatisfied = true;
-        pluginGatewayRequestAuth = requestAuth;
-        const { resolvePluginRouteRuntimeOperatorScopes } =
-          await getPluginRouteRuntimeScopesModule();
-        pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
-          params.req,
-          requestAuth,
-        );
+        pluginGatewayRequestAuth = authResult.requestAuth;
+        pluginRequestOperatorScopes = authResult.operatorScopes;
         return false;
       },
     },

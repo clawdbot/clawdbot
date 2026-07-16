@@ -1,0 +1,221 @@
+.model-setup {
+  display: grid;
+  gap: 18px;
+}
+
+.model-setup__intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.model-setup__intro h1,
+.model-setup-wizard h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.model-setup__intro p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  max-width: 720px;
+}
+
+.model-setup__rows {
+  display: grid;
+  gap: 10px;
+}
+
+.model-setup__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.model-setup__row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.model-setup__row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.model-setup__chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.model-setup__testing {
+  margin-top: 8px;
+  color: var(--accent);
+}
+
+.model-setup__row .callout {
+  margin-top: 10px;
+}
+
+.model-setup__more {
+  margin-top: 12px;
+}
+
+.model-setup__more summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.model-setup__more[open] summary {
+  margin-bottom: 10px;
+}
+
+.model-setup__manual {
+  display: grid;
+  gap: 10px;
+  max-width: 620px;
+}
+
+.model-setup__manual .field {
+  display: grid;
+  gap: 6px;
+}
+
+.model-setup__manual select,
+.model-setup__manual input {
+  width: 100%;
+}
+
+.model-setup__manual .btn {
+  justify-self: start;
+}
+
+.model-setup__success {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--ok) 10%, var(--panel));
+}
+
+.model-setup__success strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ok);
+  font-size: 16px;
+}
+
+.model-setup-wizard {
+  display: grid;
+  max-height: min(720px, calc(100dvh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-lg);
+}
+
+.model-setup-wizard__header,
+.model-setup-wizard__body,
+.model-setup-wizard__footer {
+  padding: 18px;
+}
+
+.model-setup-wizard__header {
+  border-bottom: 1px solid var(--border);
+}
+
+.model-setup-wizard__body {
+  display: grid;
+  gap: 14px;
+  overflow: auto;
+}
+
+.model-setup-wizard__body form {
+  display: grid;
+  gap: 12px;
+}
+
+.model-setup-wizard__footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+}
+
+.model-setup-wizard__message {
+  white-space: pre-wrap;
+}
+
+.model-setup-wizard__device-code {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.model-setup-wizard__device-code code {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.model-setup-wizard__options {
+  display: grid;
+  gap: 8px;
+}
+
+.model-setup-wizard__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.model-setup-wizard__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.model-setup-wizard__actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .model-setup__intro,
+  .model-setup__row,
+  .model-setup__success {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-setup__row > .btn,
+  .model-setup__success > .btn {
+    align-self: flex-start;
+  }
+}

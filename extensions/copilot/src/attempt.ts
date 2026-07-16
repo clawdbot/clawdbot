@@ -476,6 +476,17 @@ export async function runCopilotAttempt(
   // behavior. See `EmbeddedRunAttemptResult.yieldDetected` at
   // `src/agents/pi-embedded-runner/run/types.ts:139`.
   let yieldDetected = false;
+  let lastToolError: AgentHarnessAttemptResult["lastToolError"];
+  const hostObserveToolTerminal = input.observeToolTerminal;
+  // Copilot reports facts only; the host observer owns mutation/recovery policy.
+  // Retain its returned state so shared terminal preparation sees the same outcome.
+  const observeToolTerminal = hostObserveToolTerminal
+    ? (observation: Parameters<typeof hostObserveToolTerminal>[0]) => {
+        const terminal = hostObserveToolTerminal(observation);
+        lastToolError = terminal.lastToolError;
+        return terminal;
+      }
+    : undefined;
 
   const markExternalAbort = () => {
     abortRequested = true;
@@ -647,7 +658,7 @@ export async function runCopilotAttempt(
         // (identity, owner-only allowlist, auth-profile store,
         // channel/routing, model context, run hooks). See
         // tool-bridge.ts buildOpenClawCodingToolsOptions().
-        attemptParams: input,
+        attemptParams: observeToolTerminal ? { ...input, observeToolTerminal } : input,
         computerContextEpoch,
         sessionRef,
         onYieldDetected: () => {
@@ -1189,6 +1200,7 @@ export async function runCopilotAttempt(
       startedCount: snap?.startedCount ?? 0,
     },
     lastAssistant,
+    lastToolError,
     messagesSnapshot,
     now,
     promptError,
@@ -1245,6 +1257,7 @@ function createResult(
     externalAbort?: boolean;
     itemLifecycle?: { activeCount: number; completedCount: number; startedCount: number };
     lastAssistant?: AssistantMessage;
+    lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
     now: () => number;
     promptError: Error | undefined;
@@ -1285,6 +1298,7 @@ function createResult(
       startedCount: 0,
     },
     lastAssistant: state.lastAssistant,
+    ...(state.lastToolError ? { lastToolError: state.lastToolError } : {}),
     messagesSnapshot: state.messagesSnapshot,
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],

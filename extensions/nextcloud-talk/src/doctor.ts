@@ -1,9 +1,9 @@
 // Nextcloud Talk plugin module implements doctor behavior.
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { migratePersistentDedupeLegacyJsonFile } from "openclaw/plugin-sdk/persistent-dedupe";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { listNextcloudTalkAccountIds, resolveNextcloudTalkAccount } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
@@ -26,15 +26,6 @@ function sanitizeLegacyReplaySegment(value: string): string {
     return "default";
   }
   return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function collectNextcloudTalkBotResponseWarnings(params: {
@@ -74,7 +65,7 @@ async function repairNextcloudTalkReplayDedupeState(params: {
 
   for (const accountId of listNextcloudTalkAccountIds(params.cfg)) {
     const legacyPath = path.join(replayDir, `${sanitizeLegacyReplaySegment(accountId)}.json`);
-    if (!(await fileExists(legacyPath))) {
+    if (!fileExists(legacyPath)) {
       continue;
     }
     try {

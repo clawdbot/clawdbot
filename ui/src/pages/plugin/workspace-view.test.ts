@@ -121,6 +121,39 @@ describe("renderWorkspace", () => {
     }
   });
 
+  it("cancels a removed deep link before the initial workspace finishes loading", async () => {
+    window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces&ws=empty");
+    const host = document.createElement("div");
+    document.body.append(host);
+    let resolveWorkspace!: (value: unknown) => void;
+    const request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveWorkspace = resolve;
+        }),
+    );
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+    const state = getWorkspaceState(host);
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(request).toHaveBeenCalledOnce();
+
+      window.history.replaceState({}, "", "/plugin?plugin=workspaces&id=workspaces");
+      render(renderWorkspace({ host, client, connected: true }), host);
+
+      resolveWorkspace({ doc, workspaceVersion: doc.workspaceVersion });
+      await vi.waitFor(() => expect(state.loaded).toBe(true));
+      expect(state.activeSlug).toBe("main");
+    } finally {
+      stopWorkspace(host);
+      host.remove();
+    }
+  });
+
   it("discards a stale binding result after the polling version advances", async () => {
     vi.useFakeTimers();
     const host = document.createElement("div");

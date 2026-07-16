@@ -405,6 +405,59 @@ describe("debug proxy runtime", () => {
     expect(events.some((event) => event.kind === "error")).toBe(false);
   });
 
+  it("skips capturing decimal Content-Length values above the safe integer range", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/huge",
+        method: "GET",
+        response: new Response("{}", {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-length": "9007199254740993",
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "too-large" });
+    expect(response).not.toHaveProperty("dataText");
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
+  it("streams non-decimal Content-Length values through the body cap", async () => {
+    initializeDebugProxyCapture("test", settings, deps);
+    captureHttpExchange(
+      {
+        url: "https://api.openai.com/v1/files/small",
+        method: "GET",
+        response: new Response("captured", {
+          status: 200,
+          headers: {
+            "content-type": "text/plain",
+            "content-length": "1e9",
+          },
+        }),
+      },
+      settings,
+      deps,
+    );
+    await waitForResponseSettled();
+    finalizeDebugProxyCapture(settings, deps);
+
+    const response = events.find((event) => event.kind === "response");
+    expect(response).toBeDefined();
+    expect(response?.dataText).toBe("captured");
+    expect(response?.metaJson).toBeUndefined();
+    expect(events.some((event) => event.kind === "error")).toBe(false);
+  });
+
   it("fails closed on chunked responses that stream past the cap", async () => {
     initializeDebugProxyCapture("test", settings, deps);
     // 20 MiB streamed without a Content-Length header: the bounded reader must

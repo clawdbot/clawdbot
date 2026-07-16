@@ -1,3 +1,4 @@
+import { formatChannelProgressDraftText } from "openclaw/plugin-sdk/channel-outbound";
 // Slack tests cover progress blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -5,6 +6,7 @@ import {
   buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
+  reconcileSlackNativeTaskChunks,
 } from "./progress-blocks.js";
 
 function progressLine(index: number) {
@@ -36,7 +38,11 @@ function planUpdate(title: string) {
   return { type: "plan_update", title };
 }
 
-function taskUpdate(id: unknown, title: string, status: "in_progress" | "complete" | "error") {
+function taskUpdate(
+  id: unknown,
+  title: string,
+  status: "pending" | "in_progress" | "complete" | "error",
+) {
   return { type: "task_update", id, title, status };
 }
 
@@ -71,6 +77,21 @@ function expectTaskUpdate(task: unknown, fields: { id: string; title: string; st
 }
 
 describe("buildSlackProgressDraftBlocks", () => {
+  it("keeps a typed checklist below Slack status draft text", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        lines: [toolLine("hidden while status exists")],
+        narration: "Implementing the change.",
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Test", status: "pending" },
+        ],
+      }),
+    ).toBe("Shelling\n\nImplementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test");
+  });
+
   it("keeps legacy rich draft rendering as section field blocks", () => {
     expect(
       buildSlackProgressDraftBlocks({
@@ -144,7 +165,9 @@ describe("buildSlackProgressDraftBlocks", () => {
       lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
     });
     expect(blocksWithLabel).toHaveLength(50);
-    expectLegacyLineBlock(blocksWithLabel?.[0], "🛠️ *Exec 10*", "run 10");
+    // The label block survives capping; tool lines yield the remaining budget.
+    expect(JSON.stringify(blocksWithLabel?.[0])).toContain("Shelling...");
+    expectLegacyLineBlock(blocksWithLabel?.[1], "🛠️ *Exec 11*", "run 11");
     expectLegacyLineBlock(blocksWithLabel?.at(-1), "🛠️ *Exec 59*", "run 59");
 
     const blocksWithoutTitle = buildSlackProgressDraftBlocks({
@@ -181,6 +204,137 @@ describe("buildSlackProgressDraftBlocks", () => {
 });
 
 describe("native Slack progress stream chunks", () => {
+  it("uses typed plan steps instead of tool lines when a plan exists", () => {
+    const chunks = buildSlackProgressStreamStartChunks({
+      title: "Implementation",
+      lines: [toolLine("legacy fallback")],
+      plan: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Patch code", status: "in_progress" },
+        { step: "Run tests", status: "pending" },
+      ],
+    });
+
+    expect(chunks).toEqual([
+      planUpdate("Implementation"),
+      taskUpdate("plan_step_1", "Inspect code", "complete"),
+      taskUpdate("plan_step_2", "Patch code", "in_progress"),
+      taskUpdate("plan_step_3", "Run tests", "pending"),
+    ]);
+  });
+
+  it("reconciles renamed and reordered plan steps by rewriting position-keyed tasks", () => {
+    const initial = buildSlackProgressStreamStartChunks({
+      title: "Implementation",
+      lines: [],
+      plan: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Run tests", status: "pending" },
+      ],
+    });
+    const revised = buildSlackProgressStreamUpdateChunks({
+      title: "Implementation",
+      lines: [],
+      plan: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Fix parser bug", status: "in_progress" },
+        { step: "Run tests", status: "pending" },
+      ],
+    });
+
+    expect(initial).toEqual([
+      planUpdate("Implementation"),
+      taskUpdate("plan_step_1", "Inspect code", "complete"),
+      taskUpdate("plan_step_2", "Run tests", "pending"),
+    ]);
+    expect(revised).toEqual([
+      planUpdate("Implementation"),
+      taskUpdate("plan_step_1", "Inspect code", "complete"),
+      taskUpdate("plan_step_2", "Fix parser bug", "in_progress"),
+      taskUpdate("plan_step_3", "Run tests", "pending"),
+    ]);
+  });
+
+  it("renders the plan checklist in rich draft blocks", () => {
+    const blocks = buildSlackProgressDraftBlocks({
+      title: "Implementation",
+      lines: [],
+      plan: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Run tests", status: "in_progress" },
+      ],
+    });
+
+    expect(JSON.stringify(blocks)).toContain("✅ Inspect code");
+    expect(JSON.stringify(blocks)).toContain("▸ Run tests");
+  });
+
+  it("terminalizes orphaned rows when a plan snapshot shrinks", () => {
+    const first = reconcileSlackNativeTaskChunks({
+      previousTasks: new Map(),
+      chunks: buildSlackProgressStreamUpdateChunks({
+        title: "Implementation",
+        lines: [],
+        plan: [
+          { step: "Inspect code", status: "completed" },
+          { step: "Patch code", status: "in_progress" },
+          { step: "Run tests", status: "pending" },
+        ],
+      }),
+    });
+    const shrunk = reconcileSlackNativeTaskChunks({
+      previousTasks: first.tasks,
+      chunks: buildSlackProgressStreamUpdateChunks({
+        title: "Implementation",
+        lines: [],
+        plan: [{ step: "Inspect code", status: "in_progress" }],
+      }),
+    });
+
+    expect(shrunk.chunks).toEqual([
+      planUpdate("Implementation"),
+      taskUpdate("plan_step_1", "Inspect code", "in_progress"),
+      taskUpdate("plan_step_2", "Patch code", "complete"),
+      taskUpdate("plan_step_3", "Run tests", "complete"),
+    ]);
+  });
+
+  it("terminalizes tool-line tasks when the source switches to a typed plan", () => {
+    const lineChunks = reconcileSlackNativeTaskChunks({
+      previousTasks: new Map(),
+      chunks: buildSlackProgressStreamStartChunks({
+        lines: [itemLine("run tests", "Running tests")],
+      }),
+    });
+    const planChunks = reconcileSlackNativeTaskChunks({
+      previousTasks: lineChunks.tasks,
+      chunks: buildSlackProgressStreamUpdateChunks({
+        title: "Implementation",
+        lines: [],
+        plan: [{ step: "Inspect code", status: "in_progress" }],
+      }),
+    });
+
+    const tasks = (planChunks.chunks ?? []).filter((chunk) => chunk.type === "task_update");
+    expect(tasks).toHaveLength(2);
+    expect(tasks[0]).toMatchObject({ id: "plan_step_1", status: "in_progress" });
+    expect(tasks[1]).toMatchObject({ status: "complete" });
+  });
+
+  it("keeps chunks untouched when no previous tasks are orphaned", () => {
+    const chunks = buildSlackProgressStreamUpdateChunks({
+      title: "Implementation",
+      lines: [],
+      plan: [{ step: "Inspect code", status: "in_progress" }],
+    });
+    const reconciled = reconcileSlackNativeTaskChunks({
+      previousTasks: new Map([["plan_step_1", { title: "Inspect code", status: "in_progress" }]]),
+      chunks,
+    });
+
+    expect(reconciled.chunks).toEqual(chunks);
+  });
+
   it("starts native Slack progress with plan/task chunks instead of a static blocks plan", () => {
     expect(
       buildSlackProgressStreamStartChunks({

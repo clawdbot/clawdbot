@@ -345,6 +345,61 @@ describe("runCapability video provider wiring", () => {
     );
   });
 
+  it("resolves provider registry defaultModels.video when a config entry has no explicit model", async () => {
+    let seenModel: string | undefined;
+
+    await withTempDir({ prefix: "openclaw-video-entry-default-" }, async (isolatedAgentDir) => {
+      await withVideoFixture("openclaw-video-entry-default", async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              moonshot: {
+                auth: "api-key",
+                models: [],
+              },
+            },
+          },
+          tools: {
+            media: {
+              video: {
+                models: [{ provider: "moonshot" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "video",
+          cfg,
+          ctx,
+          agentDir: isolatedAgentDir,
+          attachments: cache,
+          media,
+          providerRegistry: new Map<string, MediaUnderstandingProvider>([
+            [
+              "moonshot",
+              {
+                id: "moonshot",
+                capabilities: ["video"],
+                defaultModels: { video: "kimi-k2.5" },
+                describeVideo: async (req) => {
+                  seenModel = req.model;
+                  return { text: "moonshot", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.provider).toBe("moonshot");
+        expect(output.model).toBe("kimi-k2.5");
+        expect(seenModel).toBe("kimi-k2.5");
+      });
+    });
+  });
+
   it("does not use provider api config as video auth modelApi", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);

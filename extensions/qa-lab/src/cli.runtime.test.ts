@@ -283,7 +283,6 @@ describe("qa cli runtime", () => {
     listLiveTransportQaAdapterFactories.mockReturnValue([
       {
         id: "telegram",
-        scenarioIds: ["channel-chat-baseline"],
         matches: vi.fn(),
         create: vi.fn(),
       },
@@ -587,6 +586,21 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("dispatches the Matrix restart scenario through the Crabline smoke profile", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "smoke-ci",
+      scenarioIds: ["matrix-restart-resume"],
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs).toMatchObject({
+      channelDriver: "crabline",
+      channelDriverSelection: { channel: "matrix", channelDriver: "crabline" },
+      scenarioIds: ["matrix-restart-resume"],
+    });
+  });
+
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
@@ -678,16 +692,54 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("uses the selected live adapter's declared scenarios by default", async () => {
+  it("dispatches one declared-channel scenario through either driver", async () => {
+    for (const channelDriver of ["crabline", "live"] as const) {
+      await runQaSuiteCommand({
+        channelDriver,
+        channel: "telegram",
+        providerMode: "mock-openai",
+        scenarioIds: ["telegram-help-command"],
+      });
+    }
+
+    const [crablineArgs, liveArgs] = runQaSuite.mock.calls.map(([args]) => args);
+    expect(crablineArgs).toMatchObject({
+      channelDriver: "crabline",
+      channelDriverSelection: { channel: "telegram" },
+      scenarioIds: ["telegram-help-command"],
+    });
+    expect(liveArgs).toMatchObject({
+      channelDriver: "live",
+      channelId: "telegram",
+      scenarioIds: ["telegram-help-command"],
+    });
+  });
+
+  it("keeps implicit channel membership identical for live and Crabline drivers", async () => {
     await runQaSuiteCommand({
       channelDriver: "live",
       channel: "telegram",
     });
+    await runQaSuiteCommand({
+      channelDriver: "crabline",
+      channel: "telegram",
+    });
 
-    expect(runQaSuite).toHaveBeenCalledWith(
+    expect(runQaSuite).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         adapterOptions: expect.objectContaining({ explicitScenarioSelection: false }),
-        scenarioIds: ["channel-chat-baseline"],
+        channelDriver: "live",
+        channelId: "telegram",
+        scenarioIds: [],
+      }),
+    );
+    expect(runQaSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        scenarioIds: [],
       }),
     );
   });

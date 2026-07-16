@@ -19,9 +19,16 @@ const elements = {
   primaryAction: document.querySelector("#primary-action"),
   statusDot: document.querySelector("#status-dot"),
   title: document.querySelector("#title"),
+  updateAction: document.querySelector("#update-action"),
+  updateBanner: document.querySelector("#update-banner"),
+  updateDismiss: document.querySelector("#update-dismiss"),
+  updateMessage: document.querySelector("#update-message"),
+  updateProgress: document.querySelector("#update-progress"),
+  updateTitle: document.querySelector("#update-title"),
 };
 
 let primaryAction = null;
+let updateAction = null;
 let discoveryPending = false;
 let discoverySignature = null;
 
@@ -59,6 +66,30 @@ function renderAction(options, action) {
 function appendLog(line) {
   elements.installLog.textContent += `${line}\n`;
   elements.installLog.scrollTop = elements.installLog.scrollHeight;
+}
+
+function renderUpdate({ action = null, actionLabel = "", message, progress = false, title }) {
+  elements.updateTitle.textContent = title;
+  elements.updateMessage.textContent = message;
+  updateAction = action;
+  elements.updateAction.textContent = actionLabel;
+  show(elements.updateAction, Boolean(action));
+  show(elements.updateProgress, progress);
+  show(elements.updateBanner, true);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 function friendlyError(error) {
@@ -237,8 +268,67 @@ elements.installButton.addEventListener("click", () => {
 elements.primaryAction.addEventListener("click", () => {
   void primaryAction?.();
 });
+elements.updateAction.addEventListener("click", () => {
+  void updateAction?.();
+});
+elements.updateDismiss.addEventListener("click", () => {
+  show(elements.updateBanner, false);
+});
 
 await listen("install-progress", ({ payload }) => appendLog(payload.line));
+await listen("updater://not-available", () => {
+  renderUpdate({
+    message: "No update is available.",
+    title: "OpenClaw is up to date",
+  });
+});
+await listen("updater://available", ({ payload }) => {
+  elements.updateProgress.removeAttribute("value");
+  renderUpdate({
+    message: payload.notes || "Downloading in the background…",
+    progress: true,
+    title: `Update available v${payload.version} — downloading…`,
+  });
+});
+await listen("updater://progress", ({ payload }) => {
+  if (payload.total) {
+    elements.updateProgress.max = payload.total;
+    elements.updateProgress.value = payload.downloaded;
+    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} of ${formatBytes(payload.total)}`;
+  } else {
+    elements.updateProgress.removeAttribute("value");
+    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} downloaded`;
+  }
+});
+await listen("updater://ready", ({ payload }) => {
+  renderUpdate({
+    action: () => invoke("relaunch"),
+    actionLabel: "Restart to update",
+    message: `Version v${payload.version} is installed and ready.`,
+    title: "Update ready",
+  });
+});
+await listen("updater://available-manual", ({ payload }) => {
+  renderUpdate({
+    action: () =>
+      invoke("open_release_page").catch((error) => {
+        renderUpdate({
+          message: friendlyError(error),
+          title: "Could not open release page",
+        });
+      }),
+    actionLabel: "Open download page",
+    message: payload.notes || "Install the latest system package from the release page.",
+    title: `Update available v${payload.version}`,
+  });
+});
+await listen("updater://error", ({ payload }) => {
+  renderUpdate({
+    message: payload.message,
+    title: "Update check failed",
+  });
+});
+void invoke("updater_ready");
 void refreshGateways();
 window.setInterval(() => void refreshGateways(), 2000);
 

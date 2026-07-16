@@ -44,7 +44,6 @@ function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageSc
 export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-canary",
-    standardId: "canary",
     title: "WhatsApp DM canary",
     timeoutMs: 60_000,
     buildRun: () => {
@@ -60,7 +59,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   },
   {
     id: "whatsapp-mention-gating",
-    standardId: "mention-gating",
     title: "WhatsApp group mention gating",
     timeoutMs: 60_000,
     requiresGroupJid: true,
@@ -82,7 +80,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   {
     id: "whatsapp-group-pending-history-context",
     title: "WhatsApp group pending history reaches mentioned turns",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       groupHistoryLimit: 50,
@@ -116,7 +113,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   {
     id: "whatsapp-broadcast-group-fanout",
     title: "WhatsApp group broadcast fans out to multiple agents",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     configOverrides: {
       broadcast: {
@@ -155,7 +151,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   {
     id: "whatsapp-group-activation-always",
     title: "WhatsApp group activation always wakes unmentioned messages",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     configOverrides: {
       groupPolicy: "open",
@@ -242,7 +237,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   {
     id: "whatsapp-group-reply-to-bot-triggers",
     title: "WhatsApp group reply to bot wakes without an explicit mention",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 120_000,
     configOverrides: {
       groupPolicy: "open",
@@ -300,7 +294,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   },
   {
     id: "whatsapp-top-level-reply-shape",
-    standardId: "top-level-reply-shape",
     title: "WhatsApp DM top-level reply shape",
     timeoutMs: 60_000,
     configOverrides: {
@@ -326,7 +319,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   },
   {
     id: "whatsapp-reply-to-message",
-    standardId: "quote-reply",
     title: "WhatsApp DM reply-to mode quotes the triggering message",
     timeoutMs: 60_000,
     configOverrides: {
@@ -336,7 +328,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   },
   {
     id: "whatsapp-group-reply-to-message",
-    standardId: "quote-reply",
     title: "WhatsApp group reply-to mode quotes the triggering message",
     timeoutMs: 60_000,
     configOverrides: {
@@ -348,7 +339,6 @@ export const WHATSAPP_QA_CONVERSATION_SCENARIOS: WhatsAppQaScenarioDefinition[] 
   {
     id: "whatsapp-reply-to-mode-batched",
     title: "WhatsApp batched reply-to mode quotes the queued message",
-    defaultProviderModes: ["mock-openai"],
     timeoutMs: 90_000,
     configOverrides: {
       inboundDebounceMs: 250,

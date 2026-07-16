@@ -50,6 +50,7 @@ export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
 export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   ...GATEWAY_CONTROL_PLANE_TOOLS,
   "sessions",
+  "screen",
   "nodes",
   "computer",
   "openclaw",

@@ -184,7 +184,7 @@ type RollbackRestoreEvidence = {
   sqliteStillExists: boolean;
 };
 
-export type SqliteSessionsTranscriptsFlipProofReport = {
+type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
   checkpoints: ProofCheckpoint[];

@@ -38,6 +38,20 @@ describe("slack config schema", () => {
     }
   });
 
+  it("keeps presence events off by default and accepts account/channel modes", () => {
+    const absent = SlackConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.presenceEvents).toBeUndefined();
+    }
+    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({
+      accounts: { ops: { presenceEvents: { mode: "on" } } },
+      channels: { C123: { presenceEvents: { mode: "off" } } },
+    });
+    expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
+  });
+
   it("accepts historyLimit overrides per account", () => {
     const res = SlackConfigSchema.safeParse({
       historyLimit: 7,

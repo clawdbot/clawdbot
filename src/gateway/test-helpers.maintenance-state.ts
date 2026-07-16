@@ -30,5 +30,6 @@ export function createGatewayMaintenanceStateForTest(params?: {
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
     getRuntimeConfig: () => ({}),
+    runDeliveryQueueMediaGc: async () => undefined,
   };
 }

@@ -11,7 +11,7 @@ import {
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
-import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
+import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {

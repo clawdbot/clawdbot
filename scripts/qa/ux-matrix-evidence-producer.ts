@@ -16,6 +16,7 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import { readQaScenarioById } from "../../extensions/qa-lab/src/scenario-catalog.js";
 import {
   ensurePlaywrightChromium,
   resolveSystemChromiumExecutablePath,
@@ -28,7 +29,6 @@ const SUITE_COMMAND = `pnpm openclaw qa suite --scenario ${SCENARIO_ID}`;
 
 type MatrixCell = {
   artifacts: Array<{ kind: string; path: string }>;
-  coverageIds: string[];
   failureReason?: string;
   stage: string;
   status: QaEvidenceStatus;
@@ -40,7 +40,7 @@ type MatrixCell = {
 type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
 type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
-export type ProducerOptions = {
+type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
   skipVisualProof: boolean;
@@ -227,7 +227,21 @@ function buildExecution(params: {
   };
 }
 
-function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSummaryEntry {
+function readCanonicalScenarioCoverage(): QaEvidenceSummaryEntry["coverage"] {
+  // Matrix cells are artifacts of one catalog scenario, not independent scenarios.
+  // Evidence therefore uses that scenario's mapping instead of cell-local coverage IDs.
+  const coverage = readQaScenarioById(SCENARIO_ID).coverage;
+  return [
+    ...(coverage?.primary ?? []).map((id) => ({ id, role: "primary" as const })),
+    ...(coverage?.secondary ?? []).map((id) => ({ id, role: "secondary" as const })),
+  ];
+}
+
+function buildEvidenceEntry(
+  cell: MatrixCell,
+  repoRoot: string,
+  coverage: QaEvidenceSummaryEntry["coverage"],
+): QaEvidenceSummaryEntry {
   const source = `ux-matrix:${cell.surface}:${cell.stage}`;
   return {
     test: {
@@ -236,10 +250,7 @@ function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSumma
       title: cell.title,
       source: { path: SOURCE_PATH },
     },
-    coverage: cell.coverageIds.map((id, index) => ({
-      id,
-      role: index === 0 ? "primary" : "secondary",
-    })),
+    coverage,
     refs: [
       { kind: "code", path: SOURCE_PATH },
       { kind: "docs", path: "docs/concepts/qa-e2e-automation.md" },
@@ -271,12 +282,13 @@ function buildEvidenceSummary(params: {
   generatedAt: string;
   repoRoot: string;
 }): QaEvidenceSummaryJson {
+  const coverage = readCanonicalScenarioCoverage();
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
     evidenceMode: "full",
-    entries: params.cells.map((cell) => buildEvidenceEntry(cell, params.repoRoot)),
+    entries: params.cells.map((cell) => buildEvidenceEntry(cell, params.repoRoot, coverage)),
   });
 }
 
@@ -600,6 +612,7 @@ async function writeProducerMetadata(params: {
   cells: readonly MatrixCell[];
   repoRoot: string;
 }) {
+  const coverageIds = readCanonicalScenarioCoverage().map((coverage) => coverage.id);
   const counts = params.cells.reduce<Record<string, number>>((acc, cell) => {
     acc[cell.status] = (acc[cell.status] ?? 0) + 1;
     return acc;
@@ -613,7 +626,7 @@ async function writeProducerMetadata(params: {
   });
   await writeJson(path.join(params.artifactBase, "matrix.json"), {
     cells: params.cells.map((cell) => ({
-      coverageIds: cell.coverageIds,
+      coverageIds,
       stage: cell.stage,
       status: cell.status,
       surface: cell.surface,
@@ -622,7 +635,7 @@ async function writeProducerMetadata(params: {
   });
   await writeJson(path.join(params.artifactBase, "release-ledger.json"), {
     entries: params.cells.map((cell) => ({
-      coverageIds: cell.coverageIds,
+      coverageIds,
       stage: cell.stage,
       status: cell.status,
       surface: cell.surface,
@@ -702,7 +715,6 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["ui.control", "gateway.control-ui-hosting"],
       failureReason:
         "failureReason" in matrixScreenshotResult
           ? matrixScreenshotResult.failureReason
@@ -715,7 +727,6 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     },
     {
       artifacts: [{ kind: "log", path: relativeToArtifactBase(options.artifactBase, cliLogPath) }],
-      coverageIds: ["cli.entrypoint", "cli.status-snapshots"],
       failureReason: cliResult.failureReason,
       stage: "entrypoint-help",
       status: cliResult.status,
@@ -783,7 +794,6 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["qa.artifact-safety", "tools.evidence", "workspace.artifacts"],
       failureReason:
         "failureReason" in fixtureProofResult ? fixtureProofResult.failureReason : undefined,
       stage: "producer-artifact-fixture",

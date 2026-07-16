@@ -1138,6 +1138,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          appGuidedDiscovery: true,
         },
       ],
       configSchema: { type: "object" },
@@ -1206,6 +1207,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        appGuidedDiscovery: true,
       },
     ]);
   });

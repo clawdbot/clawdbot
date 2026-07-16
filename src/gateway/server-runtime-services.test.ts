@@ -72,6 +72,8 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? ""),
   isVitestRuntimeEnv: hoisted.isVitestRuntimeEnv,
 }));
 
@@ -126,6 +128,7 @@ const {
   runGatewayPostReadyMaintenance,
   scheduleGatewayIdleTask,
   scheduleGatewayPostReadyMaintenance,
+  startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
   startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
@@ -203,6 +206,20 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
+
+  it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
+    "keeps channel health recovery disabled when %s suppresses startup",
+    (envKey) => {
+      const monitor = startGatewayChannelHealthMonitor({
+        cfg: {} as never,
+        channelManager: {} as never,
+        env: { [envKey]: "1" },
+      });
+
+      expect(monitor).toBeNull();
+      expect(hoisted.startChannelHealthMonitor).not.toHaveBeenCalled();
+    },
+  );
 
   it("starts model pricing refresh after scheduled services activate", async () => {
     const pluginLookUpTable = {

@@ -3,7 +3,13 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
-export type CloudPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
+
+function isCloudWorkerPlacementState(
+  state: SessionPlacementState | undefined,
+): state is Exclude<SessionPlacementState, "local" | "reclaimed"> {
+  return state !== undefined && state !== "local" && state !== "reclaimed";
+}
 
 export function isStoppableCloudWorkerPlacement(
   placement: GatewaySessionRow["placement"],
@@ -14,13 +20,16 @@ export function isStoppableCloudWorkerPlacement(
 export function renderSessionRowBadges(params: {
   worktreeId?: string;
   hasAutomation: boolean;
-  placementState?: CloudPlacementState;
+  placementState?: SessionPlacementState;
 }) {
-  if (!params.worktreeId && !params.hasAutomation && !params.placementState) {
+  const cloudPlacementState = isCloudWorkerPlacementState(params.placementState)
+    ? params.placementState
+    : undefined;
+  if (!params.worktreeId && !params.hasAutomation && !cloudPlacementState) {
     return nothing;
   }
-  const cloudLabel = params.placementState
-    ? t("sessionsView.cloudWorkerPlacement", { state: params.placementState })
+  const cloudLabel = cloudPlacementState
+    ? t("sessionsView.cloudWorkerPlacement", { state: cloudPlacementState })
     : "";
   return html`<span class="session-row-badges">
     ${params.worktreeId
@@ -41,14 +50,14 @@ export function renderSessionRowBadges(params: {
           >${icons.clock}</span
         >`
       : nothing}
-    ${params.placementState
+    ${cloudPlacementState
       ? html`<span
           class="session-row-badge session-row-badge--cloud"
-          data-placement-state=${params.placementState}
+          data-placement-state=${cloudPlacementState}
           role="img"
           aria-label=${cloudLabel}
           title=${cloudLabel}
-          >${icons.server}</span
+          >${icons.globe}</span
         >`
       : nothing}
   </span>`;

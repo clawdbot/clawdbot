@@ -64,6 +64,11 @@ describe("buildXiaomiSpeechProvider", () => {
       process.env.XIAOMI_API_KEY = "sk-env";
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
+
+    it.each(["", "   "])("returns false when XIAOMI_API_KEY is blank", (apiKey) => {
+      process.env.XIAOMI_API_KEY = apiKey;
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
@@ -402,6 +407,66 @@ describe("buildXiaomiSpeechProvider", () => {
             timeoutMs: 30000,
           }),
         ).rejects.toThrow("Xiaomi API key missing");
+      } finally {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
+          process.env.XIAOMI_API_KEY = savedKey;
+        }
+      }
+    });
+
+    it("rejects blank keys before building request credentials", async () => {
+      const blank = "   ";
+      const savedKey = process.env.XIAOMI_API_KEY;
+      process.env.XIAOMI_API_KEY = blank;
+      try {
+        const mockFetch = vi.mocked(globalThis.fetch);
+        await expect(
+          provider.synthesize({
+            text: "Test",
+            cfg: {} as never,
+            providerConfig: { apiKey: blank },
+            target: "audio-file",
+            timeoutMs: 30000,
+          }),
+        ).rejects.toThrow("Xiaomi API key missing");
+        expect(mockFetch).not.toHaveBeenCalled();
+        expect(
+          mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("api-key")),
+        ).toEqual([]);
+      } finally {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
+          process.env.XIAOMI_API_KEY = savedKey;
+        }
+      }
+    });
+
+    it("trims a padded environment key before building the credential header", async () => {
+      const padded = "  fake  ";
+      const savedKey = process.env.XIAOMI_API_KEY;
+      process.env.XIAOMI_API_KEY = padded;
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      try {
+        await provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: {},
+          target: "audio-file",
+          timeoutMs: 30000,
+        });
+
+        const [, init] = mockFetch.mock.calls[0] ?? [];
+        expect(new Headers(init?.headers).get("api-key")).toBe("fake");
       } finally {
         if (savedKey === undefined) {
           delete process.env.XIAOMI_API_KEY;

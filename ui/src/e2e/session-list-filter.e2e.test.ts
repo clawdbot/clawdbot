@@ -14,13 +14,20 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-let browser: Browser | undefined;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 let page: Page | undefined;
 let server: ControlUiE2eServer | undefined;
 
 describeControlUiE2e("Control UI session-list event scope", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterEach(async () => {
@@ -28,19 +35,17 @@ describeControlUiE2e("Control UI session-list event scope", () => {
       ?.context()
       .close()
       .catch(() => {});
-    await browser?.close().catch(() => {});
     page = undefined;
-    browser = undefined;
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
   it("refetches instead of showing a row excluded by configured-agent filtering", async () => {
     const visibleLabel = "Visible configured session";
     const hiddenLabel = "Hidden unconfigured session";
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -109,7 +114,6 @@ describeControlUiE2e("Control UI session-list event scope", () => {
   });
 
   it("omits noncanonical numeric filters from sessions.list requests", async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

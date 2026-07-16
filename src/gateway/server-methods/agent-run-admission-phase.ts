@@ -5,7 +5,9 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,13 +139,35 @@ export async function prepareAgentRunDispatch(params: {
     : params.request.thinking;
   const effectiveAllowModelOverride =
     params.allowModelOverride || params.restoredCronContinuation !== undefined;
-  const activeModelProvider =
-    effectiveProviderOverride ??
-    resolveSessionModelRef(
-      params.cfgForAgent ?? params.cfg,
-      params.sessionEntry,
-      params.activeSessionAgentId,
-    ).provider;
+  const runtimeConfig = params.cfgForAgent ?? params.cfg;
+  const sessionModel = resolveSessionModelRef(
+    runtimeConfig,
+    params.sessionEntry,
+    params.activeSessionAgentId,
+  );
+  const activeModel = effectiveModelOverride
+    ? (resolvePersistedOverrideModelRef({
+        defaultProvider: effectiveProviderOverride ?? sessionModel.provider,
+        overrideProvider: effectiveProviderOverride,
+        overrideModel: effectiveModelOverride,
+      }) ?? sessionModel)
+    : {
+        provider: effectiveProviderOverride ?? sessionModel.provider,
+        model: sessionModel.model,
+      };
+  const resolvedRuntime = {
+    harness: resolveEffectiveAgentRuntime({
+      cfg: runtimeConfig,
+      provider: activeModel.provider,
+      modelId: activeModel.model,
+      agentId: params.activeSessionAgentId,
+      sessionKey: params.resolvedSessionKey,
+      sessionEntry: params.sessionEntry,
+    }),
+    provider: activeModel.provider,
+    model: activeModel.model,
+  };
+  const activeModelProvider = activeModel.provider;
   const lifecycleStorePath = params.resolvedSessionKey
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
@@ -282,6 +306,7 @@ export async function prepareAgentRunDispatch(params: {
     ...(params.resolvedSessionKey === "global" ? { agentId: params.activeSessionAgentId } : {}),
     status: "accepted" as const,
     acceptedAt: Date.now(),
+    ...(taskTrackingMode === "plugin_subagent" ? { runtime: resolvedRuntime } : {}),
   };
   params.markAgentRunAccepted(true);
   setGatewayDedupeEntries({

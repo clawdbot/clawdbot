@@ -114,6 +114,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
     expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
     expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
       headers: { Authorization: "Bearer tok" },
+      signal: expect.any(AbortSignal),
     });
 
     await vi.waitFor(() => {
@@ -160,6 +161,7 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith("/avatar/alpha", {
         headers: { Authorization: "Bearer tok2" },
+        signal: expect.any(AbortSignal),
       });
       expect(
         element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
@@ -167,6 +169,161 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
     });
   } finally {
     element.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts the stale request on auth rotation without duplicating the current fetch", async () => {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:rotated-avatar");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const pending: Array<{
+    resolve: (response: Response) => void;
+    signal: AbortSignal;
+  }> = [];
+  const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    return new Promise<Response>((resolve, reject) => {
+      pending.push({ resolve, signal });
+      signal.addEventListener("abort", () => reject(new Error("avatar fetch aborted")), {
+        once: true,
+      });
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    element.authToken = "tok2";
+    await element.updateComplete;
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    expect(pending[0]?.signal.aborted).toBe(true);
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer tok", "Bearer tok2"]);
+
+    // Let the canceled request's rejection settle, then force another render while
+    // the replacement is pending. It must not clear the replacement's route claim.
+    await Promise.resolve();
+    element.identityById = { ...element.identityById };
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    pending[1]?.resolve({
+      ok: true,
+      blob: async () => new Blob(["avatar"]),
+    } as Response);
+    await vi.waitFor(() => {
+      expect(
+        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+      ).toBe("blob:rotated-avatar");
+    });
+  } finally {
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts a stalled local avatar fetch after the request deadline", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(signal.reason as Error);
+        },
+        { once: true },
+      );
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    element.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts a stalled local avatar body after the request deadline", async () => {
+  vi.useFakeTimers();
+  const blob = vi.fn<() => Promise<Blob>>();
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    blob.mockImplementation(
+      () =>
+        new Promise<Blob>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("avatar body read aborted")), {
+            once: true,
+          });
+        }),
+    );
+    return { ok: true, blob } as unknown as Response;
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(blob).toHaveBeenCalledTimes(1));
+    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+    await vi.waitFor(() => {
+      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    element.remove();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   }
 });

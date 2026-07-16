@@ -234,6 +234,8 @@ What this does:
   bootstrap.
 - Exposes plugin tools already registered by installed and enabled OpenClaw
   plugins.
+- Passes the active ACP session identity to plugin tool factories, so
+  agent-scoped tools stay in that agent's namespace.
 - Keeps the feature explicit and default-off.
 
 Security and trust notes:

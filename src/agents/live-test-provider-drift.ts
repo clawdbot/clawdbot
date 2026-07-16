@@ -63,7 +63,7 @@ function isAnthropicBillingError(message: string): boolean {
 }
 
 /** Returns whether an error is expected live auth/account drift. */
-export function isLiveAuthDrift(error: unknown): boolean {
+function isLiveAuthDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const message = normalizeLowercaseStringOrEmpty(raw);
   return (
@@ -74,13 +74,13 @@ export function isLiveAuthDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected live billing/quota drift. */
-export function isLiveBillingDrift(error: unknown): boolean {
+function isLiveBillingDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isBillingErrorMessage(raw) || isAnthropicBillingError(raw);
 }
 
 /** Returns whether an error is expected live rate-limit drift. */
-export function isLiveRateLimitDrift(error: unknown): boolean {
+function isLiveRateLimitDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
 }
@@ -96,7 +96,7 @@ function isLiveModelNotFoundDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected upstream/provider availability drift. */
-export function isLiveProviderUnavailableDrift(error: unknown): boolean {
+function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const htmlCandidate = raw.trim().replace(/^error:\s*/i, "");
   const msg = normalizeLowercaseStringOrEmpty(raw);

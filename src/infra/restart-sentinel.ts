@@ -5,17 +5,21 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+
+const sentinelLog = createSubsystemLogger("restart-sentinel");
 
 type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -227,7 +231,11 @@ export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env)
       },
       { env },
     );
-  } catch {}
+  } catch (err) {
+    // Clearing the sentinel is best-effort during shutdown/cleanup, but a
+    // failure here may leave the gateway believing a restart is still pending.
+    sentinelLog.warn(`Failed to clear restart sentinel: ${formatErrorMessage(err)}`);
+  }
   await removeLegacyRestartSentinel(env);
 }
 
@@ -238,7 +246,11 @@ function resolveLegacyRestartSentinelPath(env: NodeJS.ProcessEnv): string {
 async function removeLegacyRestartSentinel(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await rm(resolveLegacyRestartSentinelPath(env), { force: true });
-  } catch {}
+  } catch (err) {
+    // Legacy cleanup must not block the canonical SQLite operation, but a
+    // failed removal can replay stale restart state after the database clears.
+    sentinelLog.warn(`Failed to remove legacy restart sentinel: ${formatErrorMessage(err)}`);
+  }
 }
 
 async function importLegacyRestartSentinel(
@@ -300,7 +312,8 @@ export async function readRestartSentinel(
       return null;
     }
     return { version: 1, payload };
-  } catch {
+  } catch (err) {
+    sentinelLog.warn(`Failed to read restart sentinel: ${formatErrorMessage(err)}`);
     return null;
   }
 }
@@ -320,7 +333,8 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
       return true;
     }
     return Boolean(await importLegacyRestartSentinel(env));
-  } catch {
+  } catch (err) {
+    sentinelLog.warn(`Failed to check restart sentinel: ${formatErrorMessage(err)}`);
     return false;
   }
 }

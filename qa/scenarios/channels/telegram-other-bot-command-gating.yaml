@@ -14,11 +14,16 @@ scenario:
     - extensions/telegram/src/bot-message-context.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 10,
+        "telegram:all": 9,
+        "telegram:mock-release": 9,
+        "telegram:release": 9,
+      }
     kind: flow
     channel: telegram
     summary: Address a command to another bot and verify OpenClaw ignores it.
-    config:
-      requiredChannelDriver: live
 
 flow:
   steps:

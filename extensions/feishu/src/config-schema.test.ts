@@ -62,10 +62,18 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.groupPolicy).toBe("open");
   });
 
+  it("accepts the canonical disabled DM policy", () => {
+    expect(FeishuConfigSchema.parse({ dmPolicy: "disabled" }).dmPolicy).toBe("disabled");
+    expect(
+      FeishuConfigSchema.parse({ accounts: { work: { dmPolicy: "disabled" } } }).accounts?.work
+        ?.dmPolicy,
+    ).toBe("disabled");
+  });
+
   it("exports legacy groupPolicy as a typed config input", () => {
     const expected = {
       anyOf: [
-        { type: "string", enum: ["open", "allowlist", "disabled"] },
+        { type: "string", enum: ["open", "disabled", "allowlist"] },
         { type: "string", const: "allowall" },
       ],
     };

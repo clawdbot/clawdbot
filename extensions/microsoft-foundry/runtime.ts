@@ -28,9 +28,15 @@ const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
 const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
 
-export function resetFoundryRuntimeAuthCaches(): void {
+function resetFoundryRuntimeAuthCaches(): void {
   cachedTokens.clear();
   refreshPromises.clear();
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, { ...api, resetFoundryRuntimeAuthCaches });
 }
 
 async function refreshEntraToken(params?: {

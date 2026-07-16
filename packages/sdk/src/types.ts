@@ -341,6 +341,7 @@ export type SessionCreateParams = {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   parentSessionKey?: string;
   task?: string;
   message?: string;
@@ -378,7 +379,7 @@ export type AgentsUpdateParams = {
   agentId: string;
   name?: string;
   workspace?: string;
-  model?: string;
+  model?: string | null;
   emoji?: string;
   avatar?: string;
 };

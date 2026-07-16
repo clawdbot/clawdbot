@@ -19,6 +19,7 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - src/channels/turn/kernel.ts
   execution:
+    profiles: { "matrix:adapter": 4, "matrix:all": 47, "matrix:fast": 10, "matrix:transport": 46 }
     kind: flow
     summary: Exercise sender allowlist rejection and the configured driver override in one ordered flow.
     transportPolicy:

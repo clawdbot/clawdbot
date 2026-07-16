@@ -46,7 +46,9 @@ FROM bare AS functional
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
 # Preserve package self-reference imports such as openclaw/plugin-sdk/* after
 # copying the installed package out of npm's global node_modules tree.
-RUN npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit \
+# The pinned Node image owns uid 1000, so useradd assigns appuser uid/gid 1001.
+RUN --mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked \
+    npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit \
  && cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/ \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \

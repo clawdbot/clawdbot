@@ -155,7 +155,7 @@ function parseArgs(argv) {
   return options;
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const result = resolveOpenClawNpmResumeRun(parseArgs(argv));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

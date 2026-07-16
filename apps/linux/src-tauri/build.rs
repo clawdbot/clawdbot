@@ -4,10 +4,14 @@ fn main() {
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "canvas_a2ui_action",
+        "check_for_updates",
         "connect_discovered_gateway",
         "discover_gateways",
         "gateway_action",
         "install_cli",
+        "open_release_page",
+        "relaunch",
+        "updater_ready",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()

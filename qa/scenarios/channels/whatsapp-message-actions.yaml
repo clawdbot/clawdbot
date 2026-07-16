@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [channels.group-messages]
   execution:
+    profiles: { "whatsapp:mock-default": 24 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000

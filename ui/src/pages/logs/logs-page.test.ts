@@ -11,6 +11,7 @@ type TestLogsPage = HTMLElement & {
   logsAtBottom: boolean;
   logsAutoFollow: boolean;
   logsEntries: unknown[];
+  logsStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
   scheduleScroll: (force?: boolean) => void;
   readonly updateComplete: Promise<boolean>;
   applyGatewaySnapshot: (snapshot: ApplicationGatewaySnapshot) => void;
@@ -172,6 +173,33 @@ describe("LogsPage lifecycle", () => {
 
     pending.resolve({ cursor: 2, lines: ["fresh"], reset: true });
     expect(await first).toBe(true);
+    expect(page.logsEntries).toHaveLength(1);
+  });
+
+  it("retains loaded logs as stale after failure and clears the marker on retry success", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ cursor: 1, lines: ["old"], reset: true })
+      .mockRejectedValueOnce(new Error("logs unavailable"))
+      .mockResolvedValueOnce({ cursor: 2, lines: ["fresh"], reset: true });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    page.context = contextWithClient(client);
+    document.body.append(page);
+    await page.updateComplete;
+    page.connected = true;
+
+    await page.loadLogs({ reset: true });
+    await page.loadLogs({ reset: true });
+    expect(page.logsEntries).toHaveLength(1);
+    expect(page.logsStatus).toEqual({
+      error: "Error: logs unavailable",
+      hasLoaded: true,
+      stale: true,
+    });
+
+    await page.loadLogs({ reset: true });
+    expect(page.logsStatus).toEqual({ error: null, hasLoaded: true, stale: false });
     expect(page.logsEntries).toHaveLength(1);
   });
 

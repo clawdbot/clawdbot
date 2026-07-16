@@ -15,9 +15,9 @@ import { registerPolicyDoctorChecks } from "./register.js";
 
 export let workspaceDir: string;
 
-export let originalOpenClawHome: string | undefined;
+let originalOpenClawHome: string | undefined;
 
-export let originalOpenClawStateDir: string | undefined;
+let originalOpenClawStateDir: string | undefined;
 
 export function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawConfig {
   return {

@@ -66,7 +66,7 @@ function digestInputs(repoRoot, inputs) {
   return hash.digest("hex");
 }
 
-export function buildTestboxLeaseFingerprint(repoRoot, args) {
+function buildTestboxLeaseFingerprint(repoRoot, args) {
   let baseSha;
   try {
     baseSha = git(repoRoot, ["merge-base", "HEAD", "refs/remotes/origin/main"]);

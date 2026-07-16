@@ -456,11 +456,17 @@ describe("session store writer queue", () => {
           channel: "discord",
           to: [],
         },
+        restartRecoveryBeforeAgentReplyState: "maybe",
         restartRecoveryDeliveryMediaUrls: "not-an-array",
         restartRecoveryDisableMessageTool: "yes",
         restartRecoverySuppressTextDelivery: "yes",
         restartRecoveryDeliveryRunId: 123,
         restartRecoveryDeliverySourceRunId: 123,
+        restartRecoveryRequesterAccountId: 123,
+        restartRecoveryRequesterSenderId: {},
+        restartRecoverySameChannelThreadRequired: "yes",
+        restartRecoverySourceIngress: "web",
+        restartRecoverySourceReplyDeliveryMode: "sometimes",
         restartRecoveryTerminalDeliveryEvidence: [{ runId: 123, payloads: "bad" }],
         restartRecoveryTerminalRunIds: [123, "", {}],
       },
@@ -486,11 +492,17 @@ describe("session store writer queue", () => {
           accountId: "Main",
           threadId: "reply-1",
         },
+        restartRecoveryBeforeAgentReplyState: "admitted",
         restartRecoveryDeliveryMediaUrls: [" /tmp/proof.png ", "", "/tmp/proof.png"],
         restartRecoveryDisableMessageTool: true,
         restartRecoverySuppressTextDelivery: true,
         restartRecoveryDeliveryRunId: "run-1",
         restartRecoveryDeliverySourceRunId: "source-run-1",
+        restartRecoveryRequesterAccountId: " work ",
+        restartRecoveryRequesterSenderId: " sender-1 ",
+        restartRecoverySameChannelThreadRequired: true,
+        restartRecoverySourceIngress: "channel",
+        restartRecoverySourceReplyDeliveryMode: "message_tool_only",
         restartRecoveryTerminalDeliveryEvidence: [
           {
             runId: " terminal-1 ",
@@ -540,11 +552,17 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(bad?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryMediaUrls).toBeUndefined();
     expect(bad?.restartRecoveryDisableMessageTool).toBeUndefined();
     expect(bad?.restartRecoverySuppressTextDelivery).toBeUndefined();
     expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(bad?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterAccountId).toBeUndefined();
+    expect(bad?.restartRecoveryRequesterSenderId).toBeUndefined();
+    expect(bad?.restartRecoverySameChannelThreadRequired).toBeUndefined();
+    expect(bad?.restartRecoverySourceIngress).toBeUndefined();
+    expect(bad?.restartRecoverySourceReplyDeliveryMode).toBeUndefined();
     expect(bad?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
     expect(bad?.restartRecoveryTerminalRunIds).toBeUndefined();
 
@@ -568,11 +586,17 @@ describe("session store writer queue", () => {
         accountId: "main",
         threadId: "reply-1",
       },
+      restartRecoveryBeforeAgentReplyState: "admitted",
       restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
       restartRecoveryDisableMessageTool: true,
       restartRecoverySuppressTextDelivery: true,
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "source-run-1",
+      restartRecoveryRequesterAccountId: "work",
+      restartRecoveryRequesterSenderId: "sender-1",
+      restartRecoverySameChannelThreadRequired: true,
+      restartRecoverySourceIngress: "channel",
+      restartRecoverySourceReplyDeliveryMode: "message_tool_only",
       restartRecoveryTerminalDeliveryEvidence: [
         {
           runId: "terminal-1",

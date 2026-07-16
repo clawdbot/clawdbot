@@ -11,8 +11,6 @@ import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-re
 
 // Shared ACP manager task registry setup for tests.
 
-export { findTaskByRunId };
-
 /** Reset task and task-flow registries without persisting state. */
 export function resetAcpManagerTaskStateForTests(): void {
   resetTaskRegistryForTests({ persist: false });

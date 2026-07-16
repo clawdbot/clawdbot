@@ -161,6 +161,7 @@ export async function runCliFallbackCandidate(params: {
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
+          onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },

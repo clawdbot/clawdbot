@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { loadApnsRegistration } from "./push-apns.js";
 import {
   createWebPushVapidKeyPair,
   hashWebPushEndpoint,
@@ -163,6 +164,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
 });
 
 const tempDirs = createTrackedTempDirs();
+const APNS_DEVICE_FIELD = "token";
 
 type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
@@ -1806,9 +1808,10 @@ describe("state migrations", () => {
     const cfg = createConfig();
 
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
-    expect(detected.preview).toContain(
+    expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
-    );
+      "- Shared SQLite schema: tables → SQLite STRICT typing",
+    ]);
 
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(result.warnings).toStrictEqual([]);
@@ -2075,6 +2078,49 @@ describe("state migrations", () => {
     await expect(fs.access(path.join(canonicalStateDir, "legacy.txt"))).resolves.toBeUndefined();
   });
 
+  it("routes explicit Doctor repair through the APNs SQLite importer", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const pushDir = path.join(stateDir, "push");
+    const sourcePath = path.join(pushDir, "apns-registrations.json");
+    await fs.mkdir(pushDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        registrationsByNodeId: {
+          "doctor-ios-node": {
+            nodeId: "doctor-ios-node",
+            [APNS_DEVICE_FIELD]: "abcd1234abcd1234abcd1234abcd1234",
+            topic: "ai.openclaw.ios",
+            environment: "sandbox",
+            updatedAtMs: 1,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.apns.hasLegacy).toBe(true);
+    expect(detected.preview).toContain("- APNs registrations: legacy JSON → shared SQLite state");
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    await expect(loadApnsRegistration("doctor-ios-node", stateDir)).resolves.toMatchObject({
+      nodeId: "doctor-ios-node",
+      transport: "direct",
+    });
+    await expectMissingPath(sourcePath);
+  });
+
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -2185,6 +2231,26 @@ describe("state migrations", () => {
       },
     });
     await expectMissingPath(sourcePath);
+  });
+
+  it("previews retired subagent JSON as discard-only transient state", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const sourcePath = path.join(stateDir, "subagents", "runs.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify({ version: 2, runs: {} }), "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.preview).toContain(
+      "- Subagent runs: discard retired transient subagents/runs.json state",
+    );
   });
 
   it("migrates legacy update-check JSON into shared SQLite state", async () => {

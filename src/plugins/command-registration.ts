@@ -9,7 +9,6 @@ import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
   clearPluginCommands,
-  clearPluginCommandsForPlugin,
   isPluginCommandRegistryLocked,
   pluginCommands,
 } from "./command-registry-state.js";
@@ -90,7 +89,7 @@ export function isReservedCommandName(name: string): boolean {
 }
 
 /** Validates user-visible command names before plugin registration accepts them. */
-export function validateCommandName(
+function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -386,4 +385,4 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin };
+export { clearPluginCommands };

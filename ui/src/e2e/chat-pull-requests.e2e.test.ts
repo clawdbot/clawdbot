@@ -15,22 +15,24 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
-const openBrowsers = new Set<Browser>();
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
+const openContexts = new Set<BrowserContext>();
 
 async function newBrowserContext(): Promise<BrowserContext> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  openBrowsers.add(browser);
-  return browser.newContext({
+  const context = await browser.newContext({
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 800, width: 1180 },
   });
+  openContexts.add(context);
+  return context;
 }
 
-async function closeBrowsers(): Promise<void> {
-  await Promise.all([...openBrowsers].map((browser) => browser.close().catch(() => {})));
-  openBrowsers.clear();
+async function closeContexts(): Promise<void> {
+  await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
+  openContexts.clear();
 }
 
 describeControlUiE2e("session pull request chips", () => {
@@ -38,15 +40,22 @@ describeControlUiE2e("session pull request chips", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
-    await closeBrowsers();
+    await closeContexts();
+    await browser?.close();
     await server?.close();
   });
 
-  afterEach(closeBrowsers);
+  afterEach(closeContexts);
 
   it("pins detected PR chips above the composer with rate-limit staleness", async () => {
     const context = await newBrowserContext();

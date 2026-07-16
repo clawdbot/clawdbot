@@ -224,6 +224,8 @@ describe("createDiscordGatewayPlugin", () => {
     return firstMockArg(fetchWithSsrFGuardMock, "fetchWithSsrFGuardMock") as {
       url: string;
       init?: RequestInit & { signal?: unknown };
+      signal?: unknown;
+      timeoutMs?: number;
       mode?: string;
       dispatcherPolicy?: unknown;
       policy?: unknown;
@@ -644,6 +646,8 @@ describe("createDiscordGatewayPlugin", () => {
     expect(guardedFetch.policy).toEqual({ allowedHostnames: ["discord.com"] });
     expect(guardedFetch.init?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(guardedFetch.init?.signal).toBeInstanceOf(AbortSignal);
+    expect(guardedFetch.signal).toBe(guardedFetch.init?.signal);
+    expect(guardedFetch.timeoutMs).toBeUndefined();
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 

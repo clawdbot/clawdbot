@@ -39,7 +39,7 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
 };
 
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
-export type DurableInboundReplyDeliveryResult =
+type DurableInboundReplyDeliveryResult =
   | { status: "not_applicable"; reason: "non_final" }
   | {
       status: "unsupported";

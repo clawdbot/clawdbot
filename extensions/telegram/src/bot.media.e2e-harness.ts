@@ -165,7 +165,7 @@ function installTopicNameRuntimeForTest(): void {
   } as TelegramRuntime);
 }
 
-export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
+const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;

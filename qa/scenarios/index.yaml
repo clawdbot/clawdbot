@@ -7,7 +7,7 @@ title: OpenClaw QA Scenario Pack
 # - each nested `*.yaml` scenario defines one runnable test via `scenario`
 # - flow scenarios add top-level `flow`; native test scenarios use `scenario.execution.path`
 # - scenario YAML may also define coverage IDs, category metadata, required plugins,
-#   lane filters, runtime parity tiers, and gateway config patching
+#   channel constraints, provider/runtime filters, runtime parity tiers, and gateway config patching
 #
 # - kickoff mission
 # - QA operator identity

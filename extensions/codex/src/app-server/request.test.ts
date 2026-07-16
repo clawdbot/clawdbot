@@ -20,7 +20,7 @@ vi.mock("./shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
 }));
 
-const { requestCodexAppServerJson } = await import("./request.js");
+const { readCodexAppServerUsage, requestCodexAppServerJson } = await import("./request.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -353,5 +353,42 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     );
 
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("reads usage and account identity over one isolated client", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "account/rateLimits/read"
+        ? { rateLimitsByLimitId: { codex: { limitId: "codex" } } }
+        : { account: { email: "codex-account@example.com" } },
+    );
+    const closeAndWait = vi.fn(async () => undefined);
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue({
+      request,
+      closeAndWait,
+    });
+
+    await expect(
+      readCodexAppServerUsage({
+        timeoutMs: 3_500,
+        authProfileId: "openai:test",
+      }),
+    ).resolves.toEqual({
+      rateLimits: { rateLimitsByLimitId: { codex: { limitId: "codex" } } },
+      accountEmail: "codex-account@example.com",
+    });
+    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "openai:test",
+        timeoutMs: expect.any(Number),
+      }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "account/rateLimits/read",
+      undefined,
+      expectDeadlineOptions(),
+    );
+    expect(request).toHaveBeenNthCalledWith(2, "account/read", {}, expectDeadlineOptions());
+    expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 300, forceKillDelayMs: 200 });
   });
 });

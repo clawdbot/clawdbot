@@ -40,6 +40,15 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
+function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
+  return {
+    kind: "item",
+    label: "",
+    text,
+    prefix: false,
+  };
+}
+
 export function createTelegramProgressController(params: {
   accountId: string;
   chatId: TelegramMessageContext["chatId"];
@@ -65,11 +74,15 @@ export function createTelegramProgressController(params: {
     mode: params.streamMode,
     active: Boolean(answerLane.stream),
     seed: `${params.accountId}:${params.chatId}:${params.threadId ?? ""}`,
-    formatLine: (text) => (compositor.hasStatusHeadline ? text : formatTelegramProgressLine(text)),
+    formatLine: (text) =>
+      compositor.hasStatusHeadline || compositor.hasPlanProgress
+        ? text
+        : formatTelegramProgressLine(text),
     reasoningGate: params.streamReasoningInProgressDraft,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
+    updateOnLineChange: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();
@@ -81,7 +94,7 @@ export function createTelegramProgressController(params: {
           streamText,
           options?.lines ?? [],
           params.telegramCfg.richMessages === true,
-          compositor.hasStatusHeadline,
+          compositor.hasStatusHeadline || compositor.hasPlanProgress,
         ),
       );
       if (options?.flush) {
@@ -110,7 +123,10 @@ export function createTelegramProgressController(params: {
     if (!canPushToolProgress()) {
       return false;
     }
-    return await compositor.pushToolProgress(line, options);
+    return await compositor.pushToolProgress(
+      typeof line === "string" ? buildTelegramTextToolProgressLine(line) : line,
+      options,
+    );
   };
   const pushReasoningProgress = async (payload: {
     text?: string;
@@ -253,16 +269,10 @@ export function createTelegramProgressController(params: {
     );
   };
   const handlePlanUpdate = async (payload: CallbackPayload<"onPlanUpdate">) => {
-    if (payload.phase === "update") {
-      await pushToolProgress(
-        buildChannelProgressDraftLine({
-          event: "plan",
-          phase: payload.phase,
-          title: payload.title,
-          explanation: payload.explanation,
-          steps: payload.steps,
-        }),
-      );
+    if (payload.phase === "update" && canPushToolProgress()) {
+      await compositor.pushPlanProgress(payload.planSteps, {
+        explanation: payload.explanation,
+      });
     }
   };
   const handleApprovalEvent = async (payload: CallbackPayload<"onApprovalEvent">) => {

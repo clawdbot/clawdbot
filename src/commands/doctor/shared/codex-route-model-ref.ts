@@ -25,12 +25,121 @@ export function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicy
   return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
+const LEGACY_CODEX_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
+
+export type LegacyCodexModelIdentity = string;
+
+// A namespace block ends at the separator; exact model blocks append the model id.
+// This lets one retained dynamic provider stop every downstream route rewrite.
+export function legacyCodexProviderIdentityKey(
+  providerId: unknown,
+): LegacyCodexModelIdentity | undefined {
+  const normalized = normalizeString(providerId);
+  return normalized && LEGACY_CODEX_PROVIDER_IDS.has(normalized)
+    ? `${normalized}\u0000`
+    : undefined;
+}
+
+function legacyCodexModelIdentityKey(params: {
+  providerId: unknown;
+  modelId: unknown;
+}): LegacyCodexModelIdentity | undefined {
+  const providerId = normalizeString(params.providerId);
+  if (
+    !providerId ||
+    !LEGACY_CODEX_PROVIDER_IDS.has(providerId) ||
+    typeof params.modelId !== "string"
+  ) {
+    return undefined;
+  }
+  const modelId = splitTrailingAuthProfile(params.modelId).model.trim();
+  if (!modelId) {
+    return undefined;
+  }
+  const slash = modelId.indexOf("/");
+  const unscopedModelId =
+    slash > 0 && LEGACY_CODEX_PROVIDER_IDS.has(normalizeString(modelId.slice(0, slash)) ?? "")
+      ? modelId.slice(slash + 1).trim()
+      : modelId;
+  return unscopedModelId ? `${providerId}\u0000${unscopedModelId}` : undefined;
+}
+
+function legacyCodexModelRefIdentityKey(modelRef: unknown): LegacyCodexModelIdentity | undefined {
+  if (typeof modelRef !== "string") {
+    return undefined;
+  }
+  const model = splitTrailingAuthProfile(modelRef).model.trim();
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  return legacyCodexModelIdentityKey({
+    providerId: model.slice(0, slash),
+    modelId: model.slice(slash + 1),
+  });
+}
+
+export function isBlockedLegacyCodexModelRef(params: {
+  modelRef: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): boolean {
+  const identity = legacyCodexModelRefIdentityKey(params.modelRef);
+  if (!identity || !params.blockedModelIdentities) {
+    return false;
+  }
+  const separator = identity.indexOf("\u0000");
+  const providerIdentity = separator >= 0 ? identity.slice(0, separator + 1) : undefined;
+  return (
+    params.blockedModelIdentities.has(identity) ||
+    Boolean(providerIdentity && params.blockedModelIdentities.has(providerIdentity))
+  );
+}
+
+export function isBlockedLegacyCodexModelPair(params: {
+  providerId: unknown;
+  modelId: unknown;
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+}): boolean {
+  if (!params.blockedModelIdentities) {
+    return false;
+  }
+  const providerIdentity = legacyCodexProviderIdentityKey(params.providerId);
+  const modelIdentity = legacyCodexModelIdentityKey(params);
+  return (
+    Boolean(providerIdentity && params.blockedModelIdentities.has(providerIdentity)) ||
+    Boolean(modelIdentity && params.blockedModelIdentities.has(modelIdentity))
+  );
+}
+
+export function isLegacyCodexProviderId(provider: unknown): boolean {
+  const normalized = normalizeString(provider);
+  return normalized ? LEGACY_CODEX_PROVIDER_IDS.has(normalized) : false;
+}
+
+function readLegacyCodexModelId(model: unknown): string | undefined {
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (
+    slash <= 0 ||
+    !LEGACY_CODEX_PROVIDER_IDS.has(normalizeString(trimmed.slice(0, slash)) ?? "")
+  ) {
+    return undefined;
+  }
+  const modelId = trimmed.slice(slash + 1).trim();
+  return modelId || undefined;
+}
+
 export function isOpenAICodexModelRef(model: string | undefined): model is string {
-  return normalizeString(model)?.startsWith("openai-codex/") === true;
+  return readLegacyCodexModelId(model) !== undefined;
 }
 
 export function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
-  return normalizeString(profile)?.startsWith("openai-codex:") === true;
+  const normalized = normalizeString(profile);
+  const separator = normalized?.indexOf(":") ?? -1;
+  return separator > 0 && LEGACY_CODEX_PROVIDER_IDS.has(normalized?.slice(0, separator) ?? "");
 }
 
 export function isProviderlessModelRef(model: unknown): model is string {
@@ -39,19 +148,12 @@ export function isProviderlessModelRef(model: unknown): model is string {
 }
 
 export function toCanonicalOpenAIModelRef(model: string): string | undefined {
-  if (!isOpenAICodexModelRef(model)) {
-    return undefined;
-  }
-  const modelId = model.slice("openai-codex/".length).trim();
+  const modelId = readLegacyCodexModelId(model);
   return modelId ? `openai/${modelId}` : undefined;
 }
 
 export function toOpenAIModelId(model: string): string | undefined {
-  if (!isOpenAICodexModelRef(model)) {
-    return undefined;
-  }
-  const modelId = model.slice("openai-codex/".length).trim();
-  return modelId || undefined;
+  return readLegacyCodexModelId(model);
 }
 
 export function resolveRuntime(params: {

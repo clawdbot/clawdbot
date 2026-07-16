@@ -140,7 +140,7 @@ When debugging real providers/models (requires real creds):
     `openclaw setup` CLI fails closed without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
-    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    resolve to typed setup, followed by one-shot model, agent, Discord config,
     and SecretRef operations. It validates config and audit entries. This is
     supporting gate/operation evidence, not an interactive onboarding or
     OpenClaw agent/tool/approval proof. The same lane is exposed in QA Lab by

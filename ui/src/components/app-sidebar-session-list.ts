@@ -1,8 +1,9 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { channelDisplayLabel } from "../lib/session-display.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
@@ -19,13 +20,58 @@ import {
   limitSidebarSessionRows,
   SIDEBAR_SESSION_PAGE_SIZE,
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  sidebarSessionMetaId,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import "./elapsed-time.ts";
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
+  private renderSessionState(session: SidebarRecentSession) {
+    if (session.hasActiveRun || (session.isChild && session.status === "running")) {
+      return html`<span
+        class="session-run-spinner sidebar-recent-session__state"
+        role="img"
+        aria-label=${t("sessionsView.activeRun")}
+        title=${t("sessionsView.activeRun")}
+      ></span>`;
+    }
+    if (!session.isChild) {
+      return session.unread
+        ? html`<span
+            class="session-unread-dot sidebar-recent-session__unread"
+            role="img"
+            aria-label=${t("sessionsView.unread")}
+          ></span>`
+        : nothing;
+    }
+    const status = session.status;
+    if (!status) {
+      return nothing;
+    }
+    const state =
+      status === "done"
+        ? { icon: icons.check, label: t("sessionsView.statusDone") }
+        : status === "killed"
+          ? { icon: icons.stop, label: t("sessionsView.statusKilled") }
+          : status === "timeout"
+            ? { icon: icons.alertTriangle, label: t("sessionsView.statusTimeout") }
+            : status === "failed"
+              ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
+              : null;
+    return state
+      ? html`<span
+          class="sidebar-child-session__status sidebar-child-session__status--${status}"
+          role="img"
+          aria-label=${state.label}
+          title=${state.label}
+          >${state.icon}</span
+        >`
+      : nothing;
+  }
+
   private renderRecentSession(
     session: SidebarRecentSession,
     display?: CatalogBackingSessionDisplay,
@@ -37,9 +83,12 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
+    const metaId = meta ? sidebarSessionMetaId(session.key) : undefined;
+    const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
+      session.isChild ? "sidebar-recent-session--child" : "",
       session.visuallyActive ? "sidebar-recent-session--active" : "",
       this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
@@ -52,98 +101,155 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       <div
         class=${rowClass}
         data-session-key=${session.key}
-        draggable="true"
-        @dragstart=${(event: DragEvent) => {
-          if (event.dataTransfer) {
-            writeSessionDragData(event.dataTransfer, session.key);
-            this.draggingSessionKey = session.key;
-          }
-        }}
-        @dragend=${() => {
-          this.draggingSessionKey = null;
-          this.sessionDropTarget = null;
-        }}
-        @contextmenu=${(event: MouseEvent) => {
-          event.preventDefault();
-          this.openSessionMenuForRow(session, event.clientX, event.clientY);
-        }}
+        role="listitem"
+        draggable=${session.isChild ? "false" : "true"}
+        @dragstart=${session.isChild
+          ? nothing
+          : (event: DragEvent) => {
+              if (event.dataTransfer) {
+                writeSessionDragData(event.dataTransfer, session.key);
+                this.draggingSessionKey = session.key;
+              }
+            }}
+        @dragend=${session.isChild
+          ? nothing
+          : () => {
+              this.draggingSessionKey = null;
+              this.sessionDropTarget = null;
+            }}
+        @contextmenu=${session.isChild
+          ? nothing
+          : (event: MouseEvent) => {
+              event.preventDefault();
+              this.openSessionMenuForRow(session, event.clientX, event.clientY);
+            }}
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
       >
+        ${session.childSessionKeys.length > 0
+          ? html`<button
+              class="sidebar-child-session-toggle ${session.runningChildCount > 0
+                ? "sidebar-child-session-toggle--running"
+                : session.failedChildCount > 0
+                  ? "sidebar-child-session-toggle--failed"
+                  : ""}"
+              type="button"
+              data-child-session-toggle=${session.key}
+              aria-expanded=${String(this.isSessionChildrenExpanded(session))}
+              aria-label=${t(
+                this.isSessionChildrenExpanded(session)
+                  ? "sessionsView.hideChildSessions"
+                  : "sessionsView.showChildSessions",
+                { count: String(session.childSessionKeys.length), session: label },
+              )}
+              @click=${() => this.toggleSessionChildren(session)}
+            >
+              <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
+                >${this.isSessionChildrenExpanded(session)
+                  ? icons.chevronDown
+                  : icons.chevronRight}</span
+              >
+              <span class="sidebar-child-session-toggle__count"
+                >${session.childSessionKeys.length}</span
+              >
+            </button>`
+          : nothing}
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
           draggable="false"
-          title=${display?.title ?? `${session.label} · ${session.key}`}
+          title=${title}
+          aria-current=${session.visuallyActive ? "page" : nothing}
+          aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.hasActiveRun
-            ? html`<span
-                class="session-run-spinner sidebar-recent-session__state"
-                role="img"
-                aria-label=${t("sessionsView.activeRun")}
-                title=${t("sessionsView.activeRun")}
-              ></span>`
-            : session.unread
-              ? html`<span
-                  class="session-unread-dot sidebar-recent-session__unread"
-                  role="img"
-                  aria-label=${t("sessionsView.unread")}
-                ></span>`
-              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${label}</span>
             ${subtitle
               ? html`<span class="sidebar-recent-session__subtitle">${subtitle}</span>`
               : nothing}
           </span>
-          ${renderSessionRowBadges(session)}
+          ${this.renderSessionState(session)}
+          ${session.isChild ? nothing : renderSessionRowBadges(session)}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">${meta}</span>
-          <span class="session-row-actions">
-            <button
-              class="session-action session-action--pin"
-              data-sidebar-session-pin="true"
-              type="button"
-              title=${session.pinned
-                ? t("sessionsView.unpinSession")
-                : t("sessionsView.pinSession")}
-              aria-label=${session.pinned
-                ? t("sessionsView.unpinSession")
-                : t("sessionsView.pinSession")}
-              ?disabled=${!this.connected}
-              @click=${() => void this.patchSession(session, { pinned: !session.pinned })}
-            >
-              ${icons.pin}
-            </button>
-            <button
-              class="session-action"
-              data-session-menu="true"
-              type="button"
-              title=${t("chat.sidebar.openSessionMenu")}
-              aria-label=${t("chat.sidebar.openSessionMenu")}
-              aria-haspopup="menu"
-              aria-expanded=${String(this.sessionMenu?.session.key === session.key)}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                if (this.sessionMenu?.session.key === session.key) {
-                  this.closeSessionMenu();
-                  return;
-                }
-                const trigger = event.currentTarget as HTMLElement;
-                const rect = trigger.getBoundingClientRect();
-                this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
-              }}
-            >
-              ${icons.moreHorizontal}
-            </button>
-          </span>
+          <span class="session-row-trail" id=${metaId ?? nothing}
+            >${session.isChild && session.runtimeMs != null
+              ? session.hasActiveRun || session.status === "running"
+                ? html`<openclaw-elapsed-time
+                    .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                  ></openclaw-elapsed-time>`
+                : (formatDurationCompact(session.runtimeMs, { spaced: true }) ?? "0ms")
+              : session.isChild && session.startedAt != null
+                ? html`<openclaw-elapsed-time
+                    .startMs=${session.startedAt}
+                    .endMs=${session.endedAt ?? null}
+                  ></openclaw-elapsed-time>`
+                : meta}</span
+          >
+          ${session.isChild
+            ? nothing
+            : html`<span class="session-row-actions">
+                <button
+                  class="session-action session-action--pin"
+                  data-sidebar-session-pin="true"
+                  type="button"
+                  title=${session.pinned
+                    ? t("sessionsView.unpinSession")
+                    : t("sessionsView.pinSession")}
+                  aria-label=${session.pinned
+                    ? t("sessionsView.unpinSession")
+                    : t("sessionsView.pinSession")}
+                  ?disabled=${!this.connected}
+                  @click=${() => void this.patchSession(session, { pinned: !session.pinned })}
+                >
+                  ${icons.pin}
+                </button>
+                <button
+                  class="session-action"
+                  data-session-menu="true"
+                  type="button"
+                  title=${t("chat.sidebar.openSessionMenu")}
+                  aria-label=${t("chat.sidebar.openSessionMenu")}
+                  aria-haspopup="menu"
+                  aria-expanded=${String(this.sessionMenu?.session.key === session.key)}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    if (this.sessionMenu?.session.key === session.key) {
+                      this.closeSessionMenu();
+                      return;
+                    }
+                    const trigger = event.currentTarget as HTMLElement;
+                    const rect = trigger.getBoundingClientRect();
+                    this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
+                  }}
+                >
+                  ${icons.moreHorizontal}
+                </button>
+              </span>`}
         </span>
       </div>
     `;
     // Marquee state mutates the row DOM; keying prevents cross-session reuse.
     return keyed(session.key, row);
+  }
+
+  private renderSessionTree(session: SidebarRecentSession): TemplateResult {
+    const expanded = this.isSessionChildrenExpanded(session);
+    return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
+      ${this.renderRecentSession(session)}
+      ${expanded
+        ? html`<div
+            class="sidebar-session-tree__children"
+            aria-label=${t("sessionsView.childSessions")}
+          >
+            ${session.children.map((child) => this.renderSessionTree(child))}
+            ${session.loadingChildren && session.children.length === 0
+              ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
+              : nothing}
+          </div>`
+        : nothing}
+    </div>`;
   }
 
   private renderSessionSection(
@@ -269,10 +375,10 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ${collapsed
           ? nothing
           : html`
-              <div class="sidebar-recent-sessions__list">
+              <div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
                 ${showFallback
                   ? this.renderChatFallback()
-                  : section.rows.map((session) => this.renderRecentSession(session))}
+                  : section.rows.map((session) => this.renderSessionTree(session))}
               </div>
             `}
       </div>
@@ -452,24 +558,29 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
   }
 
   private renderChatFallback() {
+    const active = this.activeRouteId === "chat";
     return html`
-      <a
-        href=${pathForRoute("chat", this.basePath)}
-        class="sidebar-recent-session ${this.activeRouteId === "chat"
-          ? "sidebar-recent-session--active"
-          : ""}"
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.("chat");
-        }}
+      <div
+        class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
+        role="listitem"
       >
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
-        </span>
-      </a>
+        <a
+          href=${pathForRoute("chat", this.basePath)}
+          class="sidebar-recent-session__link"
+          aria-current=${active ? "page" : nothing}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("chat");
+          }}
+        >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
+          </span>
+        </a>
+      </div>
     `;
   }
 }

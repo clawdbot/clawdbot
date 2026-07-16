@@ -202,6 +202,7 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
+    expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
@@ -230,6 +231,26 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
+    expect(script.match(/assert-disabled-policy-preserved/g)).toHaveLength(2);
+  });
+
+  it("requires corrupt update failures to preserve the explicit allow policy", () => {
+    expect(() =>
+      runProbe("assert-disabled-policy-preserved", {
+        plugins: {
+          allow: [CORRUPT_PLUGIN_ID],
+          entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+        },
+      }),
+    ).not.toThrow();
+
+    const revokedPolicy = runProbeStatus("assert-disabled-policy-preserved", {
+      plugins: {
+        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+      },
+    });
+    expect(revokedPolicy.status).not.toBe(0);
+    expect(revokedPolicy.stderr).toContain("expected plugins.allow to preserve");
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {

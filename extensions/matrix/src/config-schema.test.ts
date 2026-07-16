@@ -98,6 +98,20 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
   });
 
+  it.each(["groups", "rooms"] as const)("rejects unknown %s entry fields", (scope) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      [scope]: {
+        "!room:example.org": {
+          enabled: true,
+          unknownSetting: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts nested quiet Matrix streaming mode with delivery controls", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",

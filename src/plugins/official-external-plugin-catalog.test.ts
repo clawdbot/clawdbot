@@ -180,6 +180,18 @@ describe("official external plugin catalog", () => {
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
   });
 
+  it("keeps Codex installable as a harness without declaring a model provider", () => {
+    const entry = expectCatalogEntry("codex");
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+
+    expect(entry.kind).toBe("plugin");
+    expect(manifest?.providers).toBeUndefined();
+    expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
+      npmSpec: "@openclaw/codex",
+      defaultChoice: "npm",
+    });
+  });
+
   it("curates featured external plugins with ClawHub install alternatives", () => {
     const featured = [
       ["diffs", "@openclaw/diffs", 40],

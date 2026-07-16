@@ -198,6 +198,15 @@ EOF_JSON
   echo "files=.local/review.md .local/review.json"
 }
 
+review_json_require() {
+  local expression="$1"
+  local message="$2"
+  if ! jq -e "$expression" .local/review.json >/dev/null 2>&1; then
+    echo "$message"
+    exit 1
+  fi
+}
+
 review_validate_artifacts() {
   local pr="$1"
   enter_worktree "$pr" false
@@ -209,6 +218,14 @@ review_validate_artifacts() {
   review_guard "$pr"
 
   jq . .local/review.json >/dev/null
+  review_json_require 'type == "object"' "Invalid .local/review.json: top-level value must be an object"
+  review_json_require '(.recommendation | type) == "string"' "Invalid recommendation in .local/review.json: recommendation must be a string"
+  review_json_require '(.findings | type) == "array"' "Invalid findings in .local/review.json: findings must be an array"
+  review_json_require 'all(.findings[]; type == "object")' "Invalid finding entry in .local/review.json: each finding must be an object"
+  review_json_require '(.nitSweep | type) == "object"' "Invalid nit sweep in .local/review.json: nitSweep must be an object"
+  review_json_require '(.issueValidation | type) == "object"' "Invalid issue validation in .local/review.json: issueValidation must be an object"
+  review_json_require '(.behavioralSweep | type) == "object"' "Invalid behavioral sweep in .local/review.json: behavioralSweep must be an object"
+  review_json_require '(.tests | type) == "object"' "Invalid tests in .local/review.json: tests must be an object"
 
   local section
   for section in "A)" "B)" "C)" "D)" "E)" "F)" "G)" "H)" "I)" "J)"; do
@@ -224,7 +241,7 @@ review_validate_artifacts() {
     "READY FOR /prepare-pr"|"NEEDS WORK"|"NEEDS DISCUSSION"|"NOT USEFUL (CLOSE)")
       ;;
     *)
-      echo "Invalid recommendation in .local/review.json: $recommendation"
+      printf 'Invalid recommendation in .local/review.json: %s (allowed: READY FOR /prepare-pr|NEEDS WORK|NEEDS DISCUSSION|NOT USEFUL (CLOSE))\n' "$(jq -c '.recommendation' .local/review.json)"
       exit 1
       ;;
   esac
@@ -232,7 +249,7 @@ review_validate_artifacts() {
   local invalid_severity_count
   invalid_severity_count=$(jq '[.findings[]? | select((.severity // "") != "BLOCKER" and (.severity // "") != "IMPORTANT" and (.severity // "") != "NIT")] | length' .local/review.json)
   if [ "$invalid_severity_count" -gt 0 ]; then
-    echo "Invalid finding severity in .local/review.json"
+    printf 'Invalid finding severity in .local/review.json: %s (allowed: BLOCKER|IMPORTANT|NIT)\n' "$(jq -c 'first(.findings[] | select((.severity // "") != "BLOCKER" and (.severity // "") != "IMPORTANT" and (.severity // "") != "NIT")).severity' .local/review.json)"
     exit 1
   fi
 
@@ -247,6 +264,7 @@ review_validate_artifacts() {
   nit_findings_count=$(jq '[.findings[]? | select((.severity // "") == "NIT")] | length' .local/review.json)
 
   local nit_sweep_performed
+  review_json_require '(.nitSweep.performed | type) == "boolean"' "Invalid nit sweep in .local/review.json: nitSweep.performed must be a boolean"
   nit_sweep_performed=$(jq -r '.nitSweep.performed // empty' .local/review.json)
   if [ "$nit_sweep_performed" != "true" ]; then
     echo "Invalid nit sweep in .local/review.json: nitSweep.performed must be true"
@@ -254,6 +272,7 @@ review_validate_artifacts() {
   fi
 
   local nit_sweep_status
+  review_json_require '(.nitSweep.status | type) == "string"' "Invalid nit sweep status in .local/review.json: nitSweep.status must be a string"
   nit_sweep_status=$(jq -r '.nitSweep.status // ""' .local/review.json)
   case "$nit_sweep_status" in
     "none")
@@ -269,12 +288,13 @@ review_validate_artifacts() {
       fi
       ;;
     *)
-      echo "Invalid nit sweep status in .local/review.json: $nit_sweep_status"
+      printf 'Invalid nit sweep status in .local/review.json: %s (allowed: none|has_nits)\n' "$(jq -c '.nitSweep.status' .local/review.json)"
       exit 1
       ;;
   esac
 
   local invalid_nit_summary_count
+  review_json_require '(.nitSweep.summary | type) == "string"' "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a string"
   invalid_nit_summary_count=$(jq '[.nitSweep.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
   if [ "$invalid_nit_summary_count" -gt 0 ]; then
     echo "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string"
@@ -282,6 +302,7 @@ review_validate_artifacts() {
   fi
 
   local issue_validation_performed
+  review_json_require '(.issueValidation.performed | type) == "boolean"' "Invalid issue validation in .local/review.json: issueValidation.performed must be a boolean"
   issue_validation_performed=$(jq -r '.issueValidation.performed // empty' .local/review.json)
   if [ "$issue_validation_performed" != "true" ]; then
     echo "Invalid issue validation in .local/review.json: issueValidation.performed must be true"
@@ -289,28 +310,31 @@ review_validate_artifacts() {
   fi
 
   local issue_validation_source
+  review_json_require '(.issueValidation.source | type) == "string"' "Invalid issue validation source in .local/review.json: issueValidation.source must be a string"
   issue_validation_source=$(jq -r '.issueValidation.source // ""' .local/review.json)
   case "$issue_validation_source" in
     "linked_issue"|"pr_body"|"both")
       ;;
     *)
-      echo "Invalid issue validation source in .local/review.json: $issue_validation_source"
+      printf 'Invalid issue validation source in .local/review.json: %s (allowed: linked_issue|pr_body|both)\n' "$(jq -c '.issueValidation.source' .local/review.json)"
       exit 1
       ;;
   esac
 
   local issue_validation_status
+  review_json_require '(.issueValidation.status | type) == "string"' "Invalid issue validation status in .local/review.json: issueValidation.status must be a string"
   issue_validation_status=$(jq -r '.issueValidation.status // ""' .local/review.json)
   case "$issue_validation_status" in
     "valid"|"unclear"|"invalid"|"already_fixed_on_main")
       ;;
     *)
-      echo "Invalid issue validation status in .local/review.json: $issue_validation_status"
+      printf 'Invalid issue validation status in .local/review.json: %s (allowed: valid|unclear|invalid|already_fixed_on_main)\n' "$(jq -c '.issueValidation.status' .local/review.json)"
       exit 1
       ;;
   esac
 
   local invalid_issue_summary_count
+  review_json_require '(.issueValidation.summary | type) == "string"' "Invalid issue validation summary in .local/review.json: issueValidation.summary must be a string"
   invalid_issue_summary_count=$(jq '[.issueValidation.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
   if [ "$invalid_issue_summary_count" -gt 0 ]; then
     echo "Invalid issue validation summary in .local/review.json: issueValidation.summary must be a non-empty string"
@@ -318,6 +342,10 @@ review_validate_artifacts() {
   fi
 
   local runtime_file_count
+  if ! jq -e 'type == "object" and (.files | type) == "array" and all(.files[]; type == "object" and (.path | type) == "string")' .local/pr-meta.json >/dev/null 2>&1; then
+    echo "Invalid .local/pr-meta.json: files must be an array of objects with string path"
+    exit 1
+  fi
   runtime_file_count=$(jq '[.files[]? | (.path // "") | select(test("^(src|extensions|apps)/")) | select(test("(^|/)__tests__/|\\.test\\.|\\.spec\\.") | not) | select(test("\\.(md|mdx)$") | not)] | length' .local/pr-meta.json)
 
   local runtime_review_required="false"
@@ -326,6 +354,7 @@ review_validate_artifacts() {
   fi
 
   local behavioral_sweep_performed
+  review_json_require '(.behavioralSweep.performed | type) == "boolean"' "Invalid behavioral sweep in .local/review.json: behavioralSweep.performed must be a boolean"
   behavioral_sweep_performed=$(jq -r '.behavioralSweep.performed // empty' .local/review.json)
   if [ "$behavioral_sweep_performed" != "true" ]; then
     echo "Invalid behavioral sweep in .local/review.json: behavioralSweep.performed must be true"
@@ -333,28 +362,31 @@ review_validate_artifacts() {
   fi
 
   local behavioral_sweep_status
+  review_json_require '(.behavioralSweep.status | type) == "string"' "Invalid behavioral sweep status in .local/review.json: behavioralSweep.status must be a string"
   behavioral_sweep_status=$(jq -r '.behavioralSweep.status // ""' .local/review.json)
   case "$behavioral_sweep_status" in
     "pass"|"needs_work"|"not_applicable")
       ;;
     *)
-      echo "Invalid behavioral sweep status in .local/review.json: $behavioral_sweep_status"
+      printf 'Invalid behavioral sweep status in .local/review.json: %s (allowed: pass|needs_work|not_applicable)\n' "$(jq -c '.behavioralSweep.status' .local/review.json)"
       exit 1
       ;;
   esac
 
   local behavioral_sweep_risk
+  review_json_require '(.behavioralSweep.silentDropRisk | type) == "string"' "Invalid behavioral sweep risk in .local/review.json: behavioralSweep.silentDropRisk must be a string"
   behavioral_sweep_risk=$(jq -r '.behavioralSweep.silentDropRisk // ""' .local/review.json)
   case "$behavioral_sweep_risk" in
     "none"|"present"|"unknown")
       ;;
     *)
-      echo "Invalid behavioral sweep risk in .local/review.json: $behavioral_sweep_risk"
+      printf 'Invalid behavioral sweep risk in .local/review.json: %s (allowed: none|present|unknown)\n' "$(jq -c '.behavioralSweep.silentDropRisk' .local/review.json)"
       exit 1
       ;;
   esac
 
   local invalid_behavioral_summary_count
+  review_json_require '(.behavioralSweep.summary | type) == "string"' "Invalid behavioral sweep summary in .local/review.json: behavioralSweep.summary must be a string"
   invalid_behavioral_summary_count=$(jq '[.behavioralSweep.summary | select((type != "string") or (gsub("^\\s+|\\s+$";"") | length == 0))] | length' .local/review.json)
   if [ "$invalid_behavioral_summary_count" -gt 0 ]; then
     echo "Invalid behavioral sweep summary in .local/review.json: behavioralSweep.summary must be a non-empty string"
@@ -369,9 +401,10 @@ review_validate_artifacts() {
   fi
 
   local invalid_behavioral_branch_count
+  review_json_require 'all(.behavioralSweep.branches[]; type == "object")' "Invalid behavioral sweep branch entry in .local/review.json: each entry must be an object with string path/decision/outcome"
   invalid_behavioral_branch_count=$(jq '[.behavioralSweep.branches[]? | select((.path|type)!="string" or (.decision|type)!="string" or (.outcome|type)!="string")] | length' .local/review.json)
   if [ "$invalid_behavioral_branch_count" -gt 0 ]; then
-    echo "Invalid behavioral sweep branch entry in .local/review.json: each branch needs string path/decision/outcome"
+    echo "Invalid behavioral sweep branch entry in .local/review.json: each entry must be an object with string path/decision/outcome"
     exit 1
   fi
 
@@ -418,24 +451,43 @@ review_validate_artifacts() {
     exit 1
   fi
 
+  review_json_require '(.tests.ran | type) == "array"' "Invalid tests in .local/review.json: tests.ran must be an array of strings"
+  review_json_require 'all(.tests.ran[]; type == "string")' "Invalid tests in .local/review.json: tests.ran must be an array of strings"
+  review_json_require '(.tests.gaps | type) == "array"' "Invalid tests in .local/review.json: tests.gaps must be an array of strings"
+  review_json_require 'all(.tests.gaps[]; type == "string")' "Invalid tests in .local/review.json: tests.gaps must be an array of strings"
+
+  local tests_result
+  review_json_require '(.tests.result | type) == "string"' "Invalid tests result in .local/review.json: tests.result must be a string"
+  tests_result=$(jq -r '.tests.result // ""' .local/review.json)
+  case "$tests_result" in
+    "pass"|"fail"|"not_run")
+      ;;
+    *)
+      printf 'Invalid tests result in .local/review.json: %s (allowed: pass|fail|not_run)\n' "$(jq -c '.tests.result' .local/review.json)"
+      exit 1
+      ;;
+  esac
+
   local docs_status
+  review_json_require '(.docs | type) == "string"' "Invalid docs status in .local/review.json: docs must be a string"
   docs_status=$(jq -r '.docs // ""' .local/review.json)
   case "$docs_status" in
     "up_to_date"|"missing"|"not_applicable")
       ;;
     *)
-      echo "Invalid docs status in .local/review.json: $docs_status"
+      printf 'Invalid docs status in .local/review.json: %s (allowed: up_to_date|missing|not_applicable)\n' "$(jq -c '.docs' .local/review.json)"
       exit 1
       ;;
   esac
 
   local changelog_status
+  review_json_require '(.changelog | type) == "string"' "Invalid changelog status in .local/review.json: changelog must be a string"
   changelog_status=$(jq -r '.changelog // ""' .local/review.json)
   case "$changelog_status" in
     "required"|"not_required")
       ;;
     *)
-      echo "Invalid changelog status in .local/review.json: $changelog_status (must be \"required\" or \"not_required\")"
+      printf 'Invalid changelog status in .local/review.json: %s (allowed: required|not_required)\n' "$(jq -c '.changelog' .local/review.json)"
       exit 1
       ;;
   esac

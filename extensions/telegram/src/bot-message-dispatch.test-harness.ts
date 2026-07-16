@@ -121,36 +121,36 @@ export const deliverInboundReplyWithMessageSendContext =
   deliverInboundReplyWithMessageSendContextHoisted;
 export const emitInternalMessageSentHook = emitInternalMessageSentHookHoisted;
 export const recordOutboundMessageForPromptContext = recordOutboundMessageForPromptContextHoisted;
-export const createForumTopicTelegram = createForumTopicTelegramHoisted;
-export const deleteMessageTelegram = deleteMessageTelegramHoisted;
-export const editForumTopicTelegram = editForumTopicTelegramHoisted;
+const createForumTopicTelegram = createForumTopicTelegramHoisted;
+const deleteMessageTelegram = deleteMessageTelegramHoisted;
+const editForumTopicTelegram = editForumTopicTelegramHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
-export const reactMessageTelegram = reactMessageTelegramHoisted;
+const reactMessageTelegram = reactMessageTelegramHoisted;
 export const sendMessageTelegram = sendMessageTelegramHoisted;
-export const sendPollTelegram = sendPollTelegramHoisted;
-export const sendStickerTelegram = sendStickerTelegramHoisted;
-export const loadConfig = loadConfigHoisted;
-export const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
-export const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
-export const enqueueSystemEvent = enqueueSystemEventHoisted;
-export const buildModelsProviderData = buildModelsProviderDataHoisted;
-export const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
+const sendPollTelegram = sendPollTelegramHoisted;
+const sendStickerTelegram = sendStickerTelegramHoisted;
+const loadConfig = loadConfigHoisted;
+const readChannelAllowFromStore = readChannelAllowFromStoreHoisted;
+const upsertChannelPairingRequest = upsertChannelPairingRequestHoisted;
+const enqueueSystemEvent = enqueueSystemEventHoisted;
+const buildModelsProviderData = buildModelsProviderDataHoisted;
+const listSkillCommandsForAgents = listSkillCommandsForAgentsHoisted;
 export const createChannelMessageReplyPipeline = createChannelMessageReplyPipelineHoisted;
-export const wasSentByBot = wasSentByBotHoisted;
+const wasSentByBot = wasSentByBotHoisted;
 export const appendAssistantMirrorMessageByIdentity = appendAssistantMirrorMessageByIdentityHoisted;
-export const getSessionEntry = getSessionEntryHoisted;
+const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
-export const resolveStorePath = resolveStorePathHoisted;
+const resolveStorePath = resolveStorePathHoisted;
 export const generateTopicLabel = generateTopicLabelHoisted;
 export const describeStickerImage = describeStickerImageHoisted;
-export const loadModelCatalog = loadModelCatalogHoisted;
-export const findModelInCatalog = findModelInCatalogHoisted;
-export const modelSupportsVision = modelSupportsVisionHoisted;
-export const resolveAgentDir = resolveAgentDirHoisted;
-export const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
-export const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
-export const resolveChunkMode = resolveChunkModeHoisted;
+const loadModelCatalog = loadModelCatalogHoisted;
+const findModelInCatalog = findModelInCatalogHoisted;
+const modelSupportsVision = modelSupportsVisionHoisted;
+const resolveAgentDir = resolveAgentDirHoisted;
+const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
+const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
+const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
 
 vi.mock("./draft-stream.js", () => ({
@@ -675,4 +675,4 @@ export function describeTelegramDispatch(name: string, registerTests: () => void
   });
 }
 
-export type { Bot, TelegramBotDeps };
+export type { TelegramBotDeps };

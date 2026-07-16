@@ -16,11 +16,11 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -5590,7 +5590,7 @@ describe("runCodexAppServerAttempt", () => {
         ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("write EPIPE");
+            throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
           }
           return {};
         }),

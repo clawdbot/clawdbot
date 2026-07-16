@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readSessionCostUsageCacheJson } from "./session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.sqlite.js";
 import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -75,7 +75,7 @@ describe("session cost usage stream errors", () => {
         ...range,
         refreshMode: "sync-when-empty",
       });
-      const cacheBefore = readSessionCostUsageCacheJson();
+      const rollupsBefore = readSessionCostUsageRollupRows();
 
       const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
       await fs.appendFile(sessionFile, appendedEntry, "utf-8");
@@ -98,7 +98,7 @@ describe("session cost usage stream errors", () => {
         { interval: 5, timeout: 1_000 },
       );
 
-      expect(readSessionCostUsageCacheJson()).toBe(cacheBefore);
+      expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
       expect(summary.totals.totalTokens).toBe(10);
       expect(summary.cacheStatus?.pendingFiles).toBe(1);
     });

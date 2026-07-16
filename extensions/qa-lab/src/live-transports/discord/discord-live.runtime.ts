@@ -18,12 +18,8 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
+import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
 import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
-import {
-  collectLiveTransportStandardScenarioCoverage,
-  selectLiveTransportScenarios,
-  type LiveTransportScenarioDefinition,
-} from "../shared/live-transport-scenarios.js";
 
 type DiscordQaRuntimeEnv = {
   guildId: string;
@@ -69,7 +65,10 @@ type DiscordQaScenarioRun =
       replyContent: string;
     };
 
-type DiscordQaScenarioDefinition = LiveTransportScenarioDefinition<DiscordQaScenarioId> & {
+type DiscordQaScenarioDefinition = {
+  id: DiscordQaScenarioId;
+  title: string;
+  timeoutMs: number;
   buildRun: (sutApplicationId: string) => DiscordQaScenarioRun;
 };
 
@@ -171,7 +170,6 @@ type DiscordQaScenarioResult = {
   artifactPaths?: Record<string, string>;
   id: string;
   title: string;
-  standardId?: string;
   status: "pass" | "fail";
   details: string;
   requestStartedAt?: string;
@@ -239,7 +237,6 @@ const DISCORD_QA_ENV_KEYS = [
 const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
   {
     id: "discord-canary",
-    standardId: "canary",
     title: "Discord canary echo",
     timeoutMs: 45_000,
     buildRun: (sutApplicationId) => {
@@ -255,7 +252,6 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
   },
   {
     id: "discord-mention-gating",
-    standardId: "mention-gating",
     title: "Discord unmentioned message does not trigger",
     timeoutMs: 8_000,
     buildRun: () => {
@@ -317,17 +313,6 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
     },
   },
 ];
-
-const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
-  (scenario) =>
-    scenario.id !== "discord-status-reactions-tool-only" &&
-    scenario.id !== "discord-voice-autojoin" &&
-    scenario.id !== "discord-thread-reply-filepath-attachment",
-);
-
-const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
-  scenarios: DISCORD_QA_SCENARIOS,
-});
 
 const discordQaCredentialPayloadSchema = z.object({
   guildId: z.string().trim().min(1),
@@ -1233,7 +1218,6 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     return {
       id: params.scenario.id,
       title: params.scenario.title,
-      standardId: params.scenario.standardId,
       status,
       details:
         status === "pass"
@@ -1365,12 +1349,16 @@ function buildObservedMessagesArtifact(params: {
 }
 
 function findScenario(ids?: string[]) {
-  const scenarios = ids && ids.length > 0 ? DISCORD_QA_SCENARIOS : DISCORD_QA_DEFAULT_SCENARIOS;
-  return selectLiveTransportScenarios({
-    ids,
-    laneLabel: "Discord",
-    scenarios,
-  });
+  const requestedIds =
+    ids && ids.length > 0
+      ? ids
+      : listQaScenariosForExecutionProfile("discord:adapter").map((scenario) => scenario.id);
+  const scenariosById = new Map(DISCORD_QA_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+  const missingIds = requestedIds.filter((id) => !scenariosById.has(id as DiscordQaScenarioId));
+  if (missingIds.length > 0) {
+    throw new Error(`unknown Discord QA scenario id(s): ${missingIds.join(", ")}`);
+  }
+  return requestedIds.map((id) => scenariosById.get(id as DiscordQaScenarioId)!);
 }
 
 function matchesDiscordScenarioReply(params: {
@@ -1421,7 +1409,6 @@ async function assertDiscordApplicationCommandsRegistered(params: {
 
 const testing = {
   DISCORD_QA_SCENARIOS,
-  DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
   assertDiscordScenarioReply,
   assertDiscordApplicationCommandsRegistered,

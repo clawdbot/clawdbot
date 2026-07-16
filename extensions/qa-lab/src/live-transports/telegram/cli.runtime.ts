@@ -1,16 +1,16 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
 import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
-import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
-import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.runtime.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
+import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
 
 const TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 const TELEGRAM_QA_SUT_UID_ENV = "OPENCLAW_QA_TELEGRAM_SUT_UID";
@@ -136,12 +136,13 @@ async function resolveTelegramQaSutOpenClawCommand(
 }
 
 type TelegramQaSuiteOptions = LiveTransportQaCommandOptions & {
+  resolvedScenarioIds?: readonly string[];
   roundTripProbe?: QaSuiteRoundTripProbe;
   sutOpenClawCommand?: QaGatewayChildCommand;
 };
 
 export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
-  const runOptions = resolveLiveTransportQaRunOptions(opts);
+  const runOptions = resolveTelegramQaRunOptions(opts);
   if (runOptions.listScenarios) {
     for (const scenario of listTelegramQaScenarios(runOptions.providerMode)) {
       const defaultLabel = scenario.defaultEnabled ? "default" : "optional";
@@ -153,11 +154,13 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     }
     return undefined;
   }
-  const scenarioIds = resolveTelegramQaScenarioIds({
-    profile: opts.profile,
-    providerMode: runOptions.providerMode,
-    scenarioIds: runOptions.scenarioIds,
-  });
+  const scenarioIds = opts.resolvedScenarioIds
+    ? [...opts.resolvedScenarioIds]
+    : resolveTelegramQaScenarioIds({
+        profile: opts.profile,
+        providerMode: runOptions.providerMode,
+        scenarioIds: runOptions.scenarioIds,
+      });
   const result = await runQaFlowSuiteFromRuntime({
     adapterFactories: [
       {
@@ -200,11 +203,11 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
 }
 
 export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) {
-  const runOptions = resolveLiveTransportQaRunOptions(opts);
+  const runOptions = resolveTelegramQaRunOptions(opts);
   if (runOptions.listScenarios) {
     return await runQaTelegramSuite(opts);
   }
-  resolveTelegramQaScenarioIds({
+  const resolvedScenarioIds = resolveTelegramQaScenarioIds({
     profile: opts.profile,
     providerMode: runOptions.providerMode,
     scenarioIds: runOptions.scenarioIds,
@@ -212,6 +215,7 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   const sutOpenClawCommand = await resolveTelegramQaSutOpenClawCommand(runOptions.repoRoot);
   return await runQaTelegramSuite({
     ...opts,
+    resolvedScenarioIds,
     ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
   });
 }

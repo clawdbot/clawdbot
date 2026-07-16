@@ -36,6 +36,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { NODE_ADMIN_ONLY_INVOKE_COMMANDS } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
+  getPendingNodePairing,
   listNodePairing,
   rejectNodePairing,
   renamePairedNode,
@@ -74,6 +75,7 @@ import {
   deniesCrossDeviceManagement,
   pairedDeviceHasNonOperatorRole,
   resolveDeviceManagementAuthz,
+  resolveDeviceSessionAuthz,
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
@@ -346,6 +348,63 @@ function broadcastRemovedNodePairing(params: {
     },
     { dropIfSlow: true },
   );
+}
+
+function emitNodePairingDeniedSecurityEvent(params: {
+  authz: DeviceManagementAuthz;
+  nodeId: string;
+  controlId: "node.pair.approve" | "node.pair.reject" | "node.rename";
+  reason: string;
+}): void {
+  emitDeviceManagementSecurityEvent({
+    action: "device.pairing.denied",
+    outcome: "denied",
+    severity: "medium",
+    authz: params.authz,
+    targetDeviceId: params.nodeId,
+    policyId: "gateway.device-pairing",
+    decision: "deny",
+    controlId: params.controlId,
+    reason: params.reason,
+    attributes: { role: "node" },
+  });
+}
+
+async function enforcePendingNodePairingOwnership(params: {
+  requestId: string;
+  mutation: "approve" | "reject";
+  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "logGateway">;
+  respond: RespondFn;
+}): Promise<boolean> {
+  const action = params.mutation === "approve" ? "approval" : "rejection";
+  const controlId = params.mutation === "approve" ? "node.pair.approve" : "node.pair.reject";
+  const deniedMessage = `node pairing ${action} denied`;
+  const pending = await getPendingNodePairing(params.requestId);
+  const sessionAuthz = resolveDeviceSessionAuthz(params.client);
+  if (!pending) {
+    if (sessionAuthz.callerDeviceId && !sessionAuthz.isAdminCaller) {
+      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+      return false;
+    }
+    return true;
+  }
+
+  const authz = resolveDeviceManagementAuthz(params.client, pending.nodeId);
+  if (!deniesCrossDeviceManagement(authz)) {
+    return true;
+  }
+  params.context.logGateway.warn(
+    `${deniedMessage} node=${pending.nodeId} reason=device-ownership-mismatch`,
+  );
+  emitNodePairingDeniedSecurityEvent({
+    authz,
+    nodeId: pending.nodeId,
+    controlId,
+    reason: "device-ownership-mismatch",
+  });
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deniedMessage));
+  return false;
 }
 
 function emitNodeRoleRemovalSecurityEvent(params: {
@@ -857,7 +916,7 @@ export async function waitForNodeReconnect(params: {
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
-  "node.pair.list": async ({ params, respond }) => {
+  "node.pair.list": async ({ params, respond, client }) => {
     if (!validateNodePairListParams(params)) {
       respondInvalidParams({
         respond,
@@ -868,7 +927,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listNodePairing();
-      respond(true, list, undefined);
+      const authz = resolveDeviceSessionAuthz(client);
+      const visibleList =
+        authz.callerDeviceId && !authz.isAdminCaller
+          ? {
+              pending: list.pending.filter(
+                (request) => request.nodeId.trim() === authz.callerDeviceId,
+              ),
+              paired: list.paired.filter((node) => node.nodeId.trim() === authz.callerDeviceId),
+            }
+          : list;
+      respond(true, visibleList, undefined);
     });
   },
   "node.pair.approve": async ({ params, respond, context, client }) => {
@@ -884,6 +953,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "approve",
+          client,
+          context,
+          respond,
+        }))
+      ) {
+        return;
+      }
       const approved = await approveNodePairing(requestId, { callerScopes });
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
@@ -938,7 +1018,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, approved, undefined);
     });
   },
-  "node.pair.reject": async ({ params, respond, context }) => {
+  "node.pair.reject": async ({ params, respond, context, client }) => {
     if (!validateNodePairRejectParams(params)) {
       respondInvalidParams({
         respond,
@@ -949,6 +1029,17 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      if (
+        !(await enforcePendingNodePairingOwnership({
+          requestId,
+          mutation: "reject",
+          client,
+          context,
+          respond,
+        }))
+      ) {
+        return;
+      }
       const rejected = await rejectNodePairing(requestId);
       if (!rejected) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
@@ -1010,7 +1101,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       }
     });
   },
-  "node.rename": async ({ params, respond }) => {
+  "node.rename": async ({ params, respond, context, client }) => {
     if (!validateNodeRenameParams(params)) {
       respondInvalidParams({
         respond,
@@ -1024,6 +1115,20 @@ export const nodeHandlers: GatewayRequestHandlers = {
       displayName: string;
     };
     await respondUnavailableOnThrow(respond, async () => {
+      const authz = resolveDeviceManagementAuthz(client, nodeId);
+      if (deniesCrossDeviceManagement(authz)) {
+        context.logGateway.warn(
+          `node rename denied node=${authz.normalizedTargetDeviceId} reason=device-ownership-mismatch`,
+        );
+        emitNodePairingDeniedSecurityEvent({
+          authz,
+          nodeId: authz.normalizedTargetDeviceId,
+          controlId: "node.rename",
+          reason: "device-ownership-mismatch",
+        });
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "node rename denied"));
+        return;
+      }
       const trimmed = displayName.trim();
       if (!trimmed) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "displayName required"));

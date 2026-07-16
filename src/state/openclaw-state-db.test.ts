@@ -719,6 +719,118 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+    expect(
+      database.db
+        .prepare(
+          `SELECT name FROM pragma_table_list
+           WHERE schema = 'main'
+             AND type = 'table'
+             AND name NOT LIKE 'sqlite_%'
+             AND strict <> 1`,
+        )
+        .all(),
+    ).toEqual([]);
+    expect(
+      database.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(() =>
+      database.db
+        .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
+        .run("not-an-integer"),
+    ).toThrow();
+  });
+
+  it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE apns_registration_tombstones RENAME TO apns_registration_tombstones_strict;
+      CREATE TABLE apns_registration_tombstones (
+        node_id TEXT NOT NULL PRIMARY KEY,
+        deleted_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO apns_registration_tombstones VALUES ('ios-node-1', 42);
+      DROP TABLE apns_registration_tombstones_strict;
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state tables to SQLite STRICT typing (1)"],
+      warnings: [],
+    });
+    const migrated = openOpenClawStateDatabase(options);
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(migrated.db.prepare("SELECT * FROM apns_registration_tombstones").get()).toEqual({
+      node_id: "ios-node-1",
+      deleted_at_ms: 42,
+    });
+  });
+
+  it("doctor migrates version 2 tables to STRICT without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const opened = openOpenClawStateDatabase(options);
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        `INSERT INTO skill_curator_state (
+          id, last_attempt_at_ms, last_success_at_ms, last_error, last_result_json
+        ) VALUES (1, 10, 20, NULL, '{}')`,
+      )
+      .run();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      ALTER TABLE skill_curator_state RENAME TO skill_curator_state_strict;
+      CREATE TABLE skill_curator_state (
+        id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+        last_attempt_at_ms INTEGER NOT NULL,
+        last_success_at_ms INTEGER,
+        last_error TEXT,
+        last_result_json TEXT NOT NULL
+      );
+      INSERT INTO skill_curator_state SELECT * FROM skill_curator_state_strict;
+      DROP TABLE skill_curator_state_strict;
+      PRAGMA user_version = 2;
+      UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "strict-tables-v3", path: databasePath },
+    ]);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state tables to SQLite STRICT typing (1)"],
+      warnings: [],
+    });
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'skill_curator_state'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(migrated.db.prepare("SELECT * FROM skill_curator_state").get()).toEqual({
+      id: 1,
+      last_attempt_at_ms: 10,
+      last_success_at_ms: 20,
+      last_error: null,
+      last_result_json: "{}",
+    });
   });
 
   it("rejects a placement turn claim tuple without an owner", () => {
@@ -1131,11 +1243,15 @@ describe("openclaw state database", () => {
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "audit-events-v2", path: databasePath },
+      { kind: "strict-tables-v3", path: databasePath },
     ]);
     expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: ["Migrated shared state audit event ledger → versioned message lifecycle schema"],
+      changes: [
+        "Migrated shared state audit event ledger → versioned message lifecycle schema",
+        "Migrated shared state tables to SQLite STRICT typing (3)",
+      ],
       warnings: [],
     });
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
@@ -2023,6 +2139,24 @@ describe("openclaw state database", () => {
         expect.objectContaining({ name: "idx_managed_outgoing_images_agent_message" }),
       ]),
     );
+  });
+
+  it("adds relay origins to existing APNs registration tables", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db.prepare("PRAGMA table_info(apns_registrations)").all() as Array<{
+      name?: unknown;
+    }>;
+    expect(columns).toContainEqual(expect.objectContaining({ name: "relay_origin" }));
   });
 
   it("serializes concurrent additive schema upgrades across processes", () => {

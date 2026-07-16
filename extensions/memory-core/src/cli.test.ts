@@ -39,29 +39,43 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
+  const [
+    {
+      defaultRuntime,
+      formatErrorMessage,
+      setVerbose,
+      shortenHomeInString,
+      shortenHomePath,
+      theme,
+      withManager,
+      withProgress,
+      withProgressTotals,
+    },
+    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
+    { listMemoryFiles, normalizeExtraMemoryPaths },
+  ] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
-    defaultRuntime: runtimeCli.defaultRuntime,
-    formatErrorMessage: runtimeCli.formatErrorMessage,
+    defaultRuntime,
+    formatErrorMessage,
     getMemorySearchManager,
-    listMemoryFiles: runtimeFiles.listMemoryFiles,
+    listMemoryFiles,
     getRuntimeConfig,
-    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
+    normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
-    resolveStateDir: runtimeCore.resolveStateDir,
-    setVerbose: runtimeCli.setVerbose,
-    shortenHomeInString: runtimeCli.shortenHomeInString,
-    shortenHomePath: runtimeCli.shortenHomePath,
-    theme: runtimeCli.theme,
-    withManager: runtimeCli.withManager,
-    withProgress: runtimeCli.withProgress,
-    withProgressTotals: runtimeCli.withProgressTotals,
+    resolveSessionTranscriptsDirForAgent,
+    resolveStateDir,
+    setVerbose,
+    shortenHomeInString,
+    shortenHomePath,
+    theme,
+    withManager,
+    withProgress,
+    withProgressTotals,
   };
 });
 
@@ -78,8 +92,14 @@ let qmdCaseId = 0;
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+  const {
+    defaultRuntime: loadedDefaultRuntime,
+    isVerbose: loadedIsVerbose,
+    setVerbose: loadedSetVerbose,
+  } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
+  defaultRuntime = loadedDefaultRuntime;
+  isVerbose = loadedIsVerbose;
+  setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
   qmdFixtureRoot = path.join(fixtureRoot, "qmd");

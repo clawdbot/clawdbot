@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
 import type { RuntimeId } from "../../runtime-parity.js";
-import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
 export type SlackQaRuntimeEnv = {
   channelId: string;
@@ -227,10 +226,12 @@ export type SlackQaScenarioContext = {
   waitForReady: () => Promise<void>;
 };
 
-export type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenarioId> & {
+export type SlackQaScenarioDefinition = {
+  id: SlackQaScenarioId;
+  title: string;
+  timeoutMs: number;
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
-  defaultEnabled?: boolean;
   forcedRuntime?: RuntimeId;
 };
 

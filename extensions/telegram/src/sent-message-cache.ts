@@ -105,7 +105,7 @@ function readLegacySentMessages(filePath: string): SentMessageStore {
         if (
           typeof timestamp === "number" &&
           Number.isFinite(timestamp) &&
-          now - timestamp <= TTL_MS
+          now - timestamp < TTL_MS
         ) {
           messages.set(messageId, timestamp);
         }
@@ -224,10 +224,17 @@ export function listTelegramLegacySentMessageCacheEntries(params: {
     ? readLegacySentMessages(filePath)
     : createSentMessageStore();
   return [...legacy.entries()].flatMap(([chatId, messages]) =>
-    [...messages.entries()].map(([messageId, timestamp]) => ({
-      key: sentMessageEntryKey(scopeKey, chatId, messageId),
-      value: { scopeKey, chatId, messageId, timestamp },
-      ttlMs: Math.max(1, TTL_MS - Math.max(0, Date.now() - timestamp)),
-    })),
+    [...messages.entries()].flatMap(([messageId, timestamp]) => {
+      const ttlMs = TTL_MS - Math.max(0, Date.now() - timestamp);
+      return ttlMs > 0
+        ? [
+            {
+              key: sentMessageEntryKey(scopeKey, chatId, messageId),
+              value: { scopeKey, chatId, messageId, timestamp },
+              ttlMs,
+            },
+          ]
+        : [];
+    }),
   );
 }

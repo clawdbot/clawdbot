@@ -889,6 +889,60 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "fixture",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result");
+    expect(toolResult?.content).toBe("");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
+  });
+
   it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],

@@ -33,7 +33,11 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -871,7 +875,7 @@ function toChatMessages(
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
     const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-    const hasImages = msg.content.some((part) => part.type === "image");
+    const hasImages = msg.content.some(isImageWithMediaPayload);
     const toolText = buildToolResultText(
       textResult,
       mediaPlaceholder,
@@ -884,7 +888,7 @@ function toChatMessages(
       if (!supportsImages) {
         continue;
       }
-      if (part.type !== "image") {
+      if (!isImageWithMediaPayload(part)) {
         continue;
       }
       toolContent.push({

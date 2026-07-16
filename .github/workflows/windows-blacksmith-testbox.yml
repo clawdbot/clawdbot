@@ -90,14 +90,19 @@ jobs:
               metadata: {}
             }' > "$hydrating_body"
 
-          hydrating_http_code="$(curl -sS -L --post302 --post303 -o "$hydrating_response" -w '%{http_code}' \
+          # curl can expose a 2xx status before a response-body timeout, so preserve its exit code.
+          hydrating_curl_status=0
+          hydrating_http_code="$(curl -sS -L --post302 --post303 \
+            --connect-timeout 10 --max-time 30 \
+            -o "$hydrating_response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            --data-binary @"$hydrating_body" || true)"
+            --data-binary @"$hydrating_body")" || hydrating_curl_status=$?
 
+          echo "phone_home_hydrating_curl=${hydrating_curl_status}"
           echo "phone_home_hydrating_http=${hydrating_http_code}"
-          if [[ ! "$hydrating_http_code" =~ ^2 ]]; then
+          if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then
             echo "Blacksmith phone-home hydrating failed; response body:" >&2
             cat "$hydrating_response" >&2 || true
             exit 1
@@ -193,13 +198,18 @@ jobs:
               metadata: {}
             }' > "$ready_body"
 
-          http_code="$(curl -sS -L --post302 --post303 -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+          # curl can expose a 2xx status before a response-body timeout, so preserve its exit code.
+          ready_curl_status=0
+          http_code="$(curl -sS -L --post302 --post303 \
+            --connect-timeout 10 --max-time 30 \
+            -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
-            --data-binary @"$ready_body" || true)"
+            --data-binary @"$ready_body")" || ready_curl_status=$?
+          echo "phone_home_ready_curl=${ready_curl_status}"
           echo "phone_home_ready_http=${http_code}"
-          if [[ ! "$http_code" =~ ^2 ]]; then
+          if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then
             echo "Blacksmith phone-home ready failed; response body:" >&2
             cat "$RUNNER_TEMP/testbox-ready.response" >&2 || true
             exit 1

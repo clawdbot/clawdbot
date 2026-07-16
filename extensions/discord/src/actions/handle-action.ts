@@ -28,6 +28,7 @@ import {
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 const providerId = "discord";
 
@@ -385,7 +386,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
+    const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {

@@ -119,6 +119,8 @@ export function fingerprintPluginRuntimeArtifact(
 ): string {
   const runtimeArtifact = record.source
     ? resolvePluginRuntimeArtifact({
+        pluginId: record.pluginId,
+        entryKind: "runtime",
         source: record.source,
         rootDir: record.rootDir,
         origin: record.origin,

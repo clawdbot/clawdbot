@@ -1,5 +1,6 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  type AgentPlanStep,
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   resolveChannelProgressDraftConfig,
@@ -213,6 +214,9 @@ export function createDiscordDraftPreviewController(params: {
       options?: { toolName?: string },
     ) {
       await progressDraft.pushToolProgress(line, options);
+    },
+    async pushPlanProgress(steps?: AgentPlanStep[], options?: { explanation?: string }) {
+      await progressDraft.pushPlanProgress(steps, options);
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       await progressDraft.pushReasoningProgress(text, options);

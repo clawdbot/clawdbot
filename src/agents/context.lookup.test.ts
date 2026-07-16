@@ -2,6 +2,7 @@
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "./context-resolution.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 
 type DiscoveredModel = {
@@ -342,7 +343,9 @@ describe("lookupContextTokens", () => {
       config,
       readOnly: true,
     });
-    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
+    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(
+      ANTHROPIC_CONTEXT_1M_TOKENS,
+    );
   });
 
   it("uses caller config when gateway startup starts cache warming", async () => {
@@ -364,7 +367,7 @@ describe("lookupContextTokens", () => {
     });
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
-    ).toBe(1_048_576);
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("warms fresh caches instead of reusing a pre-generation load promise", async () => {

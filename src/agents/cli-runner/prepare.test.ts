@@ -4620,7 +4620,7 @@ describe("prepareCliRunContext", () => {
     }
   });
 
-  it("uses the automatic Claude CLI cap before mapping canonical models to CLI aliases", async () => {
+  it("uses the plan-safe Claude CLI cap before mapping canonical models to CLI aliases", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       cliBackendsTesting.setDepsForTest({
@@ -4645,7 +4645,7 @@ describe("prepareCliRunContext", () => {
       });
 
       const summaryMarker = "RESEED_ALIAS_SUMMARY_MARKER_KEEP";
-      const padding = "x".repeat(90_000);
+      const padding = "x".repeat(40_000);
       fs.appendFileSync(
         sessionFile,
         `${JSON.stringify({

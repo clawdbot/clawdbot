@@ -470,15 +470,21 @@ describe("matrix doctor contract state migrations", () => {
       auth: { accountId: "ops" },
       env: dedupeEnv,
     });
-    await expect(opsDeduper.claimEvent({ roomId, eventId: "$committed" })).resolves.toBe(false);
-    await expect(opsDeduper.claimEvent({ roomId, eventId: "$expired" })).resolves.toBe(true);
+    await expect(opsDeduper.claim({ roomId, eventId: "$committed" })).resolves.toEqual({
+      kind: "duplicate",
+    });
+    const expiredClaim = await opsDeduper.claim({ roomId, eventId: "$expired" });
+    expect(expiredClaim.kind).toBe("claimed");
+    if (expiredClaim.kind === "claimed") {
+      expiredClaim.handle.release();
+    }
     const homeDeduper = createMatrixInboundEventDeduper({
       auth: { accountId: "home" },
       env: dedupeEnv,
     });
-    await expect(homeDeduper.claimEvent({ roomId, eventId: "$json-committed" })).resolves.toBe(
-      false,
-    );
+    await expect(homeDeduper.claim({ roomId, eventId: "$json-committed" })).resolves.toEqual({
+      kind: "duplicate",
+    });
 
     // Legacy sources are retired and the migration is idempotent.
     await expect(legacyStore.entries()).resolves.toEqual([]);

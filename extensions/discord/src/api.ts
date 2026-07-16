@@ -4,12 +4,13 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
+  parseRetryAfterHeaderSeconds,
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
-import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "./retry-after.js";
+import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {

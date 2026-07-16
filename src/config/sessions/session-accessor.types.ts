@@ -199,6 +199,11 @@ export type SessionTranscriptStats = {
   sizeBytes: number;
 };
 
+export type SessionTranscriptEventRow = {
+  event: TranscriptEvent;
+  seq: number;
+};
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
   config?: OpenClawConfig;

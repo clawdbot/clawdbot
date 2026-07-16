@@ -580,7 +580,7 @@ async function waitForClose(
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

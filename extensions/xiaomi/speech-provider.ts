@@ -12,7 +12,11 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asObject,
+  resolveSpeechProviderApiKey,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -126,6 +130,18 @@ function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsPro
       normalized.voice,
     format: normalizeXiaomiTtsFormat(config.format) ?? normalized.format,
     style: trimToUndefined(config.style) ?? normalized.style,
+  };
+}
+
+function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsProviderConfig {
+  const providerConfig = readXiaomiTtsProviderConfig(config);
+  const resolvedKey = resolveSpeechProviderApiKey(
+    providerConfig.apiKey,
+    process.env.XIAOMI_API_KEY,
+  );
+  return {
+    ...providerConfig,
+    apiKey: resolvedKey,
   };
 }
 
@@ -295,18 +311,17 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     listVoices: async () => XIAOMI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readXiaomiTtsProviderConfig(providerConfig).apiKey || process.env.XIAOMI_API_KEY),
+      Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey),
     synthesize: async (req) => {
-      const config = readXiaomiTtsProviderConfig(req.providerConfig);
+      const config = resolveXiaomiTtsProviderConfig(req.providerConfig);
       const overrides = readXiaomiTtsOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XIAOMI_API_KEY;
-      if (!apiKey) {
+      if (!config.apiKey) {
         throw new Error("Xiaomi API key missing");
       }
       const outputFormat = overrides.format ?? config.format;
       const audioBuffer = await xiaomiTTS({
         text: req.text,
-        apiKey,
+        apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: overrides.model ?? config.model,
         voice: overrides.voice ?? config.voice,

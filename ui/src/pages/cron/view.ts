@@ -26,13 +26,14 @@ import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
+  CronFormState,
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
@@ -1231,12 +1232,11 @@ function renderGeneralSection(props: CronProps) {
   );
 }
 
-// Human-readable line under the schedule pills; null while inputs are invalid
-// so the summary never lies about what would be saved.
+// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {

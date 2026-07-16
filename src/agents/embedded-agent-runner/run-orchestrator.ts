@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resetContinueDelegateTurnBudget } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
+import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
   captureAgentRunLifecycleGeneration,
   getAgentEventLifecycleGeneration,
@@ -44,6 +45,7 @@ import type {
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
+import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
 import { assertAgentHarnessRunAdmission, backfillSessionKey } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -137,8 +139,14 @@ async function runEmbeddedAgentInternal(
         : "plain"
       : "markdown");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-
   throwIfAborted();
+
+  const recoveryMessageActionTurnCapability = createRecoveryMessageActionTurnCapability(params);
+  if (recoveryMessageActionTurnCapability) {
+    // A recovered run reconstructs this capability from the exact durable
+    // source claim; revocation below keeps it scoped to this run lifetime.
+    params = { ...params, messageActionTurnCapability: recoveryMessageActionTurnCapability };
+  }
 
   return enqueueSession(async () => {
     throwIfAborted();
@@ -290,5 +298,7 @@ async function runEmbeddedAgentInternal(
         suspendForFailure,
       });
     });
+  }).finally(() => {
+    revokeMessageActionTurnCapability(recoveryMessageActionTurnCapability);
   });
 }

@@ -161,6 +161,9 @@ export function applyParallelVitestCachePaths<T extends { config: string; env: N
 ): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
 export function shouldRetryVitestNoOutputTimeout(env?: Record<string, string | undefined>): boolean;
+export function withRetryNoOutputTimeout<T extends { env?: Record<string, string | undefined> }>(
+  spec: T,
+): T;
 
 export function shouldAcquireLocalHeavyCheckLock(
   runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,

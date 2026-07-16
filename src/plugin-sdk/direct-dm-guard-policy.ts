@@ -1,4 +1,5 @@
 /**
  * Public SDK subpath for direct-message guard policy evaluation.
  */
-export * from "../channels/direct-dm-guard-policy.js";
+export { createDirectDmPreCryptoGuardPolicy } from "../channels/direct-dm-guard-policy.js";
+export type { DirectDmPreCryptoGuardPolicyOverrides } from "../channels/direct-dm-guard-policy.js";

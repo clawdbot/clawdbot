@@ -18,6 +18,7 @@ vi.mock("@slack/web-api", () => {
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let createSlackStartupAuthClient: typeof import("./client.js").createSlackStartupAuthClient;
 let createSlackLookupClient: typeof import("./client.js").createSlackLookupClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
@@ -31,8 +32,10 @@ let WebClient: ReturnType<typeof vi.fn>;
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL", "OPENCLAW_SLACK_API_URL"] as const;
 const PROXY_KEYS = [
+  "ALL_PROXY",
   "HTTPS_PROXY",
   "HTTP_PROXY",
+  "all_proxy",
   "https_proxy",
   "http_proxy",
   "NO_PROXY",
@@ -94,6 +97,7 @@ beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
     createSlackWebClient,
+    createSlackStartupAuthClient,
     createSlackLookupClient,
     createSlackWriteClient,
     createSlackTokenCacheKey,
@@ -183,6 +187,23 @@ describe("slack web client config", () => {
       agent: customAgent,
       retryConfig: SLACK_DEFAULT_RETRY_OPTIONS,
       timeout: 1234,
+    });
+  });
+
+  it("bounds startup auth while preserving listener transport options", () => {
+    const customAgent = {} as never;
+
+    createSlackStartupAuthClient("xoxb-startup", {
+      agent: customAgent,
+      slackApiUrl: "https://slack.test/api/",
+    });
+
+    expect(WebClient).toHaveBeenCalledWith("xoxb-startup", {
+      agent: customAgent,
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      slackApiUrl: "https://slack.test/api/",
+      timeout: 10_000,
     });
   });
 

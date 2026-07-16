@@ -20,7 +20,6 @@ export { normalizeReleaseProfile };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
-export const DEFAULT_E2E_IMAGE = DEFAULT_E2E_FUNCTIONAL_IMAGE;
 export const DEFAULT_PARALLELISM = 10;
 export const DEFAULT_PROFILE = "all";
 export const DEFAULT_RESOURCE_LIMITS = {

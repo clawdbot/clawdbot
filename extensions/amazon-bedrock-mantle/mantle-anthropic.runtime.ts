@@ -22,7 +22,7 @@ type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
 type MantleAnthropicStream = typeof stream;
 
 /** Resolve the Anthropic-compatible Mantle base URL from a provider base URL. */
-export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
+function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
   if (trimmed.endsWith("/anthropic")) {
     return trimmed;

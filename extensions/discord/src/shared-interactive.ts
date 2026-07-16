@@ -12,6 +12,10 @@ import type {
   MessagePresentationOption,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
+import {
+  buildDiscordActivityCustomId,
+  isValidDiscordActivityWidgetId,
+} from "./component-custom-id.js";
 import type {
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
@@ -77,6 +81,22 @@ function buildDiscordButtonComponent(
       internalCustomId,
       ...(button.disabled === true ? { disabled: true } : {}),
     };
+  }
+  if (
+    action.type === "web-app" &&
+    action.widgetId &&
+    isValidDiscordActivityWidgetId(action.widgetId)
+  ) {
+    return {
+      label: button.label,
+      style: resolveDiscordInteractiveButtonStyle(button.style),
+      internalCustomId: buildDiscordActivityCustomId(action.widgetId),
+      ...(button.disabled === true ? { disabled: true } : {}),
+      ...(button.reusable === true ? { reusable: true } : {}),
+    };
+  }
+  if (action.type === "web-app" && !action.url) {
+    return undefined;
   }
   const component: DiscordComponentButtonSpec = {
     label: button.label,

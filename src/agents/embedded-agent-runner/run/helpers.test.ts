@@ -252,6 +252,29 @@ describe("buildUsageAgentMetaFields", () => {
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
     expect(fields.promptTokens).toBe(148_874);
   });
+
+  it("does not derive a prompt override from unavailable context usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    const latestCallUsage = {
+      input: 12,
+      output: 15_104,
+      cacheRead: 819_661,
+      cacheWrite: 93_130,
+      contextUsage: { state: "unavailable" },
+      total: 927_907,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: latestCallUsage,
+      lastRunPromptUsage: latestCallUsage,
+      lastTurnTotal: latestCallUsage.total,
+    });
+
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.promptTokens).toBeUndefined();
+  });
 });
 
 describe("buildErrorAgentMeta", () => {

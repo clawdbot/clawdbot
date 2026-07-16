@@ -1,7 +1,6 @@
 // Deepinfra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import {
-  clearLiveCatalogCacheForTests,
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -20,9 +19,9 @@ const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 });
 
 export const DEEPINFRA_BASE_URL = DEEPINFRA_MANIFEST_PROVIDER.baseUrl;
-export const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
+const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
 
-export const DEEPINFRA_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash";
+const DEEPINFRA_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V4-Flash";
 export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
 
 const DEEPINFRA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -95,10 +94,6 @@ interface DeepInfraDiscoveredCatalog {
   stt: DeepInfraSurfaceModel[];
   /** True iff served from a successful live fetch; false for the static fallback. */
   live: boolean;
-}
-
-export function resetDeepInfraModelCacheForTest(): void {
-  clearLiveCatalogCacheForTests();
 }
 
 const SURFACE_FOR_TAG: Record<string, DeepInfraSurface> = {

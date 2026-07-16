@@ -5,6 +5,7 @@ import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-s
 import {
   createSetupTranslator,
   createStandardChannelSetupStatus,
+  defineTokenCredential,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -133,8 +134,9 @@ export function createDiscordSetupWizardBase(handlers: {
         inspectDiscordSetupAccount({ cfg, accountId }).configured,
     }),
     credentials: [
-      {
+      defineTokenCredential({
         inputKey: "token",
+        configKey: "token",
         providerHint: channel,
         credentialLabel: t("wizard.discord.botToken"),
         preferredEnvVar: "DISCORD_BOT_TOKEN",
@@ -144,19 +146,15 @@ export function createDiscordSetupWizardBase(handlers: {
         keepPrompt: t("wizard.discord.tokenKeepPrompt"),
         inputPrompt: t("wizard.discord.tokenInputPrompt"),
         allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
-        inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
-          const account = inspectDiscordSetupAccount({ cfg, accountId });
-          return {
-            accountConfigured: account.configured,
-            hasConfiguredValue: account.tokenStatus !== "missing",
-            resolvedValue: normalizeOptionalString(account.token),
-            envValue:
-              accountId === DEFAULT_ACCOUNT_ID
-                ? normalizeOptionalString(process.env.DISCORD_BOT_TOKEN)
-                : undefined,
-          };
-        },
-      },
+        resolveAccount: ({ cfg, accountId }) => inspectDiscordSetupAccount({ cfg, accountId }),
+        accountConfigured: (account) => account.configured,
+        hasConfiguredValue: (account) => account.tokenStatus !== "missing",
+        resolvedValue: (account) => normalizeOptionalString(account.token),
+        envValue: ({ accountId }) =>
+          accountId === DEFAULT_ACCOUNT_ID
+            ? normalizeOptionalString(process.env.DISCORD_BOT_TOKEN)
+            : undefined,
+      }),
     ],
     groupAccess: createAccountScopedGroupAccessSection({
       channel,

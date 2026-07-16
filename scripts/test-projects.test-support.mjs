@@ -689,6 +689,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-pnpm-store-cache/action.yml",
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
@@ -697,7 +701,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/setup-pnpm-store-cache-ensure-node.test.ts"],
   ],
   [".github/images/live-media-runner/Dockerfile", LIVE_MEDIA_RUNNER_IMAGE_TEST_TARGETS],
+  [".github/workflows/auto-response.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [".github/workflows/ci.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/clawsweeper-dispatch.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/labeler.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [".github/workflows/real-behavior-proof.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/workflows/security-sensitive-guard.yml",
     ["test/scripts/security-sensitive-guard-workflow.test.ts"],
@@ -4418,7 +4426,7 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   });
 }
 
-export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
@@ -4427,7 +4435,7 @@ export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   );
 }
 
-export function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
+function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
   return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
 }
 
@@ -4568,6 +4576,27 @@ export function shouldRetryVitestNoOutputTimeout(env = process.env) {
     return false;
   }
   return !["0", "false", "no", "off"].includes(value ?? "");
+}
+
+// Shards may pin a short no-output window so the known warm-cache stall dies
+// fast (see AGENTS_CORE_RUNTIME_ENV in ci-node-test-plan.mjs). A cold Vitest
+// module cache makes those same imports legitimately silent for minutes, so
+// the retry attempt must get the full watchdog window or it re-dies at the
+// short limit and the job fails without ever running a test.
+const RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS = 300_000;
+
+export function withRetryNoOutputTimeout(spec) {
+  const current = Number(spec.env?.[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]);
+  if (!Number.isFinite(current) || current <= 0 || current >= RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS) {
+    return spec;
+  }
+  return {
+    ...spec,
+    env: {
+      ...spec.env,
+      [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(RETRY_NO_OUTPUT_TIMEOUT_FLOOR_MS),
+    },
+  };
 }
 
 export function createVitestRunSpecs(args, params = {}) {

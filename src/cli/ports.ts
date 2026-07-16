@@ -29,6 +29,9 @@ const FUSER_SIGNALS: Record<"SIGTERM" | "SIGKILL", string> = {
   SIGTERM: "TERM",
   SIGKILL: "KILL",
 };
+// Node waits for synchronous children to exit after a timeout signal.
+// SIGKILL keeps a tool from ignoring the startup deadline.
+const PORT_TOOL_TIMEOUT_MS = 10_000;
 
 function readExecOutput(value: string | Buffer | undefined): string {
   if (typeof value === "string") {
@@ -105,6 +108,8 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
     const stdout = execFileSync("fuser", args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return parseFuserPidList(stdout).map((pid) => ({ pid }));
   } catch (err: unknown) {
@@ -175,6 +180,8 @@ function listPortListeners(port: number): PortProcess[] {
     try {
       const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
+        timeout: PORT_TOOL_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       });
       const listeners = parseWindowsNetstatListeners(out, port);
       const seenPids = new Set<number>();
@@ -196,6 +203,8 @@ function listPortListeners(port: number): PortProcess[] {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
       encoding: "utf-8",
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     return parseLsofOutput(out);
   } catch (err: unknown) {

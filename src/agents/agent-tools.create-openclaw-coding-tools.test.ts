@@ -791,6 +791,7 @@ describe("createOpenClawCodingTools", () => {
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
+        clientCaps: ["inline-widgets"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: false,
@@ -806,6 +807,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+      expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

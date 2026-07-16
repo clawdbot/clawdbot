@@ -1,4 +1,5 @@
 /** Detects inbound media and audio markers in channel message context. */
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Minimal inbound media fields used by media/audio detection. */
@@ -62,6 +63,18 @@ export function hasInboundAudio(ctx: InboundMediaContext): boolean {
       : []),
   ].filter((type): type is string => Boolean(type));
   if (mediaTypes.some((type) => type === "audio" || type.startsWith("audio/"))) {
+    return true;
+  }
+
+  // Keep the locked-session gate aligned with media-understanding attachment
+  // classification when a channel omits MIME metadata.
+  const mediaLocations = [
+    ctx.MediaPath,
+    ctx.MediaUrl,
+    ...(Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : []),
+    ...(Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : []),
+  ];
+  if (mediaLocations.some((value) => isAudioFileName(normalizeOptionalString(value)))) {
     return true;
   }
 

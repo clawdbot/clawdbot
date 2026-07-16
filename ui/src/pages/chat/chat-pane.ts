@@ -129,6 +129,7 @@ import {
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerSnapshot,
@@ -1553,6 +1554,18 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(() =>
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
     );
+    // Interactive widget prompts bubble from the widget iframe; a listener on
+    // the pane element keeps split-view routing correct — the prompt reaches
+    // only the pane that owns the frame.
+    const handleWidgetPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<Partial<WidgetPromptEventDetail>>).detail;
+      const text = typeof detail?.text === "string" ? detail.text.trim() : "";
+      if (text) {
+        void this.state?.handleSendChat(text);
+      }
+    };
+    this.addEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt);
+    chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {
         this.applyGatewaySnapshot(snapshot);

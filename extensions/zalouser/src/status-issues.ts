@@ -7,6 +7,10 @@ import {
   coerceStatusIssueAccountId,
   readStatusIssueFields,
 } from "openclaw/plugin-sdk/extension-shared";
+import {
+  standardDmPolicyOpenIssue,
+  standardNotConfiguredIssue,
+} from "openclaw/plugin-sdk/status-helpers";
 
 const ZALOUSER_STATUS_FIELDS = [
   "accountId",
@@ -34,25 +38,26 @@ export function collectZalouserStatusIssues(
     const configured = account.configured === true;
 
     if (!configured) {
-      issues.push({
-        channel: "zalouser",
-        accountId,
-        kind: "auth",
-        message: "Not authenticated (no saved Zalo session).",
-        fix: "Run: openclaw channels login --channel zalouser",
-      });
+      issues.push(
+        standardNotConfiguredIssue({
+          channel: "zalouser",
+          accountId,
+          message: "Not authenticated (no saved Zalo session).",
+          fix: "Run: openclaw channels login --channel zalouser",
+        }),
+      );
       continue;
     }
 
     if (account.dmPolicy === "open") {
-      issues.push({
-        channel: "zalouser",
-        accountId,
-        kind: "config",
-        message:
-          'Zalo Personal dmPolicy is "open", allowing any user to message the bot without pairing.',
-        fix: 'Set channels.zalouser.dmPolicy to "pairing" or "allowlist" to restrict access.',
-      });
+      issues.push(
+        standardDmPolicyOpenIssue({
+          channel: "zalouser",
+          accountId,
+          channelLabel: "Zalo Personal",
+          configPath: "channels.zalouser",
+        }),
+      );
     }
   }
   return issues;

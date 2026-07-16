@@ -13,6 +13,7 @@ import {
   isJsonContentType,
   readWebhookBodyOrReject,
   readJsonWebhookBodyOrReject,
+  runDetachedWebhookWork,
 } from "./webhook-request-guards.js";
 
 type MockIncomingMessage = IncomingMessage & {
@@ -297,5 +298,69 @@ describe("beginWebhookRequestPipelineOrReject", () => {
     if (third.ok) {
       third.release();
     }
+  });
+});
+
+describe("runDetachedWebhookWork", () => {
+  it("defers the callback until the request handler can acknowledge", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const order: string[] = [];
+    const detached: Promise<void>[] = [];
+
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      detached.push(
+        runDetachedWebhookWork(async () => {
+          order.push("work");
+        }),
+      );
+      order.push("ack");
+      expect(order).toEqual(["ack"]);
+      return true;
+    });
+
+    await Promise.all(detached);
+    expect(order).toEqual(["ack", "work"]);
+  });
+
+  it("keeps post-ack processing admitted after the request admission is released", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let detached: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      // Ack-first shape: dispatch continues after the handler (and its
+      // admission) completes; the queue enqueue happens well past release.
+      detached = runDetachedWebhookWork(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        return await enqueueCommandInLane("detached-webhook-work-test", async () => 42);
+      });
+      return true;
+    });
+
+    await expect(detached).resolves.toBe(42);
+  });
+
+  it("refuses the same post-ack processing when it merely inherits the request admission", async () => {
+    const { runWithGatewayHttpWorkAdmission } =
+      await import("../gateway/server/http-work-admission.js");
+    const { enqueueCommandInLane } = await import("../process/command-queue.js");
+
+    let inherited: Promise<number> | null = null;
+    await runWithGatewayHttpWorkAdmission(createMockServerResponse(), async () => {
+      inherited = (async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        return await enqueueCommandInLane("inherited-webhook-work-test", async () => 42);
+      })();
+      inherited.catch(() => {});
+      return true;
+    });
+
+    await expect(inherited).rejects.toThrow("Gateway is draining");
   });
 });

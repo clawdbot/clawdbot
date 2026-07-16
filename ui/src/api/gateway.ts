@@ -457,10 +457,12 @@ export class GatewayBrowserClient {
         scopes,
         device,
         caps: [
+          GATEWAY_CLIENT_CAPS.APPROVALS,
           GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
           GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
           GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+          GATEWAY_CLIENT_CAPS.UI_COMMANDS,
         ],
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,

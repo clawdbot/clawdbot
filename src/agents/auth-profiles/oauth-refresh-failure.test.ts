@@ -120,6 +120,20 @@ describe("oauth refresh failure hints", () => {
     });
   });
 
+  it("classifies structured claude-cli logged-out failures without the provider prefix in the message", () => {
+    const error = new FailoverError("Not logged in \u00b7 Please run /login", {
+      reason: "auth",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-20250514",
+      status: 401,
+    });
+
+    expect(classifyOAuthRefreshFailureError(error)).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+  });
+
   it("does not classify a 401 auth failure without claude-cli prefix as a refresh failure", () => {
     // A generic 401 from another provider should NOT be treated as an OAuth
     // refresh failure — it lacks the "claude-cli" provider prefix.

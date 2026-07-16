@@ -2,6 +2,11 @@
  * Gateway request context construction tests.
  */
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 
@@ -87,6 +92,35 @@ function makeContextParams(
   };
 }
 
+function makeGatewayClient(params: {
+  connId: string;
+  clientId: (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
+  mode?: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
+  scopes?: string[];
+  caps?: string[];
+  approvalRuntime?: boolean;
+  invalidated?: boolean;
+}) {
+  return {
+    connId: params.connId,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: params.clientId,
+        version: "test",
+        platform: "test",
+        mode: params.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      },
+      scopes: params.scopes ?? [],
+      caps: params.caps ?? [],
+    },
+    socket: { close: vi.fn() },
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    ...(params.invalidated ? { invalidated: true } : {}),
+  };
+}
+
 describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
@@ -140,6 +174,103 @@ describe("createGatewayRequestContext", () => {
       hotReloadStatus: () => "disabled",
     };
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
+  it("does not treat scoped CLI or backend callers as approval delivery routes", () => {
+    const clients = new Set([
+      makeGatewayClient({
+        connId: "cli",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.admin"],
+      }),
+      makeGatewayClient({
+        connId: "backend",
+        clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes: ["operator.approvals"],
+      }),
+    ]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+
+    expect(context.hasExecApprovalClients?.()).toBe(false);
+    expect(context.getApprovalClientConnIds?.()).toEqual(new Set());
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(new Set());
+  });
+
+  it("preserves only clients that handle each approval kind", () => {
+    const clients = new Set([
+      makeGatewayClient({
+        connId: "control-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        scopes: ["operator.approvals"],
+      }),
+      makeGatewayClient({
+        connId: "ios",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        scopes: ["operator.admin"],
+      }),
+      makeGatewayClient({
+        connId: "bridge",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "acp",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "tui",
+        clientId: GATEWAY_CLIENT_IDS.TUI,
+        scopes: ["operator.approvals"],
+      }),
+      makeGatewayClient({
+        connId: "plugin-bridge",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "runtime",
+        clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes: ["operator.approvals"],
+        approvalRuntime: true,
+      }),
+      makeGatewayClient({
+        connId: "invalidated-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.approvals"],
+        invalidated: true,
+      }),
+      makeGatewayClient({
+        connId: "unscoped-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+    ]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+
+    expect(context.hasExecApprovalClients?.()).toBe(true);
+    expect(context.getApprovalClientConnIds?.()).toEqual(
+      new Set(["control-ui", "ios", "bridge", "acp", "runtime"]),
+    );
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(
+      new Set(["control-ui", "bridge", "tui", "plugin-bridge", "runtime"]),
+    );
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "system-agent" })).toEqual(
+      new Set(["control-ui", "bridge", "runtime"]),
+    );
+    expect(context.hasExecApprovalClients?.("control-ui")).toBe(true);
+    expect(
+      context.getApprovalClientConnIds?.({
+        excludeConnId: "control-ui",
+        filter: (client) => client.connect.client.id === GATEWAY_CLIENT_IDS.IOS_APP,
+      }),
+    ).toEqual(new Set(["ios"]));
   });
 
   it("invalidateClientsForDevice sets the flag on matching clients without closing the socket", () => {

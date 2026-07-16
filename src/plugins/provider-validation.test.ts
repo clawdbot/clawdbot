@@ -1,7 +1,8 @@
 /** Covers provider registration validation for ids, duplicates, and required hooks. */
 import { describe, expect, it } from "vitest";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
-import type { PluginDiagnostic, ProviderPlugin } from "./types.js";
+import type { ProviderPlugin } from "./types.js";
 
 function collectDiagnostics() {
   const diagnostics: PluginDiagnostic[] = [];

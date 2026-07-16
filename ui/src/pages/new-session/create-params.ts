@@ -14,6 +14,7 @@ export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
   model?: string;
+  thinkingLevel?: string;
   attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
@@ -28,6 +29,7 @@ export function buildDraftSessionCreateParams(draft: {
   const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
   const model = normalizeOptionalString(draft.model);
+  const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
@@ -36,6 +38,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(draft.worktree
       ? {
           worktree: true,

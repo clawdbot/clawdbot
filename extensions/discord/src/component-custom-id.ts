@@ -11,6 +11,10 @@ export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 const DISCORD_ACTIVITY_CUSTOM_ID_KEY = "ocactivity";
 const ENCODED_CUSTOM_ID_VERSION = "1";
 
+export function isValidDiscordActivityWidgetId(widgetId: string): boolean {
+  return /^[A-Za-z0-9_-]{22}$/.test(widgetId);
+}
+
 export function buildDiscordActivityCustomId(widgetId: string): string {
   return `${DISCORD_ACTIVITY_CUSTOM_ID_KEY}:v=${ENCODED_CUSTOM_ID_VERSION};wid=${widgetId}`;
 }
@@ -21,7 +25,7 @@ export function parseDiscordActivityCustomId(id: string): { widgetId: string } |
     parsed.key !== DISCORD_ACTIVITY_CUSTOM_ID_KEY ||
     parsed.data.v !== ENCODED_CUSTOM_ID_VERSION ||
     typeof parsed.data.wid !== "string" ||
-    !/^[A-Za-z0-9_-]{22}$/.test(parsed.data.wid)
+    !isValidDiscordActivityWidgetId(parsed.data.wid)
   ) {
     return null;
   }

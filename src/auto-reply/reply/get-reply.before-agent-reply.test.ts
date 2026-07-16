@@ -10,6 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -30,9 +31,11 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
 function createContinueDirectivesResult() {
@@ -60,6 +63,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     mocks.initSessionState.mockReset();
     mocks.hasHooks.mockReset();
     mocks.runBeforeAgentReply.mockReset();
+    vi.mocked(runPreparedReplyMock).mockReset().mockResolvedValue(undefined);
 
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
@@ -165,6 +169,36 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
+  });
+
+  it("defers dispatch-owned hooks into the admitted reply run", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "durable plugin reply" },
+    });
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:telegram:-100123",
+      sessionId: "session-1",
+      resetTriggered: false,
+    });
+
+    try {
+      await expect(
+        getReplyFromConfig(buildGetReplyGroupCtx(), { replyOperation } as never, {}),
+      ).resolves.toBeUndefined();
+
+      expect(mocks.runBeforeAgentReply).not.toHaveBeenCalled();
+      const runParams = expectDefined(
+        vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0],
+        "runPreparedReply params",
+      );
+      await expect(runParams.beforeAgentReply?.()).resolves.toEqual({
+        text: "durable plugin reply",
+      });
+      expect(mocks.runBeforeAgentReply).toHaveBeenCalledOnce();
+    } finally {
+      replyOperation.complete();
+    }
   });
 });
 afterEach(() => {

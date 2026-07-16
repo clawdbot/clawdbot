@@ -48,6 +48,8 @@ type SendExecApprovalFollowupResult =
 type BuildExecApprovalFollowupTarget =
   typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
 type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
+type ShouldResolveExecApprovalUnavailableInline =
+  typeof import("./bash-tools.exec-host-shared.js").shouldResolveExecApprovalUnavailableInline;
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
@@ -171,7 +173,9 @@ const markBackgroundedMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
 );
-const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() => vi.fn(() => false));
+const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() =>
+  vi.fn<ShouldResolveExecApprovalUnavailableInline>(() => false),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -409,6 +413,15 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
+  async function useRealUnavailableApprovalGate() {
+    const actualShared = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(
+      "./bash-tools.exec-host-shared.js",
+    );
+    shouldResolveExecApprovalUnavailableInlineMock.mockImplementation(
+      actualShared.shouldResolveExecApprovalUnavailableInline,
+    );
+  }
+
   async function planAllowlistedNodeVersion() {
     const command = "node --version";
     const authorizationPlan = await planShellAuthorization({ command, env: process.env });
@@ -612,6 +625,84 @@ describe("processGatewayAllowlist", () => {
     expect(serialized).not.toContain("deploy");
     expect(serialized).not.toContain("raw-secret-value");
     expect(serialized).not.toContain("agent-1");
+  });
+
+  it("resolves a triggerless CLI no-route approval through the real gate", async () => {
+    await useRealUnavailableApprovalGate();
+    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
+      approvalId: "approval-cli-no-route",
+      approvalSlug: "slug",
+      warningText: "",
+      expiresAtMs: 0,
+      preResolvedDecision: null,
+      initiatingSurface: { kind: "unsupported" },
+      sentApproverDms: false,
+      unavailableReason: "no-approval-route",
+    });
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+    const captured = captureSecurityEvents();
+
+    try {
+      await expect(
+        runGatewayAllowlist({
+          command: "echo askfallback-proof",
+          agentId: "agent-1",
+          ask: "on-miss",
+        }),
+      ).rejects.toThrow("denied");
+    } finally {
+      captured.stop();
+    }
+
+    expect(shouldResolveExecApprovalUnavailableInlineMock).toHaveBeenCalledWith({
+      unavailableReason: "no-approval-route",
+      preResolvedDecision: null,
+    });
+    expect(shouldResolveExecApprovalUnavailableInlineMock).toHaveReturnedWith(true);
+    expect(resolveApprovalDecisionOrUndefinedMock).not.toHaveBeenCalled();
+    expect(captured.events.at(-1)).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+    });
+  });
+
+  it("preserves a routed approval through the real gate", async () => {
+    await useRealUnavailableApprovalGate();
+    createAndRegisterDefaultExecApprovalRequestMock.mockResolvedValue({
+      approvalId: "approval-routed",
+      approvalSlug: "slug",
+      warningText: "",
+      expiresAtMs: Date.now() + 60_000,
+      preResolvedDecision: undefined,
+      initiatingSurface: { kind: "channel" },
+      sentApproverDms: true,
+      unavailableReason: null,
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = await runGatewayAllowlist({
+      command: "echo routed-approval-proof",
+      agentId: "agent-1",
+      ask: "on-miss",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(shouldResolveExecApprovalUnavailableInlineMock).toHaveBeenCalledWith({
+      unavailableReason: null,
+      preResolvedDecision: undefined,
+    });
+    expect(shouldResolveExecApprovalUnavailableInlineMock).toHaveReturnedWith(false);
+    expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-routed" }),
+    );
   });
 
   it("emits an approved security event for inline unavailable approval approvals", async () => {

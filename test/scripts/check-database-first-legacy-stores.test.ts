@@ -231,6 +231,19 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags runtime writes to the retired APNs registration store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "push", "apns-registrations.json"), "{}\n");
+      `,
+      "src/infra/push-apns-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
   it("flags runtime writes to the retired node-host JSON config", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -239,6 +252,19 @@ describe("check-database-first-legacy-stores", () => {
         await fs.writeFile(path.join(stateDir, "node.json"), "{}\n");
       `,
       "src/node-host/config-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired subagent JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "subagents", "runs.json"), "{}\n");
+      `,
+      "src/agents/subagent-registry-file-store.ts",
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);

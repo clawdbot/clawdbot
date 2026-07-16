@@ -4,6 +4,7 @@ import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
   fetchJson,
+  parseUsageResetAt,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -44,7 +45,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(data.five_hour.resets_at),
     });
   }
 
@@ -52,7 +53,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(data.seven_day.resets_at),
     });
   }
 
@@ -78,7 +79,7 @@ function buildClaudeUsageWindows(
     windows.push({
       label,
       usedPercent: clampPercent(limit.percent ?? 0),
-      resetAt: limit.resets_at ? new Date(limit.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(limit.resets_at),
     });
   }
 

@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
+import { decodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
@@ -15,6 +16,9 @@ const resolveTaskScriptPathMock = vi.hoisted(() =>
     return path.join(home, ".openclaw", "gateway.cmd");
   }),
 );
+// Pin code page detection so hosts with CJK home paths cannot leak the real
+// PowerShell probe into script-encoding assertions.
+const resolveWindowsSystemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -32,6 +36,14 @@ vi.mock("../daemon/schtasks.js", () => ({
   resolveTaskScriptPath: (env: Record<string, string | undefined>) =>
     resolveTaskScriptPathMock(env),
 }));
+vi.mock("./windows-encoding.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
+  return {
+    ...actual,
+    resolveWindowsSystemEncoding: () => resolveWindowsSystemEncodingMock(),
+  };
+});
 
 type WindowsTaskRestartModule = typeof import("./windows-task-restart.js");
 
@@ -90,6 +102,8 @@ describe("relaunchGatewayScheduledTask", () => {
       const home = env.USERPROFILE || env.HOME || os.homedir();
       return path.join(home, ".openclaw", "gateway.cmd");
     });
+    resolveWindowsSystemEncodingMock.mockReset();
+    resolveWindowsSystemEncodingMock.mockReturnValue(null);
   });
 
   it("writes a detached schtasks relaunch helper", () => {
@@ -124,6 +138,8 @@ describe("relaunchGatewayScheduledTask", () => {
     }
     expect(fs.statSync(scriptPath).isFile()).toBe(true);
     const script = fs.readFileSync(scriptPath, "utf8");
+    // ASCII helper scripts stay marker-free UTF-8 bytes.
+    expect(script.startsWith("@echo off\r\n")).toBe(true);
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
@@ -247,5 +263,58 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script).toContain(":fallback");
     expect(script).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
     expect(script).toContain(taskScriptPath);
+  });
+
+  // Pin the host home/state paths embedded in the script to ASCII so the only
+  // code-page-sensitive content in the gbk tests is the task name under test;
+  // otherwise a non-GBK Windows username (Hangul/Thai/...) fails the encode.
+  const asciiPathEnv = {
+    HOME: "C:\\ocw-test",
+    USERPROFILE: "C:\\ocw-test",
+    OPENCLAW_STATE_DIR: "C:\\ocw-test\\state",
+  };
+
+  it("writes marked code-page bytes for CJK task names that decode back exactly", () => {
+    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    const result = relaunchGatewayScheduledTask({
+      ...asciiPathEnv,
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (隆)",
+    });
+
+    expect(result.ok).toBe(true);
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const raw = fs.readFileSync(scriptPath);
+    expect(raw.toString("latin1").startsWith("@rem openclaw-launcher-encoding=gbk\r\n")).toBe(true);
+    // The old raw-UTF-8 writer would have kept the task name readable here.
+    expect(raw.toString("utf8")).not.toContain("隆");
+    const script = decodeWindowsLauncherScript({ buffer: raw });
+    expect(script.startsWith("@echo off\r\n")).toBe(true);
+    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (隆)" >>');
+    expect(script).toContain('del "%~f0" >nul 2>&1');
+  });
+
+  it("returns failed instead of writing an unrepresentable helper script", () => {
+    resolveWindowsSystemEncodingMock.mockReturnValue("gbk");
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn should not be reached");
+    });
+
+    const result = relaunchGatewayScheduledTask({
+      ...asciiPathEnv,
+      OPENCLAW_WINDOWS_TASK_NAME: "🚀",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.method).toBe("schtasks");
+    expect(result.detail).toMatch(/cannot be represented/);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

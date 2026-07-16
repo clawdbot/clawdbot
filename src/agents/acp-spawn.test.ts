@@ -10,11 +10,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
-  type SessionBindingAdapterCapabilities,
+  type SessionBindingAdapter,
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import { resolveThinkingDefault } from "./model-selection.js";
+
+type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {

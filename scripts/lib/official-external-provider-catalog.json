@@ -142,6 +142,55 @@
       }
     },
     {
+      "name": "@openclaw/baseten-provider",
+      "description": "OpenClaw Baseten provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "baseten",
+          "label": "Baseten"
+        },
+        "providers": [
+          {
+            "id": "baseten",
+            "name": "Baseten",
+            "docs": "/providers/baseten",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "BASETEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "baseten-api-key",
+                "choiceLabel": "Baseten API key",
+                "groupId": "baseten",
+                "groupLabel": "Baseten",
+                "groupHint": "Hosted Model APIs, including Inkling",
+                "optionKey": "basetenApiKey",
+                "cliFlag": "--baseten-api-key",
+                "cliOption": "--baseten-api-key <key>",
+                "cliDescription": "Baseten API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/baseten-provider",
+          "npmSpec": "@openclaw/baseten-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cerebras-provider",
       "description": "OpenClaw Cerebras provider plugin.",
       "source": "official",
@@ -362,47 +411,6 @@
           "npmSpec": "@openclaw/cloudflare-ai-gateway-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
-        }
-      }
-    },
-    {
-      "name": "@openclaw/codex",
-      "description": "OpenClaw Codex harness and model provider plugin",
-      "source": "official",
-      "kind": "provider",
-      "openclaw": {
-        "plugin": {
-          "id": "codex",
-          "label": "Codex"
-        },
-        "contracts": {
-          "migrationProviders": ["codex"]
-        },
-        "providers": [
-          {
-            "id": "codex",
-            "name": "Codex",
-            "docs": "/providers/models",
-            "categories": ["cloud", "llm"],
-            "authChoices": [
-              {
-                "method": "app-server",
-                "choiceId": "codex",
-                "choiceLabel": "Codex app-server",
-                "choiceHint": "Use the Codex app-server runtime and managed model catalog.",
-                "assistantPriority": -40,
-                "groupId": "codex",
-                "groupLabel": "Codex",
-                "groupHint": "Codex app-server model provider",
-                "onboardingScopes": ["text-inference"]
-              }
-            ]
-          }
-        ],
-        "install": {
-          "npmSpec": "@openclaw/codex",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.1-beta.1"
         }
       }
     },

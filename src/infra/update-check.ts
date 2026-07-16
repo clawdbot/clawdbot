@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
@@ -186,17 +186,19 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
   registryUrl?: string;
   packageName?: string;
 }): Promise<NpmPackageTargetStatus> {
+  const url = npmRegistryTargetUrl({
+    registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
+    packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
+    target: params.target,
+  });
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: Math.max(250, params.timeoutMs),
+    operation: "npm-registry-update-check",
+    url,
+  });
   let res: Response | undefined;
   try {
-    res = await fetchWithTimeout(
-      npmRegistryTargetUrl({
-        registryUrl: params.registryUrl ?? PUBLIC_NPM_REGISTRY_URL,
-        packageName: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
-        target: params.target,
-      }),
-      {},
-      Math.max(250, params.timeoutMs),
-    );
+    res = await fetch(url, { signal });
     if (!res.ok) {
       return {
         target: params.target,
@@ -205,6 +207,8 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
         error: `HTTP ${res.status}`,
       };
     }
+    // Keep the deadline active through body consumption. Fetch resolves at
+    // headers, so clearing it earlier would leave a stalled registry body unbounded.
     const json = await readProviderJsonResponse<{
       version?: unknown;
       engines?: { node?: unknown };
@@ -220,6 +224,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
     if (res?.bodyUsed !== true) {
       await res?.body?.cancel().catch(() => undefined);
     }
+    cleanup();
   }
 }
 

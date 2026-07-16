@@ -88,6 +88,100 @@ suite("Codex native session catalog", () => {
     await page.close();
   });
 
+  it("groups sessions by host and hides empty offline nodes", async () => {
+    const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true },
+              hosts: [
+                {
+                  hostId: "gateway:local",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "thread-local",
+                      name: "Local planning session",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                  ],
+                },
+                {
+                  hostId: "node:offline-a",
+                  label: "Offline Workstation",
+                  kind: "node",
+                  connected: false,
+                  sessions: [],
+                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+                },
+                {
+                  hostId: "node:build",
+                  label: "Build Node",
+                  kind: "node",
+                  connected: true,
+                  sessions: [
+                    {
+                      threadId: "thread-remote",
+                      name: "Remote review session",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                  ],
+                },
+                {
+                  hostId: "node:offline-b",
+                  label: "Offline Laptop",
+                  kind: "node",
+                  connected: false,
+                  sessions: [],
+                  error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const section = page.locator('[data-session-section="catalog:codex"]');
+      await section.waitFor({ state: "visible" });
+      await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
+      expect(await section.locator('[data-session-catalog-host="gateway:local"]').count()).toBe(1);
+      expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
+      expect(await section.getByText("Offline Workstation", { exact: true }).count()).toBe(0);
+      expect(await section.getByText("Offline Laptop", { exact: true }).count()).toBe(0);
+      const toggle = section.locator(".sidebar-session-group-toggle");
+      expect(await toggle.getAttribute("title")).toBeNull();
+      await expect
+        .poll(() => section.locator(".sidebar-session-group-count").textContent())
+        .toBe("2");
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await section.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
+        });
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   it("explains node-list failures and exposes independent discovery settings", async () => {
     const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
     await installMockGateway(page, {
@@ -205,6 +299,7 @@ suite("Codex native session catalog", () => {
       await expect
         .poll(() => warning.getAttribute("title"))
         .toContain("Settings > Automation > Plugins");
+      expect(await page.locator('[data-session-catalog-host="node:registry"]').count()).toBe(0);
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });

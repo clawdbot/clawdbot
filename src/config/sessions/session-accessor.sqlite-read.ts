@@ -14,6 +14,7 @@ import type {
   LatestTranscriptAssistantMessage,
   LatestTranscriptAssistantText,
   SessionTranscriptReadScope,
+  SessionTranscriptEventRow,
   SessionTranscriptStats,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -43,6 +44,53 @@ export function loadSqliteTranscriptEventsSync(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
+}
+
+/** Loads additive transcript rows after one durable sequence checkpoint. */
+export function loadSqliteTranscriptEventRowsAfterSeqSync(
+  scope: SessionTranscriptReadScope,
+  afterSeq: number,
+  throughSeq?: number,
+): SessionTranscriptEventRow[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  let query = db
+    .selectFrom("transcript_events")
+    .select(["event_json", "seq"])
+    .where("session_id", "=", resolved.sessionId)
+    .where("seq", ">", afterSeq);
+  if (throughSeq !== undefined) {
+    query = query.where("seq", "<=", throughSeq);
+  }
+  return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
+    event: JSON.parse(row.event_json) as TranscriptEvent,
+    seq: normalizeSqliteNumber(row.seq),
+  }));
+}
+
+/** Reads one checkpoint row so incremental consumers can reject transcript rewrites. */
+export function readSqliteTranscriptEventAtSeqSync(
+  scope: SessionTranscriptReadScope,
+  seq: number,
+): SessionTranscriptEventRow | undefined {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", resolved.sessionId)
+      .where("seq", "=", seq),
+  );
+  return row
+    ? {
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        seq: normalizeSqliteNumber(row.seq),
+      }
+    : undefined;
 }
 
 export function loadSqliteTranscriptEventsFromDatabase(

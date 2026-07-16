@@ -16,7 +16,13 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
     expect(source).toContain("OpenClaw did not fail closed without inference");
     expect(source).toContain("activateSetupInference({");
-    expect(source).toContain('runPackagedCli(["setup", "--message", "overview"])');
+    expect(source).toContain("verifySetupInference");
+    expect(source).toContain("runSystemAgent");
+    expect(source).toContain("runPackagedOneShot(message, command.approve)");
+    expect(source).toContain('"--modern"');
+    expect(source).toContain(
+      "modern compatibility entrypoint did not expose OpenClaw after activation",
+    );
     expect(source).toContain("const PACKAGED_CLI_TIMEOUT_MS = 60_000");
     expect(source).toContain("inference activation did not send the live model probe");
     expect(source).toContain("function resolveDefaultModel(config: OpenClawConfig)");
@@ -24,20 +30,18 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("Fake Claude planner selected an inference-backed typed setup.");
     expect(source).toContain("[openclaw] interpreted: ${plannerCommand}");
     expect(source).toContain("expected one fuzzy setup planner prompt");
-    expect(source).toContain('runPackagedCli(["plugins", "list", "--json"])');
-    expect(source).toContain(
-      "Telegram channel config did not auto-enable the packaged Telegram plugin",
-    );
+    expect(source).toContain("OpenClaw did not enable Discord");
+    expect(source).toContain("OpenClaw did not write Discord token SecretRef");
     expect(source).toContain("OpenClaw first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"openclaw.setup"');
     expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
     expect(spec).toContain('"planner": true');
-    expect(spec).toContain('"telegramEnv": "TELEGRAM_BOT_TOKEN"');
-    expect(spec).toContain("config set-ref channels.telegram.botToken env {telegramEnv}");
+    expect(source).toContain('const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"]');
+    expect(spec).toContain("config set-ref channels.discord.token env {discordEnv}");
     expect(spec).not.toContain("plugins.allow");
-    expect(spec).not.toContain("plugins.entries.telegram.enabled");
-    expect(spec).not.toContain("channels.discord");
+    expect(spec).not.toContain("plugins.entries.discord.enabled");
+    expect(spec).not.toContain("channels.telegram");
   });
 
   it("keeps rescue checks wired through auto-reply command handling", () => {

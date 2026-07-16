@@ -116,7 +116,7 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
           .locator(".chat-working-indicator__status > span:not(.agent-chat__sr-only)")
           .count(),
       ).toBe(0);
-      await page.clock.runFor(177_000);
+      await page.clock.fastForward(177_000);
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");

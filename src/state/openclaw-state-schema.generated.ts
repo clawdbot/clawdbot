@@ -7,13 +7,13 @@ export const OPENCLAW_STATE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS auth_profil
   store_key TEXT NOT NULL PRIMARY KEY,
   store_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS auth_profile_state (
   store_key TEXT NOT NULL PRIMARY KEY,
   state_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
   payload_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (scope, event_key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
   ON diagnostic_events(scope, created_at, event_key);
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_used_at_ms INTEGER NOT NULL,
   use_count INTEGER NOT NULL,
   last_agent_id TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS skill_lifecycle (
   state_changed_at_ms INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL,
   archived_reason TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_key
   ON skill_lifecycle(skill_key, skill_file);
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS skill_curator_state (
   last_success_at_ms INTEGER,
   last_error TEXT,
   last_result_json TEXT NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   conversation_ref TEXT,
   message_ref TEXT,
   target_ref TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_time
   ON audit_events(occurred_at DESC, sequence DESC);
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   key_id TEXT NOT NULL,
   key BLOB NOT NULL,
   created_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS session_state_events (
   occurred_at INTEGER NOT NULL,
   summary TEXT NOT NULL,
   payload_json TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_session_state_events_session_sequence
   ON session_state_events(session_key, sequence DESC);
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, agent_id)
-);
+) STRICT;
 
 -- Watcher identity is the bare session key, matching the process-local system-event
 -- queue it feeds. Producers only create rows for agent-qualified watcher keys;
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS session_watch_cursors (
   material_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (watcher_session_key, target_session_key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
   ON session_watch_cursors(target_session_key);
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS session_upstream_links (
   -- (session_key, agent_id) composite identity: under session.scope="global" agents
   -- share bare keys; a key-only row would let one agent overwrite another's upstream.
   PRIMARY KEY (session_key, agent_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_session_upstream_links_catalog_id
   ON session_upstream_links(catalog_id);
@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   generated_at TEXT NOT NULL,
   bundle_json TEXT NOT NULL,
   created_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
   ON diagnostic_stability_bundles(created_at DESC, bundle_key);
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS state_leases (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (scope, lease_key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   ON state_leases(expires_at, scope, lease_key)
@@ -239,7 +239,7 @@ CREATE TABLE IF NOT EXISTS exec_approvals_config (
   agent_count INTEGER NOT NULL,
   allowlist_count INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS operator_approvals (
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
       AND consumed_by IS NOT NULL
     )
   )
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
@@ -372,7 +372,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   app_version TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,
@@ -391,7 +391,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   is_repair INTEGER,
   ts INTEGER NOT NULL,
   refreshed_at_ms INTEGER
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_pairing_pending_device
   ON device_pairing_pending(device_id, ts DESC);
@@ -418,7 +418,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   approved_at_ms INTEGER NOT NULL,
   last_seen_at_ms INTEGER,
   last_seen_reason TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
   ON device_pairing_paired(approved_at_ms DESC, device_id);
@@ -434,7 +434,7 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
   pending_profile_json TEXT,
   issued_at_ms INTEGER NOT NULL,
   last_used_at_ms INTEGER
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
@@ -446,7 +446,7 @@ CREATE TABLE IF NOT EXISTS device_identities (
   private_key_pem TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_identities_device
   ON device_identities(device_id, updated_at_ms DESC);
@@ -458,7 +458,7 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
   scopes_json TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (device_id, role)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
@@ -467,7 +467,7 @@ CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
   package_name TEXT NOT NULL PRIMARY KEY,
   sort_order INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
   ON android_notification_recent_packages(sort_order, package_name);
@@ -478,7 +478,7 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   command TEXT NOT NULL,
   mode TEXT NOT NULL,
   timestamp REAL NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
@@ -490,7 +490,7 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   bootstrap_seeded_at TEXT,
   setup_completed_at TEXT,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path
   ON workspace_setup_state(workspace_path);
@@ -503,7 +503,7 @@ CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
   token TEXT NOT NULL,
   expires_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
   ON native_hook_relay_bridges(expires_at_ms, relay_id);
@@ -524,7 +524,7 @@ CREATE TABLE IF NOT EXISTS model_capability_cache (
   cost_cache_write REAL NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (provider_id, model_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
   ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
@@ -534,7 +534,7 @@ CREATE TABLE IF NOT EXISTS agent_model_catalogs (
   agent_dir TEXT NOT NULL,
   raw_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
   ON agent_model_catalogs(agent_dir, updated_at DESC);
@@ -558,7 +558,7 @@ CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
   original_filename TEXT,
   record_json TEXT NOT NULL,
   cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
   ON managed_outgoing_image_records(session_key, created_at DESC, attachment_id);
@@ -583,7 +583,7 @@ CREATE TABLE IF NOT EXISTS channel_pairing_requests (
   last_seen_at TEXT NOT NULL,
   meta_json TEXT,
   PRIMARY KEY (channel_key, account_id, request_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_channel_pairing_requests_code
   ON channel_pairing_requests(channel_key, code);
@@ -598,7 +598,7 @@ CREATE TABLE IF NOT EXISTS channel_pairing_allow_entries (
   sort_order INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (channel_key, account_id, entry)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_channel_pairing_allow_account
   ON channel_pairing_allow_entries(channel_key, account_id, sort_order, entry);
@@ -611,7 +611,7 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   auth TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
@@ -622,7 +622,7 @@ CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
   private_key TEXT NOT NULL,
   subject TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
@@ -631,15 +631,21 @@ CREATE TABLE IF NOT EXISTS apns_registrations (
   relay_handle TEXT,
   send_grant TEXT,
   installation_id TEXT,
+  relay_origin TEXT,
   topic TEXT NOT NULL,
   environment TEXT NOT NULL,
   distribution TEXT,
   token_debug_suffix TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
   ON apns_registrations(updated_at_ms DESC, node_id);
+
+CREATE TABLE IF NOT EXISTS apns_registration_tombstones (
+  node_id TEXT NOT NULL PRIMARY KEY,
+  deleted_at_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS node_host_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -653,7 +659,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
@@ -661,7 +667,7 @@ CREATE TABLE IF NOT EXISTS voicewake_triggers (
   trigger TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (config_key, position)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_voicewake_triggers_trigger
   ON voicewake_triggers(config_key, trigger);
@@ -673,7 +679,7 @@ CREATE TABLE IF NOT EXISTS voicewake_routing_config (
   default_target_agent_id TEXT,
   default_target_session_key TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
   config_key TEXT NOT NULL,
@@ -685,7 +691,7 @@ CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (config_key, position),
   FOREIGN KEY (config_key) REFERENCES voicewake_routing_config(config_key) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_voicewake_routing_routes_trigger
   ON voicewake_routing_routes(config_key, trigger);
@@ -706,7 +712,7 @@ CREATE TABLE IF NOT EXISTS update_check_state (
   auto_last_success_version TEXT,
   auto_last_success_at TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS config_health_entries (
   config_path TEXT NOT NULL PRIMARY KEY,
@@ -714,7 +720,7 @@ CREATE TABLE IF NOT EXISTS config_health_entries (
   last_promoted_good_json TEXT,
   last_observed_suspicious_signature TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
   state_key TEXT NOT NULL PRIMARY KEY,
@@ -724,7 +730,7 @@ CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
   last_checked_at_ms INTEGER,
   notified_slugs_json TEXT NOT NULL DEFAULT '[]',
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
   slug TEXT NOT NULL PRIMARY KEY,
@@ -732,7 +738,7 @@ CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
   model_keys_json TEXT NOT NULL,
   ends_at_ms INTEGER NOT NULL,
   claimed_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS installed_plugin_index (
   index_key TEXT NOT NULL PRIMARY KEY,
@@ -748,7 +754,7 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
   diagnostics_json TEXT NOT NULL,
   warning TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
@@ -767,7 +773,7 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
   trust_threshold INTEGER,
   trust_verified_at TEXT,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
   ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
@@ -789,7 +795,7 @@ CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   stats_json TEXT,
   payload_json TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_sentinel_ts
   ON gateway_restart_sentinel(ts DESC, sentinel_key);
@@ -803,7 +809,7 @@ CREATE TABLE IF NOT EXISTS gateway_restart_intent (
   force INTEGER,
   wait_ms INTEGER,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
   handoff_key TEXT NOT NULL PRIMARY KEY,
@@ -821,7 +827,7 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
   restart_kind TEXT NOT NULL,
   supervisor_mode TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
@@ -834,7 +840,7 @@ CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
   outcome TEXT,
   startup_reason TEXT,
   reason TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
   ON gateway_boot_lifecycle(started_at_ms);
@@ -853,7 +859,7 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
   last_activity_at INTEGER NOT NULL,
   last_error TEXT,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
   ON acp_sessions(state, last_activity_at DESC, session_key);
@@ -873,7 +879,7 @@ CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   -- all event rows), maintained at insert/trim so budget checks never scan
   -- acp_replay_events (#100622).
   estimated_bytes INTEGER NOT NULL DEFAULT 0
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_key_updated
   ON acp_replay_sessions(session_key, complete, updated_at DESC, session_id);
@@ -891,7 +897,7 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   estimated_bytes INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
   ON acp_replay_events(session_id, seq);
@@ -903,7 +909,7 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   last_seen_at INTEGER NOT NULL,
   size_bytes INTEGER,
   PRIMARY KEY (agent_id, path)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
   plugin_id TEXT NOT NULL,
@@ -913,7 +919,7 @@ CREATE TABLE IF NOT EXISTS plugin_state_entries (
   created_at INTEGER NOT NULL,
   expires_at INTEGER,
   PRIMARY KEY (plugin_id, namespace, entry_key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
   ON plugin_state_entries(expires_at)
@@ -944,7 +950,7 @@ CREATE TABLE IF NOT EXISTS channel_ingress_events (
   completed_at INTEGER,
   completed_metadata_json TEXT,
   PRIMARY KEY (queue_name, event_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_channel_ingress_pending
   ON channel_ingress_events(queue_name, status, received_at, event_id);
@@ -964,7 +970,7 @@ CREATE TABLE IF NOT EXISTS plugin_blob_entries (
   created_at INTEGER NOT NULL,
   expires_at INTEGER,
   PRIMARY KEY (plugin_id, namespace, entry_key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_plugin_blob_expiry
   ON plugin_blob_entries(expires_at)
@@ -982,7 +988,7 @@ CREATE TABLE IF NOT EXISTS media_blobs (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (subdir, id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_media_blobs_created
   ON media_blobs(created_at);
@@ -1002,7 +1008,7 @@ CREATE TABLE IF NOT EXISTS skill_uploads (
   committed INTEGER NOT NULL,
   committed_at INTEGER,
   idempotency_key_hash TEXT UNIQUE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_skill_uploads_expiry
   ON skill_uploads(expires_at);
@@ -1019,7 +1025,7 @@ CREATE TABLE IF NOT EXISTS skill_upload_chunks (
   PRIMARY KEY (upload_id, byte_offset),
   FOREIGN KEY (upload_id) REFERENCES skill_uploads(upload_id) ON DELETE CASCADE,
   CHECK (length(chunk_blob) = size_bytes)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,
@@ -1029,7 +1035,7 @@ CREATE TABLE IF NOT EXISTS capture_sessions (
   source_scope TEXT NOT NULL,
   source_process TEXT NOT NULL,
   proxy_url TEXT
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS capture_blobs (
   blob_id TEXT NOT NULL PRIMARY KEY,
@@ -1039,7 +1045,7 @@ CREATE TABLE IF NOT EXISTS capture_blobs (
   sha256 TEXT NOT NULL,
   data BLOB NOT NULL,
   created_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS capture_events (
   id INTEGER NOT NULL PRIMARY KEY,
@@ -1065,7 +1071,7 @@ CREATE TABLE IF NOT EXISTS capture_events (
   meta_json TEXT,
   FOREIGN KEY (session_id) REFERENCES capture_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (data_blob_id) REFERENCES capture_blobs(blob_id) ON DELETE SET NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx
   ON capture_events(session_id, ts);
@@ -1089,7 +1095,7 @@ CREATE TABLE IF NOT EXISTS sandbox_registry_entries (
   entry_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (registry_kind, container_name)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_sandbox_registry_updated
   ON sandbox_registry_entries(registry_kind, updated_at DESC, container_name);
@@ -1133,7 +1139,7 @@ CREATE TABLE IF NOT EXISTS commitments (
   snoozed_until_ms INTEGER,
   expired_at_ms INTEGER,
   record_json TEXT NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
   ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
@@ -1227,7 +1233,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   sort_order INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (store_key, job_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
@@ -1251,7 +1257,7 @@ CREATE TABLE IF NOT EXISTS command_log_entries (
   sender_id TEXT NOT NULL,
   source TEXT NOT NULL,
   entry_json TEXT NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
   ON command_log_entries(timestamp_ms DESC, id);
@@ -1278,7 +1284,7 @@ CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   updated_at INTEGER NOT NULL,
   failed_at INTEGER,
   PRIMARY KEY (queue_name, id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
@@ -1325,7 +1331,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   terminal_summary TEXT,
   terminal_outcome TEXT,
   detail_json TEXT
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
@@ -1386,7 +1392,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   pending_final_delivery_payload_json TEXT,
   completion_announced_at INTEGER,
   payload_json TEXT NOT NULL DEFAULT '{}'
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_child_session_key
   ON subagent_runs(child_session_key, created_at DESC, run_id);
@@ -1417,7 +1423,7 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   metadata_json TEXT,
   record_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
   ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
@@ -1434,7 +1440,7 @@ CREATE TABLE IF NOT EXISTS plugin_binding_approvals (
   plugin_name TEXT,
   approved_at INTEGER NOT NULL,
   PRIMARY KEY (plugin_root, channel, account_id)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_plugin_binding_approvals_plugin
   ON plugin_binding_approvals(plugin_id, approved_at DESC);
@@ -1443,7 +1449,7 @@ CREATE TABLE IF NOT EXISTS tui_last_sessions (
   scope_key TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
   ON tui_last_sessions(session_key, updated_at DESC, scope_key);
@@ -1453,7 +1459,7 @@ CREATE TABLE IF NOT EXISTS task_delivery_state (
   requester_origin_json TEXT,
   last_notified_event_at INTEGER,
   FOREIGN KEY (task_id) REFERENCES task_runs(task_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS flow_runs (
   flow_id TEXT NOT NULL PRIMARY KEY,
@@ -1476,7 +1482,7 @@ CREATE TABLE IF NOT EXISTS flow_runs (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   ended_at INTEGER
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);
 CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);
@@ -1488,7 +1494,7 @@ CREATE TABLE IF NOT EXISTS migration_runs (
   finished_at INTEGER,
   status TEXT NOT NULL,
   report_json TEXT NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_migration_runs_started
   ON migration_runs(started_at DESC, id);
@@ -1507,7 +1513,7 @@ CREATE TABLE IF NOT EXISTS migration_sources (
   removed_source INTEGER NOT NULL DEFAULT 0,
   report_json TEXT NOT NULL,
   FOREIGN KEY (last_run_id) REFERENCES migration_runs(id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_migration_sources_path
   ON migration_sources(source_path, migration_kind, target_table);
@@ -1521,7 +1527,7 @@ CREATE TABLE IF NOT EXISTS backup_runs (
   archive_path TEXT NOT NULL,
   status TEXT NOT NULL,
   manifest_json TEXT NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
   ON backup_runs(created_at DESC, id);
@@ -1536,16 +1542,25 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
   owner_id TEXT,
   snapshot_ref TEXT,
+  provisioned_paths_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
   ON worktrees(repo_fingerprint);
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
   ON worktrees(removed_at);
+
+CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  data BLOB NOT NULL,
+  PRIMARY KEY (worktree_id, path, chunk_index)
+) STRICT;
 
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
@@ -1554,7 +1569,7 @@ CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
   created_at INTEGER NOT NULL
-);
+) STRICT;
 
 -- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
 -- stays in plugins; this table records only core reconciliation facts.
@@ -1597,7 +1612,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
   last_error TEXT
-);
+) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
   ON worker_environments(provider_id, lease_id)
@@ -1711,7 +1726,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
     (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
       AND turn_claim_owner_epoch IS active_owner_epoch)
   )
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
   ON worker_session_placements(agent_id, session_key);
@@ -1732,7 +1747,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_reconciliations (
   base_pack BLOB NOT NULL CHECK (length(base_pack) <= 268435456),
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 -- A completed remote turn is fenced from stale-claim teardown until its
 -- workspace result is durably reconciled into the managed worktree.
@@ -1748,7 +1763,7 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   workspace_accepted_at_ms INTEGER,
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.
@@ -1762,7 +1777,7 @@ CREATE TABLE IF NOT EXISTS worker_environment_credentials (
   expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
   delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
   FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-);
+) STRICT;
 
 -- One durable sequence cursor per attached session owner epoch. The environment
 -- binding prevents independent workers with coincident epochs from sharing replay state.
@@ -1773,7 +1788,7 @@ CREATE TABLE IF NOT EXISTS worker_transcript_commit_heads (
   next_seq INTEGER NOT NULL CHECK (next_seq >= 1),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
   PRIMARY KEY (session_id, run_epoch)
-);
+) STRICT;
 
 -- Pending rows preserve a claimed request across gateway restarts. Terminal rows
 -- cache the exact result returned for deterministic at-least-once replay.
@@ -1794,7 +1809,7 @@ CREATE TABLE IF NOT EXISTS worker_transcript_commits (
     (state = 'pending' AND result_json IS NULL) OR
     (state = 'terminal' AND result_json IS NOT NULL)
   )
-);
+) STRICT;
 
 -- Pending rows preserve a claimed inference turn across gateway restarts.
 -- Terminal rows cache the exact outcome returned for deterministic replay.
@@ -1815,7 +1830,7 @@ CREATE TABLE IF NOT EXISTS worker_inference_turns (
     (state = 'pending' AND terminal_json IS NULL) OR
     (state = 'terminal' AND terminal_json IS NOT NULL)
   )
-);
+) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_inference_turns_pending_run
   ON worker_inference_turns(session_id, run_epoch, run_id)
@@ -1829,4 +1844,4 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   host_port INTEGER NOT NULL,
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
-);\n`;
+) STRICT;\n`;

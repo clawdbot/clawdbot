@@ -1,6 +1,6 @@
 // Control UI tests cover form controls behavior.
-import { chromium, type Browser, type Page } from "playwright";
-import { describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
@@ -8,14 +8,16 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
-  ? describe
-  : describe.skip;
+const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const describeBrowserLayout = chromiumAvailable ? describe : describe.skip;
 
 type MobileFixture = {
-  browser: Browser;
   page: Page;
 };
+
+let browser: Browser;
+let desktopContext: BrowserContext;
+let mobileContext: BrowserContext;
 
 function readUiCss(): string {
   const files = [
@@ -57,29 +59,50 @@ function controlsHtml() {
 }
 
 async function openMobileFixture(): Promise<MobileFixture> {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
   let page: Page | undefined;
   try {
-    page = await browser.newPage({
-      hasTouch: true,
-      isMobile: true,
-      viewport: { width: 390, height: 844 },
-    });
+    page = await mobileContext.newPage();
     await page.setContent(
       `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
     );
-    return { browser, page };
+    return { page };
   } catch (error) {
     await page?.close().catch(() => {});
-    await browser.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeMobileFixture(fixture: MobileFixture): Promise<void> {
   await fixture.page.close().catch(() => {});
-  await fixture.browser.close().catch(() => {});
 }
+
+beforeAll(async () => {
+  if (!chromiumAvailable) {
+    return;
+  }
+  browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  try {
+    [desktopContext, mobileContext] = await Promise.all([
+      browser.newContext(),
+      browser.newContext({
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 390, height: 844 },
+      }),
+    ]);
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
+  }
+});
+
+afterAll(async () => {
+  await Promise.all([
+    desktopContext?.close().catch(() => {}),
+    mobileContext?.close().catch(() => {}),
+  ]);
+  await browser?.close().catch(() => {});
+});
 
 describeBrowserLayout("touch-primary form controls", () => {
   it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
@@ -186,12 +209,8 @@ describeBrowserLayout("touch-primary form controls", () => {
 
 describeBrowserLayout("mount fallback cursor", () => {
   it("uses the default cursor for its controls and the pointer for its real link", async () => {
-    const browser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
+    const page = await desktopContext.newPage();
     try {
-      const page = await browser.newPage();
       await page.setContent(readStyleSheet("ui/index.html"));
       const cursors = await page.evaluate(() => {
         const cursor = (selector: string) => {
@@ -214,19 +233,16 @@ describeBrowserLayout("mount fallback cursor", () => {
         docs: "pointer",
       });
     } finally {
-      await browser.close().catch(() => {});
+      await page.close().catch(() => {});
     }
   });
 });
 
 describeBrowserLayout("app chrome interaction styles", () => {
   it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
-    const browser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      headless: true,
-    });
+    const page = await desktopContext.newPage();
     try {
-      const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+      await page.setViewportSize({ width: 1200, height: 800 });
       await page.setContent(`
         <!doctype html>
         <html>
@@ -288,7 +304,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
         settingsSidebarSelection: "none",
       });
     } finally {
-      await browser.close().catch(() => {});
+      await page.close().catch(() => {});
     }
   });
 });

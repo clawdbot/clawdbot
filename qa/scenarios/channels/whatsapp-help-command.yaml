@@ -14,10 +14,9 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:adapter": 5, "whatsapp:default": 7, "whatsapp:mock-default": 32 }
     kind: flow
     channel: whatsapp
-    config:
-      requiredChannelDriver: live
     summary: Send WhatsApp help and verify command guidance.
 
 flow:

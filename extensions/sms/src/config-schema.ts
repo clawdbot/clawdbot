@@ -2,6 +2,7 @@
 import {
   AllowFromListSchema,
   buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   DmPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -27,8 +28,11 @@ const SmsAccountConfigSchema = z
     allowFrom: AllowFromListSchema,
     textChunkLimit: z.number().int().positive().optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
+  .strict();
+
+const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
     requireChannelOpenAllowFrom({
       channel: "sms",
       policy: value.dmPolicy,
@@ -36,11 +40,7 @@ const SmsAccountConfigSchema = z
       ctx,
       requireOpenAllowFrom,
     });
-  });
-
-const SmsConfigSchema = SmsAccountConfigSchema.extend({
-  accounts: z.record(z.string(), SmsAccountConfigSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
+  },
 });
 
 export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, {

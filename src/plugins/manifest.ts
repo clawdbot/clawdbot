@@ -537,6 +537,8 @@ type PluginManifestProviderAuthChoice = {
    * Defaults to `["text-inference"]` when omitted.
    */
   onboardingScopes?: PluginManifestOnboardingScope[];
+  /** Provider runtime can discover and prepare an already-installed local model. */
+  appGuidedDiscovery?: boolean;
 };
 
 type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
@@ -1567,6 +1569,7 @@ function normalizeProviderAuthChoices(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
+    const appGuidedDiscovery = entry.appGuidedDiscovery === true;
     normalized.push({
       provider,
       method,
@@ -1580,6 +1583,7 @@ function normalizeProviderAuthChoices(
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
       ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
+      ...(appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),

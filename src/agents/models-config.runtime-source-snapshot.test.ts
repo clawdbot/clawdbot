@@ -425,4 +425,107 @@ describe("models-config runtime source snapshot", () => {
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
   });
+
+  it("reapplies source markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
+    // Regression: provider keys in sourceConfigForSecrets may arrive as "OpenAI" while the
+    // merge boundary canonicalizes to "openai". The source-managed marker lookup must use the
+    // same provider-id normalizer, otherwise the resolved runtime apiKey leaks into models.json.
+    const mixedCaseSourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    const providers = await planGeneratedProviders({
+      config: createOpenAiApiKeyRuntimeConfig(),
+      sourceConfigForSecrets: mixedCaseSourceConfig,
+    });
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
+    expect(providers.OpenAI).toBeUndefined();
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("reapplies source header markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          " OpenAI ": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+              },
+              "X-Tenant-Token": {
+                source: "file",
+                provider: "vault",
+                id: "/providers/openai/tenantToken",
+              },
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const providers = await planGeneratedProviders({
+      config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
+      sourceConfigForSecrets: sourceConfig,
+    });
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
+    expect(providers.OpenAI).toBeUndefined();
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expectOpenAiHeaderMarkers(providers);
+  });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])(
+    "prefers canonical source secret ownership when it appears %s a case variant",
+    async (_position, first) => {
+      const canonical = getOpenAiProvider(createOpenAiApiKeySourceConfig());
+      const caseVariant = {
+        ...canonical,
+        apiKey: {
+          source: "env" as const,
+          provider: "default",
+          id: "OPENAI_CASE_VARIANT",
+        },
+      };
+      const sourceProviders = first
+        ? { openai: canonical, OpenAI: caseVariant }
+        : { OpenAI: caseVariant, openai: canonical };
+      const providers = await planGeneratedProviders({
+        config: createOpenAiApiKeyRuntimeConfig(),
+        sourceConfigForSecrets: { models: { providers: sourceProviders } },
+      });
+
+      expect(Object.keys(providers)).toEqual(["openai"]);
+      expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    },
+  );
+
+  it("uses a valid case alias when the canonical source entry is not a provider record", () => {
+    const runtimeConfig = createOpenAiApiKeyRuntimeConfig();
+    const sourceProviders = {
+      openai: null,
+      OpenAI: getOpenAiProvider(createOpenAiApiKeySourceConfig()),
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    const providers = enforceSourceManagedProviderSecrets({
+      providers: runtimeConfig.models!.providers!,
+      sourceProviders,
+    });
+
+    expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
 });

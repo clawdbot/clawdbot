@@ -66,7 +66,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
 }
 
 /** Resolves and caches the Windows system encoding used by legacy text files. */
-function resolveWindowsSystemEncoding(): string | null {
+export function resolveWindowsSystemEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
   }

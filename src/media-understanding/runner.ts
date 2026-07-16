@@ -71,13 +71,12 @@ import type {
 } from "./types.js";
 
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
-export type RunCapabilityResult = {
+type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
@@ -336,10 +335,16 @@ export function resolveMediaAttachmentLocalRoots(params: {
 const binaryCache = new Map<string, Promise<string | null>>();
 const antigravityCliCache = new Map<string, Promise<string | null>>();
 
-export function clearMediaUnderstandingBinaryCacheForTests(): void {
+function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
   antigravityCliCache.clear();
   clearLocalAudioInspectionCacheForTests();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaUnderstandingRunnerTestApi")
+  ] = { clearMediaUnderstandingBinaryCacheForTests };
 }
 
 function expandHomeDir(value: string): string {

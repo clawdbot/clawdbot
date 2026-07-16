@@ -106,7 +106,7 @@ type LegacyMemorySidecarImportResult = {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-class LegacyMemoryRowsConflictError extends Error {
+class LegacyMemoryDerivedRowsConflictError extends Error {
   constructor(readonly tableName: string) {
     super(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
   }
@@ -211,10 +211,26 @@ function formatLegacyVectorRows(count: number | undefined): string {
   return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
 }
 
-function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
+function assertLegacyDerivedRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
-    throw new LegacyMemoryRowsConflictError(tableName);
+    throw new LegacyMemoryDerivedRowsConflictError(tableName);
+  }
+}
+
+function assertLegacyVectorRowsReferenceChunks(db: DatabaseSync, schema: string): void {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
+         WHERE chunk.id = legacy.id
+       )`,
+    )
+    .get() as { missing?: unknown } | undefined;
+  if (Number(row?.missing ?? 0) > 0) {
+    throw new Error(`legacy memory ${LEGACY_MEMORY_VECTOR_TABLE} rows reference missing chunks`);
   }
 }
 
@@ -340,17 +356,8 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
   if (!tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
     return;
   }
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
-       WHERE chunk.id = legacy.id
-     )`,
-    `${LEGACY_MEMORY_VECTOR_TABLE} chunk references`,
-  );
-  assertLegacyRowsCopied(
+  assertLegacyVectorRowsReferenceChunks(db, schema);
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
@@ -368,7 +375,7 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
       WHERE canonical.id = legacy.id
     );
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
@@ -398,7 +405,7 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
       WHERE canonical.id = legacy.id
     );
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.chunks AS legacy
@@ -435,7 +442,7 @@ function copyLegacyMemoryIndexRows(
     SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
     FROM ${schema}.chunks;
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.meta AS legacy
@@ -445,7 +452,7 @@ function copyLegacyMemoryIndexRows(
      )`,
     "meta",
   );
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.files AS legacy
@@ -459,7 +466,7 @@ function copyLegacyMemoryIndexRows(
      )`,
     "files",
   );
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.chunks AS legacy
@@ -493,15 +500,16 @@ function copyLegacyMemoryIndexRows(
         dims INTEGER,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
-      );
+      ) STRICT;
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
-    // Canonical derived payloads win only when both rows match their shared dimensions.
-    assertLegacyRowsCopied(
+    // Matching cache keys are derived rows. Validate shape before deciding whether the
+    // entire stale sidecar should yield to the canonical index.
+    assertLegacyDerivedRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.embedding_cache AS legacy
@@ -939,9 +947,9 @@ async function migrateLegacyMemorySidecarSource(params: {
         requireVectorRows: vectorEnabled,
       });
     } catch (err) {
-      if (err instanceof LegacyMemoryRowsConflictError && err.tableName === "files") {
-        // Memory index rows are derived from canonical memory sources. Keep the
-        // current per-agent index and let normal sync rebuild any stale entries.
+      if (err instanceof LegacyMemoryDerivedRowsConflictError) {
+        // Every imported table is a derived search index. A same-identity mismatch means the
+        // current per-agent row wins; normal sync rebuilds any rows skipped with the sidecar.
         params.changes.push(
           `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
         );

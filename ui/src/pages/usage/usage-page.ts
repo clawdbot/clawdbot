@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, type PropertyValues } from "lit";
+import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -7,14 +7,16 @@ import type {
   SessionsUsageResult,
   SessionUsageTimeSeries,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+} from "../../components/panel-refresh-status.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -30,12 +32,14 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
+import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import {
   currentLocalDate,
   selectUsageSessionKeys,
   toggleUsageRangeSelection,
   toUsageErrorMessage,
 } from "./helpers.ts";
+import { renderUsagePageShell } from "./page-shell.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
@@ -84,11 +88,15 @@ class UsagePage extends OpenClawLightDomElement {
   @state() private usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() private usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() private usageTimeSeries: SessionUsageTimeSeries | null = null;
+  private usageTimeSeriesSessionKey: string | null = null;
   @state() private usageTimeSeriesLoading = false;
+  @state() private usageTimeSeriesStatus = createPanelRefreshStatus();
   @state() private usageTimeSeriesCursorStart: number | null = null;
   @state() private usageTimeSeriesCursorEnd: number | null = null;
   @state() private usageSessionLogs: SessionLogEntry[] | null = null;
+  private usageSessionLogsSessionKey: string | null = null;
   @state() private usageSessionLogsLoading = false;
+  @state() private usageSessionLogsStatus = createPanelRefreshStatus();
   @state() private usageSessionLogsExpanded = false;
   @state() private usageQuery = "";
   @state() private usageQueryDraft = "";
@@ -115,6 +123,7 @@ class UsagePage extends OpenClawLightDomElement {
   private queryDebounceTimer: number | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private usageReloadPending = false;
   private hasBoundGatewaySource = false;
   private observedAgentScopeId: string | null | undefined;
   private readonly subscriptions = new SubscriptionsController(this)
@@ -178,12 +187,16 @@ class UsagePage extends OpenClawLightDomElement {
       this.resetForClientChange();
     }
     if (!snapshot.connected || !snapshot.client) {
+      this.usageReloadPending ||= this.usageLoading;
       this.invalidateRequests();
       return;
     }
 
     void this.context.agents.ensureList();
-    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
+    if (
+      this.routeDataInitialized &&
+      (clientChanged || (becameConnected && (this.usageReloadPending || this.usageResult === null)))
+    ) {
       void this.loadUsage();
     }
   }
@@ -251,6 +264,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageCostSummary = null;
     this.providerUsageSummary = null;
     this.usageError = null;
+    this.usageReloadPending = false;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
     this.clearSelectionsAndDetails();
   }
@@ -300,10 +314,15 @@ class UsagePage extends OpenClawLightDomElement {
 
   private async loadUsage() {
     const client = this.client;
-    if (!client || !this.connected || this.usageLoading) {
+    if (!client || !this.connected) {
+      this.usageReloadPending = true;
+      return;
+    }
+    if (this.usageLoading) {
       return;
     }
 
+    this.usageReloadPending = false;
     this.routeDataEnabled = false;
     const requestId = ++this.usageRequestId;
     const startDate = this.usageStartDate;
@@ -354,15 +373,31 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
+    // Never render another session's retained timeline as stale.
+    if (this.usageTimeSeriesSessionKey !== sessionKey) {
+      this.usageTimeSeries = null;
+      this.usageTimeSeriesSessionKey = null;
+      this.usageTimeSeriesStatus = createPanelRefreshStatus();
+    }
     const requestId = ++this.timeSeriesRequestId;
     this.usageTimeSeriesLoading = true;
+    this.usageTimeSeriesStatus = beginPanelRefresh(this.usageTimeSeriesStatus);
     try {
       const result = await requestSessionUsageTimeSeries(client, sessionKey);
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeries = result;
+        this.usageTimeSeriesSessionKey = sessionKey;
+        this.usageTimeSeriesStatus = completePanelRefresh();
       }
-    } catch {
-      // Optional detail endpoint.
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
+        const failure = failUsageDetailRefresh(this.usageTimeSeriesStatus, error);
+        this.usageTimeSeriesStatus = failure.status;
+        if (failure.clearData) {
+          this.usageTimeSeries = null;
+          this.usageTimeSeriesSessionKey = null;
+        }
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.timeSeriesRequestId, client, sessionKey)) {
         this.usageTimeSeriesLoading = false;
@@ -375,8 +410,15 @@ class UsagePage extends OpenClawLightDomElement {
     if (!client || !this.connected) {
       return;
     }
+    // Never render another session's retained conversation as stale.
+    if (this.usageSessionLogsSessionKey !== sessionKey) {
+      this.usageSessionLogs = null;
+      this.usageSessionLogsSessionKey = null;
+      this.usageSessionLogsStatus = createPanelRefreshStatus();
+    }
     const requestId = ++this.logsRequestId;
     this.usageSessionLogsLoading = true;
+    this.usageSessionLogsStatus = beginPanelRefresh(this.usageSessionLogsStatus);
     try {
       const payload = await requestSessionUsageLogs(client, sessionKey);
       if (!this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
@@ -385,8 +427,17 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageSessionLogs = Array.isArray(payload.logs)
         ? (payload.logs as SessionLogEntry[])
         : null;
-    } catch {
-      // Optional detail endpoint.
+      this.usageSessionLogsSessionKey = sessionKey;
+      this.usageSessionLogsStatus = completePanelRefresh();
+    } catch (error) {
+      if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
+        const failure = failUsageDetailRefresh(this.usageSessionLogsStatus, error);
+        this.usageSessionLogsStatus = failure.status;
+        if (failure.clearData) {
+          this.usageSessionLogs = null;
+          this.usageSessionLogsSessionKey = null;
+        }
+      }
     } finally {
       if (this.isCurrentDetailRequest(requestId, this.logsRequestId, client, sessionKey)) {
         this.usageSessionLogsLoading = false;
@@ -403,7 +454,11 @@ class UsagePage extends OpenClawLightDomElement {
   private clearDetails() {
     this.invalidateDetailRequests();
     this.usageTimeSeries = null;
+    this.usageTimeSeriesSessionKey = null;
+    this.usageTimeSeriesStatus = createPanelRefreshStatus();
     this.usageSessionLogs = null;
+    this.usageSessionLogsSessionKey = null;
+    this.usageSessionLogsStatus = createPanelRefreshStatus();
     this.usageTimeSeriesCursorStart = null;
     this.usageTimeSeriesCursorEnd = null;
   }
@@ -513,10 +568,12 @@ class UsagePage extends OpenClawLightDomElement {
         timeSeriesBreakdownMode: this.usageTimeSeriesBreakdownMode,
         timeSeries: this.usageTimeSeries,
         timeSeriesLoading: this.usageTimeSeriesLoading,
+        timeSeriesStatus: this.usageTimeSeriesStatus,
         timeSeriesCursorStart: this.usageTimeSeriesCursorStart,
         timeSeriesCursorEnd: this.usageTimeSeriesCursorEnd,
         sessionLogs: this.usageSessionLogs,
         sessionLogsLoading: this.usageSessionLogsLoading,
+        sessionLogsStatus: this.usageSessionLogsStatus,
         sessionLogsExpanded: this.usageSessionLogsExpanded,
         logFilters: {
           roles: this.usageLogFilterRoles,
@@ -659,26 +716,23 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageTimeSeriesCursorStart = start;
             this.usageTimeSeriesCursorEnd = end;
           },
+          onRetryTimeSeries: () => {
+            const sessionKey = this.usageSelectedSessions[0];
+            if (sessionKey) {
+              void this.loadSessionTimeSeries(sessionKey);
+            }
+          },
+          onRetrySessionLogs: () => {
+            const sessionKey = this.usageSelectedSessions[0];
+            if (sessionKey) {
+              void this.loadSessionLogs(sessionKey);
+            }
+          },
         },
       },
     };
 
-    return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("usage")}</div>
-        </div>
-        ${renderAgentScopeControl({
-          agents: this.context.agents.state.agentsList?.agents ?? [],
-          additionalAgentIds:
-            this.usageResult?.sessions
-              .map((entry) => entry.agentId)
-              .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
-          selection: this.context.agentSelection,
-        })}
-      </section>
-      ${renderSettingsWorkspace(renderUsage(props))}
-    `;
+    return renderUsagePageShell(this.context, this.usageResult, renderUsage(props));
   }
 }
 

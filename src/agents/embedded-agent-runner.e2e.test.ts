@@ -182,7 +182,9 @@ beforeAll(async () => {
   installRunEmbeddedMocks();
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
+  const { SessionManager: LoadedSessionManager } =
+    await import("openclaw/plugin-sdk/agent-sessions");
+  SessionManager = LoadedSessionManager;
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);

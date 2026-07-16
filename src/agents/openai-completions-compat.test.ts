@@ -83,6 +83,16 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     expect(defaults.maxTokensField).toBe("max_tokens");
   });
 
+  it("uses Z.AI's documented max_tokens field", () => {
+    const defaults = resolveOpenAICompletionsCompatDefaults({
+      provider: "zai",
+      endpointClass: "zai-native",
+      knownProviderFamily: "zai",
+    });
+
+    expect(defaults.maxTokensField).toBe("max_tokens");
+  });
+
   it("requires a non-empty user or assistant turn for ModelStudio-compatible providers", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({

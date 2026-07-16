@@ -65,6 +65,7 @@ function buildChatSessionListOptions(
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
+    includeDerivedTitles: true,
     showArchived: false,
   };
   const search = normalizeOptionalString(options.search ?? undefined);

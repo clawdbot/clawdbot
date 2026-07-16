@@ -168,7 +168,8 @@ jobs:
           set -euo pipefail
           SHELLCHECK_VERSION="0.11.0"
           archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
+          curl --connect-timeout 10 --max-time 120 \
+            --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
             -o "${archive}" \
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  ${archive}" | sha256sum -c -
@@ -185,8 +186,16 @@ jobs:
           # GitHub release downloads occasionally return transient 5xx responses.
           # Retry all curl errors here so workflow-sanity does not fail closed on
           # a one-off release edge outage.
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          curl_args=(
+            --connect-timeout 10
+            --max-time 120
+            --retry 5
+            --retry-delay 2
+            --retry-all-errors
+            -sSfL
+          )
+          curl "${curl_args[@]}" -o "${archive}" "${base_url}/${archive}"
+          curl "${curl_args[@]}" -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint

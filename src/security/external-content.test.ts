@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
-  getHookType,
-  isExternalHookSession,
   wrapExternalContent,
   wrapWebContent,
 } from "./external-content.js";
@@ -419,37 +417,6 @@ describe("external-content security", () => {
 
       expect(result).toContain("Test content");
       expect(result).toContain("SECURITY NOTICE");
-    });
-  });
-
-  describe("isExternalHookSession", () => {
-    it.each([
-      ["hook:gmail:msg-123", true],
-      ["hook:gmail:abc", true],
-      ["hook:webhook:123", true],
-      ["hook:custom:456", true],
-      ["HOOK:gmail:msg-123", true],
-      ["Hook:custom:456", true],
-      ["  HOOK:webhook:123  ", true],
-      ["cron:daily-task", false],
-      ["agent:main", false],
-      ["session:user-123", false],
-    ] as const)("classifies %s", (sessionId, expected) => {
-      expect(isExternalHookSession(sessionId)).toBe(expected);
-    });
-  });
-
-  describe("getHookType", () => {
-    it.each([
-      ["hook:gmail:msg-123", "email"],
-      ["hook:webhook:123", "webhook"],
-      ["hook:custom:456", "webhook"],
-      ["HOOK:gmail:msg-123", "email"],
-      ["  HOOK:webhook:123  ", "webhook"],
-      ["Hook:custom:456", "webhook"],
-      ["cron:daily", "unknown"],
-    ] as const)("returns %s for %s", (sessionId, expected) => {
-      expect(getHookType(sessionId)).toBe(expected);
     });
   });
 

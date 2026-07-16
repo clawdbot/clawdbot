@@ -4,10 +4,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
-  resolveChannelTarget: vi.fn<() => Promise<unknown>>(async () => ({
+  resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(async (params) => ({
     ok: true,
     target: {
-      to: "+1999",
+      to: params.input,
       kind: "group",
       source: "normalized",
       resolutionSource: "normalized",
@@ -114,14 +114,12 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentExplicitRecipientSession: typeof import("./agent-delivery.js").resolveAgentExplicitRecipientSession;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
 beforeAll(async () => {
   ({
-    resolveAgentDeliveryPlan,
     resolveAgentDeliveryPlanWithSessionRoute,
     resolveAgentExplicitRecipientSession,
     resolveAgentOutboundTarget,
@@ -132,15 +130,15 @@ beforeEach(() => {
   mocks.resolveOutboundChannelPlugin.mockReset();
   mocks.resolveOutboundChannelPlugin.mockReturnValue(null);
   mocks.resolveChannelTarget.mockReset();
-  mocks.resolveChannelTarget.mockResolvedValue({
+  mocks.resolveChannelTarget.mockImplementation(async (params: { input: string }) => ({
     ok: true,
     target: {
-      to: "+1999",
+      to: params.input,
       kind: "group",
       source: "normalized",
       resolutionSource: "normalized",
     },
-  });
+  }));
   mocks.resolveOutboundTarget.mockReset();
   mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "+1999" });
   mocks.resolveOutboundSessionRoute.mockReset();
@@ -148,8 +146,14 @@ beforeEach(() => {
   mocks.resolveSessionDeliveryTarget.mockClear();
 });
 
-function expectDeliveryPlan(params: Parameters<typeof resolveAgentDeliveryPlan>[0]) {
-  return resolveAgentDeliveryPlan(params);
+async function buildDeliveryPlan(
+  params: Omit<Parameters<typeof resolveAgentDeliveryPlanWithSessionRoute>[0], "cfg" | "agentId">,
+) {
+  return await resolveAgentDeliveryPlanWithSessionRoute({
+    cfg: {} as OpenClawConfig,
+    agentId: "agent",
+    ...params,
+  });
 }
 
 describe("agent delivery helpers", () => {
@@ -223,15 +227,15 @@ describe("agent delivery helpers", () => {
         resolvedTo: undefined,
       },
     },
-  ])("builds delivery plan for %j", ({ params, expected }) => {
-    const plan = expectDeliveryPlan(params);
+  ])("builds delivery plan for %j", async ({ params, expected }) => {
+    const plan = await buildDeliveryPlan(params);
     for (const [key, value] of Object.entries(expected)) {
       expect((plan as Record<string, unknown>)[key]).toEqual(value);
     }
   });
 
-  it("resolves fallback targets when no explicit destination is provided", () => {
-    const plan = resolveAgentDeliveryPlan({
+  it("resolves fallback targets when no explicit destination is provided", async () => {
+    const plan = await buildDeliveryPlan({
       sessionEntry: {
         sessionId: "s2",
         updatedAt: 2,
@@ -254,8 +258,8 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
-  it("skips outbound target resolution when explicit target validation is disabled", () => {
-    const plan = expectDeliveryPlan({
+  it("skips outbound target resolution when explicit target validation is disabled", async () => {
+    const plan = await buildDeliveryPlan({
       sessionEntry: {
         sessionId: "s3",
         updatedAt: 3,
@@ -725,29 +729,6 @@ describe("agent delivery helpers", () => {
       threadId: undefined,
     });
     expect(result.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
-  });
-
-  it("does not session-route explicit targets before outbound normalization succeeds", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({
-      ok: false,
-      error: new Error("ambiguous target"),
-    });
-
-    const plan = await resolveAgentDeliveryPlanWithSessionRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "agent",
-      sessionEntry: undefined,
-      requestedChannel: "workspace",
-      explicitTo: "1470130713209602050",
-      accountId: undefined,
-      wantsDelivery: true,
-    });
-
-    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
-    expect(plan.resolvedTo).toBe("1470130713209602050");
   });
 
   it("resolves reserved explicit targets through directory-capable resolution before session routing", async () => {

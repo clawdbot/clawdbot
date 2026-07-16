@@ -1,5 +1,6 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -126,8 +127,8 @@ function buildSystemAgentApprovalPresentation(params: {
   }
   return {
     kind: "system-agent",
-    title: sanitizeExecApprovalDisplayText(title).slice(0, 80),
-    description: sanitizeExecApprovalWarningText(description).slice(0, 512),
+    title: truncateUtf16Safe(sanitizeExecApprovalDisplayText(title), 80),
+    description: truncateUtf16Safe(sanitizeExecApprovalWarningText(description), 512),
     proposalHash: request.proposalHash,
     agentId: sanitizeOptionalSingleLine(request.agentId),
     allowedDecisions: ["allow-once", "deny"],

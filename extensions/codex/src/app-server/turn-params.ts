@@ -1,19 +1,18 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
-import { readCodexSupportedReasoningEfforts } from "../../provider.js";
+import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
-import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
-  CodexUserInput,
 } from "./protocol.js";
+import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
   resolveReasoningEffort,
 } from "./thread-model-selection.js";
+import { buildCodexUserInput } from "./user-input.js";
 
 export function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
@@ -46,7 +45,7 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   return {
     threadId: options.threadId,
-    input: buildUserInput(params, options.promptText),
+    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
@@ -182,21 +181,4 @@ function buildHeartbeatCollaborationInstructions(): string {
 
 function joinPresentSections(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
-}
-
-function buildUserInput(
-  params: EmbeddedRunAttemptParams,
-  promptText: string = params.prompt,
-): CodexUserInput[] {
-  const imageInputs = (params.images ?? []).map((image): CodexUserInput => {
-    const imageUrl = sanitizeInlineImageDataUrl(`data:${image.mimeType};base64,${image.data}`);
-    return imageUrl
-      ? { type: "image", url: imageUrl }
-      : {
-          type: "text",
-          text: invalidInlineImageText("codex user input"),
-          text_elements: [],
-        };
-  });
-  return [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs];
 }

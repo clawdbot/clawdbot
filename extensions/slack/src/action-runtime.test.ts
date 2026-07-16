@@ -1231,6 +1231,10 @@ describe("handleSlackAction", () => {
     const details = requireDetails(result);
     expect(details.ok).toBe(true);
     expect(details.hasMore).toBe(false);
+    expectRecordFields(details, {
+      channelId: "C1",
+    });
+    expect(details).not.toHaveProperty("threadId");
     const messages = requireArray(details.messages, "read messages");
     expectRecordFields(requireRecord(messages[0], "first message"), {
       ts: "1712345678.123456",
@@ -1242,10 +1246,15 @@ describe("handleSlackAction", () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
     const cfg = slackConfig();
-    await handleSlackAction(
+    const result = await handleSlackAction(
       { action: "readMessages", channelId: "C1", threadId: "1712345678.123456" },
       cfg,
     );
+
+    expectRecordFields(requireDetails(result), {
+      channelId: "C1",
+      threadId: "1712345678.123456",
+    });
 
     expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
     expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {

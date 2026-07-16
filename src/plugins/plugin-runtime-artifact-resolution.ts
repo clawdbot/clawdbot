@@ -4,12 +4,24 @@ import path from "node:path";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
+type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };
+type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
+
+// Pin one physical path per plugin id and logical entry for this runtime lifecycle.
+// Registry surfaces may disagree on artifact preference, but hooks and tools must
+// share one evaluated module instance so register() runs once.
+const resolvedPluginRuntimeArtifacts = new Map<string, ResolvedPluginRuntimeArtifact>();
+
 function safeRealpathOrResolve(value: string): string {
   try {
     return fs.realpathSync(value);
   } catch {
     return path.resolve(value);
   }
+}
+
+export function clearPluginRuntimeArtifactResolutionMemo(): void {
+  resolvedPluginRuntimeArtifacts.clear();
 }
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
@@ -156,15 +168,27 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
 
 /** Applies both loader selection phases in their runtime order. */
 export function resolvePluginRuntimeArtifact(params: {
+  pluginId: string;
+  entryKind: PluginRuntimeArtifactEntryKind;
   source: string;
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
   packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
-  const preferred = resolvePreferredBuiltRuntimeArtifact(params);
-  return {
+  const rootDir = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.rootDir));
+  const source = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.source));
+  const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
+  const cached = resolvedPluginRuntimeArtifacts.get(memoKey);
+  if (cached) {
+    return { ...cached };
+  }
+
+  const preferred = resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir });
+  const resolved = {
     source: resolveCanonicalDistRuntimeSource(preferred.source),
     rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
   };
+  resolvedPluginRuntimeArtifacts.set(memoKey, resolved);
+  return { ...resolved };
 }

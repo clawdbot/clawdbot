@@ -27,6 +27,7 @@ const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModel
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
 const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
   await import("./agent-runner-run-params.js");
+const { setChannelSourceTurnId } = await import("./source-turn-id.js");
 
 function buildEmbeddedRunBaseParams(
   params: Omit<Parameters<typeof buildEmbeddedRunBaseParamsCore>[0], "isReasoningTagProvider">,
@@ -465,20 +466,23 @@ describe("agent-runner-utils", () => {
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
+    const sessionCtx = {
+      Provider: "discord",
+      To: "slash:1177378744822943744",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:123456789012345678",
+      MessageSid: "msg-9",
+    };
+    setChannelSourceTurnId(sessionCtx, "channel-user:v1:source-9");
     const context = buildThreadingToolContext({
-      sessionCtx: {
-        Provider: "discord",
-        To: "slash:1177378744822943744",
-        OriginatingChannel: "discord",
-        OriginatingTo: "channel:123456789012345678",
-        MessageSid: "msg-9",
-      },
+      sessionCtx,
       config: {},
       hasRepliedRef: undefined,
     });
 
     expect(context.currentChannelId).toBe("channel:123456789012345678");
     expect(context.currentMessageId).toBe("msg-9");
+    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {

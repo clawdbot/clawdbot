@@ -14,13 +14,10 @@ import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   clearPluginCommands,
-  clearPluginCommandsForPlugin,
   isReservedCommandName,
   listPluginInvocationKeys,
   pluginCommandSupportsChannel,
   registerPluginCommand,
-  validateCommandName,
-  validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
   canExposeSenderIsOwner,
@@ -30,7 +27,6 @@ import {
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
-import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -46,16 +42,7 @@ import type {
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
 
-export {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
-  listRegisteredPluginAgentPromptGuidance,
-  registerPluginCommand,
-  validateCommandName,
-  validatePluginCommandDefinition,
-};
+export { clearPluginCommands, listRegisteredPluginAgentPromptGuidance, registerPluginCommand };
 
 /**
  * Check if a command body matches a registered plugin command.
@@ -451,8 +438,3 @@ export function listPluginCommands(): Array<{
 function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
   return listPluginInvocationKeys(command);
 }
-
-export const testing = {
-  resolveBindingConversationFromCommand,
-};
-export { testing as __testing };

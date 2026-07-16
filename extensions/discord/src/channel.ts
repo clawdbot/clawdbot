@@ -61,6 +61,7 @@ import {
   loadDiscordSendModule,
   loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
+  probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
@@ -384,6 +385,18 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             if (!resolved) {
               return null;
             }
+            // Shared directory lookup owns mutable names. Fallback may only return
+            // a canonical Discord snowflake, never an unresolved channel/user name.
+            if (!looksLikeDiscordTargetId(resolved.normalized)) {
+              return null;
+            }
+            if (
+              !looksLikeDiscordTargetId(input) &&
+              defaultKind === "channel" &&
+              resolved.kind === "user"
+            ) {
+              return null;
+            }
             return {
               to: resolved.normalized,
               kind: resolved.kind === "user" ? "user" : "channel",
@@ -531,9 +544,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         buildChannelSummary: ({ snapshot }) =>
           buildTokenChannelStatusSummary(snapshot, { includeMode: false }),
         probeAccount: async ({ account, timeoutMs }) =>
-          (await loadDiscordProbeRuntime()).probeDiscord(account.token, timeoutMs, {
-            includeApplication: true,
-          }),
+          await probeDiscordStatusAccount({ token: account.token, timeoutMs }),
         formatCapabilitiesProbe: ({ probe }) => {
           const discordProbe = probe as DiscordProbe | undefined;
           const lines = [];

@@ -273,8 +273,13 @@ export async function runEmbeddedAttempt(
       catalogToolHookContext,
       deferredDirectoryToolsCallable,
       effectiveTools,
+      toolSearch,
       toolSearchRunPlan,
     } = preparedToolCatalog;
+    // Arms the early-exit catalog clear: the run-scoped catalog is registered in
+    // a process-global map that only clearToolSearchCatalog deletes from, so a
+    // prep-phase abort after registration leaks the entry without this.
+    toolSearchCatalogApplied = toolSearch.catalogRegistered;
     const preparedSystemPrompt = await prepareEmbeddedAttemptSystemPrompt({
       activeContextEngine,
       attempt: params,

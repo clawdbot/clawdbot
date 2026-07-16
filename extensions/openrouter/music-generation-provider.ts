@@ -15,6 +15,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -393,6 +394,9 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             "HTTP-Referer": "https://openclaw.ai",
             "X-OpenRouter-Title": "OpenClaw",
           },
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.openrouter?.request,
+          ),
           provider: "openrouter",
           capability: "audio",
           transport: "http",

@@ -29,6 +29,11 @@ import {
   isOutboundDeliveryResultArray,
   runOutboundDeliveryCommitHooks,
 } from "./delivery-commit-hooks.js";
+import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
+import {
+  cancelDeliveryQueueMediaRecoveryLease,
+  createDeliveryQueueMediaRecoveryLease,
+} from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   failDelivery,
@@ -458,7 +463,7 @@ async function persistRecoveredPostSendState(opts: {
       `Delivery entry ${opts.entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(markErr)}`,
     );
     try {
-      await ackDelivery(opts.entry.id, opts.stateDir);
+      await ackDelivery(opts.entry.id, opts.stateDir, { retainSpoolArtifacts: true });
       return "acked";
     } catch (ackErr) {
       const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
@@ -588,7 +593,15 @@ async function drainQueuedEntry(opts: {
     commitHooksRun = true;
     await runOutboundDeliveryCommitHooks(deliveredResults);
   };
+  const recoverySpoolPaths = collectEntrySpoolPaths(entry.payloads, opts.stateDir);
+  let mediaRecoveryLeaseId: string | undefined;
   try {
+    // The pending row owns these artifacts until the lease exists. Fallback
+    // acks may then remove replay intent without exposing active media to GC.
+    mediaRecoveryLeaseId =
+      recoverySpoolPaths.length > 0
+        ? createDeliveryQueueMediaRecoveryLease(recoverySpoolPaths, opts.stateDir)
+        : undefined;
     const result = await opts.deliver({
       ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir),
       onPayloadDeliveryOutcome: collectPayloadOutcome,
@@ -762,6 +775,15 @@ async function drainQueuedEntry(opts: {
       }
     }
     return "failed";
+  } finally {
+    // Early fallback acks make the row non-replayable before the adapter has
+    // necessarily finished reading every payload. Release only after the whole
+    // recovered attempt settles, and only if no pending row still owns it.
+    cancelDeliveryQueueMediaRecoveryLease(mediaRecoveryLeaseId, opts.stateDir);
+    const pending = await loadPendingDelivery(entry.id, opts.stateDir).catch(() => entry);
+    if (!pending) {
+      await releaseSpoolArtifacts(recoverySpoolPaths, opts.stateDir);
+    }
   }
 }
 

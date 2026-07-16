@@ -334,7 +334,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       );
     });
 
-    panel.renderRoot.querySelector<HTMLButtonElement>(".tp-tab__close")?.click();
+    panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
     await vi.waitFor(() => {
       expect(uploadSignal?.aborted).toBe(true);
       expect(panel.renderRoot.querySelector(".tp-upload-card")).toBeNull();

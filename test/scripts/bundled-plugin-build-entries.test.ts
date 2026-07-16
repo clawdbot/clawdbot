@@ -162,10 +162,8 @@ describe("bundled plugin build entries", () => {
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {
-    const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expectNoPrefixMatches(Object.keys(entries), "extensions/qa-matrix/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-channel/");
     expectNoPrefixMatches(artifacts, "dist/extensions/qa-lab/");
   });

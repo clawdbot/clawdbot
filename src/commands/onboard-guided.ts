@@ -359,6 +359,16 @@ async function runGuidedOnboardingFlow(
     );
     await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
   }
+  if (detection.unavailableCandidates.length > 0) {
+    const unavailable = detection.unavailableCandidates.map((candidate) =>
+      t("wizard.guided.unavailableCandidate", {
+        label: candidate.label,
+        detail: candidate.detail,
+        reason: candidate.reason,
+      }),
+    );
+    await prompter.note(unavailable.join("\n"), t("wizard.guided.unavailableTitle"));
+  }
 
   const activate =
     deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;

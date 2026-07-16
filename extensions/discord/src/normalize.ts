@@ -77,7 +77,7 @@ export function looksLikeDiscordTargetId(raw: string): boolean {
   if (/^<@!?\d+>$/.test(trimmed)) {
     return true;
   }
-  if (/^(user|channel|discord):/i.test(trimmed)) {
+  if (/^(?:(?:user|channel|discord):\d+|discord:(?:user|channel):\d+)$/i.test(trimmed)) {
     return true;
   }
   if (/^\d{6,}$/.test(trimmed)) {

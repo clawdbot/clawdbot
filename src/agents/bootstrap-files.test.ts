@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -495,6 +495,7 @@ describe("hasCompletedBootstrapTurn", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -637,6 +638,37 @@ describe("hasCompletedBootstrapTurn", () => {
       ].join("\n") + "\n",
       "utf8",
     );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("finds a recent full bootstrap marker when the tail read returns short", async () => {
+    const sessionFile = path.join(tmpDir, "short-read-tail.jsonl");
+    const lines = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      JSON.stringify({
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      }),
+    ];
+    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, prop, receiver) {
+          if (prop === "read") {
+            return (buffer: Buffer, offset: number, length: number, position: number) =>
+              realRead(buffer, offset, Math.min(length, 16), position);
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+    });
+
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
   });
 

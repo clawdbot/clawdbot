@@ -9,7 +9,7 @@ import {
   resolveUserTimezone,
 } from "./date-time.js";
 
-export type CronStyleNow = {
+type CronStyleNow = {
   userTimezone: string;
   formattedTime: string;
   timeLine: string;

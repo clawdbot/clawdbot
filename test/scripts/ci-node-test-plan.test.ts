@@ -187,7 +187,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
 
     expect(compact.length).toBeGreaterThanOrEqual(12);
-    expect(compact.length).toBeLessThanOrEqual(24);
+    expect(compact.length).toBeLessThanOrEqual(28);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -241,6 +241,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
     ).toEqual({
       OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      // Timing-sensitive groups pin the worker budget while the job-level
+      // default scales with the runner class.
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
     const startupCoreJob = compact.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
@@ -874,18 +877,36 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-subagents",
       },
+      // cli-runner stripes: agents-core runs files serially, so the
+      // import-heavy suite splits across jobs to parallelize at bin level.
       {
-        checkName: "checks-node-agentic-agents-core-runner-cli",
+        checkName: "checks-node-agentic-agents-core-runner-cli-1",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
         includePatterns: agentShards[4]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-core-runner-cli",
+        shardName: "agentic-agents-core-runner-cli-1",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-cli-2",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[5]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-cli-2",
+      },
+      {
+        checkName: "checks-node-agentic-agents-core-runner-cli-3",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        includePatterns: agentShards[6]?.includePatterns,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: "agentic-agents-core-runner-cli-3",
       },
       {
         checkName: "checks-node-agentic-agents-core-runner-commands",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
-        includePatterns: agentShards[5]?.includePatterns,
+        includePatterns: agentShards[7]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runner-commands",
@@ -893,7 +914,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-embedded",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
-        includePatterns: agentShards[6]?.includePatterns,
+        includePatterns: agentShards[8]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runner-embedded",
@@ -901,7 +922,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runner-sessions",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
-        includePatterns: agentShards[7]?.includePatterns,
+        includePatterns: agentShards[9]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runner-sessions",
@@ -909,7 +930,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-runtime",
         configs: ["test/vitest/vitest.agents-core.config.ts"],
-        includePatterns: agentShards[8]?.includePatterns,
+        includePatterns: agentShards[10]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-runtime",
@@ -917,7 +938,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-core-isolated",
         configs: ["test/vitest/vitest.agents-core-isolated.config.ts"],
-        includePatterns: agentShards[9]?.includePatterns,
+        includePatterns: agentShards[11]?.includePatterns,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-core-isolated",

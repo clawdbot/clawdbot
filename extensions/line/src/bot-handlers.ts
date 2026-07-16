@@ -3,14 +3,14 @@ import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readChannelAllowFromStore,
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -36,6 +36,7 @@ import {
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia } from "./download.js";
+import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
@@ -79,18 +80,24 @@ interface LineHandlerContext {
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
 }
 
-export function createLineWebhookReplayCache(): LineWebhookReplayCache {
-  return createClaimableDedupe({
-    ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
-    memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
+type LineReplayEvent = { event: WebhookEvent; accountId: string };
+
+export function createLineWebhookReplayCache() {
+  return createChannelReplayGuard<LineReplayEvent>({
+    dedupe: {
+      ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
+      memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
+    },
+    buildReplayKey: ({ event, accountId }) => buildLineWebhookReplayKey(event, accountId)?.key,
   });
 }
+
+type LineWebhookReplayCache = ReturnType<typeof createLineWebhookReplayCache>;
 
 function buildLineWebhookReplayKey(
   event: WebhookEvent,
@@ -122,39 +129,6 @@ function buildLineWebhookReplayKey(
         ? `room:${source.roomId ?? ""}`
         : `user:${source?.userId ?? ""}`;
   return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId: `event:${eventId}` };
-}
-
-type LineReplayCandidate = {
-  key: string;
-  eventId: string;
-  cache: LineWebhookReplayCache;
-};
-
-function getLineReplayCandidate(
-  event: WebhookEvent,
-  context: LineHandlerContext,
-): LineReplayCandidate | null {
-  const replay = buildLineWebhookReplayKey(event, context.account.accountId);
-  const cache = context.replayCache;
-  if (!replay || !cache) {
-    return null;
-  }
-  return { key: replay.key, eventId: replay.eventId, cache };
-}
-
-async function claimLineReplayEvent(
-  candidate: LineReplayCandidate,
-): Promise<{ skip: true; inFlightResult?: Promise<void> } | { skip: false }> {
-  const claim = await candidate.cache.claim(candidate.key);
-  if (claim.kind === "claimed") {
-    return { skip: false };
-  }
-  if (claim.kind === "inflight") {
-    logVerbose(`line: skipped in-flight replayed webhook event ${candidate.eventId}`);
-    return { skip: true, inFlightResult: claim.pending.then(() => undefined) };
-  }
-  logVerbose(`line: skipped replayed webhook event ${candidate.eventId}`);
-  return { skip: true };
 }
 
 function resolveLineGroupConfig(params: {
@@ -314,7 +288,7 @@ async function shouldProcessLineEvent(
     allowFrom: normalizeStringEntries(account.config.allowFrom),
     groupAllowFrom,
     command: {
-      hasControlCommand: shouldComputeCommandAuthorized(rawText, cfg),
+      hasControlCommand: hasControlCommand(rawText, cfg),
       groupOwnerAllowFrom: "none",
     },
   });
@@ -458,57 +432,63 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const allMedia: MediaRef[] = [];
-  let mediaUnavailable = false;
+  // Reserve the group window before any await below. Concurrent ambient and
+  // mention events see only unreserved entries; failed turns release theirs.
+  const groupHistoryKey = isGroup ? (groupId ?? roomId) : undefined;
+  const historyReservation = reserveLineGroupHistory(
+    context.groupHistories,
+    groupHistoryKey,
+    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+  );
 
-  if (isDownloadableLineMessageType(message.type)) {
-    try {
-      const originalFilename =
-        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
-        originalFilename,
-      });
-      allMedia.push({
-        path: media.path,
-        contentType: media.contentType,
-      });
-    } catch (err) {
-      mediaUnavailable = true;
-      const errMsg = String(err);
-      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-        logVerbose(`line: media exceeds size limit for message ${message.id}`);
-      } else {
-        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+  try {
+    const allMedia: MediaRef[] = [];
+    let mediaUnavailable = false;
+
+    if (isDownloadableLineMessageType(message.type)) {
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        allMedia.push({
+          path: media.path,
+          contentType: media.contentType,
+        });
+      } catch (err) {
+        mediaUnavailable = true;
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+        }
       }
     }
-  }
 
-  const messageContext = await buildLineMessageContext({
-    event,
-    allMedia,
-    mediaUnavailable,
-    cfg,
-    account,
-    commandAuthorized: decision.commandAccess.authorized,
-    groupHistories: context.groupHistories,
-    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-  });
+    const messageContext = await buildLineMessageContext({
+      event,
+      allMedia,
+      mediaUnavailable,
+      cfg,
+      account,
+      commandAuthorized: decision.commandAccess.authorized,
+      inboundHistory: historyReservation.inboundHistory,
+    });
 
-  if (!messageContext) {
-    logVerbose("line: skipping empty message");
-    return;
-  }
-
-  await processMessage(messageContext);
-
-  if (isGroup && context.groupHistories) {
-    const historyKey = groupId ?? roomId;
-    if (historyKey && context.groupHistories.has(historyKey)) {
-      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
-        historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-      });
+    if (!messageContext) {
+      logVerbose("line: skipping empty message");
+      return;
     }
+
+    await processMessage(messageContext);
+    historyReservation.commit();
+  } finally {
+    historyReservation.release();
   }
 }
 
@@ -566,55 +546,64 @@ export async function handleLineWebhookEvents(
 ): Promise<void> {
   let firstError: unknown;
   for (const event of events) {
-    const replayCandidate = getLineReplayCandidate(event, context);
-    const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
-    if (replaySkip?.skip) {
-      if (replaySkip.inFlightResult) {
+    try {
+      if (!context.replayCache) {
+        await handleLineWebhookEvent(event, context);
+        continue;
+      }
+      const replayEvent = { event, accountId: context.account.accountId };
+      const result = await context.replayCache.processGuarded(
+        replayEvent,
+        async () => await handleLineWebhookEvent(event, context),
+        { onError: "commit" },
+      );
+      const replayId = buildLineWebhookReplayKey(event, context.account.accountId)?.eventId;
+      if (result.kind === "inflight") {
+        logVerbose(`line: skipped in-flight replayed webhook event ${replayId ?? "unknown"}`);
         try {
-          await replaySkip.inFlightResult;
+          await result.pending;
         } catch (err) {
           context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
           firstError ??= err;
         }
-      }
-      continue;
-    }
-    try {
-      switch (event.type) {
-        case "message":
-          await handleMessageEvent(event, context);
-          break;
-        case "follow":
-          await handleFollowEvent(event, context);
-          break;
-        case "unfollow":
-          await handleUnfollowEvent(event, context);
-          break;
-        case "join":
-          await handleJoinEvent(event, context);
-          break;
-        case "leave":
-          await handleLeaveEvent(event, context);
-          break;
-        case "postback":
-          await handlePostbackEvent(event, context);
-          break;
-        default:
-          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
-      }
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
+      } else if (result.kind === "duplicate") {
+        logVerbose(`line: skipped replayed webhook event ${replayId ?? "unknown"}`);
       }
     } catch (err) {
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
-      }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;
     }
   }
   if (firstError) {
     throw toLintErrorObject(firstError, "Non-Error thrown");
+  }
+}
+
+async function handleLineWebhookEvent(
+  event: WebhookEvent,
+  context: LineHandlerContext,
+): Promise<void> {
+  switch (event.type) {
+    case "message":
+      await handleMessageEvent(event, context);
+      break;
+    case "follow":
+      await handleFollowEvent(event, context);
+      break;
+    case "unfollow":
+      await handleUnfollowEvent(event, context);
+      break;
+    case "join":
+      await handleJoinEvent(event, context);
+      break;
+    case "leave":
+      await handleLeaveEvent(event, context);
+      break;
+    case "postback":
+      await handlePostbackEvent(event, context);
+      break;
+    default:
+      logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
   }
 }
 

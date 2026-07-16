@@ -16,6 +16,7 @@ import {
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
+import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { shouldEmitTranscriptToolProgress } from "./event-projector.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
@@ -211,8 +212,10 @@ export function createCodexAttemptServerRequestController(
             toolBridge,
             signal: runAbortController.signal,
             timeoutMs: dynamicToolTimeoutMs,
+            toolMeta,
             toolCallOrdinal,
             onAgentToolResult: params.onAgentToolResult,
+            observeToolTerminal: params.observeToolTerminal,
             onFallbackSelected: () => {
               if (toolCallOrdinal !== undefined) {
                 suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
@@ -251,16 +254,7 @@ export function createCodexAttemptServerRequestController(
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
         });
-        projector?.recordDynamicToolResult({
-          callId: call.callId,
-          tool: call.tool,
-          asyncStarted: response.asyncStarted === true,
-          success: protocolResponse.success,
-          terminalType:
-            response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
-          sideEffectEvidence: response.sideEffectEvidence === true,
-          contentItems: protocolResponse.contentItems,
-        });
+        recordCodexDynamicToolResult(projector, call, response, protocolResponse);
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
           void emitCodexAppServerEvent(params, {
@@ -295,7 +289,7 @@ export function createCodexAttemptServerRequestController(
           });
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (response.terminate === true) {
+        if (response.terminate === true && response.success) {
           scheduleTurnReleaseAfterTerminalDynamicTool({
             call,
             response,

@@ -6,8 +6,11 @@ import {
   resolveRequestClientIp,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
-import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  readJsonWebhookBodyOrReject,
+  runDetachedWebhookWork,
+  type WebhookInFlightLimiter,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
@@ -345,11 +348,15 @@ export function createGoogleChatWebhookRequestHandler(params: {
 
         const dispatchTarget = selectedTarget;
         dispatchTarget.statusSink?.({ lastInboundAt: Date.now() });
-        params.processEvent(parsedEvent, dispatchTarget).catch((err: unknown) => {
-          dispatchTarget.runtime.error?.(
-            `[${dispatchTarget.account.accountId}] Google Chat webhook failed: ${String(err)}`,
-          );
-        });
+        // Reserve the detached task before the HTTP admission is released;
+        // otherwise later queue work inherits a released admission root.
+        void runDetachedWebhookWork(() => params.processEvent(parsedEvent, dispatchTarget)).catch(
+          (err: unknown) => {
+            dispatchTarget.runtime.error?.(
+              `[${dispatchTarget.account.accountId}] Google Chat webhook failed: ${String(err)}`,
+            );
+          },
+        );
 
         res.statusCode = 200;
         res.setHeader("Content-Type", "application/json");

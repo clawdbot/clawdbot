@@ -6,12 +6,14 @@ import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const readJsonWebhookBodyOrReject = vi.hoisted(() => vi.fn());
+const runDetachedWebhookWork = vi.hoisted(() => vi.fn((run: () => Promise<void>) => run()));
 const resolveWebhookTargetWithAuthOrReject = vi.hoisted(() => vi.fn());
 const withResolvedWebhookRequestPipeline = vi.hoisted(() => vi.fn());
 const verifyGoogleChatRequest = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
   readJsonWebhookBodyOrReject,
+  runDetachedWebhookWork,
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
@@ -294,6 +296,7 @@ describe("googlechat monitor webhook", () => {
       },
       target,
     );
+    expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
     expect(res.body).toBe("{}");

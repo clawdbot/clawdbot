@@ -71,7 +71,8 @@ env:
   OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa
   KOVA_REPOSITORY: openclaw/Kova
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
-  KOVA_SCENARIO_TIMEOUT_MS: "300000"
+  # Release matrices cold-build the candidate runtime before measurement.
+  KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
 
 jobs:
   resolve_target:
@@ -273,7 +274,10 @@ jobs:
           mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
 
           ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          # retry-max-time only gates new retries; cap an active transfer separately
+          # so a stalled release asset cannot consume the entire Kova job deadline.
           curl -fsSL --proto '=https' --tlsv1.2 \
+            --max-time 180 \
             --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
             -o "$ocm_archive" \
             "https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
@@ -745,8 +749,22 @@ jobs:
             >"$gateway_log" 2>&1 &
           gateway_pid="$!"
 
-          for _ in $(seq 1 120); do
-            if curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null; then
+          gateway_ready_timeout_seconds=120
+          gateway_probe_timeout_seconds=5
+          gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))
+          while true; do
+            gateway_ready_remaining=$((gateway_ready_deadline - SECONDS))
+            if (( gateway_ready_remaining <= 0 )); then
+              cat "$gateway_log" >&2
+              echo "Timed out after ${gateway_ready_timeout_seconds}s waiting for gateway health." >&2
+              exit 1
+            fi
+            # Clamp each probe to the remaining startup budget so a stalled response cannot multiply the wait.
+            gateway_probe_timeout="$gateway_ready_remaining"
+            if (( gateway_probe_timeout > gateway_probe_timeout_seconds )); then
+              gateway_probe_timeout="$gateway_probe_timeout_seconds"
+            fi
+            if curl -fsS --connect-timeout 2 --max-time "$gateway_probe_timeout" "http://127.0.0.1:${gateway_port}/healthz" >/dev/null; then
               break
             fi
             if ! kill -0 "$gateway_pid" 2>/dev/null; then
@@ -755,7 +773,6 @@ jobs:
             fi
             sleep 1
           done
-          curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null
 
           OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
             node --import tsx scripts/bench-cli-startup.ts \

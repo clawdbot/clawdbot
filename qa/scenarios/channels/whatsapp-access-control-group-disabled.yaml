@@ -19,7 +19,6 @@ scenario:
     suiteIsolation: isolated
     summary: Verify WhatsApp groupPolicy disabled behavior through the canonical adapter.
     config:
-      requiredChannelDriver: live
       policyKey: groupPolicy
       policyValue: disabled
       conversationKind: group

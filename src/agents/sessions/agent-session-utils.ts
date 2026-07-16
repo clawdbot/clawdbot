@@ -57,27 +57,6 @@ export function extractTextContent(content: unknown): string {
   return text;
 }
 
-export interface ParsedSkillBlock {
-  name: string;
-  location: string;
-  content: string;
-  userMessage: string | undefined;
-}
-
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-  const match = text.match(
-    /^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/,
-  );
-  if (!match) {
-    return null;
-  }
-  const [, name, location, content, userMessage] = match;
-  if (name === undefined || location === undefined || content === undefined) {
-    return null;
-  }
-  return { name, location, content, userMessage: userMessage?.trim() || undefined };
-}
-
 export function estimateMessagesFromContent(messages: AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
 }

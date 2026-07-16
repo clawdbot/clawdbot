@@ -3,12 +3,14 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  createResponsesToolCallTracker,
   isOpenAICompatibleAzureResponsesBaseUrl,
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
   normalizeOpenAIReasoningEffort,
   normalizeOpenAIStrictToolParameters,
   projectOpenAITools,
+  readResponsesToolCallItemIdentity,
   reconcileOpenAIResponsesToolChoice,
   resolveAzureDeploymentNameFromMap,
   resolveOpenAIReasoningEffortForModel,
@@ -16,6 +18,7 @@ import {
   type OpenAIApiReasoningEffort,
   type OpenAIReasoningEffort,
   type OpenAIToolProjection,
+  type ResponsesToolCallState,
 } from "@openclaw/ai/internal/openai";
 import {
   calculateCost,
@@ -29,6 +32,7 @@ import {
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  isImageWithMediaPayload,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -1131,7 +1135,7 @@ function convertResponsesMessages(
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasImages = msg.content.some((item) => item.type === "image");
+      const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
@@ -1146,13 +1150,11 @@ function convertResponsesMessages(
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
+                ...msg.content.filter(isImageWithMediaPayload).map((item) => ({
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:${item.mimeType};base64,${item.data}`,
+                })),
               ] as ResponseFunctionCallOutputItemList)
             : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
@@ -1226,14 +1228,11 @@ async function processResponsesStream(
   };
   let currentItem: Record<string, unknown> | null = null;
   let currentBlock: Record<string, unknown> | null = null;
-  type StreamingToolCallIdentity = { itemId?: string; callId?: string };
-  type StreamingToolCallState = StreamingToolCallIdentity & {
+  type StreamingToolCallState = ResponsesToolCallState & {
     block: Record<string, unknown>;
     contentIndex: number;
-    argumentStreamReliable: boolean;
   };
-  const toolCallsByOutputIndex = new Map<number, StreamingToolCallState>();
-  const unindexedToolCalls = new Set<StreamingToolCallState>();
+  const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
@@ -1248,113 +1247,10 @@ async function processResponsesStream(
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
-  const readOutputIndex = (event: Record<string, unknown>): number | undefined =>
-    typeof event.output_index === "number" &&
-    Number.isInteger(event.output_index) &&
-    event.output_index >= 0
-      ? event.output_index
-      : undefined;
   const readIdentityValue = (value: unknown): string | undefined => {
     const identity = typeof value === "string" ? value.trim() : "";
     return identity || undefined;
   };
-  const readEventToolCallIdentity = (
-    event: Record<string, unknown>,
-  ): StreamingToolCallIdentity => ({ itemId: readIdentityValue(event.item_id) });
-  const readItemToolCallIdentity = (item: Record<string, unknown>): StreamingToolCallIdentity => ({
-    itemId: readIdentityValue(item.id),
-    callId: readIdentityValue(item.call_id),
-  });
-  const identitiesConflict = (
-    state: StreamingToolCallState,
-    identity: StreamingToolCallIdentity,
-  ): boolean =>
-    Boolean(
-      (state.itemId && identity.itemId && state.itemId !== identity.itemId) ||
-      (state.callId && identity.callId && state.callId !== identity.callId),
-    );
-  const sharesIdentity = (
-    state: StreamingToolCallState,
-    identity: StreamingToolCallIdentity,
-  ): boolean =>
-    Boolean(
-      (state.itemId && identity.itemId && state.itemId === identity.itemId) ||
-      (state.callId && identity.callId && state.callId === identity.callId),
-    );
-  const adoptToolCallIdentity = (
-    state: StreamingToolCallState,
-    identity: StreamingToolCallIdentity,
-  ): StreamingToolCallState => {
-    state.itemId ??= identity.itemId;
-    state.callId ??= identity.callId;
-    return state;
-  };
-  const resolveCompatibleToolCall = (
-    candidates: Iterable<StreamingToolCallState>,
-    identity: StreamingToolCallIdentity,
-  ): StreamingToolCallState | undefined => {
-    const uniqueCandidates = [...new Set(candidates)];
-    if (!identity.itemId && !identity.callId) {
-      return uniqueCandidates.length === 1 ? uniqueCandidates[0] : undefined;
-    }
-    const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
-    const matches = compatible.filter((state) => sharesIdentity(state, identity));
-    if (matches.length === 1) {
-      const match = matches.at(0);
-      return match ? adoptToolCallIdentity(match, identity) : undefined;
-    }
-    // Only a sole active call may adopt an identity it did not already know.
-    // Parallel calls require a positive match so missing indices stay fail-closed.
-    if (uniqueCandidates.length !== 1 || compatible.length !== 1 || matches.length !== 0) {
-      return undefined;
-    }
-    const candidate = compatible.at(0);
-    return candidate ? adoptToolCallIdentity(candidate, identity) : undefined;
-  };
-  const resolveStreamingToolCall = (
-    event: Record<string, unknown>,
-    identity: StreamingToolCallIdentity = readEventToolCallIdentity(event),
-  ): StreamingToolCallState | undefined => {
-    const outputIndex = readOutputIndex(event);
-    if (outputIndex !== undefined) {
-      const indexed = toolCallsByOutputIndex.get(outputIndex);
-      if (indexed) {
-        return !identitiesConflict(indexed, identity)
-          ? adoptToolCallIdentity(indexed, identity)
-          : undefined;
-      }
-      // A compatibility stream may add calls without indices, then start
-      // including them. Bind only the one identity-matched (or sole) candidate.
-      const unindexed = resolveCompatibleToolCall(unindexedToolCalls, identity);
-      if (unindexed) {
-        unindexedToolCalls.delete(unindexed);
-        toolCallsByOutputIndex.set(outputIndex, unindexed);
-      }
-      return unindexed;
-    }
-
-    return resolveCompatibleToolCall(
-      [...toolCallsByOutputIndex.values(), ...unindexedToolCalls],
-      identity,
-    );
-  };
-  const forgetStreamingToolCall = (toolCall: StreamingToolCallState) => {
-    for (const [trackedIndex, tracked] of toolCallsByOutputIndex) {
-      if (tracked === toolCall) {
-        toolCallsByOutputIndex.delete(trackedIndex);
-      }
-    }
-    unindexedToolCalls.delete(toolCall);
-  };
-  const markActiveToolCallArgumentsUnreliable = () => {
-    // An unrouteable argument event may belong to any active call. Only an
-    // authoritative full argument snapshot can recover that call.
-    for (const toolCall of new Set([...toolCallsByOutputIndex.values(), ...unindexedToolCalls])) {
-      toolCall.argumentStreamReliable = false;
-    }
-  };
-  const hasActiveStreamingToolCall = () =>
-    toolCallsByOutputIndex.size > 0 || unindexedToolCalls.size > 0;
   // Opening fragments may carry the only function name. A conflicting
   // completion must never retarget an already-started call.
   const resolveCompletedToolCallName = (
@@ -1550,31 +1446,24 @@ async function processResponsesStream(
           stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
         }
       } else if (item.type === "function_call") {
-        const outputIndex = readOutputIndex(event);
-        if (outputIndex !== undefined && toolCallsByOutputIndex.has(outputIndex)) {
-          throw new Error(`Responses stream reused active tool-call output index ${outputIndex}`);
-        }
-        currentItem = item;
-        currentBlock = {
+        const toolCallBlock: Record<string, unknown> = {
           type: "toolCall",
           id: resolveToolCallId(item),
           name: readIdentityValue(item.name) ?? "",
           arguments: {},
           partialJson: stringifyJsonLike(item.arguments),
         };
-        output.content.push(currentBlock);
-        const contentIndex = blockIndex();
-        const toolCallState = {
-          block: currentBlock,
+        const contentIndex = output.content.length;
+        const toolCallState: StreamingToolCallState = {
+          block: toolCallBlock,
           contentIndex,
           argumentStreamReliable: true,
-          ...readItemToolCallIdentity(item),
+          ...readResponsesToolCallItemIdentity(item),
         };
-        if (outputIndex !== undefined) {
-          toolCallsByOutputIndex.set(outputIndex, toolCallState);
-        } else {
-          unindexedToolCalls.add(toolCallState);
-        }
+        streamingToolCalls.register(event, toolCallState);
+        currentItem = item;
+        currentBlock = toolCallBlock;
+        output.content.push(toolCallBlock);
         stream.push({ type: "toolcall_start", contentIndex, partial: output });
       }
     } else if (type === "response.reasoning_summary_text.delta") {
@@ -1601,7 +1490,7 @@ async function processResponsesStream(
         }
       }
     } else if (type === "response.function_call_arguments.delta") {
-      const toolCall = resolveStreamingToolCall(event);
+      const toolCall = streamingToolCalls.resolve(event);
       if (toolCall) {
         toolCall.block.partialJson = `${stringifyJsonLike(toolCall.block.partialJson)}${stringifyJsonLike(event.delta)}`;
         toolCall.block.arguments = parseStreamingJson(
@@ -1613,11 +1502,11 @@ async function processResponsesStream(
           delta: stringifyJsonLike(event.delta),
           partial: output,
         });
-      } else if (hasActiveStreamingToolCall()) {
-        markActiveToolCallArgumentsUnreliable();
+      } else if (streamingToolCalls.hasActive()) {
+        streamingToolCalls.markArgumentsUnreliable();
       }
     } else if (type === "response.function_call_arguments.done") {
-      const toolCall = resolveStreamingToolCall(event);
+      const toolCall = streamingToolCalls.resolve(event);
       if (toolCall) {
         const previousPartialJson = stringifyJsonLike(toolCall.block.partialJson);
         const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
@@ -1640,8 +1529,8 @@ async function processResponsesStream(
             });
           }
         }
-      } else if (hasActiveStreamingToolCall()) {
-        markActiveToolCallArgumentsUnreliable();
+      } else if (streamingToolCalls.hasActive()) {
+        streamingToolCalls.markArgumentsUnreliable();
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
@@ -1742,10 +1631,13 @@ async function processResponsesStream(
         }
         currentBlock = null;
       } else if (item.type === "function_call") {
-        const streamingToolCall = resolveStreamingToolCall(event, readItemToolCallIdentity(item));
+        const streamingToolCall = streamingToolCalls.resolve(
+          event,
+          readResponsesToolCallItemIdentity(item),
+        );
         // Do not turn an unresolved completion into a second public call while
         // an indexed call is still open. Its identity or index must match.
-        if (!streamingToolCall && hasActiveStreamingToolCall()) {
+        if (!streamingToolCall && streamingToolCalls.hasActive()) {
           await cooperativeScheduler.afterEvent();
           continue;
         }
@@ -1799,7 +1691,7 @@ async function processResponsesStream(
           partial: output,
         });
         if (streamingToolCall) {
-          forgetStreamingToolCall(streamingToolCall);
+          streamingToolCalls.forget(streamingToolCall);
         }
         if (currentBlock === toolCallBlock) {
           currentBlock = null;
@@ -1807,7 +1699,7 @@ async function processResponsesStream(
         }
       }
     } else if (type === "response.completed") {
-      if (hasActiveStreamingToolCall()) {
+      if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
       const response = event.response as Record<string, unknown> | undefined;
@@ -1876,7 +1768,7 @@ async function processResponsesStream(
     }
     await cooperativeScheduler.afterEvent();
   }
-  if (hasActiveStreamingToolCall()) {
+  if (streamingToolCalls.hasActive()) {
     throw new Error("Responses stream ended with unresolved tool calls");
   }
   const eventTypeSummary = [...eventTypes.entries()]

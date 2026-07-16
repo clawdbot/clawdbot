@@ -891,6 +891,12 @@ const SlackDmSchema = z
   })
   .strict();
 
+const SlackPresenceEventsSchema = z
+  .object({
+    mode: z.enum(["off", "auto", "on"]).optional(),
+  })
+  .strict();
+
 const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -904,6 +910,7 @@ const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
   })
   .strict();
 
@@ -995,6 +1002,7 @@ const SlackAccountSchema = z
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),

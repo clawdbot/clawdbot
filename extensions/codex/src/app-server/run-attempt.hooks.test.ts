@@ -18,8 +18,8 @@ import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   assistantMessage,
   createAppServerHarness,

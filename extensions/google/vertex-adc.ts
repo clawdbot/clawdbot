@@ -51,6 +51,7 @@ const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
 const GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES = 1024 * 1024;
+const VERTEX_ADC_TEST_API_KEY = Symbol.for("openclaw.google.vertexAdcTestApi");
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -94,10 +95,16 @@ function resolveGoogleAuthLibraryTokenExpiresAtMs(nowRaw = Date.now()): number |
     : resolveExpiresAtMsFromDurationMs(GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS, { nowMs });
 }
 
-export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
   cachedGoogleAuthClient = undefined;
   cachedGoogleVertexAdcToken = undefined;
+}
+
+if (process.env.VITEST) {
+  (globalThis as Record<PropertyKey, unknown>)[VERTEX_ADC_TEST_API_KEY] = {
+    reset: resetGoogleVertexAuthorizedUserTokenCacheForTest,
+  };
 }
 
 export function isGoogleVertexCredentialsMarker(
@@ -194,9 +201,7 @@ function readGoogleAdcCredentialsTypeSync(credentialsPath: string): string | und
  * probes the default metadata hosts asynchronously at request time, and the
  * provider wires the Vertex transport without this sync predicate.
  */
-export function hasGoogleVertexAuthorizedUserAdcSync(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function hasGoogleVertexAuthorizedUserAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveGoogleApplicationCredentialsPath(env);
   if (credentialsPath) {
     const type = readGoogleAdcCredentialsTypeSync(credentialsPath);

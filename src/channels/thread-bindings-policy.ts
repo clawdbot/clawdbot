@@ -31,10 +31,10 @@ type ChannelThreadBindingsContainerShape = {
 };
 
 /** Thread-bound session type controlled by spawn policy. */
-export type ThreadBindingSpawnKind = "subagent" | "acp";
+type ThreadBindingSpawnKind = "subagent" | "acp";
 
 /** Effective per-channel/account policy for creating thread-bound sessions. */
-export type ThreadBindingSpawnPolicy = {
+type ThreadBindingSpawnPolicy = {
   channel: string;
   accountId: string;
   enabled: boolean;

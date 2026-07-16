@@ -22,7 +22,7 @@ const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_MOONSHOT_VIDEO_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
 const DEFAULT_MOONSHOT_VIDEO_PROMPT = "Describe the video.";
 
-export async function describeMoonshotVideo(
+async function describeMoonshotVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;

@@ -7,6 +7,7 @@ import {
   mergeAllowFromEntries,
   patchTopLevelChannelConfigSection,
   promptSingleChannelSecretInput,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -607,10 +608,5 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   },
 
   dmPolicy: feishuDmPolicy,
-  disable: (cfg) =>
-    patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      patch: { enabled: false },
-    }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

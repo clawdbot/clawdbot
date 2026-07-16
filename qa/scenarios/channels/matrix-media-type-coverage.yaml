@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.media-rich-content
   execution:
+    profiles: { "matrix:all": 53, "matrix:media": 2 }
     kind: flow
     channel: matrix
     timeoutMs: 90000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

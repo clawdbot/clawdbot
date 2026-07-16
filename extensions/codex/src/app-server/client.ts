@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
@@ -62,12 +62,14 @@ export function getCodexAppServerClientInstanceId(client: object): string {
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;
   readonly data?: JsonValue;
+  readonly method: string;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
     super(formatCodexAppServerRpcErrorMessage(error, method));
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
+    this.method = method;
   }
 }
 
@@ -76,12 +78,35 @@ class CodexAppServerLocalRequestCancellationError extends Error {
 
   constructor(
     method: string,
-    reason: "aborted" | "timed out",
+    readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
   ) {
     super(`${method} ${reason}`);
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
+}
+
+export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
+    "reason" in error &&
+    error.reason === "timed out"
+  );
+}
+
+export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "EPIPE") {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 class CodexAppServerIndeterminateTransportError extends Error {
@@ -235,8 +260,8 @@ export class CodexAppServerClient {
     child.stdout.on("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (text: string) => {
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
       const trimmed = text.trim();
       if (trimmed) {
@@ -977,7 +1002,7 @@ function redactCodexAppServerLinePreview(value: string): string {
 
 function appendBoundedTail(current: string, next: string, maxLength: number): string {
   const combined = `${current}${next}`;
-  return combined.length > maxLength ? combined.slice(combined.length - maxLength) : combined;
+  return combined.length > maxLength ? sliceUtf16Safe(combined, -maxLength) : combined;
 }
 
 function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {

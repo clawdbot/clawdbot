@@ -44,6 +44,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
+  isImageWithMediaPayload,
 } from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
@@ -342,12 +343,7 @@ function toClaudeCodeName(name: string): string {
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+  const hasImages = content.some(isImageWithMediaPayload);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -359,7 +355,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       }
   > = [];
   let hasTextBlock = false;
-  for (const block of Array.isArray(content) ? content : []) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -369,7 +365,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (!isImageWithMediaPayload(record)) {
       continue;
     }
     blocks.push({
@@ -377,7 +373,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       source: {
         type: "base64",
         media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: typeof record.data === "string" ? record.data : "",
+        data: record.data,
       },
     });
   }

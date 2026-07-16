@@ -22,7 +22,9 @@ const LARK_ACCOUNTS_URL = "https://accounts.larksuite.com";
 
 const REGISTRATION_PATH = "/oauth/v1/app/registration";
 
-const REQUEST_TIMEOUT_MS = 10_000;
+// QR onboarding should fall back promptly when an accounts endpoint stalls;
+// regular Feishu API requests use the longer FEISHU_HTTP_TIMEOUT_MS budget.
+const APP_REGISTRATION_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_REGISTRATION_EXPIRE_SECONDS = 600;
 
@@ -57,6 +59,8 @@ type FeishuAppRegistrationFetchOptions = {
   fetchImpl?: FeishuAppRegistrationFetch;
   /** Override hostname lookup for hermetic SSRF-guard tests. */
   lookupFn?: LookupFn;
+  /** Override the registration HTTP deadline for tests. */
+  timeoutMs?: number;
 };
 
 interface RawBeginResponse {
@@ -105,11 +109,11 @@ async function postRegistration<T>(
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(body).toString(),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     },
     auditContext: "feishu.app-registration.post",
     fetchImpl: options?.fetchImpl,
     lookupFn: options?.lookupFn,
+    timeoutMs: options?.timeoutMs,
   });
 }
 
@@ -119,12 +123,15 @@ async function fetchFeishuJson<T>(params: {
   auditContext: string;
   fetchImpl?: FeishuAppRegistrationFetch;
   lookupFn?: LookupFn;
+  timeoutMs?: number;
 }): Promise<T> {
+  const timeoutMs = params.timeoutMs ?? APP_REGISTRATION_REQUEST_TIMEOUT_MS;
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
     fetchImpl: params.fetchImpl,
     lookupFn: params.lookupFn,
+    timeoutMs,
     policy: { allowedHostnames: [new URL(params.url).hostname] },
     auditContext: params.auditContext,
   });
@@ -227,9 +234,7 @@ export async function pollAppRegistration(params: {
   let domainSwitched = false;
 
   const expireInMs =
-    finiteSecondsToTimerSafeMilliseconds(expireIn) ??
-    finiteSecondsToTimerSafeMilliseconds(DEFAULT_REGISTRATION_EXPIRE_SECONDS) ??
-    REQUEST_TIMEOUT_MS;
+    finiteSecondsToTimerSafeMilliseconds(expireIn) ?? DEFAULT_REGISTRATION_EXPIRE_SECONDS * 1_000;
   const deadline = Date.now() + expireInMs;
 
   while (Date.now() < deadline) {
@@ -342,7 +347,6 @@ export async function getAppOwnerOpenId(params: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ app_id: params.appId, app_secret: params.appSecret }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
       auditContext: "feishu.app-registration.owner-token",
       fetchImpl: params.fetchImpl,
@@ -369,7 +373,6 @@ export async function getAppOwnerOpenId(params: {
           Authorization: `Bearer ${tokenData.tenant_access_token}`,
           "Content-Type": "application/json",
         },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
       auditContext: "feishu.app-registration.owner-app",
       fetchImpl: params.fetchImpl,
@@ -394,7 +397,6 @@ export async function getAppOwnerOpenId(params: {
 function sleepRegistrationPollInterval(intervalSeconds: number): Promise<void> {
   const intervalMs =
     finiteSecondsToTimerSafeMilliseconds(intervalSeconds) ??
-    finiteSecondsToTimerSafeMilliseconds(DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS) ??
-    REQUEST_TIMEOUT_MS;
+    DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS * 1_000;
   return sleep(intervalMs);
 }

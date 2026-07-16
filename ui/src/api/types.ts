@@ -475,6 +475,7 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  parentSessionKey?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Session-scoped exec node binding (exec host=node routing). */
@@ -485,6 +486,7 @@ export type GatewaySessionRow = {
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   displayName?: string;
+  derivedTitle?: string;
   channel?: string;
   surface?: string;
   subject?: string;
@@ -527,6 +529,8 @@ export type GatewaySessionRow = {
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
+  /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
+  runtimeSampledAt?: number;
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
@@ -860,6 +864,7 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
@@ -881,4 +886,15 @@ export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 export type ModelsProbeResult =
   import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
+export type SystemAgentSetupActivateParams =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateParams;
+export type SystemAgentSetupActivateResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateResult;
+export type SystemAgentSetupAuthStartResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupAuthStartResult;
+export type SystemAgentSetupDetectResult =
+  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupDetectResult;
+export type WizardNextResult =
+  import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
+export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

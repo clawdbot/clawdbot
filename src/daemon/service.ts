@@ -26,6 +26,7 @@ import {
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -83,32 +84,6 @@ export type GatewayService = {
     opts?: GatewayServiceReadOptions,
   ) => Promise<GatewayServiceRuntime>;
 };
-
-function mergeGatewayServiceEnv(
-  baseEnv: GatewayServiceEnv,
-  command: GatewayServiceCommandConfig | null,
-): GatewayServiceEnv {
-  if (!command?.environment) {
-    return baseEnv;
-  }
-  const merged = {
-    ...baseEnv,
-    ...command.environment,
-  };
-  for (const key of [
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    // Explicit caller env selects the target service identity; installed command
-    // env may come from a different profile or stale service file.
-    const value = baseEnv[key]?.trim();
-    if (value) {
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
 
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),

@@ -27,7 +27,7 @@ import type {
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-export type ContextEngineFactoryContext = {
+type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;

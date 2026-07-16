@@ -45,7 +45,7 @@ function readNumberField(record: Record<string, unknown> | undefined, key: strin
 /**
  * Resolves an account-scoped channel media byte limit.
  */
-export function resolveScopedChannelMediaMaxBytes(params: {
+function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   resolveChannelLimitMb: (params: { cfg: OpenClawConfig; accountId: string }) => number | undefined;

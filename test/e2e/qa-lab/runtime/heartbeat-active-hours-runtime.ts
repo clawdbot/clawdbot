@@ -154,8 +154,6 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
   }
 }
 
-export const testing = { heartbeatConfig, parseOptions, waitForObservation };
-
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runHeartbeatActiveHoursRuntime(parseOptions(process.argv.slice(2)))
     .then((evidence) => {

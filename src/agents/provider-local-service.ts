@@ -427,7 +427,9 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  const captureStdout = (chunk: Buffer | string) => {
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  const captureStdout = (chunk: string) => {
     diagnostics.stdoutTail = appendLocalServiceOutputTail(
       diagnostics.stdoutTail,
       chunk,
@@ -437,7 +439,7 @@ async function startAndWaitForLocalService(params: {
       healthHeaders,
     );
   };
-  const captureStderr = (chunk: Buffer | string) => {
+  const captureStderr = (chunk: string) => {
     diagnostics.stderrTail = appendLocalServiceOutputTail(
       diagnostics.stderrTail,
       chunk,

@@ -1,9 +1,7 @@
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 
-export type PluginConfigValidation =
-  | { ok: true; value?: unknown }
-  | { ok: false; errors: string[] };
+type PluginConfigValidation = { ok: true; value?: unknown } | { ok: false; errors: string[] };
 
 /**
  * Config schema contract accepted by plugin manifests and runtime registration.

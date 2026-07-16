@@ -226,9 +226,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
-  const agentHarness = await import("openclaw/plugin-sdk/agent-harness");
+  const {
+    createOpenClawCodingTools: defaultCreateOpenClawCodingTools,
+    resolveWebSearchToolPolicy,
+  } = await import("openclaw/plugin-sdk/agent-harness");
   const createOpenClawCodingTools =
-    dynamicToolBuildState.openClawCodingToolsFactory ?? agentHarness.createOpenClawCodingTools;
+    dynamicToolBuildState.openClawCodingToolsFactory ?? defaultCreateOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
@@ -374,7 +377,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
   toolBuildStages.mark("vision-filtering");
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
-  const webSearchPolicy = agentHarness.resolveWebSearchToolPolicy({
+  const webSearchPolicy = resolveWebSearchToolPolicy({
     config: params.config,
     modelProvider: params.model.provider,
     modelId: params.modelId,

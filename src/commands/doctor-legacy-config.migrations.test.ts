@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { validateConfigObject } from "../config/validation.js";
+import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
+import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
+import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,
@@ -759,57 +763,66 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("migrates legacy Codex primary refs to OpenAI refs without agent runtime pins", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("migrates shipped Codex refs to canonical OpenAI refs with model runtime pins", () => {
+    const normalized = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
           agentRuntime: { id: "auto" },
           model: {
-            primary: "codex/gpt-5.5",
+            primary: "codex/gpt-5.6-sol",
             fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
           },
           models: {
-            "codex/gpt-5.5": { alias: "legacy-codex" },
-            "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+            "codex/gpt-5.6-sol": { alias: "legacy-codex" },
+            "openai/gpt-5.6-sol": { alias: "gpt", params: { temperature: 0.2 } },
             "codex/gpt-5.4-mini": {},
           },
         },
         list: [
           {
             id: "reviewer",
-            model: "codex/gpt-5.4-mini",
+            model: "codex/gpt-5.6-sol",
           },
         ],
       },
     } as unknown as OpenClawConfig);
+    const repaired = maybeRepairCodexRoutes({
+      cfg: normalized.config,
+      shouldRepair: true,
+    });
 
-    expect(res.config.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.5",
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
       fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "auto" });
-    expect(res.config.agents?.defaults?.models).toEqual({
-      "codex/gpt-5.5": { alias: "legacy-codex" },
-      "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
-      "codex/gpt-5.4-mini": {},
-      "openai/gpt-5.4-mini": {},
+    expect(repaired.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": {
+        alias: "gpt",
+        params: { temperature: 0.2 },
+        agentRuntime: { id: "codex" },
+      },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
-    expect(res.config.agents?.list?.[0]).toEqual({
+    expect(repaired.cfg.agents?.list?.[0]).toEqual({
       id: "reviewer",
-      model: "openai/gpt-5.4-mini",
+      model: "openai/gpt-5.6-sol",
+      models: {
+        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+      },
     });
-    expect(res.changes).toContain(
+    expect(normalized.changes).toContain(
       "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
     );
-    expect(res.changes).toContain(
+    expect(normalized.changes).toContain(
       "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
     );
-    expect(res.changes).toContain(
+    expect(normalized.changes).toContain(
       "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
     );
   });
 
-  it("does not force Codex harness for legacy fallback-only refs", () => {
+  it("migrates fallback-only Codex refs through the complete route repair", () => {
     const input = {
       agents: {
         defaults: {
@@ -824,10 +837,148 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const res = normalizeCompatibilityConfigValues(input);
+    const repaired = maybeRepairCodexRoutes({
+      cfg: input,
+      shouldRepair: true,
+    });
 
-    expect(res.config).toEqual(input);
-    expect(res.changes).toStrictEqual([]);
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.4-mini": {
+        alias: "legacy-codex",
+        agentRuntime: { id: "codex" },
+      },
+    });
+    expect(repaired.cfg.agents?.defaults?.models?.["codex/gpt-5.4-mini"]).toBeUndefined();
+  });
+
+  it("keeps the whole provider-conflicted Codex namespace legacy", () => {
+    const migrated = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+          codex: {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.6-sol",
+            fallbacks: ["codex/gpt-5.3-mini"],
+          },
+          models: {
+            "codex/gpt-5.6-sol": { alias: "blocked" },
+            "codex/gpt-5.3-mini": { alias: "unlisted" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const migrationChanges: string[] = [];
+    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+      migration.apply(migrated as unknown as Record<string, unknown>, migrationChanges);
+    }
+
+    const blockedProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(migrated);
+    const normalized = normalizeCompatibilityConfigValues(migrated, {
+      blockedModelIdentities: new Set(blockedProviderPlan.blockedModelIdentities),
+    });
+    const repaired = maybeRepairCodexRoutes({
+      cfg: normalized.config,
+      shouldRepair: true,
+      blockedProviderPlan,
+    });
+
+    expect(repaired.cfg.models?.providers).toHaveProperty("codex");
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "codex/gpt-5.6-sol",
+      fallbacks: ["codex/gpt-5.3-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "codex/gpt-5.6-sol": { alias: "blocked" },
+      "codex/gpt-5.3-mini": { alias: "unlisted" },
+    });
+    expect(repaired.warnings).toHaveLength(1);
+    expect(repaired.warnings[0]).toContain(
+      "Legacy Codex provider routes require manual reconciliation",
+    );
+    expect(repaired.warnings[0]).toContain(
+      "Doctor retained matching legacy refs in config, sessions, and cron",
+    );
+  });
+
+  it("migrates a 2026.6 wizard-shaped Codex config into gateway-loadable canonical state", () => {
+    const raw = {
+      models: {
+        providers: {
+          codex: {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.6-sol",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.6-sol": { alias: "codex" },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+      },
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+    const migrated = structuredClone(raw) as Record<string, unknown>;
+    const migrationChanges: string[] = [];
+    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+      migration.apply(migrated, migrationChanges);
+    }
+    const normalized = normalizeCompatibilityConfigValues(migrated as OpenClawConfig);
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "codex", agentRuntime: { id: "codex" } },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+    expect(repaired.cfg.models?.providers).not.toHaveProperty("codex");
+    expect(repaired.cfg.models?.providers?.openai?.models?.[0]).toMatchObject({
+      id: "gpt-5.6-sol",
+      agentRuntime: { id: "codex" },
+    });
+    expect(JSON.stringify(repaired.cfg)).not.toContain('"codex/');
+    expect(validateConfigObject(repaired.cfg).ok).toBe(true);
   });
 
   it("migrates legacy Claude CLI primary refs to Anthropic refs plus model runtime", () => {

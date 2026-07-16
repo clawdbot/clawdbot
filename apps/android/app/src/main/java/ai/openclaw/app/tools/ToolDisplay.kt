@@ -1,6 +1,7 @@
 package ai.openclaw.app.tools
 
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -207,7 +208,12 @@ object ToolDisplayRegistry {
             ?.trim()
             .orEmpty()
         if (firstLine.isEmpty()) return null
-        return if (firstLine.length > 160) "${firstLine.take(157)}…" else firstLine
+        if (firstLine.length <= 160) {
+          return firstLine
+        }
+        // Keep the 160-code-unit preview cap without splitting a surrogate pair.
+        val preview = firstLine.takeUtf16Safe(157)
+        return "$preview…"
       }
       val raw = value.contentOrNull?.trim().orEmpty()
       raw.toBooleanStrictOrNull()?.let { return it.toString() }

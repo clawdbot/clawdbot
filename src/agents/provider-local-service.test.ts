@@ -584,6 +584,30 @@ describe("provider local service", () => {
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
+  it("preserves UTF-8 split across local service startup diagnostic chunks", async () => {
+    const port = await freePort();
+    const expected = "startup-😀-failure";
+    const serviceScript = [
+      `const bytes=Buffer.from(${JSON.stringify(expected)},"utf8");`,
+      `const split=Buffer.byteLength("startup-","utf8")+2;`,
+      `process.stderr.write(bytes.subarray(0,split));`,
+      `setTimeout(()=>process.stderr.write(bytes.subarray(split),()=>process.exit(17)),75);`,
+    ].join("");
+    const target = {
+      providerId: "local-utf8-exit",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
+        command: process.execPath,
+        args: ["-e", serviceScript],
+        readyTimeoutMs: 60_000,
+      },
+    };
+
+    await expect(ensureProviderLocalService(target)).rejects.toThrow(
+      `local-utf8-exit local service exited before readiness with code 17; stderr: ${expected}`,
+    );
+  });
+
   it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
     const port = await freePort();
     const model = attachModelProviderLocalService(

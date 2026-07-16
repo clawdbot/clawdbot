@@ -313,7 +313,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       # Require exactly one primary key (`pub` in --with-colons; subkeys use `sub`) so we
       # never pin the first fingerprint while apt trusts extra keys from the same file.
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
-      curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
+      curl -fsSL --connect-timeout 10 --max-time 120 \
+        https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
       docker_gpg_pub_count="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "pub" { c++ } END { print c+0 }')" && \
       if [ "$docker_gpg_pub_count" != "1" ]; then \

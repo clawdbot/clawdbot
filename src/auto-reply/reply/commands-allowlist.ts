@@ -448,8 +448,20 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return disabled;
   }
 
+  if (parsed.scope === "group" && parsed.target === "store") {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ Pairing-store allowlist edits apply to DMs only; omit --store for groups.",
+      },
+    };
+  }
+
   const shouldUpdateConfig = parsed.target !== "store";
-  const shouldTouchStore = parsed.target !== "config" && Boolean(plugin?.pairing);
+  // Pairing stores authorize DMs only. Group edits must stay config-scoped or a
+  // group-only sender could gain or lose unrelated direct-message access.
+  const shouldTouchStore =
+    parsed.scope !== "group" && parsed.target !== "config" && Boolean(plugin?.pairing);
 
   if (shouldUpdateConfig) {
     if (parsed.scope === "all") {
@@ -599,7 +611,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
-  const scopeLabel = parsed.scope === "dm" ? "DM" : "group";
+  const scopeLabel = parsed.scope === "group" ? "group" : "DM";
   return {
     shouldContinue: false,
     reply: { text: `✅ ${scopeLabel} allowlist ${actionLabel} in pairing store.` },

@@ -1,13 +1,15 @@
 // Line helper module supports config schema behavior.
 import {
+  DmPolicySchema,
+  GroupPolicySchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
 
-const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
-const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 const ThreadBindingsSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -37,37 +39,18 @@ const LineCommonConfigSchemaBase = z.object({
   threadBindings: ThreadBindingsSchema.optional(),
 });
 
-const LineGroupConfigSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    requireMention: z.boolean().optional(),
-    systemPrompt: z.string().optional(),
-    skills: z.array(z.string()).optional(),
-  })
-  .strict();
+const LineGroupConfigSchema = buildGroupEntrySchema().omit({
+  tools: true,
+  toolsBySender: true,
+});
 
 const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
-    requireChannelOpenAllowFrom({
-      channel: "line",
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      requireOpenAllowFrom,
-    });
-  });
+}).strict();
 
-export const LineConfigSchema = LineCommonConfigSchemaBase.extend({
-  accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
-})
-  .strict()
-  .superRefine((value, ctx) => {
+export const LineConfigSchema = buildMultiAccountChannelSchema(LineAccountConfigSchema, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
     requireChannelOpenAllowFrom({
       channel: "line",
       policy: value.dmPolicy,
@@ -75,7 +58,8 @@ export const LineConfigSchema = LineCommonConfigSchemaBase.extend({
       ctx,
       requireOpenAllowFrom,
     });
-  });
+  },
+});
 
 export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
 

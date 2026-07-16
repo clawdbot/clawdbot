@@ -5,11 +5,23 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatModelFooter,
   formatGoalFooter,
   formatRemoteConnectionHostFooter,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("formatModelFooter", () => {
+  it("shows a compact model name and its active thinking level", () => {
+    expect(
+      formatModelFooter({
+        model: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+        thinkingLevel: "high",
+      }),
+    ).toBe("gpt-5.6-sol high");
+  });
+});
 
 describe("formatGoalFooter", () => {
   it("renders active goal usage", () => {

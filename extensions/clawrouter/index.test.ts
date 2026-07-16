@@ -55,6 +55,7 @@ describe("ClawRouter plugin", () => {
       normalizeResolvedModel: expect.any(Function),
       normalizeToolSchemas: expect.any(Function),
       prepareDynamicModel: expect.any(Function),
+      preferRuntimeResolvedModel: expect.any(Function),
       resolveDynamicModel: expect.any(Function),
       resolveUsageAuth: expect.any(Function),
       sanitizeReplayHistory: expect.any(Function),
@@ -337,8 +338,10 @@ describe("ClawRouter plugin", () => {
     };
 
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+    expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
     await provider?.prepareDynamicModel?.(context as never);
 
+    expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(true);
     expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
       id: "openai/gpt-5.5",
       provider: "clawrouter",
@@ -368,7 +371,79 @@ describe("ClawRouter plugin", () => {
 
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(undefined);
     await provider?.prepareDynamicModel?.(context as never);
+    expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+  });
+
+  it("keeps the previous dynamic model snapshot while rebuilding", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider
+      .mockResolvedValueOnce({ apiKey: "decoy-token" })
+      .mockResolvedValueOnce({ apiKey: "changeme" });
+    let finishRefresh: ((response: Response) => void) | undefined;
+    const refreshResponse = new Promise<Response>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(LIVE_CATALOG))
+      .mockReturnValueOnce(refreshResponse);
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    await provider?.prepareDynamicModel?.(context as never);
+    const refresh = provider?.prepareDynamicModel?.(context as never);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+    });
+
+    finishRefresh?.(Response.json({ providers: [] }));
+    await refresh;
+    expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+  });
+
+  it("keeps the previous dynamic model snapshot when catalog refresh fails", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider
+      .mockResolvedValueOnce({ apiKey: "decoy-token" })
+      .mockResolvedValueOnce({ apiKey: "changeme" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(LIVE_CATALOG))
+        .mockRejectedValueOnce(new Error("catalog unavailable")),
+    );
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    await provider?.prepareDynamicModel?.(context as never);
+    await expect(provider?.prepareDynamicModel?.(context as never)).rejects.toThrow(
+      "catalog unavailable",
+    );
+
+    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+    });
   });
 
   it("dispatches replay and tool policies by upstream protocol family", async () => {

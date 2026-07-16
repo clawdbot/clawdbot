@@ -131,7 +131,37 @@ describe("detectInferenceBackends", () => {
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "claude-cli"]);
     expect(candidates[0]?.credentials).toBe(true);
     expect(candidates[1]?.credentials).toBe(false);
-    expect(candidates[1]?.detail).toBe("installed, not logged in");
+    expect(candidates[1]?.detail).toBe(
+      "installed, not logged in — run `claude auth login`, then check again",
+    );
+  });
+
+  it("gives each logged-out CLI its sign-in remediation", async () => {
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+        readGeminiCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "claude-cli",
+        detail: "installed, not logged in — run `claude auth login`, then check again",
+      },
+      {
+        kind: "codex-cli",
+        detail: "installed, not logged in — run `codex login`, then check again",
+      },
+      {
+        kind: "gemini-cli",
+        detail: "installed, not logged in — sign in to Gemini CLI, then check again",
+      },
+    ]);
   });
 
   it("recognizes Codex login status across native credential stores", async () => {

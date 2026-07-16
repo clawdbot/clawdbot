@@ -1248,9 +1248,11 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
+      channelId?: string;
       messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
     };
 
+    expect(payload.channelId).toBe("C1");
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
     const message = expectDefined(payload.messages[0], "Discord message result");
     expect(message.timestampMs).toBe(expectedMs);
@@ -2400,6 +2402,22 @@ describe("handleDiscordMessagingAction", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
+  });
+
+  it("rejects invalid autoArchiveMinutes before Discord thread create", async () => {
+    createThreadDiscord.mockClear();
+    await expect(
+      handleMessagingAction(
+        "threadCreate",
+        {
+          channelId: "C1",
+          name: "thread",
+          autoArchiveMinutes: 999,
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("autoArchiveMinutes must be one of 60, 1440, 4320, or 10080 minutes");
+    expect(createThreadDiscord).not.toHaveBeenCalled();
   });
 
   it("returns partial success when Discord creates the thread but initial message send fails", async () => {

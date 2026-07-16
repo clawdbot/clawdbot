@@ -44,6 +44,15 @@
         "screenIndex"
       ]
     },
+    "screen": {
+      "emoji": "🖥️",
+      "title": "Screen",
+      "detailKeys": [
+        "action",
+        "sessionKey",
+        "dock"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",

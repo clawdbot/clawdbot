@@ -20,7 +20,6 @@ scenario:
     suiteIsolation: isolated
     summary: Verify pairing gate output through the canonical WhatsApp adapter.
     config:
-      requiredChannelDriver: live
       accountId: sut
       conversationId: 15550000001@s.whatsapp.net
       senderId: 15550000002@s.whatsapp.net

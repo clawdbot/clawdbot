@@ -64,6 +64,12 @@ type SystemAgentHistoryMessage = {
   timestamp: number;
 };
 
+type SystemAgentTuiRoute = {
+  model?: string;
+  modelProvider?: string;
+  thinkingLevel: string;
+};
+
 const SYSTEM_AGENT_SESSION_KEY = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
 
 function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
@@ -128,6 +134,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     private readonly opts: SystemAgentTuiOptions,
     welcome: string,
     engine: SystemAgentChatEngine,
+    private readonly route: SystemAgentTuiRoute,
   ) {
     this.engine = engine;
     this.messages.push(message("assistant", welcome));
@@ -180,21 +187,19 @@ class SystemAgentTuiBackend implements TuiBackend {
     return {
       sessionId: "openclaw",
       messages: this.messages,
-      thinkingLevel: "off",
+      thinkingLevel: this.route.thinkingLevel,
       verboseLevel: "off",
     };
   }
 
   async listSessions(): Promise<TuiSessionList> {
-    const overview = await loadOverviewForTui(this.opts);
-    const model = splitModelRef(overview.defaultModel);
     return {
       ts: Date.now(),
       path: "openclaw",
       count: 1,
       defaults: {
-        model: model.model ?? null,
-        modelProvider: model.provider ?? null,
+        model: this.route.model ?? null,
+        modelProvider: this.route.modelProvider ?? null,
         contextTokens: null,
       },
       sessions: [
@@ -203,10 +208,10 @@ class SystemAgentTuiBackend implements TuiBackend {
           sessionId: "openclaw",
           displayName: "OpenClaw",
           updatedAt: Date.now(),
-          thinkingLevel: "off",
+          thinkingLevel: this.route.thinkingLevel,
           verboseLevel: "off",
-          model: model.model,
-          modelProvider: model.provider,
+          model: this.route.model,
+          modelProvider: this.route.modelProvider,
         },
       ],
     };
@@ -427,7 +432,7 @@ export async function runSystemAgentTui(
   let nextInput: string | undefined;
   let welcomeVariant = boundOpts.welcomeVariant;
   for (;;) {
-    await requireTuiVerifiedInference(boundOpts);
+    const route = await requireTuiVerifiedInference(boundOpts);
     // A returned agent request is single-use; a later wizard handoff must not
     // replay it when OpenClaw re-enters the chat shell.
     const initialMessage = nextInput;
@@ -445,7 +450,7 @@ export async function runSystemAgentTui(
     // The onboarding greeting applies to the first shell only; re-entry after
     // an agent handoff uses the normal repair-oriented startup message.
     welcomeVariant = undefined;
-    const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine);
+    const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
     const runTui = boundOpts.runTui ?? defaultRunTui;
     try {
       await runTui({
@@ -486,7 +491,9 @@ export async function runSystemAgentTui(
   }
 }
 
-async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions): Promise<void> {
+async function requireTuiVerifiedInference(
+  opts: SystemAgentTuiOptions,
+): Promise<SystemAgentTuiRoute> {
   const binding = opts?.verifiedInference;
   if (!binding) {
     throw new SystemAgentInferenceUnavailableError("conversation");
@@ -494,7 +501,26 @@ async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions): Promise
   try {
     const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
     if (route) {
-      return;
+      const [{ loadModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
+        import("../agents/model-catalog.js"),
+        import("../agents/model-thinking-default.js"),
+      ]);
+      // Catalog metadata improves the label but must not become a new startup
+      // dependency after this exact inference route has already been verified.
+      const catalog = await loadModelCatalog({ config: route.runConfig, readOnly: true }).catch(
+        () => undefined,
+      );
+      const model = splitModelRef(route.modelLabel);
+      return {
+        model: model.model,
+        modelProvider: model.provider,
+        thinkingLevel: resolveThinkingDefault({
+          cfg: route.runConfig,
+          provider: route.provider,
+          model: route.model,
+          catalog,
+        }),
+      };
     }
   } catch (error) {
     throw new SystemAgentInferenceUnavailableError("conversation", [error]);

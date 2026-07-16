@@ -12,6 +12,8 @@ import {
   sendApnsBackgroundWake,
   sendApnsExecApprovalAlert,
   sendApnsExecApprovalResolvedWake,
+  sendApnsPluginApprovalAlert,
+  sendApnsPluginApprovalResolvedWake,
 } from "./push-apns.js";
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
@@ -571,6 +573,104 @@ describe("push APNs send semantics", () => {
     expect(typeof openclawPayload.ts).toBe("number");
     expect(result.ok).toBe(true);
     expect(result.transport).toBe("direct");
+  });
+
+  it("builds plugin approval alerts with request copy and a bounded body", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-alert",
+      environment: "sandbox",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-plugin-approval-alert-id",
+        body: "",
+      },
+    });
+    const description = `${"x".repeat(255)}😀${"y".repeat(300)}`;
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-alert",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      title: "Install plugin update",
+      description,
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Install plugin update",
+        body: `${"x".repeat(255)}…`,
+      },
+      sound: "default",
+      category: "openclaw.plugin-approval",
+      "content-available": 1,
+    });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.requested",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "title",
+      "description",
+      "toolName",
+      "agentId",
+      "sessionKey",
+    ]);
+  });
+
+  it("falls back to the generic plugin approval title", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-fallback",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-fallback-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-fallback",
+      approvalId: "plugin:fallback",
+      gatewayDeviceId: "gateway-device-123",
+      title: "   ",
+      description: "Review this request.",
+      auth,
+      requestSender: send,
+    });
+
+    const aps = requireRecord(requirePayload(requireSendRequest(send)).aps, "APNs aps payload");
+    expect(requireRecord(aps.alert, "APNs alert").title).toBe("Approval required");
+  });
+
+  it("builds plugin approval cleanup pushes as silent background notifications", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-cleanup",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-cleanup-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalResolvedWake({
+      registration,
+      nodeId: "ios-node-plugin-approval-cleanup",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({ "content-available": 1 });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.resolved",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
   });
 
   it("parses direct send failures and clamps sub-second timeouts", async () => {

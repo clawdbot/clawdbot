@@ -47,6 +47,9 @@ import {
 } from "./process.ts";
 import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
 
+const INSTALLER_CONNECT_TIMEOUT_SECONDS = 10;
+const INSTALLER_REQUEST_TIMEOUT_SECONDS = 120;
+
 export async function resolveInstallerTargetVersion(params: {
   baselineSpec: string;
   logsDir: string;
@@ -123,6 +126,45 @@ async function runPowerShellScript(script: string, options: CommandOptions) {
   );
 }
 
+export function buildInstallerSmokeScript(
+  params: {
+    installerUrl: string;
+    installTarget: string;
+    platform?: NodeJS.Platform;
+  },
+  options: {
+    connectTimeoutSeconds?: number;
+    requestTimeoutSeconds?: number;
+  } = {},
+) {
+  const connectTimeoutSeconds = options.connectTimeoutSeconds ?? INSTALLER_CONNECT_TIMEOUT_SECONDS;
+  const requestTimeoutSeconds = options.requestTimeoutSeconds ?? INSTALLER_REQUEST_TIMEOUT_SECONDS;
+  if ((params.platform ?? process.platform) === "win32") {
+    return `
+$installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-installer-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+  & curl.exe -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o $installerPath '${powerShellSingleQuote(params.installerUrl)}'
+  if ($LASTEXITCODE -ne 0) {
+    throw "curl.exe failed to download the OpenClaw installer (exit $LASTEXITCODE)"
+  }
+  $content = [System.IO.File]::ReadAllText($installerPath, [System.Text.Encoding]::UTF8)
+  & ([scriptblock]::Create($content)) -Tag '${powerShellSingleQuote(params.installTarget)}' -NoOnboard
+} finally {
+  Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+}
+`;
+  }
+
+  // Execute only a complete installer: a timed-out response may still contain an executable prefix.
+  return [
+    "set -euo pipefail",
+    'installer_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer-XXXXXX")"',
+    "trap 'rm -f \"$installer_path\"' EXIT",
+    `curl -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o "$installer_path" '${shellEscapeForSh(params.installerUrl)}'`,
+    `bash -- "$installer_path" --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
+  ].join("\n");
+}
+
 export async function runInstallerSmoke(params: {
   lane: LaneState;
   env: NodeJS.ProcessEnv;
@@ -130,15 +172,8 @@ export async function runInstallerSmoke(params: {
   installTarget: string;
   logPath: string;
 }) {
+  const script = buildInstallerSmokeScript(params);
   if (process.platform === "win32") {
-    const script = `
-$response = Invoke-WebRequest -UseBasicParsing '${powerShellSingleQuote(params.installerUrl)}'
-$content = $response.Content
-if ($content -is [byte[]]) {
-  $content = [System.Text.Encoding]::UTF8.GetString($content)
-}
-& ([scriptblock]::Create([string]$content)) -Tag '${powerShellSingleQuote(params.installTarget)}' -NoOnboard
-`;
     await runPowerShellScript(script, {
       cwd: params.lane.homeDir,
       env: params.env,
@@ -148,10 +183,6 @@ if ($content -is [byte[]]) {
     return;
   }
 
-  const script = [
-    "set -euo pipefail",
-    `curl -fsSL '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
-  ].join("\n");
   await runPosixShellScript(script, {
     cwd: params.lane.homeDir,
     env: params.env,

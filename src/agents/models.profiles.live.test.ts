@@ -58,11 +58,11 @@ import {
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "./live-test-provider-drift.js";
+} from "./live-test-provider-drift.test-support.js";
 import {
   getApiKeyForModel,
   requireApiKey,

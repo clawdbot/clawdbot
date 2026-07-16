@@ -630,8 +630,8 @@ export function buildOpenAICodexProviderHooks(): Pick<
   return {
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveThinkingProfile: ({ modelId, agentRuntime, compat }) =>
-      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat),
+    resolveThinkingProfile: ({ modelId, agentRuntime, api, compat }) =>
+      resolveOpenAICodexThinkingProfile(modelId, agentRuntime, compat, api),
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CHATGPT_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {

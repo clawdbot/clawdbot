@@ -6,7 +6,7 @@ import {
 import milliseconds from "ms";
 
 /** Options for choosing the unit used by bare numeric duration values. */
-export type DurationMsParseOptions = {
+type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
 

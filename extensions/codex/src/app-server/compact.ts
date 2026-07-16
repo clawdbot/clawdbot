@@ -905,6 +905,13 @@ function isSameNativeCompactionBinding(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
+  // codex-rs exposes no dedicated error code for a missing compaction thread:
+  // thread/compact/start returns generic INVALID_REQUEST (-32600), and the
+  // app-server's own contract/test asserts the "thread not found" MESSAGE as
+  // the discriminator (thread_processor.rs load_thread → invalid_request;
+  // compaction.rs asserts message.contains("thread not found")). So the message
+  // is the authoritative positive signal here, not the generic code. This is a
+  // self-heal recovery gate, not user-facing classification.
   return formatCompactionError(error).toLowerCase().includes("thread not found");
 }
 

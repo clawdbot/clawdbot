@@ -221,7 +221,7 @@ const broadUnitFastCandidateGlobs = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
-export const ownerRoutedUnitTestFiles = [
+const ownerRoutedUnitTestFiles = [
   "src/agents/openai-transport-stream.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];
@@ -548,10 +548,7 @@ function analyzeUnitFastTestFile(cwd, file) {
     const forced = forcedUnitFastTestFileSet.has(file);
     analysis = {
       file,
-      unitFast:
-        forced ||
-        reasons.length === 0 ||
-        reasons.every((reason) => reason === "stateful-test-helper"),
+      unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
       forced,
       reasons,
     };
@@ -602,7 +599,7 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
   }
   const patterns = [
     ...new Set(normalizedPatterns.map((pattern) => anchorScopedIncludePattern(pattern, dir))),
-  ].toSorted();
+  ].toSorted((left, right) => left.localeCompare(right));
   const cacheKey = JSON.stringify([normalizedCwd, dir, patterns]);
   const cached = scopedUnitFastTestFilesByKey.get(cacheKey);
   if (cached) {

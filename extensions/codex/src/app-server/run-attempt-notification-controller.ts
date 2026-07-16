@@ -87,6 +87,12 @@ export function createCodexAttemptNotificationController(
       onReportExecutionNotification: reportExecutionNotification,
     });
     state.turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
+    if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
+      const item = readCodexNotificationItem(notification.params);
+      if (item?.type === "userMessage" && typeof item.clientId === "string") {
+        steeringQueue?.confirmConsumed(item.clientId);
+      }
+    }
     if (notificationState.isTurnAbortMarker) {
       state.sawCodexInterruptMarker = true;
     }

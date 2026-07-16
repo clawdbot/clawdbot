@@ -23,7 +23,7 @@ function resolveXaiSttBaseUrl(value?: string): string {
   return normalizeOptionalString(value ?? process.env.XAI_BASE_URL) ?? XAI_BASE_URL;
 }
 
-export async function transcribeXaiAudio(
+async function transcribeXaiAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;

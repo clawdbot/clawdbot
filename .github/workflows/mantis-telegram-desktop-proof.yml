@@ -375,7 +375,7 @@ jobs:
           mkdir -p "$install_dir/src"
           git init "$install_dir/src"
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$install_dir/crabbox" ./cmd/crabbox
           sudo install -m 0755 "$install_dir/crabbox" /usr/local/bin/crabbox

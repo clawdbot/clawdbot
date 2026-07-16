@@ -1299,7 +1299,9 @@ function renderLifecycle(
     <div class="workboard-card__lifecycle">
       <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
         ${taskStatus ??
-        (stale || !execution ? formatted.label : `${execution.engine} ${execution.mode}`)}
+        (stale || !execution
+          ? formatted.label
+          : `${execution.engine ? `${execution.engine} ` : ""}${execution.mode}`)}
       </span>
       <span class="workboard-card__lifecycle-detail">
         ${task && taskIsAuthoritative

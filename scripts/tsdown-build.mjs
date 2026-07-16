@@ -8,6 +8,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./lib/tsdown-config-groups.mjs";
 import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
@@ -597,16 +601,64 @@ export function resolveTsdownBuildInvocation(params = {}) {
   };
 }
 
-/** Builds AI package declarations first, then consumes them from the main graph. */
+/** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params = {}) {
   const forwardedArgs = params.args ?? [];
-  return [
+  const env = params.env ?? process.env;
+  let declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  let hasForwardedFilter = false;
+  let hasForwardedConfig = false;
+  const aiArgs = [];
+  for (let index = 0; index < forwardedArgs.length; index += 1) {
+    const arg = forwardedArgs[index];
+    if (arg === "--filter" || arg === "-F") {
+      hasForwardedFilter = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--filter=") || arg.startsWith("-F=")) {
+      hasForwardedFilter = true;
+      continue;
+    }
+    if (arg === "--dts") {
+      declarationsEnabled = true;
+    } else if (arg === "--no-dts") {
+      declarationsEnabled = false;
+    }
+    hasForwardedConfig ||=
+      arg === "--config" ||
+      arg.startsWith("--config=") ||
+      arg === "-c" ||
+      arg.startsWith("-c=") ||
+      arg === "--no-config";
+    aiArgs.push(arg);
+  }
+
+  if (hasForwardedConfig) {
+    return [resolveTsdownBuildInvocation(params)];
+  }
+
+  const invocations = [
     resolveTsdownBuildInvocation({
       ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...forwardedArgs],
+      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
     }),
-    resolveTsdownBuildInvocation(params),
   ];
+
+  if (!declarationsEnabled || hasForwardedFilter) {
+    invocations.push(resolveTsdownBuildInvocation(params));
+    return invocations;
+  }
+
+  for (const group of [TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP]) {
+    invocations.push(
+      resolveTsdownBuildInvocation({
+        ...params,
+        args: ["--filter", group, ...forwardedArgs],
+      }),
+    );
+  }
+  return invocations;
 }
 
 function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
@@ -859,8 +911,14 @@ if (isMainModule()) {
   cleanTsdownOutputRoots();
   const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
   let result;
-  for (const invocation of invocations) {
+  for (const [index, invocation] of invocations.entries()) {
+    const startedAt = performance.now();
     result = await runTsdownBuildInvocation(invocation);
+    // Per-invocation timing separates the AI-declarations pass from the main
+    // graph in CI logs; the combined step is otherwise a single opaque cost.
+    console.log(
+      `[tsdown-build] invocation ${index + 1}/${invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
     if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
       break;
     }

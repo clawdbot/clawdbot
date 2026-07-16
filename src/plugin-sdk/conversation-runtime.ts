@@ -4,32 +4,15 @@
  */
 
 export {
-  createConversationBindingRecord,
-  getConversationBindingCapabilities,
-  listSessionBindingRecords,
-  resolveConversationBindingRecord,
-  touchConversationBindingRecord,
-  unbindConversationBindingRecord,
-} from "../bindings/records.js";
-export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
-  type ConfiguredBindingRouteResult,
   resolveRuntimeConversationBindingRoute,
-  type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
-export {
-  primeConfiguredBindingRegistry,
-  resolveConfiguredBinding,
-  resolveConfiguredBindingRecord,
-  resolveConfiguredBindingRecordBySessionKey,
-  resolveConfiguredBindingRecordForConversation,
-} from "../channels/plugins/binding-registry.js";
-export {
-  ensureConfiguredBindingTargetReady,
-  ensureConfiguredBindingTargetSession,
-  resetConfiguredBindingTargetInPlace,
-} from "../channels/plugins/binding-targets.js";
+export type {
+  ConfiguredBindingRouteResult,
+  RuntimeConversationBindingRouteResult,
+} from "../channels/plugins/binding-routing.js";
+
 export { resolveConversationLabel } from "../channels/conversation-label.js";
 export { recordInboundSession } from "../channels/session.js";
 export { recordInboundSessionMetaSafe } from "../channels/session-meta.js";
@@ -51,64 +34,36 @@ export {
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingLifecycle,
   resolveThreadBindingMaxAgeMs,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingsEnabled,
   resolveThreadBindingSpawnPolicy,
-  type ThreadBindingSpawnKind,
-  type ThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
-export type {
-  ConfiguredBindingConversation,
-  ConfiguredBindingResolution,
-  CompiledConfiguredBinding,
-  StatefulBindingTargetDescriptor,
-} from "../channels/plugins/binding-types.js";
-export type {
-  StatefulBindingTargetDriver,
-  StatefulBindingTargetReadyResult,
-  StatefulBindingTargetResetResult,
-  StatefulBindingTargetSessionResult,
-} from "../channels/plugins/stateful-target-drivers.js";
+export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
+
 export {
-  type BindingStatus,
-  type BindingTargetKind,
-  type ConversationRef,
-  SessionBindingError,
-  type SessionBindingAdapter,
-  type SessionBindingAdapterCapabilities,
-  type SessionBindingBindInput,
-  type SessionBindingCapabilities,
-  type SessionBindingPlacement,
-  type SessionBindingRecord,
-  type SessionBindingService,
-  type SessionBindingUnbindInput,
   getSessionBindingService,
-  isSessionBindingError,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
-export { testing, testing as __testing } from "../infra/outbound/session-binding-service.js";
-export * from "../pairing/pairing-challenge.js";
+export type {
+  BindingTargetKind,
+  SessionBindingAdapter,
+  SessionBindingBindInput,
+  SessionBindingRecord,
+} from "../infra/outbound/session-binding-service.js";
+export { testing } from "../infra/outbound/session-binding-service.js";
+
 export { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-export * from "../pairing/pairing-messages.js";
-export * from "../pairing/pairing-store.js";
+export { buildPairingReply } from "../pairing/pairing-messages.js";
+export {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../pairing/pairing-store.js";
 export {
   buildPluginBindingApprovalCustomId,
-  buildPluginBindingDeclinedText,
-  buildPluginBindingErrorText,
   buildPluginBindingResolvedText,
-  buildPluginBindingUnavailableText,
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  hasShownPluginBindingFallbackNotice,
-  isPluginOwnedBindingMetadata,
-  isPluginOwnedSessionBindingRecord,
-  markPluginBindingFallbackNoticeShown,
   parsePluginBindingApprovalCustomId,
-  requestPluginConversationBinding,
   resolvePluginConversationBindingApproval,
-  toPluginConversationBinding,
 } from "../plugins/conversation-binding.js";
 export { resolvePinnedMainDmOwnerFromAllowlist } from "./channel-access-compat.js";

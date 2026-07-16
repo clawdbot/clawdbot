@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -93,23 +92,4 @@ export async function resolveActivityInstanceChannel(params: {
   }
   const channelId = (result.body.location as Record<string, unknown>).channel_id;
   return typeof channelId === "string" && /^\d+$/.test(channelId) ? channelId : undefined;
-}
-
-// Source layout nests this file under src/activities/; the bundled dist flattens the
-// plugin next to its assets dir. Try both so the asset resolves in either layout.
-const VENDOR_ASSET_CANDIDATE_RELATIVE_PATHS = [
-  "../../assets/embedded-app-sdk.mjs",
-  "./assets/embedded-app-sdk.mjs",
-] as const;
-
-export async function defaultReadVendorAsset(): Promise<Buffer> {
-  let lastError: unknown;
-  for (const relativePath of VENDOR_ASSET_CANDIDATE_RELATIVE_PATHS) {
-    try {
-      return await fs.readFile(new URL(relativePath, import.meta.url));
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("embedded-app-sdk asset missing");
 }

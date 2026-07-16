@@ -9,6 +9,11 @@ import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
+  prepareCdpPageSession,
+  prepareCdpTargetSession,
+  type CdpActionTimeouts,
+} from "./cdp-page-session.js";
+import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   type CdpSendFn,
@@ -25,6 +30,7 @@ import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export { appendCdpPath } from "./cdp.helpers.js";
+export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
 /** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
@@ -183,19 +189,17 @@ export async function captureScreenshot(opts: {
   );
 }
 
-/** HTTP and WebSocket timeout options for CDP actions that need discovery. */
-export type CdpActionTimeouts = {
-  httpTimeoutMs?: number;
-  handshakeTimeoutMs?: number;
-};
-
 /** Create a new browser target after applying navigation and CDP SSRF policy. */
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
   ssrfPolicy?: SsrFPolicy;
   timeouts?: CdpActionTimeouts;
-}): Promise<{ targetId: string }> {
+  signal?: AbortSignal;
+  /** Wait for the created document to finish navigation and return its authoritative URL. */
+  waitForNavigationResult?: boolean;
+}): Promise<{ targetId: string; finalUrl?: string }> {
+  opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
@@ -254,9 +258,11 @@ export async function createTargetViaCdp(opts: {
           ? ({ source: "configured" } as const)
           : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
       await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+      opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
+          opts.signal?.throwIfAborted();
           const created = (await send("Target.createTarget", { url: opts.url })) as {
             targetId?: string;
           };
@@ -264,8 +270,15 @@ export async function createTargetViaCdp(opts: {
           if (!targetId) {
             throw new Error("CDP Target.createTarget returned no targetId");
           }
-          await prepareCdpTargetSession(send, targetId);
-          return { targetId };
+          opts.signal?.throwIfAborted();
+          const finalUrl = await prepareCdpTargetSession(
+            send,
+            targetId,
+            opts.waitForNavigationResult ? opts.url : undefined,
+            opts.signal,
+          );
+          opts.signal?.throwIfAborted();
+          return finalUrl ? { targetId, finalUrl } : { targetId };
         },
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,
@@ -273,6 +286,7 @@ export async function createTargetViaCdp(opts: {
         },
       );
     } catch (err) {
+      opts.signal?.throwIfAborted();
       lastError = err;
     }
   }
@@ -280,33 +294,6 @@ export async function createTargetViaCdp(opts: {
     throw lastError;
   }
   throw new Error("CDP Target.createTarget failed");
-}
-
-async function prepareCdpTargetSession(send: CdpSendFn, targetId: string): Promise<void> {
-  const attached = (await send("Target.attachToTarget", {
-    targetId,
-    flatten: true,
-  }).catch(() => null)) as { sessionId?: unknown } | null;
-  const sessionId = typeof attached?.sessionId === "string" ? attached.sessionId : undefined;
-  if (!sessionId) {
-    return;
-  }
-  try {
-    await prepareCdpPageSession(send, sessionId);
-  } finally {
-    await send("Target.detachFromTarget", { sessionId }).catch(() => {});
-  }
-}
-
-async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promise<void> {
-  await Promise.all([
-    send("Page.enable", undefined, sessionId).catch(() => {}),
-    send("Runtime.enable", undefined, sessionId).catch(() => {}),
-    send("Network.enable", undefined, sessionId).catch(() => {}),
-    send("DOM.enable", undefined, sessionId).catch(() => {}),
-    send("Accessibility.enable", undefined, sessionId).catch(() => {}),
-  ]);
-  await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
 
 /** Normalized accessibility tree node returned by ARIA snapshots. */

@@ -10,14 +10,8 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-export type MigrationItemStatus =
-  | "planned"
-  | "migrated"
-  | "skipped"
-  | "warning"
-  | "conflict"
-  | "error";
-export type MigrationItemKind =
+type MigrationItemStatus = "planned" | "migrated" | "skipped" | "warning" | "conflict" | "error";
+type MigrationItemKind =
   | "auth"
   | "config"
   | "secret"
@@ -28,7 +22,7 @@ export type MigrationItemKind =
   | "file"
   | "archive"
   | "manual";
-export type MigrationItemAction =
+type MigrationItemAction =
   | "copy"
   | "create"
   | "update"
@@ -87,7 +81,7 @@ export type MigrationApplyResult = MigrationPlan & {
   reportDir?: string;
 };
 
-export type MigrationProviderPreparation = {
+type MigrationProviderPreparation = {
   dispose?: () => void | Promise<void>;
 };
 
@@ -127,7 +121,7 @@ export type MigrationProviderPlugin = {
   ) => MigrationApplyResult | Promise<MigrationApplyResult>;
 };
 
-export type PluginSetupAutoEnableContext = {
+type PluginSetupAutoEnableContext = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 };

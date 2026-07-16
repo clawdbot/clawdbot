@@ -37,12 +37,18 @@ type CleanOldMediaOptions = {
 };
 
 /** Overrides network dependencies for media-store tests. */
-export function setMediaStoreNetworkDepsForTest(deps?: {
+function setMediaStoreNetworkDepsForTest(deps?: {
   httpRequest?: RequestImpl;
   httpsRequest?: RequestImpl;
   resolvePinnedHostname?: ResolvePinnedHostnameImpl;
 }): void {
   setMediaStoreDownloadDepsForTest(deps);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    setMediaStoreNetworkDepsForTest,
+  };
 }
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
@@ -374,7 +380,7 @@ async function writeMediaStreamToFile(params: {
 }
 
 /** Stable error categories for unsafe or failed source-file ingestion. */
-export type SaveMediaSourceErrorCode =
+type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
   | "not-file"
@@ -382,7 +388,7 @@ export type SaveMediaSourceErrorCode =
   | "too-large";
 
 /** Error raised when saveMediaSource cannot safely read or persist a source path. */
-export class SaveMediaSourceError extends Error {
+class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
   constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
@@ -583,7 +589,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
 }
 
 /** Read result for callers that need media bytes plus the resolved file path. */
-export type ReadMediaBufferResult = {
+type ReadMediaBufferResult = {
   id: string;
   path: string;
   buffer: Buffer;

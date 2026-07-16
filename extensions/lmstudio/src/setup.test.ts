@@ -19,6 +19,7 @@ import {
 import {
   configureLmstudioNonInteractive,
   discoverLmstudioProvider,
+  prepareAppGuidedLmstudioSetup,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";
 
@@ -345,6 +346,63 @@ describe("lmstudio setup", () => {
         };
       },
     );
+  });
+
+  it("prepares an existing tool-capable LLM without a credential profile", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [
+        { type: "embedding", key: "nomic-embed" },
+        { type: "llm", key: "chat-only", display_name: "Chat only" },
+        {
+          type: "llm",
+          key: "qwen3-8b-instruct",
+          display_name: "Qwen3 8B",
+          max_context_length: 65536,
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+
+    const result = await prepareAppGuidedLmstudioSetup({ config: {}, env: {} });
+
+    expect(result).toMatchObject({
+      profiles: [],
+      defaultModel: "lmstudio/qwen3-8b-instruct",
+      configPatch: {
+        models: {
+          mode: "merge",
+          providers: {
+            lmstudio: {
+              baseUrl: LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+              api: "openai-completions",
+              models: [
+                expect.objectContaining({ id: "chat-only" }),
+                expect.objectContaining({ id: "qwen3-8b-instruct" }),
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(result?.configPatch?.models?.providers?.lmstudio?.apiKey).toBe(
+      LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    );
+    await expect(
+      prepareAppGuidedLmstudioSetup({
+        config: {},
+        env: {},
+        modelRef: "lmstudio/chat-only",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      prepareAppGuidedLmstudioSetup({
+        config: {},
+        env: {},
+        modelRef: "lmstudio/not-installed",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {

@@ -1,7 +1,17 @@
 // Cron store migration tests cover doctor migration of persisted cron stores.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { normalizeStoredCronJobs } from "./store-migration.js";
+import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
+import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
+import {
+  planCronCodexRefRewriteAgainstPersistedConfig,
+  repairCronCodexRuntimePolicies,
+} from "./runtime-policy-migration.js";
+import {
+  collectStoredCronCodexRuntimePolicyTargets,
+  cronCodexRuntimePolicyTargetKey,
+  normalizeStoredCronJobs,
+} from "./store-migration.js";
 
 const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
@@ -26,9 +36,12 @@ function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unkno
   };
 }
 
-function normalizeOneJob(job: Record<string, unknown>) {
+function normalizeOneJob(
+  job: Record<string, unknown>,
+  options: Parameters<typeof normalizeStoredCronJobs>[1] = {},
+) {
   const jobs = [job];
-  const result = normalizeStoredCronJobs(jobs);
+  const result = normalizeStoredCronJobs(jobs, options);
   return { job: jobs[0], result };
 }
 
@@ -113,6 +126,7 @@ describe("normalizeStoredCronJobs", () => {
           fallbacks: ["anthropic/claude-opus-4.6", "openai-codex/gpt-5.4-mini"],
         },
       }),
+      { migrateCodexModelRefs: true },
     );
 
     expect(result.mutated).toBe(true);
@@ -122,6 +136,331 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.message).toBe("ping");
     expect(payload.model).toBe("openai/gpt-5.5");
     expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"]);
+  });
+
+  it("rewrites shipped codex model refs in cron payloads", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "shipped-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+          fallbacks: ["codex/gpt-5.4-mini"],
+        },
+      }),
+      { migrateCodexModelRefs: true },
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
+    expect(payload.model).toBe("openai/gpt-5.6-sol");
+    expect(payload.fallbacks).toEqual(["openai/gpt-5.4-mini"]);
+    const runtimeRepair = repairCronCodexRuntimePolicies({
+      cfg: {},
+      targets: result.codexRuntimePolicyTargets,
+    });
+    expect(runtimeRepair.warnings).toStrictEqual([]);
+    expect(runtimeRepair.config.agents?.defaults?.models).toMatchObject({
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        config: runtimeRepair.config,
+      }).runtime,
+    ).toBe("codex");
+  });
+
+  it("keeps the whole provider-conflicted cron namespace legacy", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "provider-conflicted-codex-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+          fallbacks: ["codex/gpt-5.3-mini"],
+        },
+      }),
+    ];
+    const blockedNamespace = expectDefined(
+      legacyCodexProviderIdentityKey("codex"),
+      "blocked cron namespace test invariant",
+    );
+    const policyPlan = repairCronCodexRuntimePolicies({
+      cfg: {},
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+      blockedModelIdentities: new Set([blockedNamespace]),
+    });
+    const blockedTargets = new Set(policyPlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blockedTargets.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+
+    const payload = expectDefined(jobs[0], "job test invariant").payload as Record<string, unknown>;
+    expect(payload.model).toBe("codex/gpt-5.6-sol");
+    expect(payload.fallbacks).toEqual(["codex/gpt-5.3-mini"]);
+    expect(policyPlan.config.agents?.defaults?.models).toBeUndefined();
+  });
+
+  it("retains a legacy cron ref when canonical runtime policy conflicts", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "blocked-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const policyPlan = repairCronCodexRuntimePolicies({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+    const blocked = new Set(policyPlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    const result = normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+
+    expect(policyPlan.warnings.join("\n")).toContain("conflicts with migrated cron Codex runtime");
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    expect(result.codexRuntimePolicyTargets).toStrictEqual([]);
+    const job = expectDefined(jobs[0], "job test invariant");
+    expect((job.payload as Record<string, unknown>).model).toBe("codex/gpt-5.6-sol");
+  });
+
+  it("retains a default-agent cron ref when its list-entry runtime conflicts", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "default-agent-shadowed-codex-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "primary",
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          ],
+        },
+      },
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+    const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+
+    expect(rewritePlan.warnings.join("\n")).toContain(
+      'Retained agents.list.primary.models.openai/gpt-5.6-sol.agentRuntime.id="openclaw"',
+    );
+    const job = expectDefined(jobs[0], "job test invariant");
+    expect((job.payload as Record<string, unknown>).model).toBe("codex/gpt-5.6-sol");
+  });
+
+  it("blocks every stored identity that resolves to one conflicted policy owner", () => {
+    // agentId omitted and the default agent named explicitly are distinct
+    // stored identities resolving to the same owner; both must stay legacy.
+    const jobs = [
+      makeLegacyJob({
+        id: "implicit-default-agent",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "ping", model: "codex/gpt-5.6-sol" },
+      }),
+      makeLegacyJob({
+        id: "explicit-default-agent",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+          agentId: "primary",
+        },
+      }),
+    ];
+    const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "primary",
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          ],
+        },
+      },
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+    const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+
+    for (const job of jobs) {
+      expect(
+        (expectDefined(job, "job test invariant").payload as Record<string, unknown>).model,
+      ).toBe("codex/gpt-5.6-sol");
+    }
+  });
+
+  it("writes a named default agent policy to its list entry before rewriting cron", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "default-agent-list-codex-model",
+        agentId: "primary",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const targets = collectStoredCronCodexRuntimePolicyTargets(jobs);
+    const policyRepair = repairCronCodexRuntimePolicies({
+      cfg: {
+        agents: {
+          list: [{ id: "primary", default: true }],
+        },
+      },
+      targets,
+    });
+
+    expect(policyRepair.config.agents?.list?.[0]?.models).toMatchObject({
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+    });
+    expect(policyRepair.config.agents?.defaults?.models).toBeUndefined();
+    const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
+      cfg: policyRepair.config,
+      targets,
+    });
+    expect(rewritePlan).toStrictEqual({ warnings: [], blockedTargets: [] });
+    const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+    const job = expectDefined(jobs[0], "job test invariant");
+    expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
+  });
+
+  it("writes an implicit default agent policy to defaults when no list entry exists", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "implicit-default-codex-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const policyRepair = repairCronCodexRuntimePolicies({
+      cfg: {},
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+
+    expect(policyRepair.config.agents?.defaults?.models).toMatchObject({
+      "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+    });
+  });
+
+  it("retains a post-snapshot Codex ref until its runtime policy is persisted", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "post-snapshot-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    ];
+    const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
+      cfg: {},
+      targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
+    });
+    const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));
+
+    const result = normalizeStoredCronJobs(jobs, {
+      migrateCodexModelRefs: true,
+      shouldMigrateCodexRuntimePolicyTarget: (target) =>
+        !blocked.has(cronCodexRuntimePolicyTargetKey(target)),
+    });
+
+    expect(rewritePlan.warnings).toEqual([
+      expect.stringContaining("policy is not present in persisted config"),
+    ]);
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    expect(result.codexRuntimePolicyTargets).toStrictEqual([]);
+    const job = expectDefined(jobs[0], "job test invariant");
+    expect((job.payload as Record<string, unknown>).model).toBe("codex/gpt-5.6-sol");
+  });
+
+  it("does not rewrite Codex refs during an ordinary cron normalization pass", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "deferred-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: "codex/gpt-5.6-sol",
+        },
+      }),
+    );
+
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    expect(result.codexRuntimePolicyTargets).toStrictEqual([]);
+    expect(
+      (expectDefined(job, "job test invariant").payload as Record<string, unknown>).model,
+    ).toBe("codex/gpt-5.6-sol");
   });
 
   it("converts legacy agent command prompts into command cron payloads", () => {

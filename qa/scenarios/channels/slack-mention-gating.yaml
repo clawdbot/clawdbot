@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [channels.group-messages]
   execution:
+    profiles: { "slack:default": 1 }
     kind: flow
     channel: slack
     timeoutMs: 8000

@@ -798,6 +798,41 @@ describe("managed service update handoff", () => {
     }
   });
 
+  it("waits for a concurrent state writer before persisting the fallback failure", async () => {
+    let lockReleased: Promise<void> | undefined;
+    const { result, env } = await runHelperWithExistingSentinel({
+      handoffId: "handoff-locked",
+      metaHandoffId: "handoff-locked",
+      prepareStateDatabase: async (stateEnv) => {
+        openOpenClawStateDatabase({ env: stateEnv });
+        closeOpenClawStateDatabaseForTest();
+        const sqlite = await import("node:sqlite");
+        const lock = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+        lock.exec("BEGIN IMMEDIATE;");
+        lockReleased = new Promise((resolve) => {
+          setTimeout(() => {
+            lock.exec("COMMIT;");
+            lock.close();
+            resolve();
+          }, 200);
+        });
+      },
+    });
+    await lockReleased;
+
+    expect(result).toEqual({ code: 1, signal: null });
+    expect(readRestartSentinelPayload(env)).toMatchObject({
+      version: 1,
+      payload: {
+        status: "error",
+        stats: {
+          handoffId: "handoff-locked",
+          reason: "managed-service-handoff-parent-timeout",
+        },
+      },
+    });
+  });
+
   it("repairs legacy restart sentinel columns before writing fallback failures", async () => {
     const { result, env } = await runHelperWithExistingSentinel({
       handoffId: "handoff-123",

@@ -82,6 +82,49 @@ function writeResetArchive(
   return archivePath;
 }
 
+function installAsyncPositionalShortReadProxy(maxPerCall = 16) {
+  const realOpen = fs.promises.open.bind(fs.promises);
+  let shortReadCalls = 0;
+  vi.spyOn(fs.promises, "open").mockImplementation(async (...args: unknown[]) => {
+    const handle = await realOpen(...(args as Parameters<typeof realOpen>));
+    const realRead = handle.read.bind(handle);
+    return new Proxy(handle, {
+      get(target, prop, receiver) {
+        if (prop !== "read") {
+          return Reflect.get(target, prop, receiver);
+        }
+        return (buf: Buffer, offset: number, length: number, position: number | null) => {
+          const cappedLength = position !== null ? maxPerCall : length;
+          if (cappedLength < length) {
+            shortReadCalls += 1;
+          }
+          return realRead(buf, offset, Math.min(length, cappedLength), position);
+        };
+      },
+    });
+  });
+  return () => shortReadCalls;
+}
+
+function installSyncPositionalShortReadProxy(maxPerCall = 16) {
+  const realReadSync = fs.readSync.bind(fs);
+  let shortReadCalls = 0;
+  const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+    fd: number,
+    buffer: NodeJS.ArrayBufferView,
+    offset: number,
+    length: number,
+    position: fs.ReadPosition | null,
+  ) => {
+    const cappedLength = typeof position === "number" ? maxPerCall : length;
+    if (cappedLength < length) {
+      shortReadCalls += 1;
+    }
+    return realReadSync(fd, buffer, offset, Math.min(length, cappedLength), position);
+  }) as typeof fs.readSync);
+  return { readSpy, getShortReadCalls: () => shortReadCalls };
+}
+
 function appendBlockedUserMessageWithSessionManager(params: {
   sessionFile: string;
   originalText?: string;
@@ -889,15 +932,21 @@ describe("readSessionMessages", () => {
       { message: { role: "assistant", content: "newer invalid archive" } },
     ]);
 
-    const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
-      mode: "full",
-      reason: "test newest valid custom archive",
-      allowResetArchiveFallback: true,
-    });
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+        mode: "full",
+        reason: "test newest valid custom archive",
+        allowResetArchiveFallback: true,
+      });
 
-    expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "older valid archive",
-    ]);
+      expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
+        "older valid archive",
+      ]);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
@@ -2034,6 +2083,169 @@ describe("oversized transcript line guards", () => {
     expect(asyncResult).toEqual(syncResult);
     expect(asyncResult.firstUserMessage).toBe("User says hi");
     expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
+  });
+});
+
+describe("short read resilience", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-short-read-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  function buildLargeTitleTranscript(sessionId: string) {
+    return [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "head title" } },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
+      })),
+      { message: { role: "assistant", content: "tail preview" } },
+    ];
+  }
+
+  test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
+    const sessionId = "test-short-read-recent";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `message ${i}: ${"data ".repeat(80)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    const expected = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 8192,
+    });
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      const actual = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 8192,
+      });
+      expect(actual).toEqual(expected);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("readRecentSessionMessagesAsync honors maxBytes under short reads", async () => {
+    const sessionId = "test-short-read-byte-cap";
+    const lines = [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 20 }, (_, i) => ({
+        message: {
+          role: i % 2 ? "assistant" : "user",
+          content: `line ${String(i).padStart(2, "0")}: ${"payload ".repeat(30)}`,
+        },
+      })),
+    ];
+    writeTranscript(tmpDir, sessionId, lines);
+
+    const normal = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 20,
+      maxBytes: 4096,
+    });
+
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(64);
+    try {
+      const short = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 20,
+        maxBytes: 4096,
+      });
+      expect(short).toEqual(normal);
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("reads async title fields across short positional reads", async () => {
+    const sessionId = "test-short-read-title-async";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
+    try {
+      await expect(
+        readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
+      ).resolves.toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("reads sync title fields across short positional reads", () => {
+    const sessionId = "test-short-read-title-sync";
+    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
+
+    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(16);
+    try {
+      expect(readSessionTitleFieldsFromTranscript(sessionId, storePath)).toEqual({
+        firstUserMessage: "head title",
+        lastMessagePreview: "tail preview",
+      });
+      expect(getShortReadCalls()).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  test("reads sync usage and preview windows across short positional reads", () => {
+    const sessionId = "test-short-read-sync-windows";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      ...Array.from({ length: 120 }, (_, index) => ({
+        message: { role: "user", content: `filler ${index} ${"x".repeat(1024)}` },
+      })),
+      {
+        message: {
+          role: "assistant",
+          content: "tail preview",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 900, output: 100, cost: { total: 0.003 } },
+        },
+      },
+    ]);
+
+    const expectedUsage = readRecentSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      64 * 1024,
+    );
+    const expectedPreview = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      1,
+      120,
+    );
+    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(4096);
+    try {
+      expect(
+        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      ).toEqual(expectedUsage);
+      expect(
+        readSessionPreviewItemsFromTranscript(sessionId, storePath, undefined, undefined, 1, 120),
+      ).toEqual(expectedPreview);
+      expect(getShortReadCalls()).toBeGreaterThan(2);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

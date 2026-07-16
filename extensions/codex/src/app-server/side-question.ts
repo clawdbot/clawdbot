@@ -18,7 +18,6 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
@@ -89,6 +88,7 @@ import {
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import {
@@ -410,8 +410,7 @@ export async function runCodexAppServerSideQuestion(
       runId,
       signal: runAbortController.signal,
     });
-    // Auth refresh is a physical-client concern; the shared runtime handler
-    // stays installed once per client instead of once per side question.
+    // Auth refresh is client-owned; keep one shared handler per physical client.
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
       authProfileId:
@@ -491,6 +490,7 @@ export async function runCodexAppServerSideQuestion(
             toolBridge,
             signal: runAbortController.signal,
             timeoutMs,
+            observeToolTerminal: sideRunParams.observeToolTerminal,
           });
           emitDynamicToolTerminalDiagnostic({
             ...diagnosticContext,

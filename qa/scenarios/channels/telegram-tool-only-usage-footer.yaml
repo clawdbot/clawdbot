@@ -17,11 +17,11 @@ scenario:
     - src/auto-reply/reply/commands-session.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles: { "telegram:adapter": 12, "telegram:all": 11 }
     kind: flow
     channel: telegram
     summary: Enable token usage mode, then verify the next Telegram reply footer.
     config:
-      requiredChannelDriver: live
       marker: QA-TELEGRAM-USAGE-FOOTER-OK
 
 flow:

@@ -7,6 +7,7 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
+import { hasLineSpecificMediaOptions } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
@@ -25,10 +26,11 @@ type LineAutoReplyDeps = {
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
   createFlexMessage: (altText: string, contents: FlexContainer) => messagingApi.FlexMessage;
-  createImageMessage: (
-    originalContentUrl: string,
-    previewImageUrl?: string,
-  ) => messagingApi.ImageMessage;
+  buildMediaMessage: (
+    mediaUrl: string,
+    opts: Pick<LineChannelData, "mediaKind" | "previewImageUrl" | "durationMs" | "trackingId">,
+    target: string,
+  ) => Promise<messagingApi.Message>;
   createLocationMessage: (location: {
     title: string;
     address: string;
@@ -48,12 +50,21 @@ type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean; visibleReplySent: boolean }
   | { status: "partial"; replyTokenUsed: boolean; visibleReplySent: true; error: Error };
 
+function toLineDeliveryError(error: unknown): Error {
+  return error instanceof Error
+    ? error
+    : new Error("LINE rich or media message send failed", { cause: error });
+}
+
 function markLineVisibleDeliveryError(error: unknown): Error {
-  if (error instanceof Error && Object.isExtensible(error)) {
-    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
-    return error;
+  const deliveryError = toLineDeliveryError(error);
+  if (Object.isExtensible(deliveryError)) {
+    Object.assign(deliveryError, { sentBeforeError: true, visibleReplySent: true });
+    return deliveryError;
   }
-  const visibleError = new Error("LINE rich or media message send failed", { cause: error });
+  const visibleError = new Error("LINE rich or media message send failed", {
+    cause: deliveryError,
+  });
   Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
   return visibleError;
 }
@@ -173,11 +184,32 @@ export async function deliverLineAutoReply(params: {
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
 
+  // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
+  // other LINE media options so a reply-token video/audio is not silently
+  // downgraded to an image. Generic media stays image-only but still goes
+  // through the same validation boundary. A media build failure is partial only
+  // after another visible part lands; media-only failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const mediaMessages = mediaUrls
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url))
-    .map((url) => deps.createImageMessage(url));
+  const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
+  const mediaOpts: Parameters<LineAutoReplyDeps["buildMediaMessage"]>[1] = {
+    mediaKind: useLineSpecificMedia ? lineData.mediaKind : "image",
+    previewImageUrl: lineData.previewImageUrl,
+    durationMs: lineData.durationMs,
+    trackingId: lineData.trackingId,
+  };
+  const mediaMessages: messagingApi.Message[] = [];
+  let richMediaError: unknown;
+  for (const rawUrl of mediaUrls) {
+    const url = rawUrl?.trim();
+    if (!url) {
+      continue;
+    }
+    try {
+      mediaMessages.push(await deps.buildMediaMessage(url, mediaOpts, to));
+    } catch (err) {
+      richMediaError ??= err;
+    }
+  }
 
   if (chunks.length > 0) {
     const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
@@ -186,12 +218,11 @@ export async function deliverLineAutoReply(params: {
     // failure instead of swallowing it: the text still sends below, but a lost
     // rich/media bubble must surface as a partial delivery, not silent success.
     const sendRichBeforeText = hasQuickReplies && hasRichOrMedia;
-    let richMediaError: unknown;
     if (sendRichBeforeText) {
       try {
         await sendLineMessages([...richMessages, ...mediaMessages], false);
       } catch (err) {
-        richMediaError = err;
+        richMediaError ??= err;
       }
     }
     const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
@@ -216,18 +247,8 @@ export async function deliverLineAutoReply(params: {
           await sendLineMessages(mediaMessages, false);
         }
       } catch (err) {
-        richMediaError = err;
+        richMediaError ??= err;
       }
-    }
-    if (richMediaError !== undefined) {
-      // Preserve both generic send evidence and foreground visibility: downstream
-      // callers must surface the failure without retrying text the user already saw.
-      return {
-        status: "partial",
-        replyTokenUsed,
-        visibleReplySent: true,
-        error: markLineVisibleDeliveryError(richMediaError),
-      };
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
@@ -259,6 +280,23 @@ export async function deliverLineAutoReply(params: {
       }
       await sendLineMessages(combined, true);
     }
+  }
+
+  if (richMediaError !== undefined) {
+    if (!visibleReplySent) {
+      // No user-visible content landed, so this is a full delivery failure.
+      // Throwing lets the caller surface or replace it instead of recording a
+      // successful empty reply.
+      throw toLineDeliveryError(richMediaError);
+    }
+    // Other visible content landed; preserve that evidence so downstream
+    // recovery does not replay text the user already saw.
+    return {
+      status: "partial",
+      replyTokenUsed,
+      visibleReplySent: true,
+      error: markLineVisibleDeliveryError(richMediaError),
+    };
   }
 
   return { status: "delivered", replyTokenUsed, visibleReplySent };

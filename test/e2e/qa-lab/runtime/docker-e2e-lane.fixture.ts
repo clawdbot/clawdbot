@@ -1,7 +1,7 @@
 // Shared QA Lab fixture for dispatching existing Docker E2E lanes.
 import { spawnSync } from "node:child_process";
 
-export type QaDockerE2eLaneDefinition = {
+type QaDockerE2eLaneDefinition = {
   env?: (env: NodeJS.ProcessEnv) => Record<string, string>;
   script: string;
 };
@@ -18,7 +18,7 @@ type SpawnQaDockerE2eLane = (
   options: { env: NodeJS.ProcessEnv; stdio: "inherit" },
 ) => QaDockerE2eLaneRunResult;
 
-export const QA_DOCKER_E2E_LANES = {
+const QA_DOCKER_E2E_LANES = {
   "agent-bundle-mcp-tools": {
     script: "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
   },
@@ -87,14 +87,11 @@ export const QA_DOCKER_E2E_LANES = {
   },
 } satisfies Record<string, QaDockerE2eLaneDefinition>;
 
-export type QaDockerE2eLaneName = keyof typeof QA_DOCKER_E2E_LANES;
+type QaDockerE2eLaneName = keyof typeof QA_DOCKER_E2E_LANES;
 
-export type QaDockerE2eLaneArgs =
-  | { kind: "help" }
-  | { kind: "list" }
-  | { kind: "run"; laneName: string };
+type QaDockerE2eLaneArgs = { kind: "help" } | { kind: "list" } | { kind: "run"; laneName: string };
 
-export type ResolvedQaDockerE2eLane = {
+type ResolvedQaDockerE2eLane = {
   env: NodeJS.ProcessEnv;
   name: QaDockerE2eLaneName;
   script: string;

@@ -495,10 +495,19 @@ function referenceLabelsIn(text) {
 
 export function renderContributionRecordEntry(entry) {
   const references = [];
-  appendUnique(references, referenceLabelsIn(entry.title));
+  const linkedIssueNumbers = new Set(entry.linkedIssues.map((issue) => issue.number));
   appendUnique(
     references,
-    (entry.priorReferences ?? []).map((number) => `#${number}`),
+    referenceLabelsIn(entry.title).filter(
+      (reference) =>
+        !reference.startsWith("#") || linkedIssueNumbers.has(Number(reference.slice(1))),
+    ),
+  );
+  appendUnique(
+    references,
+    (entry.priorReferences ?? [])
+      .filter((number) => linkedIssueNumbers.has(number))
+      .map((number) => `#${number}`),
   );
   appendUnique(references, entry.externalReferences ?? []);
   for (const issue of entry.linkedIssues) {
@@ -2209,11 +2218,7 @@ export function ledgerChecks(section, pullRequests, nodes, directCommits, shippe
       }
     }
     const expectedReferences = [];
-    appendUnique(expectedReferences, referenceLabelsIn(entry.title));
-    appendUnique(
-      expectedReferences,
-      entry.priorReferences.map((number) => `#${number}`),
-    );
+    appendUnique(expectedReferences, externalReferencesIn(entry.title));
     appendUnique(expectedReferences, entry.externalReferences);
     appendUnique(
       expectedReferences,
@@ -2320,7 +2325,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
       editorialEligible: entry.editorialEligible,
       thanks: entry.thanks,
       externalReferences: entry.externalReferences,
-      relatedReferences: [...new Set([...entry.priorReferences, ...referencesIn(entry.title)])],
+      relatedReferences: [...new Set(entry.linkedIssues.map((issue) => issue.number))],
       linkedIssues: entry.linkedIssues.map((issue) => ({
         number: issue.number,
         title: issue.title,

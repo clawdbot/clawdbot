@@ -2,7 +2,11 @@
 import { createHash } from "node:crypto";
 import type { AnyChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
-import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  type AgentPlanStep,
+  type ChannelProgressDraftLine,
+  formatPlanChecklistLines,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { truncateSlackText } from "./truncate.js";
@@ -14,7 +18,7 @@ const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
 const SLACK_PROGRESS_PLAN_FALLBACK_TITLE = "Thinking";
 
-type SlackPlanTaskStatus = "in_progress" | "complete" | "error";
+type SlackPlanTaskStatus = "pending" | "in_progress" | "complete" | "error";
 
 type SlackPlanTask = {
   id: string;
@@ -135,8 +139,20 @@ function stableTaskIdPart(value: string): string {
 
 function buildPlanTasks(params: {
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
   maxLineChars?: number;
 }): SlackPlanTask[] {
+  if (params.plan) {
+    // Slack keys task_update chunks by id with no removal primitive, so
+    // position-keyed ids make each snapshot rewrite row i in place: renames,
+    // reorders, and insertions reconcile in place. Dropped ids (shrinks, mode
+    // switches) are terminalized by reconcileSlackNativeTaskChunks.
+    return params.plan.slice(-SLACK_MAX_BLOCKS).map((entry, index) => ({
+      id: `plan_step_${index + 1}`,
+      title: compactTitle(entry.step),
+      status: entry.status === "completed" ? ("complete" as const) : entry.status,
+    }));
+  }
   const maxLineChars = resolveMaxLineChars(
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_TASK_DETAIL_MAX_CHARS,
@@ -167,11 +183,16 @@ function buildSlackProgressStreamChunks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
   maxLineChars?: number;
   completeInProgress?: boolean;
   finalInProgressStatus?: SlackPlanTaskStatus;
 }): AnyChunk[] | undefined {
-  const tasks = buildPlanTasks({ lines: params.lines, maxLineChars: params.maxLineChars });
+  const tasks = buildPlanTasks({
+    lines: params.lines,
+    plan: params.plan,
+    maxLineChars: params.maxLineChars,
+  });
   if (tasks.length === 0) {
     return undefined;
   }
@@ -198,6 +219,8 @@ export function buildSlackProgressDraftBlocks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
+  narration?: string;
   maxLineChars?: number;
 }): (Block | KnownBlock)[] | undefined {
   const label = params.label?.trim() || params.title?.trim();
@@ -205,7 +228,15 @@ export function buildSlackProgressDraftBlocks(params: {
     params.maxLineChars,
     DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS,
   );
-  const renderedBlocks: (Block | KnownBlock)[] = [
+  const planLines = formatPlanChecklistLines(params.plan ?? [], {
+    maxLines: SLACK_MAX_BLOCKS,
+    maxLineChars,
+  });
+  const narration = params.narration?.replace(/\s+/g, " ").trim();
+  // Status blocks (label, narration, checklist) take priority over rolling
+  // tool lines inside Slack's 50-block budget; the tail slice would otherwise
+  // silently drop the checklist first.
+  const headBlocks: (Block | KnownBlock)[] = [
     ...(label
       ? [
           {
@@ -214,18 +245,92 @@ export function buildSlackProgressDraftBlocks(params: {
           },
         ]
       : []),
-    ...params.lines.map((line) => ({
+    ...(narration
+      ? [
+          {
+            type: "section" as const,
+            text: field(`_${escapeSlackMrkdwn(narration)}_`),
+          },
+        ]
+      : []),
+    ...(planLines.length > 0
+      ? [
+          {
+            type: "section" as const,
+            text: field(planLines.map((line) => escapeSlackMrkdwn(line)).join("\n")),
+          },
+        ]
+      : []),
+  ].slice(0, SLACK_MAX_BLOCKS);
+  const lineBudget = Math.max(0, SLACK_MAX_BLOCKS - headBlocks.length);
+  const renderedBlocks: (Block | KnownBlock)[] = [
+    ...headBlocks,
+    ...params.lines.slice(-lineBudget).map((line) => ({
       type: "section" as const,
       fields: [field(legacyLineTitle(line)), field(legacyLineDetail(line, maxLineChars))],
     })),
-  ].slice(-SLACK_MAX_BLOCKS);
+  ];
   return renderedBlocks.length ? renderedBlocks : undefined;
+}
+
+export type SlackNativeTaskSnapshot = ReadonlyMap<
+  string,
+  { title: string; status: SlackPlanTaskStatus }
+>;
+
+/**
+ * Slack native streams key task rows by persistent id with no removal chunk.
+ * When the task source switches representation (tool lines <-> typed plan) or
+ * a snapshot drops ids, previously emitted non-terminal rows must receive a
+ * final update or they linger in_progress forever.
+ */
+export function reconcileSlackNativeTaskChunks(params: {
+  previousTasks: SlackNativeTaskSnapshot;
+  chunks: AnyChunk[] | undefined;
+}): { chunks: AnyChunk[] | undefined; tasks: SlackNativeTaskSnapshot } {
+  const nextTasks = new Map<string, { title: string; status: SlackPlanTaskStatus }>();
+  for (const chunk of params.chunks ?? []) {
+    if (chunk.type === "task_update") {
+      nextTasks.set(chunk.id, {
+        title: chunk.title,
+        status: chunk.status as SlackPlanTaskStatus,
+      });
+    }
+  }
+  const orphaned = [...params.previousTasks].filter(
+    ([id, task]) => !nextTasks.has(id) && task.status !== "complete" && task.status !== "error",
+  );
+  const terminalized = orphaned.map(([id, task]) => {
+    const entry = { title: task.title, status: "complete" as const };
+    nextTasks.set(id, entry);
+    return {
+      type: "task_update" as const,
+      id,
+      title: task.title,
+      status: "complete" as const,
+    };
+  });
+  // Carry forward already-terminal rows so a later reappearance diffs correctly.
+  for (const [id, task] of params.previousTasks) {
+    if (!nextTasks.has(id)) {
+      nextTasks.set(id, task);
+    }
+  }
+  // An explicitly cleared source still needs its previous rows retired even
+  // when the current build produced no chunks of its own.
+  const chunks = params.chunks?.length
+    ? [...params.chunks, ...terminalized]
+    : terminalized.length
+      ? terminalized
+      : params.chunks;
+  return { chunks, tasks: nextTasks };
 }
 
 export function buildSlackProgressStreamStartChunks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
   maxLineChars?: number;
 }): AnyChunk[] | undefined {
   return buildSlackProgressStreamChunks(params);
@@ -235,6 +340,7 @@ export function buildSlackProgressStreamUpdateChunks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
   maxLineChars?: number;
 }): AnyChunk[] | undefined {
   return buildSlackProgressStreamChunks(params);
@@ -244,6 +350,7 @@ export function buildSlackProgressStreamCompletionChunks(params: {
   label?: string;
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
+  plan?: readonly AgentPlanStep[];
   maxLineChars?: number;
   finalInProgressStatus?: SlackPlanTaskStatus;
 }): AnyChunk[] | undefined {

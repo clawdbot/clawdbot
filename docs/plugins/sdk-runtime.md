@@ -223,6 +223,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       purpose: "my-plugin.summary",
       maxTokens: 512,
       temperature: 0.2,
+      reasoning: "high",
     });
     ```
 
@@ -264,6 +265,12 @@ two-party event loops that do not go through the shared inbound reply runner.
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
+
+    Set `reasoning` to request a reasoning effort for the selected model. The
+    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
+    provider and model before dispatching the completion. `adaptive` becomes
+    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.

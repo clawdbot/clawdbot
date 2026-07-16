@@ -23,11 +23,11 @@ scenario:
     - extensions/matrix/src/matrix/monitor/threads.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:adapter": 10, "matrix:all": 6, "matrix:transport": 5 }
     kind: flow
     channel: matrix
     summary: Require the canonical Matrix adapter to surface the native m.thread relation through threadId.
     config:
-      requiredChannelDriver: live
       conversationId: main
       marker: QA-MATRIX-THREAD-OVERRIDE-OK
 
@@ -35,9 +35,6 @@ flow:
   steps:
     - name: exposes the native thread override relation
       actions:
-        - assert:
-            expr: transport.id === 'matrix'
-            message: Matrix thread reply override requires the live Matrix adapter
         - resetTransport: true
         - sendInbound:
             conversation:

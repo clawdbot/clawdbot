@@ -120,6 +120,10 @@ export type LineTemplateMessagePayload =
 
 export type LineChannelData = {
   quickReplies?: string[];
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
   location?: {
     title: string;
     address: string;

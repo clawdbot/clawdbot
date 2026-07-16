@@ -14,6 +14,13 @@ scenario:
     - src/auto-reply/reply/commands-whoami.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 6,
+        "telegram:all": 5,
+        "telegram:mock-release": 5,
+        "telegram:release": 5,
+      }
     kind: flow
     channel: telegram
     summary: Run whoami and verify channel identity context.

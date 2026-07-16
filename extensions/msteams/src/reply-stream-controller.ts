@@ -1,5 +1,6 @@
 // Msteams plugin module implements reply stream controller behavior.
 import {
+  type AgentPlanStep,
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
@@ -75,6 +76,8 @@ export function createTeamsReplyStreamController(params: {
   let streamFailed = false;
   let lastInformativeText = "";
   let progressLines: Array<string | ChannelProgressDraftLine> = [];
+  let latestPlan: AgentPlanStep[] | undefined;
+  let latestPlanExplanation: string | undefined;
   let pendingFinalPayload: Maybe<ReplyPayload>;
   // openclaw's reply pipeline calls onPartialReply with the cumulative text on
   // each chunk, but the SDK's HttpStream appends each emit() to its internal
@@ -109,7 +112,13 @@ export function createTeamsReplyStreamController(params: {
       lines: shouldStreamPreviewToolProgress ? progressLines : [],
       seed: params.progressSeed,
       bullet: "-",
+      narration: latestPlanExplanation,
+      plan: latestPlan,
     });
+    // Empty render after a cleared plan intentionally keeps the previous
+    // card: Teams streams cannot delete or blank an update mid-stream, and
+    // the final answer settles the card at turn end. Default label configs
+    // re-render immediately, so this only lingers with `label: false`.
     if (!informativeText || informativeText === lastInformativeText) {
       return;
     }
@@ -260,6 +269,22 @@ export function createTeamsReplyStreamController(params: {
       const hadStarted = progressDraftGate.hasStarted;
       const progressActive = await progressDraftGate.noteWork();
       if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
+        renderInformativeUpdate();
+      }
+    },
+
+    async pushPlanProgress(
+      steps?: AgentPlanStep[],
+      options?: { explanation?: string },
+    ): Promise<void> {
+      if (!stream || streamMode !== "progress" || streamFinalizationPending) {
+        return;
+      }
+      latestPlan = steps?.length ? steps.map((entry) => ({ ...entry })) : undefined;
+      latestPlanExplanation = options?.explanation?.replace(/\s+/g, " ").trim() || undefined;
+      const hadStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.startNow();
+      if (hadStarted && progressDraftGate.hasStarted) {
         renderInformativeUpdate();
       }
     },

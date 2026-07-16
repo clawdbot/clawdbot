@@ -39,6 +39,7 @@ import {
   resolveChangedTargetArgs,
   shouldAcquireLocalHeavyCheckLock,
   shouldRetryVitestNoOutputTimeout,
+  withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import { forceKillVitestProcessGroup } from "./vitest-process-group.mjs";
@@ -164,7 +165,7 @@ async function runLoggedVitestSpec(spec) {
   let result = await runVitestSpec(spec);
   if (result.noOutputTimedOut && !spec.watchMode && shouldRetryVitestNoOutputTimeout(spec.env)) {
     console.error(`[test] retrying ${spec.config} after no-output timeout`);
-    result = await runVitestSpec(spec);
+    result = await runVitestSpec(withRetryNoOutputTimeout(spec));
   }
   const durationMs = performance.now() - startedAt;
   if (result.noOutputTimedOut && result.signal) {

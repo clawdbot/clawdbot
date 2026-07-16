@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.reconnect
   execution:
+    profiles: { "matrix:all": 31, "matrix:transport": 30 }
     kind: flow
     channel: matrix
     timeoutMs: 90000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

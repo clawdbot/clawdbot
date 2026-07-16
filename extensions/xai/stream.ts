@@ -214,9 +214,7 @@ function normalizeXaiResponsesToolResultPayload(
   payloadObj.input = normalizedInput;
 }
 
-export function createXaiToolPayloadCompatibilityWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
@@ -241,7 +239,7 @@ export function createXaiToolPayloadCompatibilityWrapper(
   };
 }
 
-export function createXaiFastModeWrapper(
+function createXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: DynamicFastMode,
 ): StreamFn {

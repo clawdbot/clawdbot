@@ -5,16 +5,19 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
+  GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
-import {
-  OPENAI_FRIENDLY_PROMPT_OVERLAY,
-  OPENAI_GPT5_BEHAVIOR_CONTRACT,
-  OPENAI_HEARTBEAT_PROMPT_OVERLAY,
-  shouldApplyOpenAIPromptOverlay,
-} from "./prompt-overlay.js";
+
+const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
+const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
+const OPENAI_HEARTBEAT_PROMPT_OVERLAY = GPT5_HEARTBEAT_PROMPT_OVERLAY;
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -35,7 +38,7 @@ vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
+import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider-runtime.factory.js";
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
   const providers: ProviderPlugin[] = [];
@@ -299,7 +302,6 @@ describe("openai plugin", () => {
     runtimeMocks.refreshOpenAICodexToken.mockResolvedValue(refreshed);
     const runtime = createOpenAICodexProviderRuntime({
       ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
-      getOAuthApiKey: vi.fn(),
       refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
     });
 
@@ -459,12 +461,6 @@ describe("openai plugin", () => {
         modelId: "gpt-image-1",
       }),
     ).toBeUndefined();
-    expect(shouldApplyOpenAIPromptOverlay({ modelProviderId: "openai", modelId: "gpt-4.1" })).toBe(
-      false,
-    );
-    expect(
-      shouldApplyOpenAIPromptOverlay({ modelProviderId: "anthropic", modelId: "gpt-5.4" }),
-    ).toBe(false);
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {

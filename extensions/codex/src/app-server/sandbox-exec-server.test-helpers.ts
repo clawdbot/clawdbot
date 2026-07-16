@@ -115,7 +115,7 @@ export function codexFsSandboxContext(params: {
       },
       network: "restricted",
     },
-    cwd: params.cwd ?? "/workspace",
+    cwd: params.cwd ?? "file:///workspace",
     windowsSandboxLevel: "disabled",
     windowsSandboxPrivateDesktop: false,
     useLegacyLandlock: false,

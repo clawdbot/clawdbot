@@ -67,33 +67,19 @@ export async function processNextcloudTalkReplayGuardedMessage(params: {
   message: NextcloudTalkInboundMessage;
   handleMessage: () => Promise<void>;
 }): Promise<"processed" | "duplicate"> {
-  const claim = await params.replayGuard.claimMessage({
-    accountId: params.accountId,
-    roomToken: params.message.roomToken,
-    messageId: params.message.messageId,
-  });
-  if (claim !== "claimed") {
-    return "duplicate";
-  }
-
-  try {
-    await params.handleMessage();
-    await params.replayGuard.commitMessage({
+  const result = await params.replayGuard.processGuarded(
+    {
       accountId: params.accountId,
       roomToken: params.message.roomToken,
       messageId: params.message.messageId,
-    });
-    return "processed";
-  } catch (error) {
-    // Failures are treated as non-retryable because the handler may already
-    // have produced a visible side effect, and replaying the webhook would duplicate it.
-    await params.replayGuard.commitMessage({
-      accountId: params.accountId,
-      roomToken: params.message.roomToken,
-      messageId: params.message.messageId,
-    });
-    throw error;
-  }
+    },
+    params.handleMessage,
+    {
+      // The handler may have produced a visible side effect before failing.
+      onError: "commit",
+    },
+  );
+  return result.kind === "processed" ? "processed" : "duplicate";
 }
 
 function formatError(err: unknown): string {

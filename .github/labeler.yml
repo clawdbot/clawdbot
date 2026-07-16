@@ -411,6 +411,11 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: baseten":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baseten/**"
+          - "docs/providers/baseten.md"
 "extensions: clawrouter":
   - changed-files:
       - any-glob-to-any-file:

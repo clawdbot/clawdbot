@@ -71,14 +71,23 @@ Where does the **Gateway** run?
   only run for a fresh or incomplete Gateway.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
-a Claude Code or Codex login, or `OPENAI_API_KEY` /
-`ANTHROPIC_API_KEY`. The best option is tested with a real completion and
-only saved after it answers; when a test fails the app automatically tries
-the next option and shows why the previous one failed. If several options
-are found you can switch between them before continuing.
+a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
+tool-capable model already installed in a reachable Ollama or LM Studio server.
+Detection runs on the Gateway host, including when the macOS app connects to a
+Linux Gateway. The best option is tested with a real completion and only saved
+after it answers; when a test fails the app automatically tries the next option
+and shows why the previous one failed. If several options are found you can
+switch between them before continuing. Automatic local discovery never pulls
+or downloads a model.
 
-Gemini CLI remains available for normal agents after setup, but it is not
-offered here because it cannot enforce the tool-free inference probe.
+To use a Claude subscription when the Gateway host has no Claude CLI login, run
+`claude setup-token` on any machine with Claude Code installed, then paste the
+printed token as **Anthropic setup-token** under **Connect with an API key or
+token**.
+
+Gemini CLI and Antigravity remain available for normal use after setup. Their
+installed CLIs are shown for context but are not auto-tested because neither can
+enforce the tool-free inference probe.
 
 You can also sign in through the provider's own OAuth or device-pairing flow.
 The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google

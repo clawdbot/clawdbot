@@ -38,6 +38,22 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
   });
 
+  it("forwards ordered images with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const images = [
+      { type: "image" as const, data: "first", mimeType: "image/jpeg" },
+      { type: "image" as const, data: "second", mimeType: "image/png" },
+    ];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
+
+    expect(steer).toHaveBeenCalledWith("compare these", images);
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
     // A queued steer is only durable once the user message_end event lands in
     // the active transcript.

@@ -114,7 +114,11 @@ download_file() {
         detect_downloader
     fi
     if [[ "$DOWNLOADER" == "curl" ]]; then
-        curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 --retry-connrefused -o "$output" "$url"
+        # Bound post-connect stalls without imposing a total download duration.
+        curl -fsSL --proto '=https' --tlsv1.2 \
+            --speed-limit 1 --speed-time 30 \
+            --retry 3 --retry-delay 1 --retry-connrefused \
+            -o "$output" "$url"
         return
     fi
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout=20 -O "$output" "$url"

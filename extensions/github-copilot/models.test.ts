@@ -2,10 +2,11 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CachedCopilotToken } from "./token.js";
-import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
+import type { CachedCopilotToken } from "./token-cache.js";
+import { resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({

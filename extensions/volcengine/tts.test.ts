@@ -1,5 +1,5 @@
 // Volcengine tests cover tts plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";
 
@@ -39,13 +39,12 @@ function makeLegacyProviderConfig(overrides?: Record<string, unknown>) {
   };
 }
 
-function clearTtsEnv() {
-  delete process.env.BYTEPLUS_API_KEY;
-  delete process.env.BYTEPLUS_SEED_SPEECH_API_KEY;
-  delete process.env.VOLCENGINE_TTS_API_KEY;
-  delete process.env.VOLCENGINE_TTS_APPID;
-  delete process.env.VOLCENGINE_TTS_TOKEN;
-}
+const TTS_ENV_KEYS = [
+  "BYTEPLUS_SEED_SPEECH_API_KEY",
+  "VOLCENGINE_TTS_API_KEY",
+  "VOLCENGINE_TTS_APPID",
+  "VOLCENGINE_TTS_TOKEN",
+] as const;
 
 function makeOversizedStreamResponse(): Response {
   return new Response(
@@ -59,19 +58,18 @@ function makeOversizedStreamResponse(): Response {
   );
 }
 
-function restoreOptionalEnv(key: string, value: string | undefined) {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
-}
-
 describe("Volcengine speech provider", () => {
   const provider = buildVolcengineSpeechProvider();
 
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    for (const key of TTS_ENV_KEYS) {
+      vi.stubEnv(key, undefined);
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("has correct id, label, and aliases", () => {
@@ -94,40 +92,32 @@ describe("Volcengine speech provider", () => {
   });
 
   it("reports not configured when credentials are missing", () => {
-    const oldBytePlusKey = process.env.BYTEPLUS_API_KEY;
-    const oldSeedKey = process.env.BYTEPLUS_SEED_SPEECH_API_KEY;
-    const oldApiKey = process.env.VOLCENGINE_TTS_API_KEY;
-    const oldAppId = process.env.VOLCENGINE_TTS_APPID;
-    const oldToken = process.env.VOLCENGINE_TTS_TOKEN;
-    clearTtsEnv();
-    try {
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
-    } finally {
-      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
-      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
-      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
-      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
-      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
-    }
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
   });
 
   it("falls back to env vars for credentials", () => {
-    const oldBytePlusKey = process.env.BYTEPLUS_API_KEY;
-    const oldSeedKey = process.env.BYTEPLUS_SEED_SPEECH_API_KEY;
-    const oldApiKey = process.env.VOLCENGINE_TTS_API_KEY;
-    const oldAppId = process.env.VOLCENGINE_TTS_APPID;
-    const oldToken = process.env.VOLCENGINE_TTS_TOKEN;
-    clearTtsEnv();
-    process.env.BYTEPLUS_SEED_SPEECH_API_KEY = "env-api-key";
-    try {
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
-    } finally {
-      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
-      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
-      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
-      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
-      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
+    vi.stubEnv("BYTEPLUS_SEED_SPEECH_API_KEY", "env-api-key");
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+  });
+
+  it("rejects blank Seed and legacy credentials before requests", async () => {
+    for (const key of TTS_ENV_KEYS) {
+      vi.stubEnv(key, "   ");
     }
+    const providerConfig = { apiKey: "   ", appId: "   ", token: "   " };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {},
+        providerConfig,
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("Volcengine TTS credentials missing");
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("lists voices with locale and gender", async () => {

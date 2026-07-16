@@ -85,8 +85,10 @@ async function writeTuiPtyFixtureScript(dir: string) {
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
+      const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
+      const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
-      let currentModel = "fixture-provider/fixture-model";
+      let currentModel = footerModel ?? "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
       let pendingPluginApproval: {
         id: string;
@@ -127,6 +129,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
           modelProvider: "fixture-provider",
           contextTokens: 128,
           fastMode,
+          ...(footerThinkingLevel ? { thinkingLevel: footerThinkingLevel } : {}),
           thinkingLevels: [],
         };
       }
@@ -329,7 +332,16 @@ async function writeTuiPtyFixtureScript(dir: string) {
               messages: [{ role: "user", content: rapidSwitchMarker + "_HISTORY_MARKER" }],
             };
           }
-          return { messages: [], fastMode };
+          return {
+            messages: [],
+            fastMode,
+            ...(footerModel
+              ? {
+                  thinkingLevel: footerThinkingLevel,
+                  sessionInfo: sessionEntry(sessionKey),
+                }
+              : {}),
+          };
         }
 
         async listSessions() {
@@ -527,6 +539,25 @@ describe.sequential("TUI PTY harness", () => {
     expect(fixture.run.output()).toContain("local ready");
     expect(fixture.run.output()).not.toContain("host local");
   });
+
+  it(
+    "renders a compact model and active thinking level in the footer",
+    async () => {
+      const compactFooter = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_MODEL: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+          OPENCLAW_TUI_PTY_THINKING_LEVEL: "high",
+        },
+      });
+      try {
+        await compactFooter.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
+        expect(compactFooter.run.output()).not.toContain("openai:setup-64cddea3");
+      } finally {
+        await compactFooter.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
 
   it(
     "shows startup activity while post-connect initialization is pending",

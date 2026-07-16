@@ -31,6 +31,7 @@ describe("UrbitSSEClient", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -116,6 +117,44 @@ describe("UrbitSSEClient", () => {
       client.updateCookie("urbauth-~zod=newvalue");
 
       expect(client.cookie).toBe("urbauth-~zod=newvalue");
+    });
+  });
+
+  describe("openStream", () => {
+    it("clears the connect timeout when urbitFetch rejects", async () => {
+      vi.useFakeTimers();
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockRejectedValueOnce(new Error("dns failed"));
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        autoReconnect: false,
+      });
+
+      await expect(client.openStream()).rejects.toThrow("dns failed");
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("clears the connect timeout when the stream response is not ok", async () => {
+      vi.useFakeTimers();
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const release = vi.fn().mockResolvedValue(undefined);
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValueOnce({
+        response: { ok: false, status: 503 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release,
+      });
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        autoReconnect: false,
+      });
+
+      await expect(client.openStream()).rejects.toThrow("Stream connection failed: 503");
+      expect(release).toHaveBeenCalledOnce();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 

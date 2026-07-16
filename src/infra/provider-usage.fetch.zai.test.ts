@@ -149,4 +149,46 @@ describe("fetchZaiUsage", () => {
       },
     ]);
   });
+
+  it("ignores invalid nextResetTime while preserving valid ISO resets", async () => {
+    const validReset = "2026-01-08T00:00:00Z";
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: 200,
+        data: {
+          planName: "Team",
+          limits: [
+            {
+              type: "TOKENS_LIMIT",
+              percentage: 20,
+              unit: 3,
+              number: 6,
+              nextResetTime: "not-a-date",
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: 40,
+              nextResetTime: validReset,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (6h)",
+        usedPercent: 20,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 40,
+        resetAt: new Date(validReset).getTime(),
+      },
+    ]);
+  });
 });

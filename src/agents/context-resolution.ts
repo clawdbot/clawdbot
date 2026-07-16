@@ -7,6 +7,7 @@ import {
   minPositiveContextTokens,
   providerContextTokenCacheKey,
 } from "./context-cache.js";
+import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
@@ -43,7 +44,7 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-sonnet-4-6",
   "claude-sonnet-4.6",
 ] as const;
-export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
+export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
@@ -187,6 +188,7 @@ function resolveModelFamilyId(modelId: string): string {
 export function resolveAnthropicFixedContextWindow(
   provider: string,
   model: string,
+  options?: { claudeCli1M?: boolean },
 ): number | undefined {
   const modelId = resolveModelFamilyId(model);
   const isAnthropicProvider =
@@ -210,6 +212,9 @@ export function resolveAnthropicFixedContextWindow(
     return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;
   }
   if (!ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix))) {
+    return undefined;
+  }
+  if (provider === "claude-cli" && !modelId.endsWith("[1m]") && options?.claudeCli1M !== true) {
     return undefined;
   }
   return provider === "anthropic-vertex"
@@ -245,7 +250,18 @@ export function resolveContextTokensForModelFromCache(
       params.modelProvider,
       ref.model,
     );
-    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model);
+    const extraParamSources = resolveModelExtraParamSources({
+      config: params.cfg,
+      provider: ref.provider,
+      modelId: ref.model,
+    });
+    const effectiveContext1M =
+      extraParamSources.modelParams && Object.hasOwn(extraParamSources.modelParams, "context1m")
+        ? extraParamSources.modelParams.context1m
+        : extraParamSources.defaultParams?.context1m;
+    const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model, {
+      claudeCli1M: effectiveContext1M === true,
+    });
     const providerResult = lookupContextTokens(
       providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
     );

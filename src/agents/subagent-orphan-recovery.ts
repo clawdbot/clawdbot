@@ -18,7 +18,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
-import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -149,9 +149,10 @@ function extractMessageText(msg: unknown): string | undefined {
 }
 
 /**
- * Send a resume message to an orphaned subagent session via the gateway agent method.
+ * Send a resume message through the owning Gateway's in-process agent dispatcher.
  */
 async function resumeOrphanedSession(params: {
+  gatewayRuntime: GatewayRecoveryRuntime;
   sessionKey: string;
   task: string;
   lastHumanMessage?: string;
@@ -166,9 +167,8 @@ async function resumeOrphanedSession(params: {
 
   try {
     const idempotencyKey = crypto.randomUUID();
-    const result = await callGateway<{ runId: string }>({
-      method: "agent",
-      params: {
+    const result = await params.gatewayRuntime.dispatchAgent<{ runId: string }>(
+      {
         message: resumeMessage,
         sessionKey: params.sessionKey,
         idempotencyKey,
@@ -183,8 +183,8 @@ async function resumeOrphanedSession(params: {
         sessionEffects: "internal",
         suppressPromptPersistence: true,
       },
-      timeoutMs: 10_000,
-    });
+      10_000,
+    );
     const remapped = replaceSubagentRunAfterSteer({
       previousRunId: params.originalRunId,
       nextRunId: result.runId,
@@ -229,6 +229,7 @@ async function resumeOrphanedSession(params: {
  * 2. Send a synthetic resume message to trigger a new LLM turn
  */
 export async function recoverOrphanedSubagentSessions(params: {
+  gatewayRuntime: GatewayRecoveryRuntime;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
@@ -457,9 +458,10 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         // Resume the session with the original task context.
         // We intentionally do NOT clear abortedLastRun before attempting
-        // the resume — if callGateway fails (e.g. gateway still booting),
+        // the resume — if instance dispatch fails (e.g. Gateway still booting),
         // the flag stays true so the next restart can retry.
         const resumeResult = await resumeOrphanedSession({
+          gatewayRuntime: params.gatewayRuntime,
           sessionKey: childSessionKey,
           task: runRecord.task,
           lastHumanMessage: extractMessageText(lastHumanMessage),
@@ -588,6 +590,7 @@ async function finalizeInterruptedRunWithRetry(params: {
  * If recovery fails (e.g. gateway not yet ready), retries with exponential backoff.
  */
 export function scheduleOrphanRecovery(params: {
+  getGatewayRuntime: () => GatewayRecoveryRuntime | undefined;
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   delayMs?: number;
   maxRetries?: number;
@@ -602,8 +605,18 @@ export function scheduleOrphanRecovery(params: {
       // Every delayed/retry scan owns a fresh root lease. Keep terminal
       // mutation in the same lease so suspension cannot become ready mid-attempt.
       void runWithGatewayIndependentRootWorkAdmission(async () => {
+        // Resolve at attempt time so a Gateway replacement cannot leave a
+        // debounced recovery bound to the closed instance it was scheduled by.
+        const gatewayRuntime = params.getGatewayRuntime();
+        if (!gatewayRuntime) {
+          if (attempt < maxRetries) {
+            attemptRecovery(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+          }
+          return;
+        }
         const result = await recoverOrphanedSubagentSessions({
-          ...params,
+          gatewayRuntime,
+          getActiveRuns: params.getActiveRuns,
           resumedSessionKeys,
           pendingStaleFinalizations,
         });

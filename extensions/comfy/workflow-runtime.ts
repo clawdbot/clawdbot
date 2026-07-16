@@ -114,8 +114,15 @@ type ComfyWorkflowResult = {
 
 let comfyFetchGuard = fetchWithSsrFGuard;
 
-export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.comfyTestApi"), {
+    getConfig: getComfyConfig,
+    setFetchGuard: setComfyFetchGuardForTesting,
+  });
 }
 
 function resolveComfyGeneratedOutputMaxBytes(params: {
@@ -140,7 +147,7 @@ function readConfigInteger(config: ComfyProviderConfig, key: string): number | u
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
+function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
   const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
   if (isRecord(pluginConfig)) {
     return pluginConfig;

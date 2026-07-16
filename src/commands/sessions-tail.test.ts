@@ -90,7 +90,7 @@ describe("sessionsTailCommand", () => {
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
-    setSessionsTailFollowIntervalMsForTests(10);
+    setSessionsTailFollowIntervalMsForTests(2);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
@@ -352,6 +352,70 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("bash ok");
   });
 
+  it("delivers appended events across short follow reads without skipping bytes", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        sourceSeq: 1,
+        type: "session.started",
+        ts: "2026-05-18T12:04:17.000Z",
+      }),
+    ]);
+    const appendedEvent = makeEvent({
+      sourceSeq: 2,
+      type: "tool.result",
+      ts: "2026-05-18T12:04:21.000Z",
+      data: { name: "python", success: true },
+    });
+    // POSIX positional reads may return fewer bytes than requested; cap each
+    // call to prove the bounded delta is filled without skipping bytes.
+    let capReads = false;
+    let shortReadCalls = 0;
+    const realReadSync = fs.readSync.bind(fs);
+    const cappedReadSync = (
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ): number => {
+      const cappedLength = capReads ? Math.min(length, 16) : length;
+      if (capReads) {
+        shortReadCalls += 1;
+      }
+      return realReadSync(fd, buffer, offset, cappedLength, position);
+    };
+    const readSpy = vi
+      .spyOn(fs, "readSync")
+      .mockImplementation(cappedReadSync as typeof fs.readSync);
+    let appended = false;
+    vi.mocked(runtime.log).mockImplementation((message) => {
+      if (!appended && String(message).includes("session.started")) {
+        appended = true;
+        capReads = true;
+        appendJsonl(trajectoryPath, appendedEvent);
+      }
+    });
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "python ok");
+    } finally {
+      readSpy.mockRestore();
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    const output = runtimeOutput(runtime);
+    expect(shortReadCalls).toBeGreaterThan(1);
+    expect(output).toContain("tool.result");
+    expect(output).toContain("python ok");
+  });
+
   it("continues following when later trajectory events are appended", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();
@@ -422,7 +486,7 @@ describe("sessionsTailCommand", () => {
 
       fs.appendFileSync(trajectoryPath, line.subarray(0, markerOffset + 1));
       await new Promise((resolve) => {
-        setTimeout(resolve, 100);
+        setTimeout(resolve, 20);
       });
       fs.appendFileSync(trajectoryPath, line.subarray(markerOffset + 1));
       await waitForRuntimeOutput(runtime, "prompt skipped");
@@ -506,7 +570,7 @@ describe("sessionsTailCommand", () => {
       expect(markerOffset).toBeGreaterThanOrEqual(0);
       fs.appendFileSync(trajectoryPath, partialLine.subarray(0, markerOffset + 1));
       await new Promise((resolve) => {
-        setTimeout(resolve, 100);
+        setTimeout(resolve, 20);
       });
 
       const replacementPath = `${trajectoryPath}.replacement`;

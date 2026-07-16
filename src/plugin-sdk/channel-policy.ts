@@ -100,6 +100,102 @@ export type ChannelMutableAllowlistCandidate = {
   list: unknown;
 };
 
+type StandardAllowlistScope = {
+  prefix: string;
+  account: Record<string, unknown>;
+};
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Collect the common account, nested-DM, and group/room allowlist paths for doctor warnings. */
+export function collectStandardAllowlistLists(
+  scope: StandardAllowlistScope,
+  options: {
+    includeAllowFrom?: boolean;
+    includeGroupAllowFrom?: boolean;
+    includeDm?: boolean;
+    includeGroups?: boolean;
+    groupsKey?: string;
+    groupField?: string;
+  } = {},
+): ChannelMutableAllowlistCandidate[] {
+  const lists: ChannelMutableAllowlistCandidate[] = [];
+  if (options.includeAllowFrom !== false) {
+    lists.push({ pathLabel: `${scope.prefix}.allowFrom`, list: scope.account.allowFrom });
+  }
+  if (options.includeGroupAllowFrom !== false) {
+    lists.push({
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+    });
+  }
+  if (options.includeDm) {
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      lists.push({ pathLabel: `${scope.prefix}.dm.allowFrom`, list: dm.allowFrom });
+    }
+  }
+  if (options.includeGroups) {
+    const groupsKey = options.groupsKey ?? "groups";
+    const groupField = options.groupField ?? "allowFrom";
+    const groups = asObjectRecord(scope.account[groupsKey]);
+    if (groups) {
+      for (const [groupKey, groupRaw] of Object.entries(groups)) {
+        const group = asObjectRecord(groupRaw);
+        if (!group) {
+          continue;
+        }
+        lists.push({
+          pathLabel: `${scope.prefix}.${groupsKey}.${groupKey}.${groupField}`,
+          list: group[groupField],
+        });
+      }
+    }
+  }
+  return lists;
+}
+
+function stripMutableAllowEntryPrefixes(value: string, prefixes: readonly string[]): string {
+  let current = value;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of prefixes) {
+      if (current.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) {
+        continue;
+      }
+      current = current.slice(prefix.length).trim();
+      changed = true;
+      break;
+    }
+  }
+  return current;
+}
+
+/** Build a mutable-name detector by stripping channel prefixes and recognizing stable IDs. */
+export function buildMutableAllowEntryDetector(params: {
+  prefixes?: readonly string[];
+  stableIdPattern: RegExp;
+}): (entry: string) => boolean {
+  const prefixes = (params.prefixes ?? []).filter((prefix) => prefix.length > 0);
+  return (entry) => {
+    const text = entry.trim();
+    if (!text || text === "*") {
+      return false;
+    }
+    const normalized = stripMutableAllowEntryPrefixes(text, prefixes);
+    if (!normalized) {
+      return false;
+    }
+    params.stableIdPattern.lastIndex = 0;
+    return !params.stableIdPattern.test(normalized);
+  };
+}
+
 type ChannelMutableAllowlistHit = {
   path: string;
   entry: string;

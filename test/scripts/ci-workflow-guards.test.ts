@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -32,6 +33,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
@@ -43,6 +45,7 @@ const MATURITY_GENERATED_PR_PATHS = [
 ];
 
 type WorkflowStep = {
+  env?: Record<string, unknown>;
   name?: string;
   run?: string;
   uses?: string;
@@ -259,6 +262,10 @@ function readAndroidReleaseWorkflow() {
   return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
 }
 
+function readAndroidToolchainAction() {
+  return parse(readFileSync(SETUP_ANDROID_TOOLCHAIN_ACTION, "utf8"));
+}
+
 function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
@@ -372,6 +379,19 @@ function readReleaseChecksWorkflow() {
 
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
+function readWorkflow(path: string) {
+  return parse(readFileSync(path, "utf8"));
+}
+
+const PULL_REQUEST_EDIT_FIELDS = ["title", "body", "base"] as const;
+
+function readPullRequestEditFields(condition: unknown) {
+  const expression = typeof condition === "string" ? condition : "";
+  return PULL_REQUEST_EDIT_FIELDS.filter((field) =>
+    expression.includes(`github.event.changes.${field}`),
+  );
 }
 
 function readTrackedText(relativePath: string): string {
@@ -663,6 +683,52 @@ function runGeneratedPublisherScenario(
 }
 
 describe("ci workflow guards", () => {
+  it("routes PR edited metadata only to interested automation", () => {
+    const autoResponse = readWorkflow(".github/workflows/auto-response.yml");
+    const clawsweeperDispatch = readWorkflow(".github/workflows/clawsweeper-dispatch.yml");
+    const labeler = readWorkflow(".github/workflows/labeler.yml");
+    const realBehaviorProof = readWorkflow(".github/workflows/real-behavior-proof.yml");
+
+    for (const workflow of [autoResponse, clawsweeperDispatch, labeler, realBehaviorProof]) {
+      expect(workflow.on.pull_request_target.types).toContain("edited");
+    }
+
+    expect({
+      autoResponse: readPullRequestEditFields(autoResponse.jobs["auto-response"].if),
+      clawsweeperDispatch: readPullRequestEditFields(clawsweeperDispatch.jobs.dispatch.if),
+      labeler: readPullRequestEditFields(labeler.jobs.label.if),
+      realBehaviorProof: readPullRequestEditFields(
+        realBehaviorProof.jobs["real-behavior-proof"].if,
+      ),
+    }).toEqual({
+      autoResponse: [],
+      clawsweeperDispatch: [],
+      labeler: ["title", "base"],
+      realBehaviorProof: ["body", "base"],
+    });
+
+    const labelerSteps = labeler.jobs.label.steps;
+    const changedFieldsForStep = (matcher: (step: WorkflowStep) => boolean) =>
+      readPullRequestEditFields(labelerSteps.find(matcher)?.if);
+    expect({
+      pathLabels: changedFieldsForStep(
+        (step) => step.uses?.startsWith("actions/labeler@") === true,
+      ),
+      size: changedFieldsForStep((step) => step.name === "Apply PR size label"),
+      contributor: changedFieldsForStep(
+        (step) => step.name === "Apply maintainer or trusted-contributor label",
+      ),
+      betaBlocker: changedFieldsForStep((step) => step.name === "Apply beta-blocker title label"),
+      activePrLimit: changedFieldsForStep((step) => step.name === "Apply too-many-prs label"),
+    }).toEqual({
+      pathLabels: ["base"],
+      size: ["base"],
+      contributor: [],
+      betaBlocker: ["title"],
+      activePrLimit: [],
+    });
+  });
+
   it("makes the hosted release-gate fallback explicit and exact-SHA only", () => {
     const workflow = readCiWorkflow();
     const releaseGate = workflow.on.workflow_dispatch.inputs.release_gate;
@@ -1419,21 +1485,83 @@ describe("ci workflow guards", () => {
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
     const releaseWorkflow = readAndroidReleaseWorkflow();
+    const action = readAndroidToolchainAction();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
     const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    for (const job of sdkJobs) {
-      const cacheStep = job.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK");
-      const installStep = job.steps.find(
-        (step: WorkflowStep) => step.name === "Install Android SDK packages",
-      );
+    expect(
+      workflow.jobs.android.steps.filter(
+        (step: WorkflowStep) =>
+          step.uses === "./.ci-workflow/.github/actions/setup-android-toolchain",
+      ),
+    ).toHaveLength(1);
+    expect(
+      releaseWorkflow.jobs.publish_signed_android_apk.steps.filter(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-android-toolchain",
+      ),
+    ).toHaveLength(1);
 
-      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
-      expect(installStep.run).toContain(`"${packageId}"`);
-    }
+    const cacheStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Cache Android SDK"),
+      "Android SDK cache step",
+    );
+    const javaStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Setup Java"),
+      "Android Java setup step",
+    );
+    const installStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Install Android SDK packages"),
+      "Android SDK package install step",
+    );
+
+    expect(javaStep.uses).toBe("actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287");
+    expect(javaStep.with).toMatchObject({
+      cache: "gradle",
+      distribution: "temurin",
+      "java-version": 17,
+    });
+    expect(javaStep.with?.["cache-dependency-path"]).toContain(
+      "apps/android/gradle/libs.versions.toml",
+    );
+    expect(cacheStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
+    expect(installStep.run).toContain(
+      'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
+    );
+  });
+
+  it("loads Android CI setup from the workflow revision for frozen targets", () => {
+    const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const checkoutIndex = steps.findIndex((step) => step.name === "Checkout");
+    const actionCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout CI Android toolchain action",
+    );
+    const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const actionCheckout = expectDefined(steps[actionCheckoutIndex], "Android action checkout");
+
+    expect(actionCheckout.uses).toBe(CHECKOUT_V6);
+    expect(actionCheckout.with).toMatchObject({
+      path: ".ci-workflow",
+      "persist-credentials": false,
+      ref: "${{ github.workflow_sha }}",
+      "sparse-checkout": ".github/actions/setup-android-toolchain",
+    });
+    expect(checkoutIndex).toBeLessThan(actionCheckoutIndex);
+    expect(actionCheckoutIndex).toBeLessThan(setupIndex);
+  });
+
+  it("bounds Android SDK command-line tools downloads", () => {
+    const action = readAndroidToolchainAction();
+    const setupStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) =>
+        step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
+      ),
+      "Android SDK setup step",
+    );
+
+    expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
   });
 
   it("covers Android app variants, lint, and benchmark compilation", () => {
@@ -1492,6 +1620,161 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs.preflight["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
     expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
+  });
+
+  it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
+    const workflow = readCiWorkflow();
+    const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
+      const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
+      return typeof runsOn === "string" && runsOn.includes("blacksmith-");
+    });
+    const setupNodeStep = workflow.jobs["checks-node-core-test-nondist-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    const stickyCondition = setupNodeStep.with["sticky-disk"];
+    const cacheCondition = setupNodeStep.with["use-actions-cache"];
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const validateLayoutStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
+    );
+    const setupPnpmStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Setup pnpm",
+    );
+    const mountStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
+    );
+    const cleanupStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Register sticky bind cleanup",
+    );
+    const bindStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Bind sticky node_modules into workspace",
+    );
+    const installStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Install dependencies",
+    );
+
+    expect(blacksmithJobs.length).toBeGreaterThan(0);
+    for (const [jobName, job] of blacksmithJobs) {
+      expect(
+        (job as { "runs-on": string })["runs-on"],
+        `${jobName} must route fork pull requests to GitHub-hosted runners`,
+      ).toContain(
+        "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+    }
+    expect(stickyCondition).toContain("github.event_name != 'workflow_dispatch'");
+    expect(stickyCondition).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(cacheCondition).toContain("github.event_name != 'workflow_dispatch'");
+    expect(cacheCondition).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(cacheCondition).toContain("&& 'false' || 'true'");
+    expect(action.inputs["sticky-disk"].default).toBe("false");
+    expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
+    expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
+    expect(validateLayoutStep.run).toContain('config_value="$(pnpm config get "$config_name")"');
+    expect(validateLayoutStep.run).toContain(
+      "sticky mode requires pnpm's stock node_modules layout",
+    );
+    expect(action.runs.steps.indexOf(setupPnpmStep)).toBeLessThan(
+      action.runs.steps.indexOf(validateLayoutStep),
+    );
+    expect(action.runs.steps.indexOf(validateLayoutStep)).toBeLessThan(
+      action.runs.steps.indexOf(mountStep),
+    );
+    expect(mountStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true'",
+      uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
+      with: {
+        path: "/var/tmp/openclaw-node-deps",
+        commit: "if-missing",
+      },
+    });
+    expect(mountStep.with.key).toContain("node-deps-bind-v2-");
+    expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
+    expect(mountStep.with.key).toContain("inputs.frozen-lockfile");
+    expect(mountStep.with.key).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
+    expect(mountStep.with.key).toContain("'.npmrc'");
+    expect(mountStep.with.key).toContain("'.pnpmfile.cjs'");
+    expect(mountStep.with.key).toContain(".github/actions/setup-node-env/sticky-importers.sh");
+    expect(mountStep.with.key).toContain("scripts/postinstall-bundled-plugins.mjs");
+    expect(cleanupStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true'",
+      uses: "./.github/actions/register-bind-mount-cleanup",
+      with: { path: "${{ github.workspace }}/node_modules" },
+    });
+    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
+      action.runs.steps.indexOf(cleanupStep),
+    );
+    expect(action.runs.steps.indexOf(cleanupStep)).toBeLessThan(
+      action.runs.steps.indexOf(bindStep),
+    );
+    expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
+    expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
+    expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
+    expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
+    expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    expect(installStep.env).toMatchObject({
+      STICKY_DISK: "${{ inputs.sticky-disk }}",
+      STICKY_ROOT: "/var/tmp/openclaw-node-deps",
+    });
+    expect(installStep.run).toContain('sticky_ready_marker="$STICKY_ROOT/.install-complete-v2"');
+    expect(installStep.run).toContain(
+      'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+    );
+    expect(installStep.run).toContain("Sticky dependency snapshot is ready; skipping pnpm install");
+    expect(installStep.run.indexOf('pnpm "${install_args[@]}"')).toBeLessThan(
+      installStep.run.indexOf(
+        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+      ),
+    );
+    const cleanupAction = parse(
+      readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
+    );
+    expect(cleanupAction.runs).toMatchObject({
+      using: "node24",
+      main: "main.cjs",
+      post: "post.cjs",
+      "post-if": "always()",
+    });
+    const cleanupPost = readFileSync(
+      ".github/actions/register-bind-mount-cleanup/post.cjs",
+      "utf8",
+    );
+    expect(cleanupPost).toContain("mountpoint.status === 32");
+    expect(cleanupPost).toContain('spawnSync("sudo", ["umount", mountPath]');
+    expect(readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8")).toContain(
+      "actions/cache/restore@",
+    );
+  });
+
+  it("restores importer-local node_modules from sticky snapshots", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      const stickyRoot = path.join(root, "sticky");
+      const rootModules = path.join(workspace, "node_modules");
+      const importerModules = path.join(workspace, "packages", "example", "node_modules");
+      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      mkdirSync(path.join(rootModules, "shared"), { recursive: true });
+      mkdirSync(importerModules, { recursive: true });
+      writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
+      symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
+
+      execFileSync("bash", [helper, "capture", stickyRoot, workspace]);
+      rmSync(importerModules, { recursive: true });
+      writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
+      execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
+
+      expect(readlinkSync(path.join(importerModules, "shared"))).toBe(
+        "../../../node_modules/shared",
+      );
+      expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -1703,6 +1986,31 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("bounds the workflow sanity tool downloads", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const shellcheckStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install ShellCheck",
+      ),
+      "ShellCheck install step",
+    );
+    const actionlintStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install actionlint",
+      ),
+      "actionlint install step",
+    );
+
+    expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
+    expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+    expect(actionlintStep.run).toContain("--connect-timeout 10");
+    expect(actionlintStep.run).toContain("--max-time 120");
+    expect(actionlintStep.run).toContain("--retry 5");
+    expect(actionlintStep.run).toContain("--retry-delay 2");
+    expect(actionlintStep.run).toContain("--retry-all-errors");
+    expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
+  });
+
   it("runs generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;
@@ -1795,6 +2103,8 @@ describe("ci workflow guards", () => {
       expect(installStep.run).toContain(
         "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
       );
+      expect(installStep.run).toContain("--connect-timeout 10 --max-time 120");
+      expect(installStep.run).toContain("--retry 3 --retry-max-time 120");
       expect(installStep.run).toContain(
         'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
       );
@@ -1858,10 +2168,96 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("bounds Mantis Slack runner IP discovery", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/mantis-slack-desktop-smoke.yml", "utf8"),
+    ) as { jobs: { run_slack_desktop: { steps: WorkflowStep[] } } };
+    const runStep = workflow.jobs.run_slack_desktop.steps.find(
+      (step) => step.name === "Run Slack desktop scenario",
+    );
+
+    expect(runStep?.run).toContain("for attempt in 1 2 3");
+    expect(runStep?.run).toContain(
+      "curl -fsS --connect-timeout 5 --max-time 15 https://checkip.amazonaws.com",
+    );
+    expect(runStep?.run).not.toContain("--retry");
+    expect(runStep?.run).toContain('runner_ip=""');
+    expect(runStep?.run).toContain('[[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\\.');
+    expect(runStep?.run).toContain("((10#$octet > 255))");
+
+    const discoveryBlock = runStep?.run?.match(
+      /runner_ip=""[\s\S]*?echo "Using AWS SSH CIDR \$\{CRABBOX_AWS_SSH_CIDRS\}"/u,
+    )?.[0];
+    expect(discoveryBlock).toBeTruthy();
+
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-mantis-runner-ip-"));
+    try {
+      const fakeBin = path.join(root, "bin");
+      const callCount = path.join(root, "curl-calls");
+      mkdirSync(fakeBin);
+      writeFileSync(callCount, "0\n");
+      writeFileSync(
+        path.join(fakeBin, "curl"),
+        `#!/bin/bash
+count="$(<"$CURL_CALL_COUNT")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$CURL_CALL_COUNT"
+if [[ "$count" == "1" ]]; then
+  printf '198.51.'
+  exit 28
+fi
+printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(fakeBin, "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${discoveryBlock}\nprintf 'result=%s\\n' "$CRABBOX_AWS_SSH_CIDRS"`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("result=203.0.113.7/32");
+      expect(result.stdout).not.toContain("198.51.");
+      expect(readFileSync(callCount, "utf8")).toBe("2\n");
+
+      for (const invalidIp of ["999.0.0.1", "203.0.113.7."]) {
+        writeFileSync(callCount, "0\n");
+        const invalidResult = spawnSync("bash", ["-c", `set -euo pipefail\n${discoveryBlock}`], {
+          encoding: "utf8",
+          env: {
+            CURL_CALL_COUNT: callCount,
+            CURL_SUCCESS_IP: invalidIp,
+            PATH: `${fakeBin}:${process.env.PATH}`,
+          },
+        });
+        expect(invalidResult.status).toBe(1);
+        expect(invalidResult.stderr).toContain(
+          "Could not resolve GitHub runner public IPv4 for AWS SSH ingress.",
+        );
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails Windows Testbox setup when Blacksmith phone-home is not accepted", () => {
     const workflow = readFileSync(".github/workflows/windows-blacksmith-testbox.yml", "utf8");
 
+    expect(workflow.match(/--connect-timeout 10 --max-time 30/gu)).toHaveLength(2);
+    expect(workflow).toContain('echo "phone_home_hydrating_curl=${hydrating_curl_status}"');
     expect(workflow).toContain('echo "phone_home_hydrating_http=${hydrating_http_code}"');
+    expect(workflow).toContain('echo "phone_home_ready_curl=${ready_curl_status}"');
     expect(workflow).toContain('echo "phone_home_ready_http=${http_code}"');
     expect(workflow).toContain('jq -e \'type == "number"\' <<<"$installation_model_id"');
     expect(workflow).toContain('--arg testbox_id "$TESTBOX_ID"');
@@ -1870,7 +2266,9 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain('--data-binary @"$hydrating_body"');
     expect(workflow).toContain('--data-binary @"$ready_body"');
     const hydratingFailureBlock = workflow.slice(
-      workflow.indexOf('if [[ ! "$hydrating_http_code" =~ ^2 ]]; then'),
+      workflow.indexOf(
+        'if (( hydrating_curl_status != 0 )) || [[ ! "$hydrating_http_code" =~ ^2 ]]; then',
+      ),
       workflow.indexOf('response="$(cat "$hydrating_response")"'),
     );
     const missingSshKeyFailureBlock = workflow.slice(
@@ -1878,10 +2276,12 @@ describe("ci workflow guards", () => {
       workflow.indexOf("mkdir -p ~/.ssh"),
     );
     const readyFailureBlock = workflow.slice(
-      workflow.indexOf('if [[ ! "$http_code" =~ ^2 ]]; then'),
+      workflow.indexOf('if (( ready_curl_status != 0 )) || [[ ! "$http_code" =~ ^2 ]]; then'),
       workflow.indexOf('echo "============================================"'),
     );
 
+    expect(workflow).toContain(')" || hydrating_curl_status=$?');
+    expect(workflow).toContain(')" || ready_curl_status=$?');
     expect(hydratingFailureBlock).toContain("exit 1");
     expect(missingSshKeyFailureBlock).toContain("exit 1");
     expect(readyFailureBlock).toContain("exit 1");
@@ -3292,6 +3692,9 @@ describe("ci workflow guards", () => {
     const smokeBuildStep = smokeProfileJob.steps.find(
       (step: WorkflowStep) => step.name === "Build QA smoke runtime",
     );
+    const smokeDockerCacheStep = smokeProfileJob.steps.find(
+      (step: WorkflowStep) => step.name === "Set up Blacksmith Docker layer cache",
+    );
     const smokeRunStep = smokeProfileJob.steps.find(
       (step: WorkflowStep) => step.name === "Run smoke profile part",
     );
@@ -3323,11 +3726,32 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["qa-smoke-ci-artifacts"]).toBeUndefined();
     expect(workflow.jobs["qa-smoke-ci"]).toBeUndefined();
     expect(smokeProfileJob.needs).toEqual(["preflight"]);
-    expect(smokeProfileJob.strategy["max-parallel"]).toBe(2);
+    expect(smokeProfileJob.strategy["max-parallel"]).toBe(4);
     expect(
       smokeProfileJob.strategy.matrix.include.map((entry: { slug: string }) => entry.slug),
-    ).toEqual(["profile-1-of-2", "profile-2-of-2"]);
+    ).toEqual(["profile-1-of-4", "profile-2-of-4", "profile-3-of-4", "profile-4-of-4"]);
+    expect(
+      smokeProfileJob.strategy.matrix.include.filter(
+        (entry: { docker_cache?: boolean }) => entry.docker_cache,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        lane: "profile-2",
+        slug: "profile-2-of-4",
+        docker_cache: true,
+      }),
+    ]);
     expect(smokeProfileJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeDockerCacheStep.uses).toBe(
+      "useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba",
+    );
+    expect(smokeDockerCacheStep.if).toContain("matrix.docker_cache == true");
+    expect(smokeDockerCacheStep.if).toContain("github.event_name != 'workflow_dispatch'");
+    expect(smokeDockerCacheStep.if).toContain("github.repository == 'openclaw/openclaw'");
+    expect(smokeDockerCacheStep.if).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+    expect(smokeDockerCacheStep.with["max-cache-size-mb"]).toBe(800000);
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");
@@ -3341,6 +3765,12 @@ describe("ci workflow guards", () => {
     expect(compatibilityScenarioBlock).toContain('"control-ui-chat-flow-playwright"');
     expect(compatibilityScenarioBlock).toContain('"gateway-smoke"');
     expect(compatibilityScenarioBlock).toContain('"matrix-restart-resume"');
+    expect(smokeRunStep.run).toContain(
+      "console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
+    expect(smokeRunStep.run).not.toContain(
+      "console.log(`[skip] ${partId} is not declared by this checkout's smoke plan`)",
+    );
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");

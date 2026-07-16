@@ -13,6 +13,7 @@ import {
   type SpeechProviderPlugin,
   type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import {
   asFiniteNumberInRange,
   normalizeLowercaseStringOrEmpty,
@@ -136,6 +137,10 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
   };
 }
 
+function resolveDirectXaiAudioApiKey(configApiKey?: string): string | undefined {
+  return resolveSpeechProviderApiKey(configApiKey, process.env.XAI_API_KEY);
+}
+
 function resolveGeneratedAudioMaxBytes(req: {
   cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
 }): number {
@@ -240,7 +245,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       });
     },
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      Boolean(resolveDirectXaiAudioApiKey(readXaiProviderConfig(providerConfig).apiKey)) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
@@ -319,7 +324,7 @@ async function resolveOptionalXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
+  const direct = resolveDirectXaiAudioApiKey(configApiKey);
   if (direct) {
     return direct;
   }

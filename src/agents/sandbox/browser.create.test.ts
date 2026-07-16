@@ -1,6 +1,8 @@
 // Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
 // config hashing, and cached bridge invalidation.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -770,6 +772,96 @@ describe("ensureSandboxBrowser create args", () => {
       ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
       { allowFailure: true },
     );
+  });
+
+  it("keeps a stalled CDP request inside the browser startup deadline", async () => {
+    const sockets = new Set<Socket>();
+    let requestPath: string | undefined;
+    let resolveRequestReceived: (() => void) | undefined;
+    const requestReceived = new Promise<void>((resolve) => {
+      resolveRequestReceived = resolve;
+    });
+    const server = createServer((req, _res) => {
+      requestPath = req.url;
+      req.resume();
+      resolveRequestReceived?.();
+      // Accept the CDP request but never send response headers.
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const cdpPort = (server.address() as AddressInfo).port;
+    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
+      if (port === 9222) {
+        return cdpPort;
+      }
+      if (port === 6080) {
+        return 49101;
+      }
+      return null;
+    });
+    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+      await params.onEnsureAttachTarget?.({});
+      throw new Error("expected CDP startup to time out before bridge creation");
+    });
+
+    const cfg = buildConfig(false);
+    cfg.browser.autoStartTimeoutMs = 25;
+
+    const originalSetTimeout = globalThis.setTimeout;
+    let requestTimeoutMs: number | undefined;
+    let fireRequestTimeout: (() => void) | undefined;
+    // Fire the production request timer only after the real loopback server sees
+    // the request, keeping the stalled-fetch proof deterministic and fast.
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (requestTimeoutMs === undefined) {
+        requestTimeoutMs = timeout;
+        fireRequestTimeout = () => callback(...args);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return originalSetTimeout(() => callback(...args), timeout);
+    }) as typeof setTimeout);
+
+    try {
+      const startup = ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      });
+      await Promise.race([
+        requestReceived,
+        new Promise<never>((_resolve, reject) => {
+          originalSetTimeout(
+            () => reject(new Error("CDP request was not received")),
+            1_000,
+          ).unref();
+        }),
+      ]);
+
+      expect(requestPath).toBe("/json/version");
+      expect(requestTimeoutMs).toBeGreaterThanOrEqual(1);
+      expect(requestTimeoutMs).toBeLessThanOrEqual(cfg.browser.autoStartTimeoutMs);
+      fireRequestTimeout?.();
+      await expect(startup).rejects.toThrow("hung container has been forcefully removed");
+    } finally {
+      setTimeoutSpy.mockRestore();
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("requires auth for the sandbox CDP relay without auto-derived source ranges", async () => {

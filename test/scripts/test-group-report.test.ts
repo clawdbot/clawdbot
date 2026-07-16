@@ -983,7 +983,7 @@ describe("scripts/test-group-report child process guard", () => {
       {
         cwd: process.cwd(),
         env: process.env,
-        killGraceMs: 50,
+        killGraceMs: 25,
         timeoutMs: 250,
       },
     );
@@ -1015,13 +1015,13 @@ describe("scripts/test-group-report child process guard", () => {
           [
             "import fs from 'node:fs';",
             "process.on('SIGTERM', () => {});",
-            `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+            `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
           ].join("\n"),
         ],
         {
           cwd: process.cwd(),
           env: process.env,
-          killGraceMs: 50,
+          killGraceMs: 25,
           timeoutMs: 250,
         },
       );
@@ -1035,7 +1035,7 @@ describe("scripts/test-group-report child process guard", () => {
 
       const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
       await new Promise((resolve) => {
-        setTimeout(resolve, 150);
+        setTimeout(resolve, 40);
       });
       const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
       expect(sizeAfterWait).toBe(sizeAfterReturn);
@@ -1066,7 +1066,7 @@ describe("scripts/test-group-report child process guard", () => {
         "const result = await spawnText(",
         '  "/usr/bin/time",',
         `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
-        "  { cwd: process.cwd(), env: process.env, killGraceMs: 50, timeoutMs: 500 },",
+        "  { cwd: process.cwd(), env: process.env, killGraceMs: 25, timeoutMs: 500 },",
         ");",
         "process.stdout.write(JSON.stringify(result));",
       ].join("\n");

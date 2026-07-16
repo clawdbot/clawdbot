@@ -1353,6 +1353,128 @@ describe("openai transport stream", () => {
     ).toEqual(["call_click|fc_click", "call_type|fc_type"]);
   });
 
+  it("routes indexed Responses tool arguments when item ids rotate", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "encrypted_delta_1",
+          delta: '{"path":',
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: "encrypted_delta_2",
+          delta: '"README.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          item_id: "encrypted_done",
+          arguments: '{"path":"README.md"}',
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_read", status: "completed" },
+        },
+      ]),
+      output,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      model,
+    );
+
+    expect(output.content).toMatchObject([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+
+  it("rejects indexed Responses completions when call ids change", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await expect(
+      testing.processResponsesStream(
+        streamChunks([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read",
+              call_id: "call_read_a",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "encrypted_delta",
+            delta: '{"path":"README.md"}',
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read_done",
+              call_id: "call_read_b",
+              name: "read",
+              arguments: '{"path":"README.md"}',
+            },
+          },
+          {
+            type: "response.completed",
+            response: { id: "resp_read", status: "completed" },
+          },
+        ]),
+        output,
+        { push: (event) => events.push(event as CapturedStreamEvent) },
+        model,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
+  });
+
   it("rejects reuse of an active Responses tool-call output index", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

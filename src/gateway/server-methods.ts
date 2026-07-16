@@ -132,6 +132,10 @@ const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
 );
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -343,6 +347,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "terminal.upload",
     ],
     loadHandlers: loadTerminalHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],

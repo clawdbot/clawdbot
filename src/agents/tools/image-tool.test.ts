@@ -223,9 +223,6 @@ vi.mock("../model-auth.js", () => ({
     modelApi?: string;
   }) => {
     const providerConfig = params.cfg?.models?.providers?.[params.provider];
-    if (params.provider === "codex") {
-      return process.env.OPENCLAW_TEST_CODEX_ROUTE === "1";
-    }
     if (params.provider === "openai" && params.modelApi === "openai-responses") {
       return Boolean(process.env.OPENAI_API_KEY || providerConfig?.apiKey);
     }
@@ -582,6 +579,12 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
+const codexMediaProvider = {
+  id: "codex",
+  capabilities: ["image"],
+  defaultModels: { image: "gpt-5.5" },
+} satisfies MediaUnderstandingProvider;
+
 const resolveConfiguredImageModelForTest: NonNullable<
   Parameters<typeof testing.setProviderDepsForTest>[0]
 >["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
@@ -646,6 +649,11 @@ function installImageUnderstandingProviderDeps(
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
+      imageProviderHarness.getMediaUnderstandingProvider(
+        providerId,
+        imageProviderHarness.buildProviderRegistry(),
+      ),
     resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
@@ -829,7 +837,7 @@ describe("image tool implicit imageModel config", () => {
     name: string;
     cfg: OpenClawConfig;
     profiles?: Profiles;
-    codexRoute?: boolean;
+    codexProvider?: boolean;
     openAiApiKey?: boolean;
     expected: ReturnType<typeof resolveImageModelConfigForTool>;
   };
@@ -875,7 +883,6 @@ describe("image tool implicit imageModel config", () => {
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     "OPENCLAW_TEST_CODEX_CLI_OAUTH",
-    "OPENCLAW_TEST_CODEX_ROUTE",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
     "COPILOT_GITHUB_TOKEN",
     "GH_TOKEN",
@@ -896,21 +903,21 @@ describe("image tool implicit imageModel config", () => {
       name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image defaults on canonical token-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:token": openAiTokenProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth",
       cfg: anthropicPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
@@ -935,7 +942,7 @@ describe("image tool implicit imageModel config", () => {
       name: "does not treat legacy openai-codex profiles as canonical Codex OAuth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai-codex:default": openAiOAuthProfile("openai-codex") },
-      codexRoute: true,
+      codexProvider: true,
       expected: null,
     },
   ];
@@ -949,9 +956,13 @@ describe("image tool implicit imageModel config", () => {
 
   it.each(implicitImageRoutingCases)(
     "$name",
-    async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
-      if (codexRoute) {
-        vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+    async ({ cfg, profiles, codexProvider, openAiApiKey, expected }) => {
+      if (codexProvider) {
+        installImageUnderstandingProviderStubs(
+          minimaxProvider,
+          moonshotProvider,
+          codexMediaProvider,
+        );
       }
       if (openAiApiKey) {
         vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -974,7 +985,7 @@ describe("image tool implicit imageModel config", () => {
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
       const cfg: OpenClawConfig = {
         ...openAiPrimaryCfg,
         models: {
@@ -1050,7 +1061,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive the candidate auth filter", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toEqual(
         codexImageModel,
@@ -1061,7 +1072,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive a supplied scoped auth store", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({
@@ -1076,7 +1087,7 @@ describe("image tool implicit imageModel config", () => {
   it("does not re-import persisted OpenAI OAuth when a scoped auth store is supplied", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({

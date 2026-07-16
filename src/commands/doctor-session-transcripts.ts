@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
 const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
@@ -52,7 +53,6 @@ type ActiveTranscriptPath = {
   appendParentId: string | null;
 };
 
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
@@ -101,7 +101,7 @@ function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]
       continue;
     }
     let touched = false;
-    if (message.provider === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
+    if (isLegacyCodexProviderId(message.provider)) {
       message.provider = OPENAI_PROVIDER_ID;
       touched = true;
     }

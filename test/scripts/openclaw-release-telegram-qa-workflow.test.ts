@@ -347,6 +347,18 @@ describe("release Telegram QA workflow", () => {
     );
   });
 
+  it("bounds the OIDC identity request below the job timeout", () => {
+    const identityJob = workflowJob("trusted_identity");
+    const identityStep = workflowStep(identityJob, "Verify dispatched-main identity");
+    const oidcRequest = identityStep.run?.match(
+      /curl --fail --silent --show-error[\s\S]*?audience=openclaw-release-telegram-qa/u,
+    )?.[0];
+
+    expect(identityJob["timeout-minutes"]).toBe(5);
+    expect(oidcRequest).toContain("--connect-timeout 10");
+    expect(oidcRequest).toContain("--max-time 30");
+  });
+
   it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
     expect(
       workflowStep(workflowJob("trusted_identity"), "Verify dispatched-main identity").env

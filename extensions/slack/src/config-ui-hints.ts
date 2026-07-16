@@ -102,6 +102,18 @@ export const slackChannelConfigUiHints = {
     label: "Slack Exec Approvals",
     help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
   },
+  presenceEvents: {
+    label: "Slack Presence Events",
+    help: 'Poll observed human participants and wake the routed agent on away-to-active transitions. Default: "off".',
+  },
+  "presenceEvents.mode": {
+    label: "Slack Presence Event Mode",
+    help: '"off" disables polling; "auto" covers DMs, MPIMs, and recent threads with up to 8 observed people; "on" also covers larger threads and top-level channels.',
+  },
+  "channels.*.presenceEvents.mode": {
+    label: "Slack Channel Presence Event Mode",
+    help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
+  },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
     help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',

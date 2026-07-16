@@ -790,7 +790,6 @@ src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
-src/docker-setup.e2e.test.ts
 src/fleet/backup.runtime.ts
 src/fleet/containers.runtime.ts
 src/fleet/service.runtime.ts
@@ -949,7 +948,6 @@ src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
-src/infra/push-apns.ts
 src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
 src/infra/run-node.test.ts
@@ -1054,7 +1052,6 @@ src/plugins/tools.optional.test.ts
 src/plugins/tools.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/plugins/update.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts

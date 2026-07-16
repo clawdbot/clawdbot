@@ -3,6 +3,7 @@ import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
   fetchJson,
+  parseUsageResetAt,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -71,7 +72,7 @@ export async function fetchZaiUsage(
 
   for (const limit of limits) {
     const percent = clampPercent(limit.percentage || 0);
-    const nextReset = limit.nextResetTime ? new Date(limit.nextResetTime).getTime() : undefined;
+    const nextReset = parseUsageResetAt(limit.nextResetTime);
     let windowLabel = "Limit";
     if (limit.unit === 1) {
       windowLabel = `${limit.number}d`;

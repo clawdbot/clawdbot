@@ -5,7 +5,9 @@ import { clearPluginCommands, registerPluginCommand } from "../../plugins/comman
 import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
-import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
+import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
+
+type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
 import type { MsgContext } from "../templating.js";
 import { handleDiagnosticsCommand as defaultDiagnosticsCommandHandler } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";

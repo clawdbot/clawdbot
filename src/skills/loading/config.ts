@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { SkillConfig } from "../../config/types.skills.js";
 import {
   evaluateRuntimeEligibility,
@@ -54,6 +55,19 @@ export function resolveSkillConfig(
     return undefined;
   }
   return entry;
+}
+
+export function isSkillEnvRequirementSatisfied(params: {
+  envName: string;
+  skillConfig?: SkillConfig;
+  primaryEnv?: string;
+}): boolean {
+  const { envName, skillConfig, primaryEnv } = params;
+  return (
+    normalizeOptionalString(process.env[envName]) !== undefined ||
+    normalizeOptionalString(skillConfig?.env?.[envName]) !== undefined ||
+    (primaryEnv === envName && hasConfiguredSecretInput(skillConfig?.apiKey))
+  );
 }
 
 function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
@@ -113,11 +127,11 @@ export function shouldIncludeSkill(params: {
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
     hasEnv: (envName) =>
-      Boolean(
-        process.env[envName] ||
-        skillConfig?.env?.[envName] ||
-        (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-      ),
+      isSkillEnvRequirementSatisfied({
+        envName,
+        skillConfig,
+        primaryEnv: entry.metadata?.primaryEnv,
+      }),
     isConfigPathTruthy: (configPath) => isSkillConfigPathTruthy(config, configPath),
   });
 }

@@ -1,7 +1,6 @@
 // Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -18,7 +17,11 @@ import {
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
+import {
+  PUBLIC_GITHUB_COPILOT_DOMAIN,
+  resolveGithubCopilotDomain,
+  withGithubCopilotDomainConfig,
+} from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -66,14 +69,6 @@ class GitHubDeviceFlowError extends Error {
     this.kind = kind;
     this.name = "GitHubDeviceFlowError";
   }
-}
-
-let githubDeviceFlowFetchGuard = fetchWithSsrFGuard;
-
-export function setGitHubCopilotDeviceFlowFetchGuardForTesting(
-  impl: typeof fetchWithSsrFGuard | null,
-): void {
-  githubDeviceFlowFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
@@ -142,7 +137,7 @@ async function postGitHubDeviceFlowForm(params: {
   domain: string;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  const { response, release } = await githubDeviceFlowFetchGuard({
+  const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: {
       method: "POST",
@@ -355,46 +350,6 @@ export async function runGitHubCopilotDeviceFlow(
     }
     throw err;
   }
-}
-
-// The shortcut login mints its token against the resolved domain, so the same
-// domain must land in persisted config: a tenant token with no stored
-// githubDomain would silently route to github.com (and 401) once
-// COPILOT_GITHUB_DOMAIN is unset. Mirrors the enterprise auth method's
-// persist-on-tenant / clear-on-public behavior.
-export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
-  // Normalize the optional layers to concrete objects before spreading:
-  // spreading a possibly-undefined object widens every optional property to
-  // `T | undefined`, which exactOptionalPropertyTypes rejects.
-  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
-  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
-  const provider = providers["github-copilot"];
-  const params = provider?.params;
-  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
-  if (isDefault && !(params && "githubDomain" in params)) {
-    return cfg;
-  }
-  const nextParams: Record<string, unknown> = { ...params };
-  if (isDefault) {
-    delete nextParams.githubDomain;
-  } else {
-    nextParams.githubDomain = domain;
-  }
-  const nextProviders = { ...providers };
-  if (provider) {
-    nextProviders["github-copilot"] = { ...provider, params: nextParams };
-  } else {
-    // Source config accepts partial provider inputs; catalog materialization
-    // supplies baseUrl/models before runtime consumption.
-    Object.assign(nextProviders, { "github-copilot": { params: nextParams } });
-  }
-  return {
-    ...cfg,
-    models: {
-      ...models,
-      providers: nextProviders,
-    },
-  };
 }
 
 export async function githubCopilotLoginCommand(

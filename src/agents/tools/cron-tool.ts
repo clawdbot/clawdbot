@@ -279,7 +279,6 @@ function createCronJobObjectSchema(): TSchema {
             description: "Idempotent declaration key.",
             minLength: 1,
             maxLength: 200,
-            pattern: "\\S",
           }),
         ),
         displayName: Type.Optional(

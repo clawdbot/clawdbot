@@ -12,7 +12,7 @@ type WriterReadyMessage = {
   kind: "ready";
 };
 
-export type WriterPartialMessage = {
+type WriterPartialMessage = {
   batch: number;
   kind: "partial";
   rows: number;
@@ -23,7 +23,7 @@ type WriterReleasedMessage = {
   kind: "released";
 };
 
-export type WriterResultMessage = {
+type WriterResultMessage = {
   batchesCommitted: number;
   kind: "result";
   rowsCommitted: number;

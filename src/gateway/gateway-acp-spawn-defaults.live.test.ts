@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -30,6 +31,9 @@ import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
 const ACP_SPAWN_DEFAULTS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS);
+const ACP_THINKING_CONTROLS_LIVE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_ACP_THINKING_CONTROLS,
+);
 const describeLive = LIVE && ACP_SPAWN_DEFAULTS_LIVE ? describe : describe.skip;
 const CONNECT_TIMEOUT_MS = resolvePositiveInteger(
   process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_CONNECT_TIMEOUT_MS,
@@ -57,6 +61,37 @@ function resolveThinking(): string {
   return process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_THINKING?.trim() || "high";
 }
 
+function resolveHarnessReasoningEffort(): string | undefined {
+  const thinking = resolveThinking().toLowerCase();
+  if (thinking === "off") {
+    return undefined;
+  }
+  if (thinking === "minimal") {
+    return "low";
+  }
+  if (thinking === "x-high") {
+    return "xhigh";
+  }
+  return thinking;
+}
+
+function resolveHarnessBaselineReasoningEffort(): string {
+  return resolveHarnessReasoningEffort() === "low" ? "medium" : "low";
+}
+
+function findRuntimeConfigOption(status: unknown, id: string): Record<string, unknown> | undefined {
+  const statusRecord = asNullableRecord(status);
+  const details = asNullableRecord(statusRecord?.details);
+  const configOptions = details?.configOptions;
+  if (!Array.isArray(configOptions)) {
+    return undefined;
+  }
+  return (
+    configOptions.map((option) => asNullableRecord(option)).find((option) => option?.id === id) ??
+    undefined
+  );
+}
+
 function resolveHarnessModel(): string {
   return process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || "gpt-5.6-luna";
 }
@@ -65,7 +100,10 @@ function resolveAcpAgentId(): string {
   return process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_AGENT?.trim() || "codex";
 }
 
-function resolveAcpAgentCommand(): { command: string; args?: string[] } {
+function resolveAcpAgentCommand(agentId: string): { command: string; args?: string[] } {
+  if (agentId === "opencode") {
+    return { command: "opencode", args: ["acp"] };
+  }
   const codexHome = process.env.CODEX_HOME?.trim();
   return {
     command: "env",
@@ -102,9 +140,18 @@ async function prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot: string): Promi
     }
   }
   const modelLine = `model = ${JSON.stringify(resolveHarnessModel())}`;
-  const nextConfig = /^model\s*=.*$/m.test(rawConfig)
+  let nextConfig = /^model\s*=.*$/m.test(rawConfig)
     ? rawConfig.replace(/^model\s*=.*$/m, modelLine)
     : `${modelLine}\n${rawConfig}`;
+  const baselineReasoningEffort = resolveHarnessBaselineReasoningEffort();
+  const reasoningLine = `model_reasoning_effort = ${JSON.stringify(baselineReasoningEffort)}`;
+  nextConfig = /^model_reasoning_effort\s*=.*$/m.test(nextConfig)
+    ? nextConfig.replace(/^model_reasoning_effort\s*=.*$/m, reasoningLine)
+    : `${reasoningLine}\n${nextConfig}`;
+  const planReasoningLine = `plan_mode_reasoning_effort = ${JSON.stringify(baselineReasoningEffort)}`;
+  nextConfig = /^plan_mode_reasoning_effort\s*=.*$/m.test(nextConfig)
+    ? nextConfig.replace(/^plan_mode_reasoning_effort\s*=.*$/m, planReasoningLine)
+    : `${planReasoningLine}\n${nextConfig}`;
   await fs.writeFile(targetConfigPath, nextConfig, "utf8");
   process.env.CODEX_HOME = codexHome;
 }
@@ -179,6 +226,123 @@ async function waitForSessionEntry(params: {
     await sleep(250);
   }
   throw new Error(`timed out waiting for ACP session entry ${params.sessionKey}`);
+}
+
+async function runOpenCodeThinkingControlProof(params: {
+  cfg: OpenClawConfig;
+  model: string;
+  thinking: string;
+  sessionKeys: string[];
+}): Promise<void> {
+  const sessionKey = `agent:opencode:acp:${randomUUID()}`;
+  const manager = getAcpSessionManager();
+  await manager.initializeSession({
+    cfg: params.cfg,
+    sessionKey,
+    agent: "opencode",
+    mode: "persistent",
+    runtimeOptions: {
+      model: params.model,
+      thinking: params.thinking,
+    },
+  });
+  params.sessionKeys.push(sessionKey);
+
+  await manager.runTurn({
+    cfg: params.cfg,
+    sessionKey,
+    provenance: "system",
+    text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
+    mode: "prompt",
+    requestId: randomUUID(),
+  });
+  const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
+  expect(status.runtimeOptions).toMatchObject({
+    model: params.model,
+    thinking: params.thinking,
+  });
+  expect(status.capabilities.configOptionKeys).toEqual(expect.arrayContaining(["mode", "model"]));
+  for (const key of ["thinking", "effort", "reasoning_effort", "thought_level"]) {
+    expect(status.capabilities.configOptionKeys).not.toContain(key);
+  }
+  await expect(
+    manager.setSessionConfigOption({
+      cfg: params.cfg,
+      sessionKey,
+      key: "thinking",
+      value: params.thinking,
+    }),
+  ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+  console.info(
+    "[live-acp-spawn-defaults] opencode automatic thinking skipped; explicit write rejected",
+  );
+}
+
+async function runCodexThinkingControlProof(params: {
+  cfg: OpenClawConfig;
+  model: string;
+  thinking: string;
+  sessionKeys: string[];
+}): Promise<void> {
+  const sessionKey = `agent:codex:acp:${randomUUID()}`;
+  const manager = getAcpSessionManager();
+  const baselineReasoningEffort = resolveHarnessBaselineReasoningEffort();
+  await manager.initializeSession({
+    cfg: params.cfg,
+    sessionKey,
+    agent: "codex",
+    mode: "persistent",
+    runtimeOptions: {
+      model: params.model,
+      thinking: baselineReasoningEffort,
+    },
+  });
+  params.sessionKeys.push(sessionKey);
+
+  await manager.runTurn({
+    cfg: params.cfg,
+    sessionKey,
+    provenance: "system",
+    text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
+    mode: "prompt",
+    requestId: randomUUID(),
+  });
+  const initialStatus = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
+  const initialReasoningEffortOption = findRuntimeConfigOption(
+    initialStatus.runtimeStatus,
+    "reasoning_effort",
+  );
+  expect(initialReasoningEffortOption).toEqual(
+    expect.objectContaining({ currentValue: baselineReasoningEffort }),
+  );
+
+  await manager.updateSessionRuntimeOptions({
+    cfg: params.cfg,
+    sessionKey,
+    patch: { thinking: params.thinking },
+  });
+  await manager.runTurn({
+    cfg: params.cfg,
+    sessionKey,
+    provenance: "system",
+    text: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
+    mode: "prompt",
+    requestId: randomUUID(),
+  });
+  const status = await manager.getSessionStatus({ cfg: params.cfg, sessionKey });
+  expect(status.capabilities.configOptionKeys).toContain("reasoning_effort");
+  const expectedReasoningEffort = resolveHarnessReasoningEffort();
+  const reasoningEffortOption = findRuntimeConfigOption(status.runtimeStatus, "reasoning_effort");
+  expect(reasoningEffortOption).toBeDefined();
+  if (expectedReasoningEffort) {
+    expect(reasoningEffortOption).toEqual(
+      expect.objectContaining({ currentValue: expectedReasoningEffort }),
+    );
+  } else {
+    // Codex ACP has no disabled effort value. `off` means leave its model default untouched.
+    expect(reasoningEffortOption?.currentValue).toBe(baselineReasoningEffort);
+  }
+  console.info(`[live-acp-spawn-defaults] codex reasoning_effort=${params.thinking} confirmed`);
 }
 
 function createConfig(params: {
@@ -257,7 +421,7 @@ function createConfig(params: {
             permissionMode: "approve-all",
             nonInteractivePermissions: "deny",
             agents: {
-              [params.acpAgentId]: resolveAcpAgentCommand(),
+              [params.acpAgentId]: resolveAcpAgentCommand(params.acpAgentId),
             },
           },
         },
@@ -290,7 +454,9 @@ describeLive("gateway live (ACP spawn defaults)", () => {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
-      await prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot);
+      if (acpAgentId === "codex") {
+        await prepareCodexHomeForLiveSpawnDefaultsTest(tempRoot);
+      }
 
       const cfg = createConfig({
         port,
@@ -315,6 +481,14 @@ describeLive("gateway live (ACP spawn defaults)", () => {
         await waitForGatewayPort({ host: "127.0.0.1", port, timeoutMs: CONNECT_TIMEOUT_MS });
         await waitForAcpBackendReady();
         const runtimeCfg = getRuntimeConfig();
+        if (ACP_THINKING_CONTROLS_LIVE) {
+          const runProof =
+            acpAgentId === "opencode"
+              ? runOpenCodeThinkingControlProof
+              : runCodexThinkingControlProof;
+          await runProof({ cfg: runtimeCfg, model: subagentModel, thinking, sessionKeys });
+          return;
+        }
         const configuredDefaultResult = await spawnAcpDirect(
           {
             task: "Reply with exactly LIVE-ACP-SPAWN-DEFAULTS-OK",
@@ -338,7 +512,6 @@ describeLive("gateway live (ACP spawn defaults)", () => {
           model: subagentModel,
           thinking,
         });
-
         const primaryOnlyResult = await spawnAcpDirect(
           {
             task: "Reply with exactly LIVE-ACP-SPAWN-PRIMARY-DEFAULT-OK",

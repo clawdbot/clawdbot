@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -91,6 +92,7 @@ type ModelCatalogRpcEntry = {
   contextWindow?: number;
   input?: string[];
   reasoning?: boolean;
+  agentRuntime?: GatewayAgentRuntime;
 };
 
 type AgentCatalogFixtureEntry = {
@@ -141,6 +143,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
     available: false,
     contextWindow: 8000,
   },
@@ -148,6 +151,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
     available: false,
   },
 ];
@@ -657,6 +661,7 @@ describe("gateway server models + voicewake", () => {
             id: "gpt-test-z",
             name: "gpt-test-z",
             provider: "openai",
+            agentRuntime: { id: "openclaw", source: "implicit" },
             available: false,
           },
         ]);
@@ -703,6 +708,7 @@ describe("gateway server models + voicewake", () => {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
           available: false,
         },
       ],
@@ -720,6 +726,7 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
           available: false,
         },
       ],

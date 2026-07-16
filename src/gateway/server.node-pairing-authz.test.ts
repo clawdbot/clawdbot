@@ -8,6 +8,7 @@ import {
   listDevicePairing,
   requestDevicePairing,
 } from "../infra/device-pairing.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
 import {
+  issueOperatorToken,
   loadDeviceIdentity,
   openTrackedWs,
   pairDeviceIdentity,
@@ -381,6 +383,268 @@ describe("gateway node pairing authorization", () => {
         commands: ["system.run"],
         expectedMessage: "operator.pairing",
       });
+    });
+  });
+
+  describeWithGatewayServer("cross-device management guard", (getStarted) => {
+    async function requestVictimNodeSurface(nodeId: string) {
+      await seedNodeDevice(nodeId);
+      return await requestNodePairing({
+        nodeId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+      });
+    }
+
+    async function openDeviceTokenSession(params: {
+      name: string;
+      scopes: string[];
+    }): Promise<{ ws: WebSocket; deviceId: string }> {
+      const operator = await issueOperatorToken({
+        name: params.name,
+        approvedScopes: params.scopes,
+        tokenScopes: params.scopes,
+      });
+      const ws = await openTrackedWs(getStarted().port);
+      await connectOk(ws, {
+        skipDefaultAuth: true,
+        deviceToken: operator.token.trim(),
+        deviceIdentityPath: operator.identityPath,
+        scopes: params.scopes,
+      });
+      return { ws, deviceId: operator.deviceId };
+    }
+
+    test("denies non-admin cross-device list, approve, reject, and rename", async () => {
+      const approveVictimId = "node-cross-device-approve-victim";
+      const approveRequest = await requestVictimNodeSurface(approveVictimId);
+      const rejectVictimId = "node-cross-device-reject-victim";
+      const rejectRequest = await requestVictimNodeSurface(rejectVictimId);
+      const renameVictimId = "node-cross-device-rename-victim";
+      const renameRequest = await requestVictimNodeSurface(renameVictimId);
+      requireApprovedPairing(
+        await approveNodePairing(renameRequest.request.requestId, {
+          callerScopes: ["operator.pairing", "operator.write"],
+        }),
+      );
+
+      const { ws } = await openDeviceTokenSession({
+        name: "node-cross-device-attacker",
+        scopes: ["operator.pairing", "operator.write"],
+      });
+      try {
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.ok).toBe(true);
+        expect(listed.payload).toEqual({ pending: [], paired: [] });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: approveRequest.request.requestId,
+        });
+        expect(approve.ok).toBe(false);
+        expect(approve.error?.message).toBe("node pairing approval denied");
+        await expect(findPairedNode(approveVictimId)).resolves.toBeNull();
+
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: rejectRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(false);
+        expect(reject.error?.message).toBe("node pairing rejection denied");
+        expect((await listNodePairing()).pending).toContainEqual(
+          expect.objectContaining({ nodeId: rejectVictimId }),
+        );
+
+        const unknownApprove = await rpcReq(ws, "node.pair.approve", {
+          requestId: "unknown-cross-device-approve",
+        });
+        expect(unknownApprove.error?.message).toBe("node pairing approval denied");
+        const unknownReject = await rpcReq(ws, "node.pair.reject", {
+          requestId: "unknown-cross-device-reject",
+        });
+        expect(unknownReject.error?.message).toBe("node pairing rejection denied");
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: renameVictimId,
+          displayName: "attacker rename",
+        });
+        expect(rename.ok).toBe(false);
+        expect(rename.error?.message).toBe("node rename denied");
+        await expect(findPairedNode(renameVictimId)).resolves.not.toMatchObject({
+          displayName: "attacker rename",
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows a non-admin device-token session to manage its own node surface", async () => {
+      const name = "node-self-device";
+      const attacker = await issueOperatorToken({
+        name,
+        approvedScopes: ["operator.pairing", "operator.write"],
+        tokenScopes: ["operator.pairing", "operator.write"],
+      });
+      await pairDeviceIdentity({
+        name,
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      const request = await requestNodePairing({
+        nodeId: attacker.deviceId,
+        platform: "macos",
+        deviceFamily: "Mac",
+        commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          skipDefaultAuth: true,
+          deviceToken: attacker.token.trim(),
+          deviceIdentityPath: attacker.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending.map((entry) => entry.nodeId)).toEqual([attacker.deviceId]);
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: attacker.deviceId,
+          displayName: "self renamed",
+        });
+        expect(rename.ok).toBe(true);
+        await expect(findPairedNode(attacker.deviceId)).resolves.toMatchObject({
+          displayName: "self renamed",
+        });
+
+        const nextRequest = await requestNodePairing({
+          nodeId: attacker.deviceId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+        expect((await listNodePairing()).pending).not.toContainEqual(
+          expect.objectContaining({ requestId: nextRequest.request.requestId }),
+        );
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows a shared-auth operator session to manage another device's node surface", async () => {
+      const victimNodeId = "node-shared-auth-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const operator = await issueOperatorToken({
+        name: "node-shared-auth-operator",
+        approvedScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret".trim(),
+          deviceIdentityPath: operator.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending).toContainEqual(
+          expect.objectContaining({ nodeId: victimNodeId }),
+        );
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+        await expect(findPairedNode(victimNodeId)).resolves.toMatchObject({
+          commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+        });
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: victimNodeId,
+          displayName: "shared renamed",
+        });
+        expect(rename.ok).toBe(true);
+
+        const nextRequest = await requestNodePairing({
+          nodeId: victimNodeId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("allows an admin device-token session to manage another device's node surface", async () => {
+      const victimNodeId = "node-admin-device-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const { ws } = await openDeviceTokenSession({
+        name: "node-admin-device-operator",
+        scopes: ["operator.admin", "operator.pairing", "operator.write"],
+      });
+      try {
+        const listed = await rpcReq<Awaited<ReturnType<typeof listNodePairing>>>(
+          ws,
+          "node.pair.list",
+          {},
+        );
+        expect(listed.payload?.pending).toContainEqual(
+          expect.objectContaining({ nodeId: victimNodeId }),
+        );
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+        expect(approve.ok).toBe(true);
+
+        const rename = await rpcReq(ws, "node.rename", {
+          nodeId: victimNodeId,
+          displayName: "admin renamed",
+        });
+        expect(rename.ok).toBe(true);
+
+        const nextRequest = await requestNodePairing({
+          nodeId: victimNodeId,
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: [],
+        });
+        const reject = await rpcReq(ws, "node.pair.reject", {
+          requestId: nextRequest.request.requestId,
+        });
+        expect(reject.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
   });
 

@@ -4,9 +4,26 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { NextFunction, Request, Response } from "express";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+const runDetachedWebhookWorkSpy = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-request-guards")>(
+    "openclaw/plugin-sdk/webhook-request-guards",
+  );
+  runDetachedWebhookWorkSpy.mockImplementation(actual.runDetachedWebhookWork);
+  return {
+    ...actual,
+    runDetachedWebhookWork: runDetachedWebhookWorkSpy,
+  };
+});
+
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { createLineWebhookMiddleware } from "./webhook.js";
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
+});
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -396,6 +413,21 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
+  it("dispatches signed POST event processing through the detached admitted work root", async () => {
+    runDetachedWebhookWorkSpy.mockClear();
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
+
+    const { res } = createRes();
+    await runSignedPost({ handler, rawBody, secret, res });
+
+    expect(res.statusCode).toBe(200);
+    // The request admission is released once the handler returns; the inherited
+    // chain would be refused as draining, so dispatch must reserve its own root.
+    expect(runDetachedWebhookWorkSpy).toHaveBeenCalledTimes(1);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it("uses strict pre-auth limits for signed POST requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const bot = { handleWebhook: vi.fn(async () => {}) };
@@ -526,6 +558,16 @@ describe("createLineWebhookMiddleware", () => {
     expect(onEvents).toHaveBeenCalledTimes(1);
     const payload = firstParsedPayload(onEvents, "LINE middleware payload");
     expect(payload.events).toEqual(expectedEvents);
+  });
+
+  it("dispatches middleware event processing through the detached admitted work root", async () => {
+    runDetachedWebhookWorkSpy.mockClear();
+    const { res, onEvents } = await invokeWebhook({
+      body: JSON.stringify({ events: [{ type: "message" }] }),
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(runDetachedWebhookWorkSpy).toHaveBeenCalledTimes(1);
+    expect(onEvents).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid JSON payloads", async () => {

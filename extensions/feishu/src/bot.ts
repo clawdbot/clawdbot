@@ -49,7 +49,11 @@ import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
-import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
+import {
+  finalizeFeishuMessageProcessing,
+  recordProcessedFeishuMessage,
+  type FeishuMessageProcessingClaim,
+} from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -270,7 +274,7 @@ export async function handleFeishuMessage(params: {
   channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
-  processingClaimHeld?: boolean;
+  processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
 }): Promise<void> {
   const {
@@ -282,7 +286,7 @@ export async function handleFeishuMessage(params: {
     channelRuntime,
     chatHistories,
     accountId,
-    processingClaimHeld = false,
+    processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
   } = params;
 
@@ -300,7 +304,7 @@ export async function handleFeishuMessage(params: {
       messageId: messageDedupeKey,
       namespace: account.accountId,
       log,
-      claimHeld: processingClaimHeld,
+      processingClaim,
     }))
   ) {
     log(`feishu: skipping duplicate message ${messageId}`);

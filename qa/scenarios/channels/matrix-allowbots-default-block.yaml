@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.access-policy
   execution:
+    profiles: { "matrix:all": 36, "matrix:fast": 8, "matrix:transport": 35 }
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         configuredBotRoles:
           - observer

@@ -43,9 +43,9 @@ const WORKBOARD_STATUSES: readonly WorkboardStatus[] = [
 ];
 
 let server: ControlUiE2eServer;
+let browser: Browser;
 
 type RecordedPage = {
-  browser: Browser;
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
@@ -254,7 +254,6 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   await rm(rawVideoDir, { force: true, recursive: true });
   await mkdir(rawVideoDir, { recursive: true });
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   let context: BrowserContext | undefined;
   let page: Page | undefined;
   try {
@@ -269,11 +268,10 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
     });
     page = await context.newPage();
     page.setDefaultTimeout(10_000);
-    return { browser, context, page, rawVideoDir };
+    return { context, page, rawVideoDir };
   } catch (error) {
     await page?.close().catch(() => {});
     await context?.close().catch(() => {});
-    await browser.close().catch(() => {});
     await rm(rawVideoDir, { force: true, recursive: true });
     throw error;
   }
@@ -305,7 +303,6 @@ async function closeRecordedPage(
     await copyFile(rawVideoPath, videoPath);
     artifacts.videos.push(videoPath);
   } finally {
-    await recorded.browser.close().catch(() => {});
     await rm(recorded.rawVideoDir, { force: true, recursive: true });
   }
 }
@@ -317,10 +314,17 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         `Playwright Chromium is not installed at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
       );
     }
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close().catch(() => {});
     await server?.close();
   });
 
@@ -369,6 +373,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     });
 
     const writable = await newRecordedPage("workboard-writable");
+    await writable.page.clock.install();
     try {
       const writableGateway = await installMockGateway(writable.page, {
         methodResponses: {
@@ -631,7 +636,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .waitFor({ state: "visible" });
       const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
-      await writable.page.waitForTimeout(1_250);
+      await writable.page.clock.fastForward(1_250);
       expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
         listAfterLiveRefresh,
       );

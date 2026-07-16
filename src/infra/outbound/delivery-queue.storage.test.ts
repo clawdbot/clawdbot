@@ -1,5 +1,6 @@
 // Verifies SQLite-backed outbound queue storage, metadata, failure updates,
 // recovery-state markers, and failed-entry moves.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -34,6 +35,22 @@ describe("delivery-queue storage", () => {
       .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
       .get(id) as { status?: string } | undefined;
     return row?.status;
+  }
+
+  async function enqueueSpoolDelivery(suffix: string) {
+    const artifact = path.join(
+      tmpDir(),
+      "delivery-queue-media",
+      `00000000-0000-4000-8000-00000000000${suffix}.ogg`,
+    );
+    await fs.mkdir(path.dirname(artifact), { recursive: true });
+    await fs.writeFile(artifact, "audio-bytes");
+    const id = await enqueueTextDelivery({
+      channel: "directchat",
+      to: "+1",
+      payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+    });
+    return { artifact, id };
   }
 
   describe("enqueue + ack lifecycle", () => {
@@ -338,6 +355,43 @@ describe("delivery-queue storage", () => {
       await ackDelivery(id, tmpDir());
 
       expect(readStatus(id)).toBe("failed");
+    });
+  });
+
+  describe("queue media custody", () => {
+    it("can retain artifacts while an active recovery attempt owns them", async () => {
+      const acked = await enqueueSpoolDelivery("0");
+
+      await ackDelivery(acked.id, tmpDir(), { retainSpoolArtifacts: true });
+
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
+    });
+
+    it("releases artifacts after every terminal queue transition", async () => {
+      const acked = await enqueueSpoolDelivery("1");
+      await ackDelivery(acked.id, tmpDir());
+      await expect(fs.stat(acked.artifact)).rejects.toThrow();
+
+      const moved = await enqueueSpoolDelivery("2");
+      await moveToFailed(moved.id, tmpDir());
+      await expect(fs.stat(moved.artifact)).rejects.toThrow();
+
+      const guarded = await enqueueSpoolDelivery("3");
+      const entry = await loadPendingDelivery(guarded.id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+      await failPendingDelivery(
+        {
+          id: guarded.id,
+          expectedStatus: "pending",
+          lastError: "terminal failure",
+          entry,
+        },
+        tmpDir(),
+      );
+      await expect(fs.stat(guarded.artifact)).rejects.toThrow();
     });
   });
 

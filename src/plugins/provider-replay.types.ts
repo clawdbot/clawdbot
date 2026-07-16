@@ -3,9 +3,9 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
-export type ProviderReplaySanitizeMode = "full" | "images-only";
+type ProviderReplaySanitizeMode = "full" | "images-only";
 
-export type ProviderReplayToolCallIdMode = "strict" | "strict9";
+type ProviderReplayToolCallIdMode = "strict" | "strict9";
 
 export type ProviderReasoningOutputMode = "native" | "tagged";
 

@@ -7,6 +7,7 @@ describe("vydra speech provider", () => {
   installPinnedHostnameTestHooks();
 
   const provider = buildVydraSpeechProvider();
+  const originalVydraApiKey = process.env.VYDRA_API_KEY;
 
   const oversizedJsonResponse = () =>
     new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
@@ -15,6 +16,11 @@ describe("vydra speech provider", () => {
     });
 
   afterEach(() => {
+    if (originalVydraApiKey === undefined) {
+      delete process.env.VYDRA_API_KEY;
+    } else {
+      process.env.VYDRA_API_KEY = originalVydraApiKey;
+    }
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -75,6 +81,30 @@ describe("vydra speech provider", () => {
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
+  });
+
+  it("does not treat a blank environment API key as configured", () => {
+    process.env.VYDRA_API_KEY = "   ";
+
+    expect(provider.isConfigured?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
+  });
+
+  it("rejects blank environment API keys before making requests", async () => {
+    process.env.VYDRA_API_KEY = "\t  \n";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Vydra API key missing");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("rejects generated audio downloads that exceed the configured media cap", async () => {

@@ -7,7 +7,7 @@ import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { discoverHermesSource, resolveImplicitHermesRoot } from "./source.js";
+import { discoverHermesSource } from "./source.js";
 import { resolveTargets } from "./targets.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
 
@@ -95,14 +95,23 @@ describe("Hermes migration file and skill items", () => {
     await writeFile(path.join(defaultRoot, "active_profile"), "coder\n");
     await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
 
-    expect(await resolveImplicitHermesRoot({ HERMES_HOME: defaultRoot }, "darwin")).toBe(
-      defaultRoot,
-    );
-    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(profileRoot);
+    expect(
+      (
+        await discoverHermesSource(undefined, {
+          env: { HERMES_HOME: defaultRoot },
+          platform: "darwin",
+        })
+      ).root,
+    ).toBe(defaultRoot);
+    expect(
+      (await discoverHermesSource(undefined, { env: { HOME: home }, platform: "darwin" })).root,
+    ).toBe(profileRoot);
     expect((await discoverHermesSource(profileRoot)).root).toBe(profileRoot);
 
     await writeFile(path.join(defaultRoot, "active_profile"), "../escape\n");
-    expect(await resolveImplicitHermesRoot({ HOME: home }, "darwin")).toBe(defaultRoot);
+    expect(
+      (await discoverHermesSource(undefined, { env: { HOME: home }, platform: "darwin" })).root,
+    ).toBe(defaultRoot);
 
     const windowsHome = path.join(root, "windows-home");
     const localAppData = path.join(windowsHome, "AppData", "Local");
@@ -110,17 +119,21 @@ describe("Hermes migration file and skill items", () => {
     const legacyWindowsRoot = path.join(windowsHome, ".hermes");
     await writeFile(path.join(legacyWindowsRoot, "config.yaml"), "model: legacy\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(legacyWindowsRoot);
     await writeFile(path.join(nativeWindowsRoot, "config.yaml"), "model: current\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: localAppData, USERPROFILE: windowsHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(nativeWindowsRoot);
 
     const personaHome = path.join(root, "persona-home");
@@ -128,10 +141,12 @@ describe("Hermes migration file and skill items", () => {
     const personaLegacyRoot = path.join(personaHome, ".hermes");
     await writeFile(path.join(personaLegacyRoot, "SOUL.md"), "Legacy persona\n");
     expect(
-      await resolveImplicitHermesRoot(
-        { LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome },
-        "win32",
-      ),
+      (
+        await discoverHermesSource(undefined, {
+          env: { LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome },
+          platform: "win32",
+        })
+      ).root,
     ).toBe(personaLegacyRoot);
   });
 

@@ -141,6 +141,14 @@ describe("config doc baseline integration", () => {
     expect(requireEntry(byPath, "bindings.*.match.peer.id").path).toBe("bindings.*.match.peer.id");
   });
 
+  it("merges tuple item branches from the bundled config schema", async () => {
+    const byPath = await getSharedByPath();
+    const rangePath = "models.providers.*.models.*.cost.tieredPricing.*.range";
+
+    expect(requireEntry(byPath, rangePath).type).toBe("array");
+    expect(requireEntry(byPath, `${rangePath}.*`).type).toBe("number");
+  });
+
   it("supports check mode for stale hash files", async () => {
     await withTempDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
       const rendered = getSharedRendered();

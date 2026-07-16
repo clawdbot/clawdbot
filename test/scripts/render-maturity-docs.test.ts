@@ -259,7 +259,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
     expect(taxonomy).toMatch(
-      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {8}<\/div>/,
+      /<div className="maturity-category-docs">\n\n {4}\[[^\n]+\]\([^)]+\)[^\n]*\n\n {4}<\/div>/,
     );
     expect(taxonomy).not.toMatch(
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,

@@ -59,7 +59,7 @@ function selectQaFlowSuiteScenarios(params: {
         `suite execution requires flow scenarios; unsupported scenario(s): ${scenarioList}`,
       );
     }
-    const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
+    const laneMismatches = selectedScenarios.flatMap((scenario) => {
       const mismatches = describeQaProviderLaneMismatches({
         scenario,
         providerMode: params.providerMode,
@@ -67,14 +67,12 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
-      }).filter(
-        (mismatch) => mismatch.startsWith("channelDriver=") || mismatch.startsWith("channel="),
-      );
+      });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
-    if (channelDriverMismatches.length > 0) {
+    if (laneMismatches.length > 0) {
       throw new Error(
-        `selected QA scenario(s) do not match the current QA lane: ${channelDriverMismatches.join(", ")}`,
+        `selected QA scenario(s) do not match the current QA lane: ${laneMismatches.join(", ")}`,
       );
     }
     return selectedScenarios;

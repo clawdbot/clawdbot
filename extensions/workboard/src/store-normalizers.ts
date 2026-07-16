@@ -5,7 +5,6 @@ import {
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EVENT_KINDS,
-  WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_LINK_TYPES,
@@ -28,7 +27,6 @@ import {
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
-  type WorkboardExecutionEngine,
   type WorkboardExecutionMode,
   type WorkboardExecutionStatus,
   type WorkboardLink,
@@ -486,19 +484,6 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-function normalizeExecutionEngine(
-  value: unknown,
-  fallback: WorkboardExecutionEngine,
-): WorkboardExecutionEngine {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_ENGINES.includes(value as WorkboardExecutionEngine)
-  ) {
-    return value as WorkboardExecutionEngine;
-  }
-  return fallback;
-}
-
 function normalizeExecutionMode(
   value: unknown,
   fallback: WorkboardExecutionMode,
@@ -630,16 +615,14 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
+  const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
   return {
     id,
     status: normalizeAttemptStatus(record.status, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
-    ...(typeof record.engine === "string" &&
-    WORKBOARD_EXECUTION_ENGINES.includes(record.engine as WorkboardExecutionEngine)
-      ? { engine: record.engine as WorkboardExecutionEngine }
-      : {}),
+    ...(engine ? { engine } : {}),
     ...(typeof record.mode === "string" &&
     WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
       ? { mode: record.mode as WorkboardExecutionMode }
@@ -1128,24 +1111,27 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   }
   const record = value as Record<string, unknown>;
   const now = Date.now();
-  const model = normalizeOptionalString(record.model);
-  const id = normalizeOptionalString(record.id) ?? randomUUID();
-  if (!model) {
-    return undefined;
-  }
-  const startedAt = normalizeTimestamp(record.startedAt, now);
-  const updatedAt = normalizeTimestamp(record.updatedAt, startedAt);
+  // Preserve historical labels as written; old hardcoded "codex" rows cannot be inferred safely.
+  const engine = normalizeBoundedString(record.engine, undefined, 160, "execution engine");
+  const model = normalizeBoundedString(record.model, undefined, 160, "execution model");
+  const normalizedId = normalizeOptionalString(record.id);
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
+  if (!normalizedId && !engine && !model && !sessionKey && !runId) {
+    return undefined;
+  }
+  const id = normalizedId ?? randomUUID();
+  const startedAt = normalizeTimestamp(record.startedAt, now);
+  const updatedAt = normalizeTimestamp(record.updatedAt, startedAt);
   return {
     id,
     kind: "agent-session",
-    engine: normalizeExecutionEngine(record.engine, "codex"),
     mode: normalizeExecutionMode(record.mode, "autonomous"),
     status: normalizeExecutionStatus(record.status, "idle"),
-    model,
     startedAt,
     updatedAt,
+    ...(engine ? { engine } : {}),
+    ...(model ? { model } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
   };
@@ -1167,6 +1153,12 @@ export function syncExecutionSessionKey(
 
 function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
   const next = { ...execution };
+  if (next.engine === undefined) {
+    delete next.engine;
+  }
+  if (next.model === undefined) {
+    delete next.model;
+  }
   if (next.sessionKey === undefined) {
     delete next.sessionKey;
   }

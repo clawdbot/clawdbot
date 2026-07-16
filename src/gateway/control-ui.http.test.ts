@@ -18,17 +18,23 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  type ControlUiPluginFrameGrantAck,
+} from "./control-ui-contract.js";
 import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -44,7 +50,10 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
-const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
@@ -93,6 +102,7 @@ describe("handleControlUiHttpRequest", () => {
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
+      pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
 
@@ -145,7 +155,7 @@ describe("handleControlUiHttpRequest", () => {
     headers?: IncomingMessage["headers"];
     config?: OpenClawConfig;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const url = params.basePath
       ? `${params.basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
       : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
@@ -164,7 +174,7 @@ describe("handleControlUiHttpRequest", () => {
         root: { kind: "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAvatarRequest(params: {
@@ -381,6 +391,30 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       await fs.rm(tempHome, { recursive: true, force: true });
     }
+  }
+
+  async function withScopedPairedOperatorDevice<T>(params: {
+    scopes: string[];
+    fn: (bearer: string) => Promise<T>;
+  }) {
+    const tempHome = testTempDirs.make("openclaw-ui-scoped-device-");
+    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      const deviceId = `control-ui-device-${randomUUID()}`;
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: params.scopes,
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: params.scopes,
+      });
+      expect(approved).toMatchObject({ status: "approved" });
+      const operatorBearer =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorBearer).toBe("string");
+      return await params.fn(operatorBearer ?? "");
+    });
   }
 
   it("sets security headers for Control UI responses", async () => {
@@ -1301,7 +1335,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         await fs.writeFile(path.join(tmp, "avatar.png"), "avatar-bytes\n");
-        const { res, handled, end } = await runBootstrapConfigRequest({
+        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
           headers: {
@@ -1314,6 +1348,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(setHeader.mock.calls.some(([name]) => name === "Set-Cookie")).toBe(false);
         const parsed = parseBootstrapPayload(end);
         expect(parsed).toMatchObject({
           assistantAgentId: "main",
@@ -1322,6 +1357,187 @@ describe("handleControlUiHttpRequest", () => {
         });
       },
     });
+  });
+
+  it("sets least-privilege route-bound cookies for multiple external plugin tabs", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook",
+          },
+        });
+        registry.controlUiDescriptors.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "other",
+            label: "Other",
+            path: "/other-hook/panel",
+            requiredScopes: ["operator.read"],
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        registry.httpRoutes.push({
+          pluginId: "other-plugin",
+          source: "other-plugin",
+          path: "/other-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        setActivePluginRegistry(registry);
+
+        const { res, handled, setHeader } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+          config: {
+            agents: { defaults: { workspace: tmp } },
+          },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const setCookie = setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+        expect(Array.isArray(setCookie)).toBe(true);
+        const cookies = Array.isArray(setCookie) ? setCookie : [];
+        expect(cookies).toHaveLength(2);
+        const cookieNames = cookies.map((cookie) => String(cookie).split("=", 1)[0] ?? "");
+        expect(new Set(cookieNames).size).toBe(2);
+        expect(
+          cookieNames.every((name) =>
+            /^__openclaw_plugin_tab_auth_[0-9a-f]{16}_[0-9a-f]{64}$/.test(name),
+          ),
+        ).toBe(true);
+        expect(cookies.map(String)).toEqual([
+          expect.stringContaining("Path=/secure-hook"),
+          expect.stringContaining("Path=/other-hook"),
+        ]);
+        expect(cookies.every((cookie) => String(cookie).includes("HttpOnly"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("Secure"))).toBe(true);
+        expect(cookies.every((cookie) => String(cookie).includes("SameSite=None"))).toBe(true);
+        const payloads = cookies.map((cookie) => {
+          const encoded = String(cookie).match(new RegExp("=v1\\.([^.]+)\\."))?.[1];
+          return JSON.parse(Buffer.from(encoded ?? "", "base64url").toString("utf8"));
+        });
+        expect(payloads).toMatchObject([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            scopes: ["operator.read"],
+          },
+          {
+            pluginId: "other-plugin",
+            path: "/other-hook",
+            scopes: ["operator.read"],
+          },
+        ]);
+      },
+    });
+  });
+
+  it("acknowledges only plugin frame grants issued by bootstrap", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const registry = createEmptyPluginRegistry();
+        registry.controlUiDescriptors.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          descriptor: {
+            surface: "tab",
+            id: "demo",
+            label: "Demo",
+            path: "/secure-hook/panel",
+          },
+        });
+        registry.httpRoutes.push({
+          pluginId: "demo-plugin",
+          source: "demo-plugin",
+          path: "/secure-hook",
+          auth: "gateway",
+          match: "prefix",
+          handler: async () => true,
+        });
+        setActivePluginRegistry(registry);
+
+        const { end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-auth-token" },
+        });
+
+        expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+          {
+            pluginId: "demo-plugin",
+            path: "/secure-hook",
+            match: "prefix",
+          },
+        ]);
+      },
+    });
+  });
+
+  it("issues read-only plugin frame grants for Tailscale-authenticated bootstrap", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.controlUiDescriptors.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      descriptor: {
+        surface: "tab",
+        id: "demo",
+        label: "Demo",
+        path: "/secure-hook/panel",
+        requiredScopes: ["operator.admin"],
+      },
+    });
+    registry.httpRoutes.push({
+      pluginId: "demo-plugin",
+      source: "demo-plugin",
+      path: "/secure-hook",
+      auth: "gateway",
+      match: "prefix",
+      handler: async () => true,
+    });
+    setActivePluginRegistry(registry);
+    const { res, setHeader } = makeMockHttpResponse();
+
+    expect(
+      setControlUiPluginAuthCookieForRequest(
+        { headers: {} } as IncomingMessage,
+        res,
+        "tailscale",
+        true,
+        "test-generation",
+      ),
+    ).toEqual([
+      {
+        pluginId: "demo-plugin",
+        path: "/secure-hook",
+        match: "prefix",
+        scopes: ["operator.read"],
+      },
+    ]);
+    expect(setHeader).toHaveBeenCalledWith(
+      "Set-Cookie",
+      expect.arrayContaining([expect.stringContaining("Path=/secure-hook")]),
+    );
   });
 
   it("serves bootstrap config JSON when paired device-token auth is valid", async () => {
@@ -1340,6 +1556,52 @@ describe("handleControlUiHttpRequest", () => {
             expect(res.statusCode).toBe(200);
             const parsed = parseBootstrapPayload(end);
             expect(parsed.assistantAgentId).toBe("main");
+          },
+        });
+      },
+    });
+  });
+
+  it("selects higher-scope frame tabs using paired device-token scopes", async () => {
+    await withScopedPairedOperatorDevice({
+      scopes: ["operator.read", "operator.admin"],
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            const registry = createEmptyPluginRegistry();
+            registry.controlUiDescriptors.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              descriptor: {
+                surface: "tab",
+                id: "admin",
+                label: "Admin",
+                path: "/admin-hook/panel",
+                requiredScopes: ["operator.admin"],
+              },
+            });
+            registry.httpRoutes.push({
+              pluginId: "admin-plugin",
+              source: "admin-plugin",
+              path: "/admin-hook",
+              auth: "gateway",
+              match: "prefix",
+              handler: async () => true,
+            });
+            setActivePluginRegistry(registry);
+
+            const { end } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "test-auth-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+            expect(parseBootstrapPayload(end).pluginFrameGrants).toEqual([
+              {
+                pluginId: "admin-plugin",
+                path: "/admin-hook",
+                match: "prefix",
+              },
+            ]);
           },
         });
       },
@@ -1539,7 +1801,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("serves local avatar bytes through hardened avatar handler", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-");
     try {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
@@ -1564,7 +1826,7 @@ describe("handleControlUiHttpRequest", () => {
   ] as const)(
     "validates %s avatar requests without reading bytes and closes the descriptor",
     async (_name, url, method) => {
-      const tmp = avatarTempDirs.make("openclaw-avatar-no-read-");
+      const tmp = testTempDirs.make("openclaw-avatar-no-read-");
       const read = vi.spyOn(fsSync, "read");
       const closeSync = vi.spyOn(fsSync, "closeSync");
       try {
@@ -1588,7 +1850,7 @@ describe("handleControlUiHttpRequest", () => {
   );
 
   it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-hardlink-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-hardlink-");
     try {
       await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
       await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
@@ -1616,7 +1878,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
-    const tmp = avatarTempDirs.make("openclaw-avatar-http-growth-");
+    const tmp = testTempDirs.make("openclaw-avatar-http-growth-");
     const avatarPath = path.join(tmp, "avatar.png");
     try {
       await fs.writeFile(avatarPath, REAL_PNG);

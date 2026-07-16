@@ -2,10 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
 import { trimForSummary } from "./shared.ts";
 
-export type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
-export type CrossOsMode = "fresh" | "upgrade" | "both";
-export type CrossOsOsId = "ubuntu" | "windows" | "macos";
-export type ProviderId = "openai" | "anthropic" | "minimax";
+type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
+type CrossOsMode = "fresh" | "upgrade" | "both";
+type CrossOsOsId = "ubuntu" | "windows" | "macos";
+type ProviderId = "openai" | "anthropic" | "minimax";
 export type ProviderConfig = {
   extensionId: string;
   secretEnv: string;
@@ -670,7 +670,7 @@ export function updateTimeoutMs() {
     : 20 * 60 * 1000;
 }
 
-export function updateStepTimeoutSeconds() {
+function updateStepTimeoutSeconds() {
   return process.platform === "win32"
     ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
     : 1200;

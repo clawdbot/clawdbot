@@ -23,22 +23,67 @@ beforeEach(() => {
 
 describe("withRetry", () => {
   it("uses the shared runner without changing exponential schedules", async () => {
+    vi.useFakeTimers();
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("first"))
+      .mockRejectedValueOnce(new Error("second"))
+      .mockResolvedValueOnce("ok");
+    const logger = createLogger();
+
+    try {
+      const promise = withRetry(
+        operation,
+        { maxRetries: 2, baseDelayMs: 100, backoff: "exponential" },
+        undefined,
+        logger,
+      );
+      await vi.advanceTimersByTimeAsync(99);
+      expect(operation).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(operation).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(operation).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toBe("ok");
+      expect(operation).toHaveBeenCalledTimes(3);
+      expect(logger.debug).toHaveBeenNthCalledWith(
+        1,
+        "[qqbot:retry] Attempt 1 failed, retrying in 100ms: first",
+      );
+      expect(logger.debug).toHaveBeenNthCalledWith(
+        2,
+        "[qqbot:retry] Attempt 2 failed, retrying in 200ms: second",
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps fixed retry schedules flat", async () => {
+    vi.useFakeTimers();
     const operation = vi
       .fn<() => Promise<string>>()
       .mockRejectedValueOnce(new Error("first"))
       .mockRejectedValueOnce(new Error("second"))
       .mockResolvedValueOnce("ok");
 
-    await expect(
-      withRetry(
-        operation,
-        { maxRetries: 2, baseDelayMs: 100, backoff: "exponential" },
-        undefined,
-        createLogger(),
-      ),
-    ).resolves.toBe("ok");
-    expect(mocks.sleep).toHaveBeenNthCalledWith(1, 100);
-    expect(mocks.sleep).toHaveBeenNthCalledWith(2, 200);
+    try {
+      const promise = withRetry(operation, {
+        maxRetries: 2,
+        baseDelayMs: 75,
+        backoff: "fixed",
+      });
+      await vi.advanceTimersByTimeAsync(75);
+      expect(operation).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(75);
+      await expect(promise).resolves.toBe("ok");
+      expect(operation).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("preserves the policy's zero-based attempt index", async () => {

@@ -22,6 +22,7 @@ import {
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
+  type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
@@ -51,6 +52,7 @@ import {
   type ThinkingLevel,
   type Tool,
   type ToolCall,
+  type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import {
   resolveClaudeFable5ModelIdentity,
@@ -66,6 +68,7 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
@@ -784,6 +787,27 @@ function normalizeToolCallId(id: string): string {
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
+function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+  const content: ToolResultContentBlock[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      content.push({ text: sanitizeSurrogates(block.text) });
+      continue;
+    }
+    if (describeToolResultMediaPlaceholder([block])) {
+      content.push({ image: createImageBlock(block.mimeType, block.data) });
+    }
+  }
+
+  return {
+    toolResult: {
+      toolUseId: message.toolCallId,
+      content: content.length > 0 ? content : [{ text: "(no output)" }],
+      status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+    },
+  };
+}
+
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
@@ -902,17 +926,7 @@ function convertMessages(
         const toolResults: ContentBlock.ToolResultMember[] = [];
 
         // Add current tool result with all content blocks combined
-        toolResults.push({
-          toolResult: {
-            toolUseId: m.toolCallId,
-            content: m.content.map((c) =>
-              c.type === "image"
-                ? { image: createImageBlock(c.mimeType, c.data) }
-                : { text: sanitizeSurrogates(c.text) },
-            ),
-            status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-          },
-        });
+        toolResults.push(createBedrockToolResult(m));
 
         // Look ahead for consecutive toolResult messages
         let j = i + 1;
@@ -921,17 +935,7 @@ function convertMessages(
           if (nextMsg?.role !== "toolResult") {
             break;
           }
-          toolResults.push({
-            toolResult: {
-              toolUseId: nextMsg.toolCallId,
-              content: nextMsg.content.map((c) =>
-                c.type === "image"
-                  ? { image: createImageBlock(c.mimeType, c.data) }
-                  : { text: sanitizeSurrogates(c.text) },
-              ),
-              status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-            },
-          });
+          toolResults.push(createBedrockToolResult(nextMsg));
           j++;
         }
 
@@ -1173,7 +1177,7 @@ function createImageBlock(mimeType: string, data: string) {
 }
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-export const testing = {
+const testing = {
   buildAdditionalModelRequestFields,
   convertMessages,
   getConfiguredBedrockRegion,
@@ -1182,4 +1186,8 @@ export const testing = {
   resolveSimpleBedrockOptions,
   shouldUseExplicitBedrockEndpoint,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockStreamTestApi"), testing);
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,7 +9,7 @@ import {
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
-export type GatewayWsClient = {
+type GatewayWsClient = {
   ws: WebSocket;
   hello: unknown;
 };

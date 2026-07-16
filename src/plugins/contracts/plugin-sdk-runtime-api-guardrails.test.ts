@@ -371,7 +371,9 @@ describe("runtime api guardrails", () => {
       "utf8",
     );
 
-    expect(pluginRuntime).toContain('export * from "../plugins/hook-runner-global.js";');
+    expect(pluginRuntime).toContain(
+      'export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";',
+    );
     expect(hookRunnerGlobal).not.toContain("getGlobalHookRunnerRegistry");
     expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
   });

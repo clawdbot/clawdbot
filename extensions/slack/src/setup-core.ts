@@ -1,5 +1,4 @@
 // Slack plugin module implements setup core behavior.
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
@@ -8,6 +7,7 @@ import {
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
+  defineTokenCredential,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -92,8 +92,9 @@ function createSlackTokenCredential(params: {
   keepPrompt: string;
   inputPrompt: string;
 }) {
-  return {
+  return defineTokenCredential({
     inputKey: params.inputKey,
+    configKey: params.inputKey,
     providerHint: params.providerHint,
     credentialLabel: params.credentialLabel,
     preferredEnvVar: params.preferredEnvVar,
@@ -101,42 +102,25 @@ function createSlackTokenCredential(params: {
     keepPrompt: params.keepPrompt,
     inputPrompt: params.inputPrompt,
     allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
-    inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
-      const resolved = resolveSlackAccount({ cfg, accountId });
-      const configuredValue =
-        params.inputKey === "botToken" ? resolved.config.botToken : resolved.config.appToken;
-      const resolvedValue = params.inputKey === "botToken" ? resolved.botToken : resolved.appToken;
-      return {
-        accountConfigured: Boolean(resolvedValue) || hasConfiguredSecretInput(configuredValue),
-        hasConfiguredValue: hasConfiguredSecretInput(configuredValue),
-        resolvedValue: normalizeOptionalString(resolvedValue),
-        envValue:
-          accountId === DEFAULT_ACCOUNT_ID
-            ? normalizeOptionalString(process.env[params.preferredEnvVar])
-            : undefined,
-      };
-    },
-    applyUseEnv: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-      enableSlackAccount(cfg, accountId),
-    applySet: ({
-      cfg,
-      accountId,
-      value,
-    }: {
-      cfg: OpenClawConfig;
-      accountId: string;
-      value: unknown;
-    }) =>
-      patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId,
-        patch: {
-          enabled: true,
-          [params.inputKey]: value,
-        },
-      }),
-  };
+    resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
+    resolvedValue: (account) =>
+      normalizeOptionalString(params.inputKey === "botToken" ? account.botToken : account.appToken),
+    envValue: ({ accountId }) =>
+      accountId === DEFAULT_ACCOUNT_ID
+        ? normalizeOptionalString(process.env[params.preferredEnvVar])
+        : undefined,
+    patchAccount: ({ cfg, accountId, mode, patch }) =>
+      mode === "env"
+        ? enableSlackAccount(cfg, accountId)
+        : patchChannelConfigForAccount({
+            cfg,
+            channel,
+            accountId,
+            patch: { enabled: true, ...patch },
+          }),
+    useEnv: { clearFields: [] },
+    set: {},
+  });
 }
 
 export const slackSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({

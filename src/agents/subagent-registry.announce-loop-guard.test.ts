@@ -42,6 +42,8 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   loadSessionEntry: (scope: { sessionKey: keyof typeof sessionStore }) =>
     sessionStore[scope.sessionKey],
   patchSessionEntry: async () => null,

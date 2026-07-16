@@ -169,52 +169,8 @@ jobs:
           install-deps: "false"
           use-actions-cache: "false"
 
-      - name: Setup Java
-        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
-        with:
-          distribution: temurin
-          java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            apps/android/**/*.gradle*
-            apps/android/**/gradle-wrapper.properties
-            apps/android/gradle/libs.versions.toml
-
-      - name: Cache Android SDK
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-v1-
-
-      - name: Setup Android SDK
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="14742923"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-          if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
-            mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-            curl -fsSL "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
-            rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-            unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
-            mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-          fi
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
-          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
-          echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
-          echo "${ANDROID_SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
-
-      - name: Install Android SDK packages
-        run: |
-          set -eu
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0"
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
 
       - name: Create apps-signing read token
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}

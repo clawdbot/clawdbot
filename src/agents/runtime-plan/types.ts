@@ -119,6 +119,12 @@ type AgentRuntimeMessagePresentationAction =
   | {
       type: "web-app";
       url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */

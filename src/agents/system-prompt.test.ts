@@ -384,6 +384,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(withYield).toContain("wait with `sessions_yield`");
   });
 
+  it("limits screen guidance to web/app tool surfaces", () => {
+    const withoutScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions"],
+    });
+    const withScreen = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions", "screen"],
+    });
+
+    expect(withoutScreen).not.toContain("web/app turn may drive UI");
+    expect(withScreen).toContain("- screen: Drive operator web UI");
+    expect(withScreen).toContain(
+      "`screen` present: web/app turn may drive UI; messaging turn: don't.",
+    );
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -788,12 +805,13 @@ describe("buildAgentSystemPrompt", () => {
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
-    const sectionText = section.join("\n");
-    expect(section.length).toBeLessThanOrEqual(4);
-    expect(sectionText).toContain("Durable reusable skill/playbook/workflow work");
-    expect(sectionText).toContain("`skill_workshop`");
-    expect(sectionText).toContain("Generated = pending proposal");
-    expect(sectionText).toContain("only explicit user ask");
+    expect(section).toEqual([
+      "## Skill Workshop",
+      "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
+      "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
+      "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
+      "",
+    ]);
 
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

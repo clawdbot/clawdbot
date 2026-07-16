@@ -213,7 +213,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       if (!this.isSessionMutationScopeCurrent(scope)) {
         return;
       }
-      await scope.sessions.refresh({ agentId, force: true });
+      await scope.sessions.refreshReplacement(agentId);
     } catch (error) {
       this.publishSessionMutationError(scope, error);
     }

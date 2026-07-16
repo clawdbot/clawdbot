@@ -255,7 +255,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nstat -c "%F|%s|%y" -- "$1"',
+      script: 'set -eu\nLC_ALL=C stat -c "%F|%s|%y" -- "$1"',
       args: [canonical],
       signal: params.signal,
     });
@@ -529,7 +529,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const result = await this.runRemoteScript({
       script: [
         'if [ ! -e "$1" ] && [ ! -L "$1" ]; then exit 0; fi',
-        'stats=$(stat -c "%F|%h" -- "$1")',
+        'stats=$(LC_ALL=C stat -c "%F|%h" -- "$1")',
         'printf "%s\\n" "$stats"',
       ].join("\n"),
       args: [params.containerPath],

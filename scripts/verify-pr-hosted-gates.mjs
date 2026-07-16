@@ -476,7 +476,7 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
   return shas;
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const pullRequest = JSON.parse(
     execGhApiRead(`repos/${args.repo}/pulls/${args.pr}`, {

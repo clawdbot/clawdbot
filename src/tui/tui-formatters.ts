@@ -1,5 +1,6 @@
 // Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -29,6 +30,16 @@ const RTL_ISOLATE_END = "\u2069";
 const FENCED_CODE_RE = /(```|~~~)[^\n]*\n[\s\S]*?\n\1[^\n]*/g;
 // Inline code spans with balanced backtick run (`code`, ``co`de``, ...).
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)+?\1/g;
+
+/** Keep routing/provider/profile details in session state, not the compact footer. */
+export function formatModelFooter(params: {
+  model?: string | null;
+  thinkingLevel?: string | null;
+}): string {
+  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
+  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
+}
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {

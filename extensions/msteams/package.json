@@ -15,8 +15,10 @@
     "typebox": "1.3.3"
   },
   "devDependencies": {
+    "@microsoft/teams.common": "2.0.13",
     "@openclaw/plugin-sdk": "workspace:*",
     "jose": "6.2.3",
+    "jwks-rsa": "3.2.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

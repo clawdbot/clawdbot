@@ -406,6 +406,16 @@ function resolveWebSearchCandidates(
   return orderedProviders;
 }
 
+/** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */
+export function hasUsableWebSearchProvider(options?: ResolveWebSearchDefinitionParams): boolean {
+  // Prepared metadata owns config/secret selection. Candidate resolution remains necessary for
+  // credentials scoped to the active agent, such as provider auth profiles.
+  if (normalizeOptionalLowercaseString(options?.runtimeWebSearch?.selectedProvider)) {
+    return true;
+  }
+  return resolveWebSearchCandidates(options).length > 0;
+}
+
 function hasExplicitWebSearchSelection(params: {
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;

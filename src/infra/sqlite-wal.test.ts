@@ -24,7 +24,7 @@ function createMockDb(): DatabaseSync {
       get: vi.fn(() =>
         sql.includes("wal_checkpoint")
           ? { busy: 0, log: 0, checkpointed: 0 }
-          : { journal_mode: "delete" },
+          : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
       ),
     })),
   } as unknown as DatabaseSync;
@@ -142,7 +142,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(realpath).toHaveBeenCalledWith(databasePath);
-    expect(db["prepare"]).not.toHaveBeenCalled();
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
     expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
   });
 
@@ -182,6 +182,45 @@ describe("sqlite WAL maintenance", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("accepts SQLite's memory journal for an in-memory database", () => {
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(":memory:");
+    try {
+      const maintenance = configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databaseLabel: "in-memory-test-db",
+      });
+
+      expect(db.prepare("PRAGMA journal_mode;").get()).toEqual({ journal_mode: "memory" });
+      expect(maintenance.checkpoint()).toBe(true);
+      expect(maintenance.close()).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a memory journal for a file-backed database", () => {
+    const db = createMockDb();
+    vi.mocked(db["prepare"]).mockImplementation(
+      (sql) =>
+        ({
+          all: vi.fn(() =>
+            sql === "PRAGMA database_list;"
+              ? [{ seq: 0, name: "main", file: "/tmp/file-backed.sqlite" }]
+              : [],
+          ),
+          get: vi.fn(() => ({ journal_mode: "memory" })),
+        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+    );
+
+    expect(() =>
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databaseLabel: "file-backed-test-db",
+      }),
+    ).toThrow("file-backed-test-db could not enable WAL; SQLite kept journal_mode=memory");
   });
 
   it("uses mountinfo filesystem names when statfs magic is not enough", () => {
@@ -474,7 +513,7 @@ describe("sqlite WAL maintenance", () => {
           get: vi.fn(() =>
             sql.includes("wal_checkpoint")
               ? { busy: 1, log: 4, checkpointed: 3 }
-              : { journal_mode: "delete" },
+              : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
           ),
         }) as unknown as ReturnType<DatabaseSync["prepare"]>,
     );
@@ -538,7 +577,7 @@ describe("sqlite WAL maintenance", () => {
         throw error;
       }
       return {
-        get: vi.fn(() => ({ journal_mode: "delete" })),
+        get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" })),
       } as unknown as ReturnType<DatabaseSync["prepare"]>;
     });
 
@@ -577,6 +616,26 @@ describe("sqlite WAL maintenance", () => {
       ["PRAGMA busy_timeout = 0;"],
       ["PRAGMA busy_timeout = 50;"],
     ]);
+  });
+
+  it("rejects a WAL transition that SQLite silently declines", () => {
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(db["prepare"]).mockImplementation(
+      (sql) =>
+        ({
+          get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "delete" : "wal" })),
+        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+    );
+
+    expect(() =>
+      configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: 50,
+        checkpointIntervalMs: 0,
+        databaseLabel: "test-db",
+      }),
+    ).toThrow("test-db could not enable WAL; SQLite kept journal_mode=delete");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
   });
 
   it("configures lock retry before inspecting a fresh database header", () => {

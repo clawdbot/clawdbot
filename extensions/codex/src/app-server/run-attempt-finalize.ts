@@ -35,6 +35,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import {
@@ -270,14 +271,24 @@ export async function finalizeCodexAttempt(
     !state.terminalTurnNotificationQueued &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
-  const attemptSucceeded =
+  const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    result.agentHarnessResultClassification === undefined &&
     (completedTurnStatus === "completed" ||
       recoveredTurnWatchTimeout ||
       completedWithoutTerminalNotification);
+  // buildResult retains the bridge's delivery records. Resolve omitted final
+  // intent only after the authoritative turn outcome is known, before any
+  // terminal observer consumes the result.
+  const completedSourceReply = settleCodexSourceReplyFinality(toolBridge.telemetry, turnSucceeded);
+  if (completedSourceReply) {
+    // Harness classification only sees assistant/reasoning/plan projections.
+    // A reply delivered entirely through the source message tool is visible
+    // output, so an empty/reasoning-only classification is stale at this point.
+    result.agentHarnessResultClassification = undefined;
+  }
+  const attemptSucceeded = turnSucceeded && result.agentHarnessResultClassification === undefined;
   terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
     trigger: params.trigger,
     result,

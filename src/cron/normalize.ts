@@ -54,18 +54,17 @@ function normalizeTrimmedStringArray(
   return undefined;
 }
 
-function normalizeTrimmedStringRecord(value: unknown): Record<string, string> | undefined {
+function normalizeCommandEnv(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
-    return undefined;
+    throw new Error("command env must be an object with non-blank keys and string values");
   }
   const entries: Array<[string, string]> = [];
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey);
-    const val = typeof rawValue === "string" ? rawValue : undefined;
-    if (!key || val === undefined) {
-      return undefined;
+    if (!key || typeof rawValue !== "string") {
+      throw new Error("command env must be an object with non-blank keys and string values");
     }
-    entries.push([key, val]);
+    entries.push([key, rawValue]);
   }
   return Object.fromEntries(entries);
 }
@@ -283,12 +282,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("env" in next) {
-    const env = normalizeTrimmedStringRecord(next.env);
-    if (env !== undefined) {
-      next.env = env;
-    } else {
-      delete next.env;
-    }
+    next.env = normalizeCommandEnv(next.env);
   }
   if ("input" in next && typeof next.input !== "string") {
     delete next.input;

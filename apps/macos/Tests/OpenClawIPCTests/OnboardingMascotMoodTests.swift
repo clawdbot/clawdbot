@@ -22,8 +22,8 @@ struct OnboardingMascotMoodTests {
     }
 
     @Test func `cli page tracks install lifecycle`() {
-        #expect(self.mood(.init(page: .cli, installingCLI: true)) == .thinking)
-        #expect(self.mood(.init(page: .cli)) == .thinking, "status probe still deciding")
+        #expect(self.mood(.init(page: .cli, installingCLI: true)) == .working)
+        #expect(self.mood(.init(page: .cli)) == .working, "status probe still deciding")
         #expect(self.mood(.init(page: .cli, cliStatusKnown: true)) == .sad, "install failed")
         #expect(self.mood(.init(page: .cli, cliInstalled: true, cliStatusKnown: true)) == .happy)
     }

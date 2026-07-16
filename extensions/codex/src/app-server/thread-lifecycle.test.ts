@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
@@ -3089,8 +3089,8 @@ describe("resolveReasoningEffort (#71946)", () => {
 
 describe("native Codex Ultra turn mapping", () => {
   it.each([
-    { modelId: "gpt-5.6-sol", expected: "ultra" },
-    { modelId: "gpt-5.6-terra", expected: "ultra" },
+    { modelId: "gpt-5.6-sol", expected: "max" },
+    { modelId: "gpt-5.6-terra", expected: "max" },
     { modelId: "gpt-5.6-luna", expected: "max" },
   ] as const)(
     "maps Ultra to $expected for $modelId with direct OpenAI API metadata",

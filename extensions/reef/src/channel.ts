@@ -26,8 +26,8 @@ import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./st
 import {
   ReefInboxConnection,
   ReefTransportClient,
-  type WebSocketLike,
   abortableSleep,
+  createReefWebSocket,
 } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
@@ -292,11 +292,10 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       };
       await reconcile();
       ctx.setStatus({ accountId: "default", running: true, connected: false });
-      const socketFactory = (url: string) => new WebSocket(url) as unknown as WebSocketLike;
       const inbox = new ReefInboxConnection(
         transport,
         (entries) => flow.processEntries(entries),
-        socketFactory,
+        createReefWebSocket,
         (state) => {
           if (ctx.abortSignal.aborted) {
             return;

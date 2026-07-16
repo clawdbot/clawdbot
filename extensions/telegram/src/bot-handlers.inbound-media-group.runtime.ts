@@ -28,6 +28,7 @@ import { getTelegramTextParts, hasBotMention } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
 type MediaAuthorization = {
   authorizationCfg: OpenClawConfig;
@@ -49,7 +50,7 @@ type TelegramMediaGroupInput = MediaAuthorization & {
   storeAllowFrom: string[];
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
-  dispatchDedupeKeys: string[];
+  dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
 };
 
 type BufferedMediaGroupEntry = MediaGroupEntry &
@@ -88,8 +89,8 @@ export function createTelegramInboundMediaGroupRuntime(
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
-    mergeDispatchDedupeKeys,
-    releaseDispatchDedupeKeys,
+    mergeDispatchDedupeClaims,
+    releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
     settleSpooledReplayParticipants,
     createSpooledReplayParticipantForBufferedWork,
@@ -217,12 +218,12 @@ export function createTelegramInboundMediaGroupRuntime(
       const primary =
         entry.messages.find((item) => item.msg.caption || item.msg.text) ?? entry.messages[0];
       if (!primary) {
-        releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+        releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
       if (await shouldSkipMediaDownloadForUnaddressedMentionGroup({ ...entry, ...primary })) {
-        releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+        releaseDispatchDedupeClaims(entry.dispatchDedupeClaims);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
@@ -293,12 +294,12 @@ export function createTelegramInboundMediaGroupRuntime(
           ),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
-        dispatchDedupeKeys: entry.dispatchDedupeKeys,
+        dispatchDedupeClaims: entry.dispatchDedupeClaims,
         spooledReplayParticipants: entry.spooledReplayParticipants,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (error) {
-      releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, error);
+      releaseDispatchDedupeClaims(entry.dispatchDedupeClaims, error);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
         buildFailedProcessingResult(error),
@@ -336,9 +337,9 @@ export function createTelegramInboundMediaGroupRuntime(
         existing.promptContextAmbientWatermark,
         input.promptContextAmbientWatermark,
       );
-      existing.dispatchDedupeKeys = mergeDispatchDedupeKeys(
-        existing.dispatchDedupeKeys,
-        input.dispatchDedupeKeys,
+      existing.dispatchDedupeClaims = mergeDispatchDedupeClaims(
+        existing.dispatchDedupeClaims,
+        input.dispatchDedupeClaims,
       );
       existing.timer = setTimeout(() => {
         buffer.delete(key);

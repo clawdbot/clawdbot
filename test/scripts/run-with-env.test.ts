@@ -391,13 +391,13 @@ describe("run-with-env", () => {
       const grandchildReadyFile = path.join(tempDir, "grandchild-ready");
       const grandchildScript = [
         "const fs = require('node:fs');",
-        "fs.writeFileSync(process.env.GRANDCHILD_READY_FILE, 'ready');",
         "process.on('SIGTERM', () => {",
         "  setTimeout(() => {",
         "    fs.writeFileSync(process.env.GRACEFUL_FILE, 'done');",
         "    process.exit(0);",
         "  }, 75);",
         "});",
+        "fs.writeFileSync(process.env.GRANDCHILD_READY_FILE, 'ready');",
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const childScript = [

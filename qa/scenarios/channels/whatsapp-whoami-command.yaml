@@ -14,10 +14,10 @@ scenario:
     - src/auto-reply/reply/commands-whoami.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:mock-default": 35 }
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
       expectedAny: [Identity, "Channel: whatsapp", "AllowFrom:"]
     summary: Run WhatsApp whoami and verify channel identity context.

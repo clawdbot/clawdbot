@@ -61,7 +61,7 @@ export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
-  id: string | null;
+  id: string;
   model: string;
   path: string;
   source: Generated<string>;
@@ -71,7 +71,7 @@ export interface MemoryIndexChunks {
 }
 
 export interface MemoryIndexMeta {
-  key: string | null;
+  key: string;
   value: string;
 }
 

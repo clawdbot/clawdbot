@@ -7,8 +7,8 @@ import OpenClawProtocol
 /// Structured "Connect your AI" onboarding step.
 ///
 /// Drives the gateway's `openclaw.setup.detect` / `openclaw.setup.activate`
-/// RPCs: detect reusable AI access (Claude Code, Codex, Gemini logins, API
-/// keys), live-test candidates in the detected order, and automatically fall
+/// RPCs: detect reusable AI access (CLI logins, provider credentials, and local model
+/// servers), live-test candidates in the detected order, and automatically fall
 /// through when one fails. Config is only written server-side after a
 /// candidate actually answered, so this page can never strand the user with a
 /// broken model.
@@ -33,6 +33,7 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var candidates: [Candidate] = []
+    private(set) var unavailableCandidates: [UnavailableCandidate] = []
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var activeAuthOption: AuthOption?
@@ -156,6 +157,7 @@ final class OnboardingAISetupModel {
         }
 
         let candidates: [DetectedCandidate]
+        let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
         let configuredModel: String?
@@ -598,6 +600,7 @@ final class OnboardingAISetupModel {
         self.started = false
         self.phase = .idle
         self.candidates = []
+        self.unavailableCandidates = []
         self.manualProviders = []
         self.authOptions = []
         self.activeAuthOption = nil
@@ -708,6 +711,7 @@ extension OnboardingAISetupModel {
             if result.manualProviders == nil {
                 self.providerCatalogError = OnboardingAISetupError.providerCatalogUnavailable.localizedDescription
             }
+            self.unavailableCandidates = result.unavailableCandidates ?? []
             if !manualProviders.contains(where: { $0.id == self.manualProviderID }) {
                 self.manualProviderID = manualProviders.first?.id ?? ""
             }

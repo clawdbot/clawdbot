@@ -1,3 +1,5 @@
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +9,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
 }));
+const childProcessMocks = vi.hoisted(() => ({
+  children: [] as ChildProcess[],
+  spawn: vi.fn(),
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  childProcessMocks.spawn.mockImplementation((...args: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...args);
+    childProcessMocks.children.push(child);
+    return child;
+  });
+  return { ...actual, spawn: childProcessMocks.spawn };
+});
 
 vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
@@ -32,15 +48,12 @@ vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
   };
 });
 
+import { registerOpenCodeSessionCatalog } from "./session-catalog-plugin.js";
 import {
-  createOpenCodeSessionNodeInvokePolicies,
-  createOpenCodeSessionNodeHostCommands,
-  isOpenCodeSessionCatalogEnabled,
   OPENCODE_SESSIONS_LIST_COMMAND,
   OPENCODE_SESSION_READ_COMMAND,
   OPENCODE_TERMINAL_RESUME_COMMAND,
-  registerOpenCodeSessionCatalog,
-} from "./session-catalog-plugin.js";
+} from "./session-catalog-shared.js";
 import {
   listLocalOpenCodeSessionPage,
   readLocalOpenCodeTranscriptPage,
@@ -48,7 +61,27 @@ import {
 
 const temporaryDirectories: string[] = [];
 const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
 const originalUnrelatedEnv = process.env.CATALOG_UNRELATED_ENV;
+
+function captureOpenCodeSessionRegistrations(pluginConfig: unknown = {}) {
+  const catalogs: Array<Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]> = [];
+  const commands: Array<Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0]> = [];
+  const policies: Array<Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0]> = [];
+  registerOpenCodeSessionCatalog({
+    pluginConfig,
+    runtime: { nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) } },
+    registerSessionCatalog: (catalog: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]) =>
+      catalogs.push(catalog),
+    registerNodeHostCommand: (
+      command: Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0],
+    ) => commands.push(command),
+    registerNodeInvokePolicy: (
+      policy: Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0],
+    ) => policies.push(policy),
+  } as unknown as OpenClawPluginApi);
+  return { catalogs, commands, policies };
+}
 
 async function installFakeOpenCode(
   assistantText = "hi",
@@ -118,9 +151,58 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   return directory;
 }
 
+async function installHangingOpenCode(): Promise<void> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-stream-"));
+  temporaryDirectories.push(directory);
+  const executableName = process.platform === "win32" ? "opencode.js" : "opencode";
+  await fs.writeFile(
+    path.join(directory, executableName),
+    `${process.platform === "win32" ? "" : "#!/usr/bin/env node\n"}setTimeout(() => process.stdout.write("ready\\n"), 50);
+setInterval(() => {}, 1_000);
+`,
+  );
+  if (process.platform !== "win32") {
+    await fs.chmod(path.join(directory, executableName), 0o755);
+  }
+  process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
+  if (process.platform === "win32") {
+    // The production resolver converts a PATHEXT-resolved .js command into
+    // process.execPath plus the script path, so this remains a direct real-child spawn.
+    process.env.PATHEXT = `.JS;${originalPathExt ?? ".EXE;.CMD;.BAT;.COM"}`;
+  }
+}
+
+function isProcessRunning(pid: number | undefined): boolean {
+  if (!pid) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopChild(child: ChildProcess | undefined): Promise<void> {
+  if (!child || !isProcessRunning(child.pid)) {
+    return;
+  }
+  const closed = once(child, "close");
+  child.kill("SIGKILL");
+  await closed;
+}
+
 afterEach(async () => {
   nodeHostMocks.runNodePtyCommand.mockClear();
+  childProcessMocks.spawn.mockClear();
+  await Promise.all(childProcessMocks.children.splice(0).map((child) => stopChild(child)));
   process.env.PATH = originalPath;
+  if (originalPathExt === undefined) {
+    delete process.env.PATHEXT;
+  } else {
+    process.env.PATHEXT = originalPathExt;
+  }
   if (originalUnrelatedEnv === undefined) {
     delete process.env.CATALOG_UNRELATED_ENV;
   } else {
@@ -221,7 +303,7 @@ describe("OpenCode session catalog", () => {
     "auto-detects the CLI and honors the node-local Web UI switch",
     async () => {
       const directory = await installFakeOpenCode();
-      const commands = createOpenCodeSessionNodeHostCommands();
+      const { commands } = captureOpenCodeSessionRegistrations();
       expect(commands.map((command) => command.command)).toEqual([
         OPENCODE_SESSIONS_LIST_COMMAND,
         OPENCODE_SESSION_READ_COMMAND,
@@ -293,7 +375,8 @@ describe("OpenCode session catalog", () => {
     "runs only catalog-validated OpenCode sessions through the node PTY",
     async () => {
       await installFakeOpenCode();
-      const terminal = createOpenCodeSessionNodeHostCommands().find(
+      const { commands, policies } = captureOpenCodeSessionRegistrations();
+      const terminal = commands.find(
         (command) => command.command === OPENCODE_TERMINAL_RESUME_COMMAND,
       );
       const io = {
@@ -325,7 +408,7 @@ describe("OpenCode session catalog", () => {
       ).rejects.toThrow("threadId is invalid");
 
       const invokeNode = vi.fn(() => ({ ok: false as const, error: "unexpected" }));
-      const policy = createOpenCodeSessionNodeInvokePolicies()[0]!;
+      const policy = policies[0]!;
       expect(
         policy.handle({ command: OPENCODE_TERMINAL_RESUME_COMMAND, invokeNode } as never),
       ).toEqual({ ok: true });
@@ -407,14 +490,10 @@ describe("OpenCode session catalog", () => {
   });
 
   it("does not register the catalog when explicitly disabled", () => {
-    const registerSessionCatalog = vi.fn();
-    const api = {
-      pluginConfig: { sessionCatalog: { enabled: false } },
-      registerSessionCatalog,
-    } as unknown as OpenClawPluginApi;
-    registerOpenCodeSessionCatalog(api);
-    expect(isOpenCodeSessionCatalogEnabled(api.pluginConfig)).toBe(false);
-    expect(registerSessionCatalog).not.toHaveBeenCalled();
+    const registrations = captureOpenCodeSessionRegistrations({
+      sessionCatalog: { enabled: false },
+    });
+    expect(registrations).toEqual({ catalogs: [], commands: [], policies: [] });
   });
 
   it("bridges paired-node list and read requests without undefined transport fields", async () => {
@@ -534,6 +613,37 @@ describe("OpenCode session catalog", () => {
       "invalid transcript page",
     );
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and reaps the real OpenCode child when its %s pipe fails",
+    async (streamName) => {
+      await installHangingOpenCode();
+      const uncaughtException = vi.fn();
+      process.on("uncaughtExceptionMonitor", uncaughtException);
+      let child: ChildProcess | undefined;
+      try {
+        const listing = listLocalOpenCodeSessionPage({ limit: 20 });
+        await vi.waitFor(() => expect(childProcessMocks.spawn).toHaveBeenCalledTimes(1));
+        child = childProcessMocks.children[0];
+        expect(child?.pid).toBeTypeOf("number");
+        await once(child!.stdout!, "data");
+
+        child![streamName]!.destroy(new Error(`${streamName} EPIPE`));
+
+        await expect(listing).rejects.toThrow(
+          `OpenCode ${streamName} stream failed: ${streamName} EPIPE`,
+        );
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(uncaughtException).not.toHaveBeenCalled();
+        expect(isProcessRunning(child!.pid)).toBe(false);
+      } finally {
+        process.off("uncaughtExceptionMonitor", uncaughtException);
+        await stopChild(child);
+      }
+    },
+  );
 
   it("fans out paired-node listing instead of blocking later hosts", async () => {
     let provider: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0] | undefined;

@@ -179,7 +179,7 @@ export async function discoverHermesSource(
   };
 }
 
-export async function resolveImplicitHermesRoot(
+async function resolveImplicitHermesRoot(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): Promise<string> {

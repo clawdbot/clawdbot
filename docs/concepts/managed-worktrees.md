@@ -30,7 +30,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite destination files or follow symlinked directories, and it preserves copied file modes.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -59,7 +59,7 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, and pins it at `refs/openclaw/snapshots/<id>`. Gitignored files are excluded from the repository object database; files selected by `.worktreeinclude` are copied again during restore. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
 
 OpenClaw applies these cleanup rules:
 

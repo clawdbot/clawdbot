@@ -24,7 +24,7 @@ import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
-export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
@@ -39,7 +39,7 @@ export type SavedRemoteMedia = SavedMedia & {
 };
 
 /** Closed error classes callers can use for retry and diagnostic policy. */
-export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 /** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
@@ -65,7 +65,7 @@ export class MediaFetchError extends Error {
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
-export type FetchDispatcherAttempt = {
+type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
 };
@@ -101,7 +101,7 @@ type FetchMediaOptions = {
 };
 
 /** Options for validating and saving an existing Response body into the media store. */
-export type SaveResponseMediaOptions = {
+type SaveResponseMediaOptions = {
   sourceUrl?: string;
   filePathHint?: string;
   maxBytes?: number;
@@ -112,7 +112,7 @@ export type SaveResponseMediaOptions = {
 };
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
-export type SaveRemoteMediaOptions = FetchMediaOptions & {
+type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;

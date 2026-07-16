@@ -221,6 +221,8 @@ describe("check-workflows", () => {
     expect(workflow).toContain('"arm64" { $wslArch = "arm64" }');
     expect(workflow).toContain("ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz");
     expect(workflow).toContain("ubuntu_wsl_rootfs_arch=$wslArch");
+    expect(workflow).toContain("-ConnectionTimeoutSeconds 15");
+    expect(workflow).toContain("-OperationTimeoutSeconds 120");
     expect(workflow).toContain('Write-Host "wsl_import_exit=$($import.Code)"');
     expect(workflow).toContain("wsl2_restart_required=true");
     expect(workflow).toContain("import_ubuntu_wsl2=skipped_restart_required");

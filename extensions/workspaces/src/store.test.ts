@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import { validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 
@@ -36,6 +38,95 @@ describe("WorkspaceStore", () => {
       // A second read hits the single-slot cache and must agree with the DB.
       expect(store.read()).toEqual(doc);
     });
+  });
+
+  it("uses STRICT tables and durable connection pragmas", async () => {
+    await withStore((store) => {
+      const database = new DatabaseSync(store.dbPath, { readOnly: true });
+      try {
+        expect(
+          database
+            .prepare(
+              `SELECT name, strict FROM pragma_table_list
+               WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+               ORDER BY name`,
+            )
+            .all(),
+        ).toEqual([
+          { name: "undo", strict: 1 },
+          { name: "workspace", strict: 1 },
+        ]);
+        expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+        expect(database.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+      } finally {
+        database.close();
+      }
+    });
+  });
+
+  it("closes its WAL maintenance timer", async () => {
+    vi.useFakeTimers();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-timer-"));
+    try {
+      const store = new WorkspaceStore({ stateDir });
+      expect(vi.getTimerCount()).toBe(1);
+      store.close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates an existing workspace and undo history to STRICT", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-legacy-"));
+    const workspaceDir = path.join(stateDir, "workspaces");
+    const databasePath = path.join(workspaceDir, "workspaces.sqlite");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE workspace (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        version INTEGER NOT NULL,
+        doc TEXT NOT NULL,
+        updated_ms INTEGER NOT NULL
+      );
+      CREATE TABLE undo (
+        version INTEGER PRIMARY KEY,
+        doc TEXT NOT NULL,
+        created_ms INTEGER NOT NULL
+      );
+    `);
+    const serialized = JSON.stringify(DEFAULT_WORKSPACE);
+    legacy.prepare("INSERT INTO workspace VALUES (1, 1, ?, 10)").run(serialized);
+    legacy.prepare("INSERT INTO undo VALUES (1, ?, 10)").run(serialized);
+    legacy.close();
+
+    const store = new WorkspaceStore({ stateDir });
+    try {
+      expect(store.read()).toEqual(DEFAULT_WORKSPACE);
+      const migrated = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          migrated
+            .prepare(
+              `SELECT name, strict FROM pragma_table_list
+               WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+               ORDER BY name`,
+            )
+            .all(),
+        ).toEqual([
+          { name: "undo", strict: 1 },
+          { name: "workspace", strict: 1 },
+        ]);
+        expect(migrated.prepare("SELECT COUNT(*) AS count FROM undo").get()).toEqual({ count: 1 });
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      store.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps a 20-entry undo ring and restores the newest snapshot as a NEW version", async () => {

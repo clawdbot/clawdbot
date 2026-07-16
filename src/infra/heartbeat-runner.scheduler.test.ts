@@ -429,6 +429,36 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("advances normal cadence after terminal tool failures", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const runSpy = vi
+      .fn()
+      .mockResolvedValue({ status: "failed", reason: "agent-tool-failure" } as const);
+
+    const intervalMs = 10 * 60_000;
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "10m" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    const delays = timeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((delay): delay is number => typeof delay === "number");
+    expect(delays[delays.length - 1]).toBeGreaterThan(5_000);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
+
   it("advances cadence after flood deferrals without wake-layer retry", async () => {
     useFakeHeartbeatTime();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");

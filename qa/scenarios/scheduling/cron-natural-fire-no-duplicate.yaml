@@ -26,8 +26,8 @@ scenario:
   execution:
     kind: flow
     summary: Let one cron job fire from the natural scheduler timer and assert qa-channel does not receive a duplicate delivery for the same marker.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-room
       channelTitle: QA Room
       fireDelayMs: 12000

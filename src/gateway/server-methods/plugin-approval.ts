@@ -1,6 +1,7 @@
 // Gateway RPC handlers for plugin approval requests and decisions.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -10,7 +11,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
-import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
+import type {
+  PluginApprovalRequest,
+  PluginApprovalRequestPayload,
+  PluginApprovalResolved,
+} from "../../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -20,16 +25,28 @@ import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
+  isApprovalRecordVisibleToClient,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+
+type PluginApprovalIosPushDelivery = {
+  handleRequested?: (
+    request: PluginApprovalRequest,
+    opts?: {
+      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+    },
+  ) => Promise<boolean>;
+  handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
+  handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
+};
 
 /** Create plugin approval handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client }) => {
@@ -131,18 +148,58 @@ export function createPluginApprovalHandlers(
         twoPhase,
         approvalKind: "plugin",
         deliverRequest: () => {
-          if (!opts?.forwarder?.handlePluginApprovalRequested) {
+          const deliveryTasks: Array<Promise<boolean>> = [];
+          if (opts?.forwarder?.handlePluginApprovalRequested) {
+            deliveryTasks.push(
+              opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err: unknown) => {
+                context.logGateway?.error?.(
+                  `plugin approvals: forward request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          if (opts?.iosPushDelivery?.handleRequested) {
+            deliveryTasks.push(
+              opts.iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err: unknown) => {
+                  context.logGateway?.error?.(
+                    `plugin approvals: iOS push request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
+            );
+          }
+          if (deliveryTasks.length === 0) {
             return false;
           }
-          return opts.forwarder
-            .handlePluginApprovalRequested(requestEvent)
-            .catch((err: unknown) => {
-              context.logGateway?.error?.(
-                `plugin approvals: forward request failed: ${String(err)}`,
-              );
-              return false;
-            });
+          return (async () => {
+            let delivered = false;
+            for (const task of deliveryTasks) {
+              delivered = (await task) || delivered;
+            }
+            return delivered;
+          })();
         },
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "plugin approvals: iOS push expire failed",
       });
     },
 
@@ -167,6 +224,7 @@ export function createPluginApprovalHandlers(
       }
       const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
+        approvalKind: "plugin",
         manager,
         inputId,
         decision,
@@ -192,16 +250,25 @@ export function createPluginApprovalHandlers(
           resolvedBy,
           snapshot,
           nowMs,
-        }) => ({
-          id: approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          ts: nowMs,
-          request: snapshot.request,
-        }),
+        }) =>
+          ({
+            id: approvalId,
+            decision: decisionLocal,
+            resolvedBy,
+            ts: nowMs,
+            request: snapshot.request,
+          }) satisfies PluginApprovalResolved,
         forwardResolved: (resolvedEvent) =>
           opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
         forwardResolvedErrorLabel: "plugin approvals: forward resolve failed",
+        extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved
+          ? [
+              {
+                run: (resolvedEvent) => opts.iosPushDelivery!.handleResolved!(resolvedEvent),
+                errorLabel: "plugin approvals: iOS push resolve failed",
+              },
+            ]
+          : undefined,
       });
     },
   };

@@ -5,6 +5,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{App, AppHandle, Manager};
 
 const OPEN_ID: &str = "open-dashboard";
+const CHECK_UPDATES_ID: &str = "check-for-updates";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
@@ -14,6 +15,7 @@ pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
+    _check_updates: MenuItem<tauri::Wry>,
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
@@ -44,22 +46,32 @@ pub fn build(app: &App, state: DesktopState) -> tauri::Result<TrayHandles> {
         None::<&str>,
     )?;
     let open = MenuItem::with_id(app, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        CHECK_UPDATES_ID,
+        "Check for Updates",
+        true,
+        None::<&str>,
+    )?;
     let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, QUIT_ID, "Quit OpenClaw", true, None::<&str>)?;
     let separator_one = PredefinedMenuItem::separator(app)?;
     let separator_two = PredefinedMenuItem::separator(app)?;
+    let separator_three = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[
             &status,
             &separator_one,
             &open,
+            &check_updates,
+            &separator_two,
             &start,
             &stop,
             &restart,
-            &separator_two,
+            &separator_three,
             &quit,
         ],
     )?;
@@ -95,6 +107,7 @@ pub fn build(app: &App, state: DesktopState) -> tauri::Result<TrayHandles> {
         _tray: tray,
         status,
         open,
+        _check_updates: check_updates,
         start,
         stop,
         restart,
@@ -118,6 +131,10 @@ fn handle_menu(app: &AppHandle, state: &DesktopState, id: &str) {
         OPEN_ID => {
             show_window(app);
             spawn_connect(app.clone(), state.clone());
+        }
+        CHECK_UPDATES_ID => {
+            show_window(app);
+            crate::updater::spawn_check(app.clone());
         }
         START_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Start),
         STOP_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Stop),

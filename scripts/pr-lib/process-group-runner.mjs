@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { constants } from "node:os";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SIGNAL_GRACE_MS = 5000;
@@ -20,7 +21,22 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
+const invocationCwd = process.cwd();
+// The supervisor must not retain a cwd inside a worktree the operation may
+// delete; only the child keeps the caller's original cwd.
+process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
+const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
+const lockScriptSnapshot = join(lockSnapshotDir, "operation-lock.sh");
+// merge-run can delete this revision's script directory before lock release.
+writeFileSync(lockScriptSnapshot, readFileSync(lockScript));
+process.once("exit", () => {
+  try {
+    rmSync(lockSnapshotDir, { force: true, recursive: true });
+  } catch {
+    // Best-effort cleanup must not change the operation result.
+  }
+});
 const locks = new Map();
 let notificationBuffer = "";
 let discardingOversizedNotificationLine = false;
@@ -33,6 +49,10 @@ let killDeadline;
 const operationGroup = { pid: undefined };
 let operationGroupGone = false;
 let hadLingeringGroup = false;
+let lingeringGroupProcesses = [];
+let drainFailure;
+let drainFailureGroupStatus;
+let drainFailureNotificationOpen = false;
 
 function delay(ms) {
   return new Promise((resolveDelay) => {
@@ -68,6 +88,28 @@ function processGroupStatus(pgid) {
     }
     return "indeterminate";
   }
+}
+
+function processGroupRows(pgid) {
+  if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid > 0x7fffffff) {
+    return [];
+  }
+  const result = spawnSync("ps", ["ax", "-o", "pid=,pgid=,command="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line))
+    .filter((match) => match && Number(match[2]) === pgid)
+    .slice(0, 10)
+    .map((match) => {
+      const executable = match[3].trim().split(/\s+/u)[0] ?? "unknown";
+      return `${match[1]} ${match[2]} ${basename(executable)}`.slice(0, 200);
+    });
 }
 
 function signalProcessGroup(signal) {
@@ -112,7 +154,7 @@ for (const signal of FORWARDED_SIGNALS) {
 }
 
 const child = spawn(script, args, {
-  cwd: process.cwd(),
+  cwd: invocationCwd,
   detached: true,
   env: {
     ...process.env,
@@ -247,6 +289,7 @@ if (postExitGroupStatus === "indeterminate") {
   // A wrapper exit does not end same-group background work. Bound and drain
   // forgotten jobs, but keep the lock because their terminal state is unknown.
   hadLingeringGroup = true;
+  lingeringGroupProcesses = processGroupRows(child.pid);
   notificationFailure ??= new Error("scripts/pr process group remained active after wrapper exit");
   signalProcessGroup("SIGTERM");
   escalationTimer ??= setTimeout(escalateSignal, SIGNAL_GRACE_MS);
@@ -266,6 +309,8 @@ async function waitForOperationDrain() {
       return;
     }
     if (killDeadline && Date.now() >= killDeadline) {
+      drainFailureGroupStatus = groupStatus;
+      drainFailureNotificationOpen = !notificationEnded;
       throw new Error(
         `scripts/pr operation lifetime did not drain (group=${groupStatus}, pipe=${notificationEnded ? "closed" : "open"})`,
       );
@@ -291,7 +336,7 @@ function releaseLock({ lockRef, ownerOid }) {
         "release_pr_operation_lock",
       ].join("\n"),
       "operation-lock-release",
-      lockScript,
+      lockScriptSnapshot,
       repoRoot,
       lockRef,
       ownerOid,
@@ -306,11 +351,74 @@ function releaseLock({ lockRef, ownerOid }) {
   }
 }
 
-function reportRetainedLock({ lockRef, ownerOid }) {
+function retainedLockReason(releaseError, releaseFailures) {
+  const reasons = [];
+  const addReason = (reason) => {
+    if (reason && !reasons.includes(reason)) {
+      reasons.push(reason);
+    }
+  };
+  if (childResult.code !== null && childResult.code !== 0) {
+    addReason(`child exited with code ${childResult.code}`);
+  }
+  if (childResult.signal) {
+    addReason(`child terminated by signal ${childResult.signal}`);
+  }
+  if (receivedSignal) {
+    addReason(`wrapper received ${receivedSignal}`);
+  }
+  if (hadLingeringGroup) {
+    addReason("process group remained active after wrapper exit");
+  }
+  if (drainFailureGroupStatus === "live") {
+    addReason("process group remained active after drain deadline");
+  }
+  if (drainFailureNotificationOpen) {
+    addReason("notification pipe still open after drain deadline");
+  }
+  if (
+    notificationFailure &&
+    notificationFailure !== drainFailure &&
+    !releaseFailures.has(notificationFailure) &&
+    !(
+      hadLingeringGroup &&
+      notificationFailure.message === "scripts/pr process group remained active after wrapper exit"
+    )
+  ) {
+    addReason(notificationFailure.message);
+  }
+  if (drainFailure && !drainFailureGroupStatus && !drainFailureNotificationOpen) {
+    addReason(drainFailure.message);
+  }
+  if (releaseError) {
+    addReason(`lock release failed: ${releaseError.message}`);
+  }
+  return reasons.join("; ") || "clean-exit invariant failed";
+}
+
+function reportRetainedLock({ lockRef, ownerOid }, releaseError, releaseFailures) {
   const pr = lockRef.split("/").at(-1);
   console.error(
     `Retaining the operation lock for PR #${pr}; detached child tools cannot be ruled out.`,
   );
+  console.error(`reason: ${retainedLockReason(releaseError, releaseFailures)}`);
+  if (hadLingeringGroup || drainFailureGroupStatus === "live") {
+    const currentProcesses = processGroupRows(child.pid);
+    if (currentProcesses.length > 0) {
+      console.error(`surviving processes in group ${child.pid}:`);
+      for (const row of currentProcesses) {
+        console.error(`  ${row}`);
+      }
+    } else {
+      if (lingeringGroupProcesses.length > 0) {
+        console.error(`surviving processes in group ${child.pid} when wrapper exited:`);
+        for (const row of lingeringGroupProcesses) {
+          console.error(`  ${row}`);
+        }
+      }
+      console.error("  process group appears empty at report time");
+    }
+  }
   console.error(`After verifying that no PR #${pr} tools remain, recover the exact owner with:`);
   console.error(`  scripts/pr lock-recover ${pr} ${ownerOid} --confirmed-no-running-tools`);
 }
@@ -320,7 +428,8 @@ try {
   await waitForOperationDrain();
   drained = true;
 } catch (error) {
-  notificationFailure ??= toError(error, "scripts/pr operation drain failed");
+  drainFailure = toError(error, "scripts/pr operation drain failed");
+  notificationFailure ??= drainFailure;
   // An out-of-group descendant can inherit the write end indefinitely. Once
   // the bounded drain fails, close our read end so that sentinel cannot keep
   // the controller alive; the exact lock remains sticky for manual recovery.
@@ -345,20 +454,23 @@ const completedCleanly =
   !notificationFailure &&
   !hadLingeringGroup;
 const retainedLocks = [];
+const releaseFailures = new Set();
 if (drained && completedCleanly) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);
     } catch (error) {
-      notificationFailure ??= toError(error, "Unable to release a scripts/pr operation lock");
-      retainedLocks.push(lock);
+      const releaseError = toError(error, "Unable to release a scripts/pr operation lock");
+      releaseFailures.add(releaseError);
+      notificationFailure ??= releaseError;
+      retainedLocks.push({ lock, releaseError });
     }
   }
 } else {
-  retainedLocks.push(...locks.values());
+  retainedLocks.push(...Array.from(locks.values(), (lock) => ({ lock })));
 }
-for (const lock of retainedLocks) {
-  reportRetainedLock(lock);
+for (const { lock, releaseError } of retainedLocks) {
+  reportRetainedLock(lock, releaseError, releaseFailures);
 }
 
 if (notificationFailure) {

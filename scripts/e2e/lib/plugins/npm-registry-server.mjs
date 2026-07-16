@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { readBoundedResponseBytes } from "../bounded-response-text.mjs";
 
 const [portFile, ...packageArgs] = process.argv.slice(2);
 function normalizeUpstreamRegistry(raw) {
@@ -25,6 +26,10 @@ function normalizeUpstreamRegistry(raw) {
 }
 
 const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
+// Match other E2E package-download budgets while keeping public-registry hops
+// inside the install deadline and decoded bodies inside a fixed memory budget.
+const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
+const UPSTREAM_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
   console.error(
@@ -139,8 +144,15 @@ async function proxyUpstream(rawRequestUrl, response) {
   }
   try {
     const upstreamUrl = resolveUpstreamRequestUrl(rawRequestUrl);
-    const upstreamResponse = await fetch(upstreamUrl, { redirect: "manual" });
-    const body = Buffer.from(await upstreamResponse.arrayBuffer());
+    const upstreamResponse = await fetch(upstreamUrl, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    });
+    const body = await readBoundedResponseBytes(
+      upstreamResponse,
+      "npm registry upstream",
+      UPSTREAM_RESPONSE_MAX_BYTES,
+    );
     // Fetch decodes compressed bodies but preserves upstream length metadata.
     // Emit the decoded size so npm clients do not truncate proxied responses.
     const headers = { "content-length": String(body.length) };

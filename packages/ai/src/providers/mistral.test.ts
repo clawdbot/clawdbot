@@ -831,6 +831,43 @@ describe("Mistral provider", () => {
     expect(textBlock?.text).not.toContain('{\\"key\\":\\"value\\"}');
   });
 
+  it("does not emit image chunks or placeholders for payload-less tool media", async () => {
+    const testContext = {
+      messages: [
+        {
+          role: "assistant",
+          provider: "mistral",
+          api: "mistral-conversations",
+          model: "mistral-large-latest",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [{ type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "tool_husk",
+          toolName: "screenshot",
+          content: [{ type: "image", mimeType: "image/png", data: "" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const stream = streamMistral({ ...makeMistralModel(), input: ["text", "image"] }, testContext, {
+      apiKey: "fake",
+    });
+    await stream.result();
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+    };
+    const toolMessage = payload.messages.find((message) => message.role === "tool");
+    expect(toolMessage?.content).toEqual([{ type: "text", text: "(no tool output)" }]);
+    expect(JSON.stringify(toolMessage)).not.toContain("image_url");
+    expect(JSON.stringify(toolMessage)).not.toContain("see attached image");
+  });
+
   it("serializes structured-only tool results instead of empty fallback", async () => {
     const testContext = {
       messages: [

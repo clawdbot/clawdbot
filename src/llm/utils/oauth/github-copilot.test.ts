@@ -1,4 +1,5 @@
 // GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../../types.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
@@ -13,10 +14,11 @@ async function refreshThroughGitHubCopilotProvider(refreshToken: string, enterpr
   } as OAuthCredentials);
 }
 
-function startGitHubCopilotLogin(enterpriseUrl = "") {
+function startGitHubCopilotLogin(enterpriseUrl = "", signal?: AbortSignal) {
   return githubCopilotOAuthProvider.login({
     onAuth: vi.fn(),
     onPrompt: vi.fn(async () => enterpriseUrl),
+    signal,
   });
 }
 
@@ -54,6 +56,10 @@ function copilotTokenResponse(): Response {
 async function finishGitHubCopilotLogin(login: Promise<OAuthCredentials>) {
   await vi.advanceTimersByTimeAsync(1_200);
   return await login;
+}
+
+function abortListenerCount(signal: AbortSignal): number {
+  return getEventListeners(signal, "abort").length;
 }
 
 function stubHangingFetch(timeoutMs: number): void {
@@ -540,5 +546,85 @@ describe("GitHub Copilot OAuth error responses", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe("GitHub Copilot OAuth abortable polling sleep", () => {
+  it("does not accumulate abort listeners across authorization_pending rounds", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const pendingResponse = () =>
+      new Response(JSON.stringify({ error: "authorization_pending" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(deviceCodeResponse())
+        .mockResolvedValueOnce(pendingResponse())
+        .mockResolvedValueOnce(pendingResponse())
+        .mockResolvedValueOnce(pendingResponse())
+        .mockResolvedValueOnce(deviceTokenResponse())
+        .mockResolvedValueOnce(copilotTokenResponse())
+        .mockResolvedValueOnce(new Response("nope", { status: 503 })),
+    );
+
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = startGitHubCopilotLogin("", controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const listenerCounts: number[] = [];
+    for (let round = 0; round < 4; round += 1) {
+      listenerCounts.push(abortListenerCount(controller.signal));
+      await vi.advanceTimersByTimeAsync(1_200);
+    }
+
+    await expect(pending).resolves.toMatchObject({ access: "copilot-token" });
+    expect(abortListenerCount(controller.signal)).toBe(0);
+    expect(Math.max(...listenerCounts)).toBe(1);
+    const abortAdds = addSpy.mock.calls.filter((call) => call[0] === "abort").length;
+    const abortRemoves = removeSpy.mock.calls.filter((call) => call[0] === "abort").length;
+    expect(abortAdds).toBeGreaterThanOrEqual(4);
+    expect(abortRemoves).toBe(abortAdds);
+  });
+
+  it("removes the abort listener when cancelled during sleep", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(deviceCodeResponse())
+      .mockRejectedValue(new Error("poll fetch should not run after abort"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = startGitHubCopilotLogin("", controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(abortListenerCount(controller.signal)).toBe(1);
+    controller.abort();
+    await expect(pending).rejects.toThrow("Login cancelled");
+    expect(abortListenerCount(controller.signal)).toBe(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an already-aborted signal without registering a listener", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort();
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    const fetchMock = vi.fn(async () => {
+      throw new Error("poll fetch should not run for aborted signal");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = startGitHubCopilotLogin("", controller.signal);
+
+    await expect(pending).rejects.toThrow("Login cancelled");
+    expect(addSpy.mock.calls.filter((call) => call[0] === "abort")).toHaveLength(0);
+    expect(abortListenerCount(controller.signal)).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

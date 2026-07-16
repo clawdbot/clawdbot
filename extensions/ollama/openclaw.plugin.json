@@ -46,6 +46,7 @@
       "provider": "ollama",
       "method": "local",
       "choiceId": "ollama",
+      "appGuidedDiscovery": true,
       "choiceLabel": "Ollama",
       "choiceHint": "Cloud and local open models",
       "groupId": "ollama",

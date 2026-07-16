@@ -412,14 +412,14 @@ function buildAgentConfigUpdate(params: {
   agentId: string;
   safeName?: string;
   workspaceDir?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Parameters<typeof updateAgentConfigEntry>[0] {
   return {
     agentId: params.agentId,
     ...(params.safeName ? { name: params.safeName } : {}),
     ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
+    ...(params.model !== undefined ? { model: params.model } : {}),
     ...(params.identity ? { identity: params.identity } : {}),
   };
 }
@@ -617,7 +617,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = resolveOptionalStringParam(params.model);
+    const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()

@@ -29,8 +29,8 @@ scenario:
   execution:
     kind: flow
     summary: Open the Control UI on a qa-channel session with the generic QA web driver, inject text and image turns through qa-channel, and verify the replies in both the transport log and the UI transcript.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       conversationId: control-ui-e2e
       textPrompt: "Control UI bridge check. Marker exact marker: `ui bridge armed`"
       uiExpectedNeedle: ui bridge armed

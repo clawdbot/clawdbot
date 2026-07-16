@@ -989,6 +989,15 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
   );
 }
 
+function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
+  // This upstream phrase is generic prose. Provider identity must come from
+  // the runner metadata so other providers cannot inherit Claude CLI policy.
+  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+    return false;
+  }
+  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -1053,6 +1062,9 @@ function classifyFailoverClassificationFromMessage(
   // Auth classifiers run before the broad isJsonApiInternalServerError check so that
   // provider errors like {"type":"api_error","message":"invalid api key"} are
   // correctly classified as "auth" rather than "timeout".
+  if (isClaudeCliLoggedOutError(raw, provider)) {
+    return toReasonClassification("auth");
+  }
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");

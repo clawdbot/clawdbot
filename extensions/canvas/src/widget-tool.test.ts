@@ -97,7 +97,8 @@ describe("show_widget", () => {
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
     );
     expect(html).toContain("<title>&lt;Status&gt;</title>");
-    expect(html).toContain('<body class="svg-widget"><SvG');
+    expect(html).toContain('<body class="svg-widget"><script>');
+    expect(html).toContain('</script><SvG viewBox="0 0 10 10">');
     // The embedding chat fits the iframe to the reported content height.
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(
@@ -121,8 +122,21 @@ describe("show_widget", () => {
       "utf8",
     );
 
-    expect(html).toContain("<body><section><button>Run</button><script>");
+    expect(html).toContain("<section><button>Run</button><script>");
     expect(html).not.toContain('<body class="svg-widget">');
+    // The prompt bridge must precede widget code so inline handlers can
+    // reference sendPrompt() while the widget's own scripts run.
+    expect(html.indexOf("window.sendPrompt")).toBeLessThan(html.indexOf("<section>"));
+    // Prompts flow over a channel the bridge creates and offers to the chat at
+    // parse time, never directly to window.parent; the send endpoint stays
+    // private to the bridge closure and requires transient user activation.
+    expect(html).toContain("openclaw:widget-prompt-offer");
+    // Natives are snapshotted before widget code runs: the bound port endpoint
+    // and the native userActivation getter cannot be patched away.
+    expect(html).toContain("navigator.userActivation");
+    expect(html).toContain("c.port1.postMessage.bind(c.port1)");
+    expect(html).toContain('post({type:"openclaw:widget-prompt"');
+    expect(html).not.toContain('window.parent.postMessage({type:"openclaw:widget-prompt",');
   });
 
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {

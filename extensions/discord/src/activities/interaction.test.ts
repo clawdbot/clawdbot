@@ -8,6 +8,7 @@ import {
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
 import type { AgentComponentContext } from "../monitor/agent-components.types.js";
+import { buildDiscordPresentationComponents } from "../shared-interactive.js";
 import { createDiscordActivityButton } from "./interaction.js";
 import { setDiscordActivitiesRuntime } from "./runtime.js";
 import {
@@ -73,8 +74,25 @@ describe("Discord Activity interaction", () => {
     });
     const launchActivity = vi.fn(async () => undefined);
     const interaction = { launchActivity } as unknown as ButtonInteraction;
+    const rendered = buildDiscordPresentationComponents({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Open widget",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
+          ],
+        },
+      ],
+    });
+    const actionBlock = rendered?.blocks?.find((block) => block.type === "actions");
+    const customId =
+      actionBlock?.type === "actions" ? actionBlock.buttons?.[0]?.internalCustomId : "";
+    const data = button?.customIdParser(customId ?? "").data ?? {};
 
-    await button?.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+    await button?.run(interaction, data);
 
     expect(authorize).toHaveBeenCalledOnce();
     expect(launchActivity).toHaveBeenCalledOnce();

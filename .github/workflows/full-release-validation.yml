@@ -927,6 +927,21 @@ jobs:
                 fetch_child_jobs |
                   jq -s '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]'
               )"
+              if [[ "$workflow" == "openclaw-release-checks.yml" ]]; then
+                # These jobs are continue-on-error in the child workflow. Let its
+                # status-artifact verifier decide whether their evidence is usable.
+                failed_jobs_json="$(
+                  jq '[.[] | select(
+                    ((.name | startswith("Run QA Lab parity lane ("))
+                      or .name == "Run QA Lab parity report"
+                      or (.name | startswith("Run QA Lab runtime parity tier ("))
+                      or .name == "Run QA Lab runtime parity lane"
+                      or .name == "Run QA Lab live Discord lane"
+                      or .name == "Run QA Lab live WhatsApp lane"
+                      or .name == "Run QA Lab live Slack lane")
+                    | not)]' <<< "$failed_jobs_json"
+                )"
+              fi
               if [[ "$workflow" == "openclaw-release-checks.yml" && "$RELEASE_PROFILE" == "beta" ]]; then
                 # Beta treats live-provider suites as advisory (live_advisory in
                 # openclaw-live-and-e2e-checks-reusable.yml); their failures must

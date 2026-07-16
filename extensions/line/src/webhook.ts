@@ -6,6 +6,7 @@ import {
   type MessageReceiveContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_RAW_BODY_BYTES = 64 * 1024;
@@ -92,9 +93,11 @@ export function createLineWebhookMiddleware(
 
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        void Promise.resolve()
-          .then(() => onEvents(body))
-          .catch((err: unknown) => logLineWebhookDispatchError(runtime, err));
+        // Detach event processing from the request admission before the ack
+        // releases it; an inherited released admission refuses queue work.
+        void runDetachedWebhookWork(() => onEvents(body)).catch((err: unknown) =>
+          logLineWebhookDispatchError(runtime, err),
+        );
       }
     } catch (err) {
       await receiveContext?.nack(err);

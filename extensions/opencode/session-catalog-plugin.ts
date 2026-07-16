@@ -37,12 +37,6 @@ import {
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
 
-export {
-  OPENCODE_SESSIONS_LIST_COMMAND,
-  OPENCODE_SESSION_READ_COMMAND,
-  OPENCODE_TERMINAL_RESUME_COMMAND,
-} from "./session-catalog-shared.js";
-
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
 const TRANSCRIPT_ITEM_TYPES = new Set([
@@ -147,7 +141,7 @@ function fullConfigCatalogEnabled(config: unknown): boolean {
   return entry.config.sessionCatalog.enabled !== false;
 }
 
-export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
+function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
     !isRecord(pluginConfig.sessionCatalog) ||
@@ -155,7 +149,7 @@ export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean 
   );
 }
 
-export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && executableOnPath("opencode", env);
   return [
@@ -179,7 +173,7 @@ export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostC
   ];
 }
 
-export function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
+function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
       commands: [

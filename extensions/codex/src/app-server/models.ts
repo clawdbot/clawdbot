@@ -13,7 +13,7 @@ import { readCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
 /** Normalized model metadata returned by the Codex app-server model listing helper. */
-export type CodexAppServerModel = {
+type CodexAppServerModel = {
   id: string;
   model: string;
   displayName?: string;
@@ -33,7 +33,7 @@ export type CodexAppServerModelListResult = {
 };
 
 /** Options for querying Codex app-server models through a shared or isolated client. */
-export type CodexAppServerListModelsOptions = {
+type CodexAppServerListModelsOptions = {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;

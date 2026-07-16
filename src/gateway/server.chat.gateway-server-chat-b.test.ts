@@ -228,6 +228,11 @@ function createDirectChatContext(): GatewayRequestContext {
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => ({}),
+    recoveryRuntime: {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    },
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -957,6 +962,7 @@ describe("gateway server chat", () => {
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
               contextWindow: 400_000,
               reasoning: false,
               available: true,
@@ -2551,16 +2557,19 @@ describe("gateway server chat", () => {
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
       if (retryable) {
+        expect(stored?.restartRecoveryBeforeAgentReplyState).toBe("admitted");
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
           expect.stringMatching(/^hmac-sha256:v1:/u),
         );
         expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
         expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+        expect(stored?.restartRecoverySourceIngress).toBe("control-ui");
         expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
       } else {
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(stored?.restartRecoverySourceIngress).toBeUndefined();
         expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
       }
       expect(loadTranscriptEventsSync(scope)).toEqual(
@@ -2699,6 +2708,7 @@ describe("gateway server chat", () => {
         expectedSessionId: "sess-main",
         sessionKey: "main",
         storePath,
+        gatewayRuntime: expect.any(Object),
       });
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({

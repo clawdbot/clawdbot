@@ -17,16 +17,15 @@ import type {
   UnifiedModelCatalogEntry,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  runGitHubCopilotDeviceFlow,
-  setGitHubCopilotDeviceFlowFetchGuardForTesting,
-} from "./login.js";
+import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
-  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+  fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(async (params) => ({
     response: await fetch(params.url, params.init),
+    finalUrl: params.url,
     release: vi.fn(async () => {}),
   })),
   resolveCopilotApiToken: vi.fn(),
@@ -85,7 +84,11 @@ type GithubCopilotTestModelCatalogProvider = {
 afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
-  setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
+  mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
+    response: await fetch(params.url, params.init),
+    finalUrl: params.url,
+    release: vi.fn(async () => {}),
+  }));
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -730,7 +733,7 @@ describe("github-copilot plugin", () => {
       throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},
@@ -838,7 +841,7 @@ describe("github-copilot plugin", () => {
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("github.com", "public-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},
@@ -898,7 +901,7 @@ describe("github-copilot plugin", () => {
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("acme.ghe.com", "tenant-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},
@@ -956,7 +959,7 @@ describe("github-copilot plugin", () => {
     // the domain change is detected and the public token is not reused.
     const fetchMock = buildDeviceFlowFetchMock("acme.ghe.com", "tenant-fresh-token");
     vi.stubGlobal("fetch", fetchMock);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},
@@ -1062,7 +1065,7 @@ describe("github-copilot plugin", () => {
     // prompt value instead, the fetch mock would throw on an unexpected host.
     const fetchMock = buildDeviceFlowFetchMock("env-tenant.ghe.com", "env-tenant-token");
     vi.stubGlobal("fetch", fetchMock);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},
@@ -1112,7 +1115,7 @@ describe("github-copilot plugin", () => {
 
   it("rejects unsafe GitHub device code lifetimes before polling", async () => {
     const release = vi.fn(async () => {});
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
       response: new Response(
         '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1e309,"interval":0}',
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1132,7 +1135,7 @@ describe("github-copilot plugin", () => {
   it("rejects GitHub device code expiries outside the Date timestamp range before polling", async () => {
     const release = vi.fn(async () => {});
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+    mocks.fetchWithSsrFGuard.mockImplementation(async () => ({
       response: new Response(
         '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1,"interval":0}',
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1159,7 +1162,7 @@ describe("github-copilot plugin", () => {
       const release = vi.fn(async () => {});
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       let accessTokenPolls = 0;
-      setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
+      mocks.fetchWithSsrFGuard.mockImplementation(async (params) => {
         if (params.url === "https://github.com/login/device/code") {
           return {
             response: new Response(

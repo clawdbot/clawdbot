@@ -40,6 +40,31 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("clawdbot ⎇ wt-3f2a");
   });
 
+  it("uses a gateway-derived title for otherwise unnamed sessions", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        label: "agent:main:dashboard:uuid",
+        displayName: "agent:main:dashboard:uuid",
+        derivedTitle: "Quarterly launch plan",
+      }),
+    ).toBe("Quarterly launch plan");
+  });
+
+  it("keeps explicit and worktree names ahead of derived titles", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        label: "Release room",
+        derivedTitle: "Quarterly launch plan",
+      }),
+    ).toBe("Release room");
+    expect(
+      resolveSessionDisplayName("agent:main:dashboard:uuid", {
+        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/repo/clawdbot" },
+        derivedTitle: "Quarterly launch plan",
+      }),
+    ).toBe("clawdbot ⎇ wt-3f2a");
+  });
+
   it("names named subsessions after their slug, never the raw agent key", () => {
     expect(resolveSessionDisplayName("agent:main:node-proof-claude")).toBe("node-proof-claude");
     expect(resolveSessionDisplayName("agent:main:explicit:node-mcp-debug")).toBe("node-mcp-debug");

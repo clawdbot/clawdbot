@@ -18,6 +18,7 @@ export {
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
+  resolveSpeechProviderApiKey,
   scheduleCleanup,
 } from "./tts-provider-helpers.js";
 

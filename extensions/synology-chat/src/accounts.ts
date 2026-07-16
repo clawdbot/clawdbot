@@ -5,6 +5,7 @@
 
 import {
   DEFAULT_ACCOUNT_ID,
+  hasConfiguredAccountValue,
   listCombinedAccountIds,
   resolveMergedAccountConfig,
   type OpenClawConfig,
@@ -24,7 +25,10 @@ function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | unde
 }
 
 function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
-  return channelCfg.token || process.env.SYNOLOGY_CHAT_TOKEN ? DEFAULT_ACCOUNT_ID : undefined;
+  return hasConfiguredAccountValue(channelCfg.token) ||
+    hasConfiguredAccountValue(process.env.SYNOLOGY_CHAT_TOKEN)
+    ? DEFAULT_ACCOUNT_ID
+    : undefined;
 }
 
 function getRawAccountConfig(

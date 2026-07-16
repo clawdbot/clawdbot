@@ -73,7 +73,7 @@ export type UsageDailyBucket =
   | { mode: "utc-offset"; utcOffsetMinutes: number }
   | { mode: "time-zone"; timeZone: string };
 
-export type SessionDailyUsage = {
+type SessionDailyUsage = {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;

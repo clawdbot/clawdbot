@@ -1,11 +1,7 @@
 // Feishu plugin module implements monitor.comment notice handler behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
-import {
-  claimUnprocessedFeishuMessage,
-  recordProcessedFeishuMessage,
-  releaseFeishuMessageProcessing,
-} from "./dedup.js";
+import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
 import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js";
 import { botOpenIds } from "./monitor.state.js";
 import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
@@ -53,20 +49,22 @@ export function createFeishuDriveCommentNoticeHandler(params: {
       }
       const eventId = event.event_id?.trim();
       const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
+      let processingClaim: FeishuMessageProcessingClaim | undefined;
       if (syntheticMessageId) {
         const claim = await claimUnprocessedFeishuMessage({
           messageId: syntheticMessageId,
           namespace: accountId,
           log,
         });
-        if (claim === "duplicate") {
+        if (claim.kind === "duplicate") {
           log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
           return;
         }
-        if (claim === "inflight") {
+        if (claim.kind === "inflight") {
           log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
           return;
         }
+        processingClaim = claim.kind === "claimed" ? claim.handle : undefined;
       }
       log(
         `feishu[${accountId}]: received drive comment notice ` +
@@ -88,18 +86,14 @@ export function createFeishuDriveCommentNoticeHandler(params: {
             runtime,
           });
         });
-        if (syntheticMessageId) {
-          await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-        }
+        await processingClaim?.commit();
       } catch (err) {
-        if (syntheticMessageId && !isFeishuRetryableSyntheticEventError(err)) {
-          await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+        if (isFeishuRetryableSyntheticEventError(err)) {
+          processingClaim?.release({ error: err });
+        } else {
+          await processingClaim?.commit();
         }
         throw err;
-      } finally {
-        if (syntheticMessageId) {
-          releaseFeishuMessageProcessing(syntheticMessageId, accountId);
-        }
       }
     });
   };

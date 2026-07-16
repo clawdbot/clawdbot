@@ -34,6 +34,7 @@ function isNonEmptyString(value: unknown): value is string {
 
 const CLOUD_CREATE_STRING_FIELDS = [
   "model",
+  "thinkingLevel",
   "worktreeBaseRef",
   "worktreeName",
   "cwd",

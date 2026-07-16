@@ -125,10 +125,26 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-sonnet-5",
       name: "Claude Sonnet 5 (Claude CLI)",
       contextWindow: 1_000_000,
+      maxTokens: 128_000,
       mediaInput: {
         image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
       },
     });
+  });
+
+  it("keeps bare Claude CLI context plan-safe while publishing output limits", () => {
+    const models = buildClaudeCliCatalogEntries();
+    for (const id of [
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+    ]) {
+      expect(models.find((model) => model.id === id)).toMatchObject({
+        contextWindow: 200_000,
+        maxTokens: 128_000,
+      });
+    }
   });
 
   it("owns native reasoning output mode for Claude transports", async () => {
@@ -585,8 +601,8 @@ describe("anthropic provider replay hooks", () => {
       id: "claude-opus-4-8",
       api: "anthropic-messages",
       reasoning: true,
-      contextWindow: 1_048_576,
-      contextTokens: 1_048_576,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
     const opus48Profile = provider.resolveThinkingProfile?.({
@@ -949,8 +965,8 @@ describe("anthropic provider replay hooks", () => {
       } as never),
       {
         reasoning: false,
-        contextWindow: 1_048_576,
-        contextTokens: 1_048_576,
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
         maxTokens: 128_000,
         thinkingLevelMap: {
           xhigh: "xhigh",
@@ -1087,24 +1103,23 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("normalizes GA 1M Claude variants to 1M context", async () => {
+  it("normalizes direct Anthropic GA models to exact context and output limits", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
-    for (const [runtimeProvider, modelId] of [
-      ["anthropic", "claude-opus-4-8"],
-      ["anthropic", "claude-opus-4-7"],
-      ["claude-cli", "claude-opus-4.7-20260219"],
-      ["anthropic", "claude-opus-4-6"],
-      ["anthropic", "claude-sonnet-4-6"],
-    ] as const) {
+    for (const modelId of [
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+    ]) {
       expectFields(
         provider.normalizeResolvedModel?.({
-          provider: runtimeProvider,
+          provider: "anthropic",
           modelId,
           model: {
             id: modelId,
             name: "Claude Opus 4.7",
-            provider: runtimeProvider,
+            provider: "anthropic",
             api: "anthropic-messages",
             reasoning: true,
             input: ["text", "image"],
@@ -1115,11 +1130,53 @@ describe("anthropic provider replay hooks", () => {
           },
         } as never),
         {
-          contextWindow: 1_048_576,
-          contextTokens: 1_048_576,
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+          maxTokens: 128_000,
         },
       );
     }
+  });
+
+  it("keeps bare Claude CLI context plan-safe and honors explicit 1M variants", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const baseModel = {
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      provider: "claude-cli",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      contextTokens: 200_000,
+      maxTokens: 64_000,
+    } as ProviderRuntimeModel;
+
+    expectFields(
+      provider.normalizeResolvedModel?.({
+        provider: "claude-cli",
+        modelId: baseModel.id,
+        model: baseModel,
+      } as never),
+      {
+        contextWindow: 200_000,
+        contextTokens: 200_000,
+        maxTokens: 128_000,
+      },
+    );
+    expectFields(
+      provider.normalizeResolvedModel?.({
+        provider: "claude-cli",
+        modelId: `${baseModel.id}[1m]`,
+        model: { ...baseModel, id: `${baseModel.id}[1m]` },
+      } as never),
+      {
+        contextWindow: 1_000_000,
+        contextTokens: 1_000_000,
+        maxTokens: 128_000,
+      },
+    );
   });
 
   it("normalizes Claude Opus 4.8 to 128k max output tokens", async () => {
@@ -1142,8 +1199,8 @@ describe("anthropic provider replay hooks", () => {
     } as never);
 
     expectFields(normalized, {
-      contextWindow: 1_048_576,
-      contextTokens: 1_048_576,
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
       maxTokens: 128_000,
     });
   });

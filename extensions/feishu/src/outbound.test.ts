@@ -7,6 +7,7 @@ import {
   adaptMessagePresentationForChannel,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
+  type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -1007,7 +1008,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
             buttons: [
               {
                 label: "Review",
-                action: { type, url: "https://example.com/review" },
+                action: { type, url: "https://example.com/review" } as MessagePresentationAction,
               },
             ],
           },

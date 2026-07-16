@@ -5,14 +5,13 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import {
-  COHERE_COMMAND_A_PLUS_MODEL_ID,
-  COHERE_COMMAND_A_REASONING_MODEL_ID,
-  COHERE_COMMAND_A_VISION_MODEL_ID,
-  COHERE_NORTH_MINI_CODE_MODEL_ID,
-} from "./models.js";
+import { COHERE_COMMAND_A_PLUS_MODEL_ID } from "./models.js";
 import { buildCohereProvider } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
+
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 function readManifest() {
   return JSON.parse(readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8")) as {

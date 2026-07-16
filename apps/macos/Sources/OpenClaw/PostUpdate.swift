@@ -212,7 +212,7 @@ final class PostUpdateModel {
 
     var mood: OpenClawMascotMood {
         switch self.phase {
-        case .checking, .updating, .verifying, .notifying: .thinking
+        case .checking, .updating, .verifying, .notifying: .working
         case .complete: .celebrating
         case .failed: .sad
         }

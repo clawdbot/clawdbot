@@ -17,6 +17,7 @@ scenario:
     - extensions/matrix/src/matrix/monitor/handler.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
+    profiles: { "matrix:adapter": 11, "matrix:all": 15, "matrix:transport": 14 }
     kind: flow
     channel: matrix
     summary: Send consecutive DMs from one Matrix user in two rooms and require the shared-session notice.

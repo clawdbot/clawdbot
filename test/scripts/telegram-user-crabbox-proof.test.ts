@@ -861,7 +861,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(500).then(() => {
+          delay(500, undefined, { ref: false }).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),

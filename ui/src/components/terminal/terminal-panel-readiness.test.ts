@@ -70,6 +70,18 @@ describe("terminal panel readiness", () => {
     await i18n.setLocale("en");
   });
 
+  it("keeps an already closed panel closed for an explicit close request", () => {
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.available = true;
+    document.body.append(panel);
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:terminal-toggle", { detail: { open: false } }),
+    );
+
+    expect((panel as unknown as { open: boolean }).open).toBe(false);
+  });
+
   it("shows a connecting animation while a terminal open is in flight", async () => {
     const open = deferred<{
       sessionId: string;
@@ -94,15 +106,17 @@ describe("terminal panel readiness", () => {
       expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
         "Connecting to session",
       );
-      expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-connecting")).toBe(
-        true,
-      );
+      expect(
+        panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-connecting"),
+      ).toBe(true);
     });
 
     open.resolve(terminalOpenResult("session-1"));
     await vi.waitFor(() => {
       expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
-      expect(panel.renderRoot.querySelector(".tp-tab")?.classList.contains("is-live")).toBe(true);
+      expect(panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-live")).toBe(
+        true,
+      );
     });
   });
 
@@ -141,7 +155,9 @@ describe("terminal panel readiness", () => {
         params: { agentId: undefined, cols: 100, rows: 30, catalog },
       });
     });
-    expect(panel.renderRoot.querySelector(".tp-tab")?.textContent).toContain("codex resume 0d5c…");
+    expect(panel.renderRoot.querySelector(".tabstrip-tab")?.textContent).toContain(
+      "codex resume 0d5c…",
+    );
     expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
       "Connecting to session",
     );
@@ -246,6 +262,6 @@ describe("terminal panel readiness", () => {
       method: "terminal.close",
       params: { sessionId: "catalog-terminal-1" },
     });
-    expect(panel.renderRoot.querySelector(".tp-tab")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
   });
 });

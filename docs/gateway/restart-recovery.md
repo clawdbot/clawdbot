@@ -21,7 +21,7 @@ and what the automatic resume looks like.
 | State                         | Storage                                     | Behavior across restart                                                 |
 | ----------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
 | Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                 |
-| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed a few seconds after startup                       |
+| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup         |
 | Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                     |
 | Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost              |
 | Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
@@ -44,13 +44,23 @@ affected session is marked for recovery.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
-- **At Control UI admission:** for an ordinary text turn on an existing main
-  session, the gateway appends the user message, marks the session running, and
-  records its transcript-only delivery claim in one SQLite transaction before
-  returning the `started` acknowledgement.
+- **At turn admission:** for an ordinary text turn on an existing main session,
+  the gateway appends the user message, marks the session running, and records
+  its recovery delivery claim in one SQLite transaction before model or
+  `before_agent_reply` hook execution. Control UI does this before returning the
+  `started` acknowledgement; channel dispatch does it when the prepared turn
+  adopts the agent run.
   Commands, attachments, per-turn overrides, pending deliveries, prior abort
   hints, plugin-owned sessions, and turns with execution hooks keep their
   specialized admission paths.
+  If a `before_agent_reply` hook is installed, admission also records its phase.
+  Recovery never replays a hook interrupted mid-call. Once an unhandled hook
+  finishes, its checkpoint records that result, but recovery still fails closed
+  while that hook remains active: a checkpoint cannot prove that the same
+  plugin code and configuration loaded after the restart. Handled text and
+  silent results are checkpointed separately for deterministic settlement.
+  Durable recovery claims written by older versions have no source-ownership
+  marker, so they receive the same fail-closed hook check during an upgrade.
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
@@ -71,6 +81,25 @@ identifier, so an ambiguous connection failure cannot start the same recovery
 twice. Completed and unresumable Control UI turns also retain bounded durable
 idempotency tombstones, allowing a reconnecting outbox to retire them without
 re-executing the request.
+
+Message-tool-only replies use a second durable correlation. Before a terminal
+same-conversation send reaches the channel, the gateway records an unresolved
+delivery intent on the exact session and source turn. A confirmed provider
+success resolves it to a durable delivered receipt; a confirmed failure clears
+it. Recovery completes a delivered receipt without rerunning tools. If a crash
+leaves the provider outcome unknown, recovery fails closed instead of replaying
+an external effect.
+
+The delivered reply is also mirrored into the transcript with its source
+message ID. Terminal mirrors use a distinct receipt key, so a progress send with
+the same provider idempotency key cannot mask the terminal marker. Progress
+sends and receipts from older turns cannot complete the current turn. Only
+durable channel-ingress claims can restore message-action authority. A resumed
+run keeps the original source-delivery mode and source correlation, including
+requester identity and any same-channel/thread restriction, so the same receipt
+remains authoritative even if another restart happens during recovery. A
+message-tool-only turn without reconstructable channel authority is failed
+closed and receives the one-time resend notice.
 
 Before resuming, the gateway checks that the transcript tail is safe to
 continue from. If it is not (for example, the turn ended on a stale pending

@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
@@ -316,20 +317,32 @@ async function readCliSessionHeaderLine(filePath: string): Promise<string | unde
 
 async function readBoundedCliSessionTranscript(
   filePath: string,
-  fileSize: number,
 ): Promise<{ content: string; truncated: boolean }> {
-  if (fileSize <= MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
-    return { content: await fsp.readFile(filePath, "utf-8"), truncated: false };
-  }
-
-  cliBackendLog.warn(
-    `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${filePath}`,
-  );
   const handle = await fsp.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(MAX_CLI_SESSION_HISTORY_FILE_BYTES);
-    await handle.read(buffer, 0, buffer.length, fileSize - buffer.length);
-    const tail = buffer.toString("utf-8");
+    let buffer = Buffer.alloc(0);
+    let bytesRead = 0;
+    let position = 0;
+    // Compaction can shrink the open file between stat and read. Retry from
+    // the new tail after EOF so a stale offset cannot discard valid history.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const currentSize = (await handle.stat()).size;
+      const readLength = Math.min(currentSize, MAX_CLI_SESSION_HISTORY_FILE_BYTES);
+      position = Math.max(0, currentSize - readLength);
+      buffer = Buffer.alloc(readLength);
+      bytesRead = await readFileWindowFully(handle, buffer, position);
+      if (bytesRead === buffer.length || position === 0) {
+        break;
+      }
+    }
+    const tail = buffer.subarray(0, bytesRead).toString("utf-8");
+    if (position === 0) {
+      return { content: tail, truncated: false };
+    }
+
+    cliBackendLog.warn(
+      `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${filePath}`,
+    );
     const firstLineEnd = tail.indexOf("\n");
     const completeTail = firstLineEnd >= 0 ? tail.slice(firstLineEnd + 1) : "";
     const headerLine = await readCliSessionHeaderLine(filePath);
@@ -449,7 +462,7 @@ async function loadCliSessionEntries(params: {
     if (!stat.isFile()) {
       return [];
     }
-    const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
+    const transcript = await readBoundedCliSessionTranscript(realSessionFile);
     const entries = parseCliSessionEntries(transcript.content);
     if (!entries) {
       return [];

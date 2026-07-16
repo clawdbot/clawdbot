@@ -21,9 +21,7 @@ import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 
-export async function describeQwenVideo(
-  params: VideoDescriptionRequest,
-): Promise<VideoDescriptionResult> {
+async function describeQwenVideo(params: VideoDescriptionRequest): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");

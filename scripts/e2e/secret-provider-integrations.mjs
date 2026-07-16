@@ -2164,13 +2164,10 @@ async function main() {
 
 export {
   assertAllowedFailureCommandSucceeded,
-  clampSecretProofTimerTimeoutMs,
   collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
-  gatewayCall,
   parseJsonOutput,
-  readPositiveTimerMs,
   runPtySecretsConfigurePreset,
   runWithProof,
   runCommand,

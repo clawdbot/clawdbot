@@ -5,6 +5,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import type { ImageContent } from "../../llm/types.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgress,
@@ -30,6 +31,8 @@ type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  /** Ordered current-turn images to inject with the steering text. */
+  images?: ImageContent[];
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -42,6 +45,8 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  /** True only when queueMessage preserves images supplied in its options. */
+  readonly supportsQueueMessageImages?: boolean;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
   isStopped?: () => boolean;
@@ -55,14 +60,21 @@ export type ReplyBackendHandle = {
 };
 
 type ReplyBackendQueueMessageMismatch =
+  | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
-/** Prevents steering a turn into a run whose model-facing tool surface differs. */
+/** Prevents steering a turn into a run that cannot preserve its model-facing input. */
 export function resolveReplyBackendQueueMessageMismatch(
-  backend: Pick<ReplyBackendHandle, "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode">,
+  backend: Pick<
+    ReplyBackendHandle,
+    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+  >,
   options?: ReplyBackendQueueMessageOptions,
 ): ReplyBackendQueueMessageMismatch | undefined {
+  if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
+    return "image_input_unsupported";
+  }
   if (
     options?.sourceReplyDeliveryMode === "message_tool_only" &&
     backend.sourceReplyDeliveryMode !== "message_tool_only"

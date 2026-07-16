@@ -53,7 +53,7 @@ function toTelegramInlineButton(
     return { text: button.label, url: action.url, style };
   }
   if (action.type === "web-app") {
-    return { text: button.label, web_app: { url: action.url }, style };
+    return action.url ? { text: button.label, web_app: { url: action.url }, style } : undefined;
   }
   if (action.type === "approval") {
     const callbackData = buildTelegramApprovalCallbackData(action);

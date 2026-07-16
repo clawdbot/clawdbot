@@ -3284,6 +3284,10 @@ describe("short-term promotion", () => {
         const memoryPath = path.join(workspaceDir, "MEMORY.md");
         const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
         await fs.writeFile(memoryPath, seeded, "utf-8");
+        if (process.platform !== "win32") {
+          await fs.chmod(workspaceDir, 0o750);
+          await fs.chmod(memoryPath, 0o640);
+        }
 
         await recordShortTermRecalls({
           workspaceDir,
@@ -3321,9 +3325,222 @@ describe("short-term promotion", () => {
         expect(applied.compactedDates).toEqual([]);
         const memoryText = await fs.readFile(memoryPath, "utf-8");
         expect(memoryText).toContain("Some small existing content.");
+        if (process.platform !== "win32") {
+          expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(0o750);
+          expect((await fs.stat(memoryPath)).mode & 0o7777).toBe(0o640);
+        }
       });
     });
   });
+
+  describe("MEMORY.md atomic promotion write", () => {
+    it.runIf(process.platform !== "win32")(
+      "preserves a dangling MEMORY.md symlink and its target directory mode",
+      async () => {
+        await withTempWorkspace(async (workspaceDir) => {
+          await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+            "Keep the shared memory target and directory permissions intact.",
+          ]);
+
+          const aliasParent = path.join(fixtureRoot, `alias-${caseId++}`, "nested");
+          const workspaceAlias = path.join(aliasParent, "workspace");
+          const sharedDir = path.join(fixtureRoot, `${path.basename(workspaceDir)}-shared`);
+          const linkedDir = path.join(workspaceDir, "linked");
+          const intermediatePath = path.join(sharedDir, "memory-alias.md");
+          const targetPath = path.join(sharedDir, `${"long".repeat(55)}\\`);
+          const memoryPath = path.join(workspaceDir, "MEMORY.md");
+          await fs.mkdir(aliasParent, { recursive: true });
+          await fs.mkdir(path.join(sharedDir, "nested"), { recursive: true });
+          await fs.chmod(sharedDir, 0o755);
+          await fs.symlink(workspaceDir, workspaceAlias);
+          await fs.symlink(path.join(sharedDir, "nested"), linkedDir);
+          await fs.symlink(path.basename(targetPath), intermediatePath);
+          await fs.symlink("invalid-target.md/", memoryPath);
+
+          await recordShortTermRecalls({
+            workspaceDir: workspaceAlias,
+            query: "shared memory",
+            nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+            results: [
+              {
+                path: "memory/2026-04-29.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.96,
+                snippet: "Keep the shared memory target and directory permissions intact.",
+                source: "memory",
+              },
+            ],
+          });
+          const ranked = await rankShortTermPromotionCandidates({
+            workspaceDir: workspaceAlias,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          await expect(
+            applyShortTermPromotions({
+              workspaceDir: workspaceAlias,
+              candidates: ranked,
+              minScore: 0,
+              minRecallCount: 0,
+              minUniqueQueries: 0,
+            }),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+          await expectEnoent(fs.lstat(path.join(workspaceDir, "invalid-target.md")));
+          await fs.unlink(memoryPath);
+          await fs.symlink("linked/../memory-alias.md", memoryPath);
+
+          await applyShortTermPromotions({
+            workspaceDir: workspaceAlias,
+            candidates: ranked,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          expect((await fs.lstat(memoryPath)).isSymbolicLink()).toBe(true);
+          expect((await fs.lstat(intermediatePath)).isSymbolicLink()).toBe(true);
+          expect(await fs.readFile(targetPath, "utf-8")).toContain(
+            "Keep the shared memory target and directory permissions intact.",
+          );
+          expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
+
+          const secondSnippet = "Keep writing through a shared read-only directory.";
+          await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
+          await recordShortTermRecalls({
+            workspaceDir: workspaceAlias,
+            query: "read-only parent",
+            nowMs: Date.parse("2026-04-30T10:00:00.000Z"),
+            results: [
+              {
+                path: "memory/2026-04-30.md",
+                startLine: 1,
+                endLine: 1,
+                score: 0.96,
+                snippet: secondSnippet,
+                source: "memory",
+              },
+            ],
+          });
+          const secondRanked = await rankShortTermPromotionCandidates({
+            workspaceDir: workspaceAlias,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          });
+
+          const canonicalTargetPath = await fs.realpath(targetPath);
+          const openSpy = vi.spyOn(fs, "open");
+          await fs.chmod(targetPath, 0o600);
+          await fs.chmod(sharedDir, 0o555);
+          try {
+            await applyShortTermPromotions({
+              workspaceDir: workspaceAlias,
+              candidates: secondRanked,
+              minScore: 0,
+              minRecallCount: 0,
+              minUniqueQueries: 0,
+            });
+            expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
+            expect(openSpy).toHaveBeenCalledWith(canonicalTargetPath, "r+");
+            expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
+          } finally {
+            await fs.chmod(sharedDir, 0o755);
+          }
+        });
+      },
+    );
+
+    it("preserves the existing MEMORY.md when the promotion write fails mid-flight", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "Rotate the staging Postgres credentials before next deploy.",
+        ]);
+
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const sentinel = "FINAL-USER-MEMORY-SENTINEL-do-not-lose";
+        const filler = "pad line filler content ".repeat(9_000);
+        const seeded = `# Long-Term Memory\n\n${filler}\n- ${sentinel}\n`;
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "rotate creds",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.96,
+              snippet: "Rotate the staging Postgres credentials before next deploy.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const truncateAt = 51_200;
+        const originalWriteFile = fs.writeFile.bind(fs);
+        vi.spyOn(fs, "writeFile").mockImplementation((async (
+          target: Parameters<typeof fs.writeFile>[0],
+          data: Parameters<typeof fs.writeFile>[1],
+          options?: Parameters<typeof fs.writeFile>[2],
+        ) => {
+          const targetPath =
+            typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
+          if (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) {
+            const text =
+              typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
+            await originalWriteFile(target, text.slice(0, truncateAt), options);
+            throw Object.assign(new Error("EFBIG: file too large, write"), {
+              code: "EFBIG",
+            });
+          }
+          return originalWriteFile(target, data, options);
+        }) as typeof fs.writeFile);
+
+        await expect(
+          applyShortTermPromotions({
+            workspaceDir,
+            candidates: ranked,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+            nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+            memoryFileMaxChars: 5_000_000,
+          }),
+        ).rejects.toMatchObject({ code: "EFBIG" });
+
+        const after = await fs.readFile(memoryPath, "utf-8");
+        expect(after).toBe(seeded);
+        await expect(
+          rankShortTermPromotionCandidates({
+            workspaceDir,
+            minScore: 0,
+            minRecallCount: 0,
+            minUniqueQueries: 0,
+          }),
+        ).resolves.toHaveLength(1);
+        expect(
+          (await fs.readdir(workspaceDir)).filter((entry) =>
+            entry.startsWith("MEMORY.md.promotion"),
+          ),
+        ).toEqual([]);
+      });
+    });
+  });
+
   it("shows signalCount instead of just recallCount in promotion annotations", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.parse("2026-05-28T10:00:00.000Z");

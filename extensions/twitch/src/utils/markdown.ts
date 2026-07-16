@@ -30,7 +30,7 @@ export function stripMarkdownForTwitch(markdown: string): string {
       // Italic (*text*)
       .replace(/\*([^*]+)\*/g, "$1")
       // Italic (_text_)
-      .replace(/_([^_]+)_/g, "$1")
+      .replace(/(?<![\p{L}\p{N}\p{M}])_(?!_)([^_]+)_(?![\p{L}\p{N}\p{M}])/gu, "$1")
       // Strikethrough (~~text~~)
       .replace(/~~([^~]+)~~/g, "$1")
       // Code blocks

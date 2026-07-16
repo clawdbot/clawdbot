@@ -14,10 +14,10 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
   execution:
+    profiles: { "whatsapp:mock-default": 38 }
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
     summary: Run `/new` through WhatsApp and verify the new-session acknowledgement.
 

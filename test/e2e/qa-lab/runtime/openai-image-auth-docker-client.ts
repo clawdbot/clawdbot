@@ -168,7 +168,7 @@ function createCodexOAuthStore() {
   } as const;
 }
 
-export async function main() {
+async function main() {
   assert(
     process.env.OPENAI_API_KEY === DIRECT_TOKEN,
     "Docker lane must expose the direct OpenAI API key",

@@ -40,7 +40,6 @@ import type {
 
 export type {
   PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartOverrideResult,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
@@ -53,10 +52,7 @@ export type {
   PluginHookChannelContext,
   PluginHookChannelSenderContext,
 } from "./hook-channel-context.types.js";
-export {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
+export { stripPromptMutationFieldsFromLegacyHookResult } from "./hook-before-agent-start.types.js";
 export type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -127,7 +123,7 @@ export type PluginHookName =
   | "before_agent_run"
   | "resolve_exec_env";
 
-export const PLUGIN_HOOK_NAMES = [
+const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
   "agent_turn_prepare",
   "before_prompt_build",
@@ -176,9 +172,9 @@ type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? tru
 const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
 void assertAllPluginHookNamesListed;
 
-export type DeprecatedPluginHookName = "subagent_spawning" | "deactivate";
+type DeprecatedPluginHookName = "subagent_spawning" | "deactivate";
 
-export type PluginHookDeprecation = {
+type PluginHookDeprecation = {
   replacement: string;
   reason: string;
   removeAfter?: string;
@@ -217,7 +213,7 @@ export const DEPRECATED_PLUGIN_HOOKS = {
   },
 } as const satisfies Record<DeprecatedPluginHookName, PluginHookDeprecation>;
 
-export const DEPRECATED_PLUGIN_HOOK_NAMES = Object.keys(
+const DEPRECATED_PLUGIN_HOOK_NAMES = Object.keys(
   DEPRECATED_PLUGIN_HOOKS,
 ) as DeprecatedPluginHookName[];
 
@@ -232,21 +228,19 @@ const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
   typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
 
-export const PROMPT_INJECTION_HOOK_NAMES = [
+const PROMPT_INJECTION_HOOK_NAMES = [
   "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
   "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
-export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
-
 const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
 
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
-export const CONVERSATION_HOOK_NAMES = [
+const CONVERSATION_HOOK_NAMES = [
   "before_model_resolve",
   "before_agent_reply",
   "llm_input",
@@ -255,8 +249,6 @@ export const CONVERSATION_HOOK_NAMES = [
   "agent_end",
   "before_agent_run",
 ] as const satisfies readonly PluginHookName[];
-
-export type ConversationHookName = (typeof CONVERSATION_HOOK_NAMES)[number];
 
 const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES);
 
@@ -325,7 +317,7 @@ export type PluginHookLlmInputEvent = {
   tools?: unknown[];
 };
 
-export type PluginHookModelCallBaseEvent = {
+type PluginHookModelCallBaseEvent = {
   runId: string;
   callId: string;
   sessionKey?: string;
@@ -753,7 +745,7 @@ export type PluginHookSubagentContext = {
   requesterSessionKey?: string;
 };
 
-export type PluginHookSubagentTargetKind = "subagent" | "acp";
+type PluginHookSubagentTargetKind = "subagent" | "acp";
 
 type PluginHookSubagentSpawnBase = {
   childSessionKey: string;
@@ -880,15 +872,15 @@ export type PluginHookCronReconciledEvent = {
   enabled: boolean;
 };
 
-export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
+type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
 
-export type PluginHookGatewayCronDeliveryStatus =
+type PluginHookGatewayCronDeliveryStatus =
   | "not-requested"
   | "delivered"
   | "not-delivered"
   | "unknown";
 
-export type PluginHookGatewayCronJobState = {
+type PluginHookGatewayCronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
@@ -966,7 +958,7 @@ export type PluginHookCronChangedEvent = {
   provider?: string;
 };
 
-export type PluginHookGatewayCronCreateInput = {
+type PluginHookGatewayCronCreateInput = {
   name: string;
   description: string;
   enabled: boolean;
@@ -983,9 +975,9 @@ export type PluginHookGatewayCronCreateInput = {
   };
 };
 
-export type PluginHookGatewayCronUpdateInput = Partial<PluginHookGatewayCronCreateInput>;
+type PluginHookGatewayCronUpdateInput = Partial<PluginHookGatewayCronCreateInput>;
 
-export type PluginHookGatewayCronRemoveResult = {
+type PluginHookGatewayCronRemoveResult = {
   removed?: boolean;
 };
 
@@ -997,7 +989,7 @@ export type PluginHookGatewayCronService = {
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
-export type PluginInstallRequestKind =
+type PluginInstallRequestKind =
   | "skill-install"
   | "plugin-dir"
   | "plugin-archive"
@@ -1006,7 +998,7 @@ export type PluginInstallRequestKind =
   | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
-export type PluginInstallFinding = {
+type PluginInstallFinding = {
   ruleId: string;
   severity: "info" | "warn" | "critical";
   file: string;
@@ -1030,7 +1022,7 @@ export type PluginHookBeforeInstallBuiltinScan = {
   error?: string;
 };
 
-export type PluginHookBeforeInstallSkillInstallSpec = {
+type PluginHookBeforeInstallSkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
   label?: string;
@@ -1107,7 +1099,7 @@ export type PluginHookBeforeAgentRunEvent = {
 };
 
 /** Result type for before_agent_run. Returns pass/block or void (= pass). */
-export type PluginHookBeforeAgentRunResult = InputGateDecision | void;
+type PluginHookBeforeAgentRunResult = InputGateDecision | void;
 
 export type PluginHookResolveExecEnvEvent = {
   sessionKey?: string;

@@ -140,6 +140,11 @@ type RunMessageActionInput = {
   defaultAccountId?: string;
   gateway?: {
     timeoutMs?: unknown;
+    terminalSourceReplyReceiptOwner?: "caller";
+    resolveAgentRuntimeIdentityToken?: (context?: {
+      sourceReplyFinal?: boolean;
+      sourceReplyToolCallId?: string;
+    }) => Promise<string | undefined>;
   };
   params?: Record<string, unknown>;
   requesterAccountId?: string;
@@ -152,6 +157,8 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
+  sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
@@ -932,6 +939,176 @@ describe("message tool secret scoping", () => {
     expect(first?.params?.idempotencyKey).toBe(second?.params?.idempotencyKey);
     expect(first?.params).not.toHaveProperty("final");
     expect(second?.params).not.toHaveProperty("final");
+  });
+
+  it("carries terminal source-reply intent outside provider params", async () => {
+    mockSendResult();
+    const sessionKey = "agent:main:telegram:direct:123";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-source-reply",
+      sessionId: "session-source-reply",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentSourceTurnId: "source-turn-1",
+      },
+    });
+    mintedTurnCapabilities.push(turnCapability);
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-source-reply",
+      sessionId: "session-source-reply",
+      messageActionTurnCapability: turnCapability,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await tool.execute("message_progress", {
+      action: "send",
+      message: "progress",
+      to: "123",
+      final: false,
+    });
+    await tool.execute("message_terminal", {
+      action: "send",
+      message: "done",
+      to: "123",
+    });
+
+    const [progress, terminal] = mocks.runMessageAction.mock.calls.map((call) => call[0]);
+    expect(progress?.sourceReplyFinal).toBe(false);
+    expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(progress?.sourceReplyToolCallId).toBe("message_progress");
+    expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
+    expect(progress?.params).not.toHaveProperty("final");
+    expect(terminal?.params).not.toHaveProperty("final");
+  });
+
+  it("assigns remote terminal source-reply receipts to the caller", async () => {
+    mockSendResult();
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example" },
+      },
+    });
+    const sessionKey = "agent:main:telegram:direct:123";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-remote-source-reply",
+      sessionId: "session-remote-source-reply",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+        currentSourceTurnId: "source-turn-remote",
+      },
+    });
+    mintedTurnCapabilities.push(turnCapability);
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-remote-source-reply",
+      sessionId: "session-remote-source-reply",
+      messageActionTurnCapability: turnCapability,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await tool.execute("message_terminal_remote", {
+      action: "send",
+      message: "done",
+      to: "123",
+    });
+
+    const terminal = firstRunMessageActionInput();
+    expect(terminal?.sourceReplyFinal).toBe(true);
+    expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
+    expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
+  });
+
+  it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {
+    mockSendResult();
+    const sessionKey = "agent:main:telegram:direct:scheduled";
+    const sourceLessCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-source-less",
+      sessionId: "session-source-less",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "scheduled",
+      },
+    });
+    mintedTurnCapabilities.push(sourceLessCapability);
+    const createSourceLessTool = (messageActionTurnCapability?: string) =>
+      createMessageTool({
+        getRuntimeConfig: mocks.getRuntimeConfig,
+        runMessageAction: mocks.runMessageAction as never,
+        agentId: "main",
+        agentSessionKey: sessionKey,
+        runId: "run-source-less",
+        sessionId: "session-source-less",
+        messageActionTurnCapability,
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+
+    await createSourceLessTool().execute("message-scheduled", {
+      action: "send",
+      message: "scheduled update",
+      to: "scheduled",
+    });
+    await createSourceLessTool(sourceLessCapability).execute("message-room-event", {
+      action: "send",
+      message: "ambient update",
+      to: "scheduled",
+    });
+
+    for (const [input] of mocks.runMessageAction.mock.calls) {
+      expect(input.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(input.sourceReplyFinal).toBeUndefined();
+      expect(input.sourceReplyToolCallId).toBeUndefined();
+    }
+  });
+
+  it("rejects a supplied turn capability after revocation", async () => {
+    const sessionKey = "agent:main:telegram:direct:revoked";
+    const revokedCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-revoked",
+      sessionId: "session-revoked",
+      sessionKey,
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "revoked",
+        currentSourceTurnId: "channel-user:v1:revoked",
+      },
+    });
+    revokeMessageActionTurnCapability(revokedCapability);
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: sessionKey,
+      runId: "run-revoked",
+      sessionId: "session-revoked",
+      messageActionTurnCapability: revokedCapability,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await expect(
+      tool.execute("message-revoked", {
+        action: "send",
+        message: "must not send",
+        to: "revoked",
+      }),
+    ).rejects.toThrow("message action turn capability is no longer active");
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("uses delivery params to avoid collisions across distinct sends", async () => {
@@ -1965,12 +2142,35 @@ describe("message tool schema scoping", () => {
           properties?: { blocks?: { items?: Record<string, unknown> } };
         }
       ).properties?.blocks?.items;
+      const presentationActionVariants = (
+        presentationBlockItemSchema as {
+          properties?: {
+            buttons?: {
+              items?: { properties?: { action?: { anyOf?: Array<Record<string, unknown>> } } };
+            };
+          };
+        }
+      ).properties?.buttons?.items?.properties?.action?.anyOf;
+      const webAppRequiredFields = presentationActionVariants
+        ?.filter(
+          (variant) =>
+            (variant.properties as { type?: { const?: string } } | undefined)?.type?.const ===
+            "web-app",
+        )
+        .map((variant) => variant.required);
 
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
       expect(presentationSchemaJson).toContain('"const":"url"');
       expect(presentationSchemaJson).toContain('"const":"web-app"');
+      expect(presentationSchemaJson).toContain('"widgetId"');
+      expect(webAppRequiredFields).toEqual(
+        expect.arrayContaining([
+          ["type", "url"],
+          ["type", "widgetId"],
+        ]),
+      );
       expect(presentationSchemaJson).not.toContain('"const":"approval"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
@@ -3293,6 +3493,14 @@ describe("message tool boot-echo guard", () => {
                   action: { type: "web-app", url: echoedText },
                   url: "https://legacy.example.test",
                 },
+                {
+                  label: "Hosted app",
+                  action: {
+                    type: "web-app",
+                    url: echoedText,
+                    widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+                  },
+                },
               ],
             },
           ],
@@ -3311,6 +3519,10 @@ describe("message tool boot-echo guard", () => {
             { label: "App" },
             { label: "Typed status" },
             { label: "Typed app" },
+            {
+              label: "Hosted app",
+              action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+            },
           ],
         },
       ],

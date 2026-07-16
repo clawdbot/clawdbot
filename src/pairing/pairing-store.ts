@@ -23,7 +23,6 @@ import {
   writeChannelPairingStateToDatabase,
 } from "./pairing-store-sqlite.js";
 import type { PairingChannel } from "./pairing-store.types.js";
-export type { PairingChannel } from "./pairing-store.types.js";
 
 /** @deprecated Compatibility helper for doctor/plugin migrations of the retired JSON store. */
 export function resolveChannelAllowFromPath(

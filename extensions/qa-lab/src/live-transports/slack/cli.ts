@@ -1,39 +1,37 @@
 // Qa Lab plugin module implements cli behavior.
 import {
+  createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  loadLiveTransportQaSuiteRuntime,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
-import { SLACK_QA_DEFAULT_SCENARIO_IDS } from "./profiles.js";
+import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 
-type SlackQaAdapterRuntime = typeof import("./adapter.runtime.js");
-type SlackQaCliRuntime = typeof import("./cli.runtime.js");
-
-const loadSlackQaAdapterRuntime = createLazyCliRuntimeLoader<SlackQaAdapterRuntime>(
+const loadSlackQaAdapterRuntime = createLazyCliRuntimeLoader<typeof import("./adapter.runtime.js")>(
   () => import("./adapter.runtime.js"),
-);
-const loadSlackQaCliRuntime = createLazyCliRuntimeLoader<SlackQaCliRuntime>(
-  () => import("./cli.runtime.js"),
 );
 
 async function runQaSlack(opts: LiveTransportQaCommandOptions) {
-  await (await loadSlackQaCliRuntime()).runQaSlackCommand(opts);
+  const runtime = await loadLiveTransportQaSuiteRuntime();
+  await runtime.runLiveTransportQaSuiteCommand({
+    channelId: "slack",
+    defaultProviderMode: "live-frontier",
+    options: opts,
+    selectScenarioIds: resolveSlackQaScenarioIds,
+  });
 }
-
-const slackQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
-  id: "slack",
-  scenarioIds: SLACK_QA_DEFAULT_SCENARIO_IDS,
-  matches: ({ channelId, driver }) => driver === "live" && channelId === "slack",
-  async create(context) {
-    return await (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
-  },
-};
 
 export const slackQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "slack",
-    adapterFactory: slackQaAdapterFactory,
+    adapterFactory: createLiveTransportQaAdapterFactory({
+      id: "slack",
+      async create(context) {
+        return (await loadSlackQaAdapterRuntime()).createSlackQaTransportAdapter(context);
+      },
+    }),
     credentialOptions: {
       sourceDescription: "Credential source for Slack QA: env or convex (default: env)",
       roleDescription:

@@ -82,11 +82,6 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
   ],
-  "extensions/codex/provider.ts": [
-    "resolvePluginConfigObject(",
-    "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",
-    "const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);",
-  ],
   "extensions/github-copilot/index.ts": [
     "resolvePluginConfigObject(",
     'const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");',

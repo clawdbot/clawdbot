@@ -13,6 +13,11 @@ function remainingDeadlineMs(deadline) {
   return Math.max(1, deadline - Date.now());
 }
 
+function deadlineSignal(deadline) {
+  // Keep headers and response-body reads inside the same phase-wide client deadline.
+  return AbortSignal.timeout(remainingDeadlineMs(deadline));
+}
+
 async function openSocket(url, timeoutMs = 10_000) {
   const ws = new WebSocket(url);
   await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
@@ -50,31 +55,35 @@ function httpUrl(url, pathname = "/") {
   return target.toString();
 }
 
-async function readJson(response, label) {
+async function readJson(response, label, signal) {
   let body;
   try {
     body = await response.json();
   } catch {
+    signal.throwIfAborted();
     throw new Error(`${label} returned non-JSON HTTP ${response.status}`);
   }
   return { status: response.status, body };
 }
 
-async function adminRpc({ token, url }, method, params = {}) {
-  const response = await fetch(httpUrl(url, "/api/v1/admin/rpc"), {
+async function adminRpc({ deadline, fetchImpl, token, url }, method, params = {}) {
+  const signal = deadlineSignal(deadline);
+  const response = await fetchImpl(httpUrl(url, "/api/v1/admin/rpc"), {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ id: `e2e-${method}`, method, params }),
+    signal,
   });
-  return await readJson(response, `Admin RPC ${method}`);
+  return await readJson(response, `Admin RPC ${method}`, signal);
 }
 
-async function readProbe(url, pathname) {
-  const response = await fetch(httpUrl(url, pathname));
-  return await readJson(response, pathname);
+async function readProbe({ deadline, fetchImpl, url }, pathname) {
+  const signal = deadlineSignal(deadline);
+  const response = await fetchImpl(httpUrl(url, pathname), { signal });
+  return await readJson(response, pathname, signal);
 }
 
 async function requestUpgradeRejection(url, timeoutMs) {
@@ -185,25 +194,32 @@ function assertAdminSuccess(response, message) {
   return assertRpcSuccess(response.body, message);
 }
 
-async function runGatewaySuspensionPreRestartClient({
-  statePath,
-  token,
-  url,
-  timeoutMs = readGatewayNetworkClientConnectTimeoutMs(),
-}) {
+export async function runGatewaySuspensionPreRestartClient(
+  { statePath, token, url, timeoutMs = readGatewayNetworkClientConnectTimeoutMs() },
+  deps = {},
+) {
   const startedAt = Date.now();
-  const rpc = (method, params) => adminRpc({ token, url }, method, params);
+  const requestContext = {
+    deadline: startedAt + timeoutMs,
+    fetchImpl: deps.fetchImpl ?? fetch,
+    token,
+    url,
+  };
+  const rpc = (method, params) => adminRpc(requestContext, method, params);
   const firstLease = assertReadySuspensionResponse(
     await rpc("gateway.suspend.prepare", { requestId: "gateway-network-live-contract" }),
   );
 
-  assertSuspendedProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+  assertSuspendedProbes(
+    await readProbe(requestContext, "/healthz"),
+    await readProbe(requestContext, "/readyz"),
+  );
 
   const blockedAdminHealth = await rpc("health");
   assert.equal(blockedAdminHealth.status, 503, "Admin health must return HTTP 503");
   assertGatewaySuspendingError(blockedAdminHealth.body);
 
-  const upgrade = await requestUpgradeRejection(url, timeoutMs);
+  const upgrade = await requestUpgradeRejection(url, remainingDeadlineMs(requestContext.deadline));
   assert.equal(upgrade.status, 503, "new websocket upgrade must return HTTP 503");
   assert.equal(
     upgrade.body,
@@ -241,7 +257,10 @@ async function runGatewaySuspensionPreRestartClient({
   );
   assert.equal(repeatedResume?.resumed, false, "repeat resume must be idempotent");
 
-  assertHealthyProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+  assertHealthyProbes(
+    await readProbe(requestContext, "/healthz"),
+    await readProbe(requestContext, "/readyz"),
+  );
 
   const requestId = "gateway-network-restart-contract";
   const secondLease = assertReadySuspensionResponse(
@@ -258,11 +277,20 @@ async function runGatewaySuspensionPreRestartClient({
   emitPhase("pre-restart", startedAt);
 }
 
-async function runGatewaySuspensionPostRestartClient({ statePath, token, url }) {
+export async function runGatewaySuspensionPostRestartClient(
+  { statePath, token, url, timeoutMs = readGatewayNetworkClientConnectTimeoutMs() },
+  deps = {},
+) {
   const startedAt = Date.now();
+  const requestContext = {
+    deadline: startedAt + timeoutMs,
+    fetchImpl: deps.fetchImpl ?? fetch,
+    token,
+    url,
+  };
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert(Date.now() < state.expiresAtMs, "restart proof exceeded the original lease");
-  const rpc = (method, params) => adminRpc({ token, url }, method, params);
+  const rpc = (method, params) => adminRpc(requestContext, method, params);
 
   const oldStatus = assertAdminSuccess(
     await rpc("gateway.suspend.status", { suspensionId: state.suspensionId }),
@@ -275,7 +303,10 @@ async function runGatewaySuspensionPostRestartClient({ statePath, token, url }) 
   );
   assert(oldResume?.resumed === false, "old lease resume must be idempotently inactive");
 
-  assertHealthyProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+  assertHealthyProbes(
+    await readProbe(requestContext, "/healthz"),
+    await readProbe(requestContext, "/readyz"),
+  );
   assertAdminSuccess(await rpc("health"), "Admin health after restart");
 
   const replacement = assertReadySuspensionResponse(
@@ -293,7 +324,7 @@ async function runGatewaySuspensionPostRestartClient({ statePath, token, url }) 
   emitPhase("post-restart", startedAt);
 }
 
-export function responseError(method, response) {
+function responseError(method, response) {
   const message = response.error?.message ?? "unknown";
   return new Error(`${method} failed: ${message}`);
 }

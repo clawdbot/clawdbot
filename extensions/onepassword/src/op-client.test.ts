@@ -118,6 +118,49 @@ describe("OpClient", () => {
     ).rejects.toMatchObject({ code: "TOKEN_MISSING" });
   });
 
+  it("rejects oversized token files before invoking the 1Password CLI", async () => {
+    await fs.writeFile(tokenFile, "x".repeat(16 * 1024 + 1), { mode: 0o600 });
+    const runner = vi.fn<OpProcessRunner>();
+    const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+
+    await expect(
+      client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+    ).rejects.toMatchObject({
+      code: "TOKEN_MISSING",
+      message: `1Password service account token file at ${tokenFile} exceeds 16384 bytes.`,
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "continues to accept a token file through a %s",
+    async (linkType) => {
+      const targetFile = path.join(root, "service-account-token-target");
+      await fs.rename(tokenFile, targetFile);
+      if (linkType === "symlink") {
+        await fs.symlink(targetFile, tokenFile);
+      } else {
+        await fs.link(targetFile, tokenFile);
+      }
+      const runner = vi.fn<OpProcessRunner>(async () => ({
+        stdout: JSON.stringify({ label: "credential", value: "value" }),
+        stderr: "",
+      }));
+      const client = new OpClient({ opBin, tokenFile, timeoutMs: 1000, runner });
+
+      await expect(
+        client.getItem({ item: "Token", vault: "Automation", field: "credential" }),
+      ).resolves.toMatchObject({ value: "value" });
+      expect(runner).toHaveBeenCalledWith(
+        opBin,
+        expect.any(Array),
+        expect.objectContaining({
+          env: expect.objectContaining({ OP_SERVICE_ACCOUNT_TOKEN: fixtureAuth }),
+        }),
+      );
+    },
+  );
+
   it("warns once for token file permissions broader than 0600", async () => {
     await fs.chmod(tokenFile, 0o644);
     const warn = vi.fn();

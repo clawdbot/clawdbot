@@ -188,6 +188,7 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     agentRuntime: params.agentRuntime,
+    api: context.api,
     reasoning: context.reasoning,
     ...(context.params ? { params: context.params } : {}),
     compat: context.compat,

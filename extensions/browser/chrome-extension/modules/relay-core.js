@@ -4,7 +4,7 @@
 
 /** Tab group shown to the user; membership == what the agent may touch. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
-export const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
 const CHROME_GROUP_COLORS = {

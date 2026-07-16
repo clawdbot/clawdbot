@@ -183,7 +183,7 @@ describe("OpenClawTerminalPanel", () => {
       ? OpenClawTerminalPanel.styles
       : [OpenClawTerminalPanel.styles];
     const styles = styleResults.map((style) => style.cssText).join("\n");
-    expect(styles).toMatch(/\.tp-new\s*\{[^}]*align-self:\s*center/u);
+    expect(styles).toMatch(/\.tabstrip-new\s*\{[^}]*align-self:\s*center/u);
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
         method: "terminal.resize",
@@ -700,11 +700,11 @@ describe("OpenClawTerminalPanel", () => {
 
     // Closing the last tab must keep the panel (with its "+" button) rendered —
     // a fullscreen document has no toggle to bring a closed panel back.
-    (panel.renderRoot.querySelector(".tp-tab__close") as HTMLElement).click();
+    (panel.renderRoot.querySelector(".tabstrip-tab__close") as HTMLElement).click();
     await panel.updateComplete;
     expect(requests.some((entry) => entry.method === "terminal.close")).toBe(true);
     expect(panel.renderRoot.querySelector(".tp")).not.toBeNull();
-    expect(panel.renderRoot.querySelector(".tp-new")).not.toBeNull();
+    expect(panel.renderRoot.querySelector(".tabstrip-new")).not.toBeNull();
   });
 
   it("opens a fresh terminal after the last tab is closed", async () => {
@@ -759,7 +759,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(new TextDecoder().decode(controllers[0].write.mock.calls[0]?.[0])).toBe(staleOutput);
 
     await panel.updateComplete;
-    (panel.renderRoot.querySelector(".tp-tab__close") as HTMLElement).click();
+    (panel.renderRoot.querySelector(".tabstrip-tab__close") as HTMLElement).click();
     await vi.waitFor(() => {
       expect(requests).toContainEqual({
         method: "terminal.close",
@@ -950,10 +950,10 @@ describe("OpenClawTerminalPanel", () => {
       payload: { sessionId: "session-1", exitCode: null, reason: "detached" },
     });
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-tab__status")?.textContent).toBe("detached");
+    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("detached");
 
     await i18n.setLocale("de");
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-tab__status")?.textContent).toBe("getrennt");
+    expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe("getrennt");
   });
 });

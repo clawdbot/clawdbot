@@ -10,7 +10,7 @@ import {
   runFfmpeg,
   runFfprobe,
 } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import { saveMediaBuffer, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -23,6 +23,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -289,14 +290,10 @@ async function saveFeishuResponseMedia(params: {
       fileName,
     );
   }
+  const save = (stream: AsyncIterable<unknown>, ct = contentType, mb = maxBytes, fn = fileName) =>
+    saveMediaStreamWithIdleTimeout(stream, ct, mb, fn, FEISHU_MEDIA_HTTP_TIMEOUT_MS);
   if (typeof response.getReadableStream === "function") {
-    return saveMediaStream(
-      response.getReadableStream(),
-      contentType,
-      "inbound",
-      maxBytes,
-      fileName,
-    );
+    return save(response.getReadableStream());
   }
   if (typeof response.writeFile === "function") {
     return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
@@ -305,21 +302,14 @@ async function saveFeishuResponseMedia(params: {
       if (stat.size > maxBytes) {
         throw mediaLimitError(maxBytes);
       }
-      return await saveMediaStream(
-        fs.createReadStream(tmpPath),
-        contentType,
-        "inbound",
-        maxBytes,
-        fileName,
-      );
+      return await save(fs.createReadStream(tmpPath));
     });
   }
   if (responseWithOptionalFields[Symbol.asyncIterator]) {
-    const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
-    return saveMediaStream(asyncIterable, contentType, "inbound", maxBytes, fileName);
+    return save(responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>);
   }
   if (response instanceof Readable) {
-    return saveMediaStream(response, contentType, "inbound", maxBytes, fileName);
+    return save(response);
   }
 
   const keys = Object.keys(response as object);

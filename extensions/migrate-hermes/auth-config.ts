@@ -10,7 +10,7 @@ export type HermesAuthProfileConfig = {
   displayName?: string;
 };
 
-export type HermesAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
+type HermesAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
 
 class HermesAuthConfigConflict extends Error {}
 

@@ -699,6 +699,27 @@ struct OnboardingAISetupTests {
         #expect(legacy["modelRef"] == nil)
         #expect(capable["kind"]?.value as? String == "codex-cli")
         #expect(capable["modelRef"]?.value as? String == "openai/gpt-5.5")
+
+        let local = OnboardingAISetupModel.activationParams(
+            kind: "provider-auto:lmstudio",
+            modelRef: "lmstudio/qwen-local",
+            supportsExactModel: true
+        )
+        #expect(local["kind"]?.value as? String == "provider-auto:lmstudio")
+        #expect(local["modelRef"]?.value as? String == "lmstudio/qwen-local")
+    }
+
+    @Test func `unavailable detected integration decodes for informational display`() throws {
+        let candidate = try JSONDecoder().decode(
+            OnboardingAISetupModel.UnavailableCandidate.self,
+            from: Data(
+                #"{"id":"antigravity-cli","label":"Antigravity CLI","detail":"installed","reason":"Automatic setup cannot enforce a tool-free probe."}"#.utf8
+            )
+        )
+
+        #expect(candidate.id == "antigravity-cli")
+        #expect(candidate.label == "Antigravity CLI")
+        #expect(candidate.detail == "installed")
     }
 
     @Test func `activation decodes and retains copyable setup lines`() throws {

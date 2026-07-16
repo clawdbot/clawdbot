@@ -8,12 +8,12 @@ scenario:
     secondary:
       - channels.inbound-media-normalization
   execution:
+    profiles: { "matrix:all": 55, "matrix:media": 4 }
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

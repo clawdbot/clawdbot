@@ -154,18 +154,23 @@ function installPrCliFixture(repoDir: string) {
 async function runSupervisedFixture(
   repoDir: string,
   fixture: string,
-  options: { accelerateTimeouts?: boolean; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    accelerateTimeouts?: boolean;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    runner?: string;
+  } = {},
 ) {
   const controller = spawn(
     process.execPath,
     [
       ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
-      processGroupRunner,
+      options.runner ?? processGroupRunner,
       repoDir,
       fixture,
     ],
     {
-      cwd: repoDir,
+      cwd: options.cwd ?? repoDir,
       env: { ...process.env, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -1001,6 +1006,64 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+  });
+
+  it("reports the child exit code when retaining a failed operation", async () => {
+    const repoDir = createRepo();
+    const fixture = writeOperationFixture(repoDir, "failed-operation.sh", [
+      "acquire_pr_operation_lock 42",
+      "exit 3",
+    ]);
+    const result = await runSupervisedFixture(repoDir, fixture);
+    const ownerOid = refOid(repoDir);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(3);
+    expect(result.stderr).toContain("reason: child exited with code 3");
+    expect(refOid(repoDir)).toBe(ownerOid);
+
+    const recovered = runLockShell(repoDir, [
+      `recover_pr_operation_lock 42 '${ownerOid}' --confirmed-no-running-tools`,
+    ]);
+    expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+    expect(refExists(repoDir)).toBe(false);
+  });
+
+  it("releases the lock after the operation deletes its runner worktree", async () => {
+    const repoDir = createRepo();
+    const doomedDir = tempDirs.make("openclaw-pr-self-deleting-runner-");
+    const copiedLibDir = join(doomedDir, "pr-lib");
+    mkdirSync(copiedLibDir, { recursive: true });
+    for (const file of ["operation-lock.sh", "process-group-runner.mjs"]) {
+      cpSync(join(repoRoot, "scripts/pr-lib", file), join(copiedLibDir, file));
+    }
+    const copiedRunner = join(copiedLibDir, "process-group-runner.mjs");
+    const fixture = join(doomedDir, "delete-own-worktree.sh");
+    writeFileSync(
+      fixture,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `source '${join(copiedLibDir, "operation-lock.sh")}'`,
+        `repo_root() { printf '%s\\n' '${repoDir}'; }`,
+        "acquire_pr_operation_lock 42",
+        "echo 'fixture: lock acquired'",
+        `rm -rf '${doomedDir}'`,
+        "echo 'fixture: runner worktree deleted'",
+      ].join("\n"),
+    );
+    chmodSync(fixture, 0o755);
+
+    const result = await runSupervisedFixture(repoDir, fixture, {
+      cwd: doomedDir,
+      runner: copiedRunner,
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("fixture: lock acquired");
+    expect(result.stdout).toContain("fixture: runner worktree deleted");
+    expect(result.stderr).not.toContain("Retaining the operation lock");
+    expect(refExists(repoDir)).toBe(false);
   });
 
   it("retains the exact owner when supervisor release cannot take the ref lock", async () => {
@@ -1440,6 +1503,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(processGroupExists(operationPgid)).toBe(false);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
+      expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
+      expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);
+      expect(result.stderr).toContain("process group appears empty at report time");
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
       );
@@ -1929,6 +1995,102 @@ describePosix("scripts/pr per-PR operation lock", () => {
         cwd: repoDir,
       }).status,
     ).toBe(1);
+  });
+
+  it("prunes a registered worktree whose directory is already gone", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    const canonicalWorktreeDir = realpathSync(worktreeDir);
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, ['remove_worktree_if_present ".worktrees/pr-42"']);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(
+      execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      }),
+    ).not.toContain(canonicalWorktreeDir);
+  });
+
+  it("surfaces git worktree remove stderr without making cleanup fatal", () => {
+    const repoDir = createRepo();
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    mkdirSync(dirname(worktreeDir), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", "pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+
+    const result = runLockShell(repoDir, [
+      "git() {",
+      "  if [ \"$1 $2\" = 'worktree remove' ]; then",
+      "    echo 'fixture remove failure' >&2",
+      "    return 1",
+      "  fi",
+      '  command git "$@"',
+      "}",
+      'remove_worktree_if_present ".worktrees/pr-42"',
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "Warning: git worktree remove failed for .worktrees/pr-42: fixture remove failure",
+    );
+    expect(existsSync(worktreeDir)).toBe(true);
+  });
+
+  it("prunes a missing registration and resets its script-owned branch on worktree add", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    const physicalWorktreesDir = join(repoDir, "linked-worktrees");
+    mkdirSync(physicalWorktreesDir);
+    symlinkSync(physicalWorktreesDir, join(repoDir, ".worktrees"), "dir");
+    const worktreeDir = join(repoDir, ".worktrees", "pr-42");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "temp/pr-42", worktreeDir], {
+      cwd: repoDir,
+    });
+    rmSync(worktreeDir, { recursive: true });
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 42",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Pruning stale worktree registration for .worktrees/pr-42");
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-42");
+  });
+
+  it("resets an existing script-owned branch when adding a fresh worktree", () => {
+    const repoDir = createRepo();
+    execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+    execFileSync("git", ["branch", "temp/pr-43"], { cwd: repoDir });
+    const worktreeDir = join(repoDir, ".worktrees", "pr-43");
+
+    const result = runLockShell(repoDir, [
+      "ensure_gh_api_auth() { return 0; }",
+      "enter_worktree 43",
+    ]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(worktreeDir)).toBe(true);
+    expect(
+      execFileSync("git", ["branch", "--show-current"], {
+        cwd: worktreeDir,
+        encoding: "utf8",
+      }).trim(),
+    ).toBe("temp/pr-43");
   });
 
   it("refuses a symlink alias to another registered worktree", () => {

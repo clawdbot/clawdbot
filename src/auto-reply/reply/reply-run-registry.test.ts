@@ -1114,6 +1114,37 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
   });
 
+  it("queues images only through backends that preserve them", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-images",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+      supportsQueueMessageImages: true,
+    });
+
+    expect(queueReplyRunMessage("session-images", "inspect", { images })).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
+  });
+
   it("queues messages through active non-streaming backends with live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({

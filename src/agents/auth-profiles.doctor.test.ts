@@ -2,10 +2,22 @@
  * Auth-profile doctor copy tests.
  * Covers provider-specific repair hints without invoking real auth flows.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const buildProviderAuthDoctorHintWithPluginMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
+}));
+
 import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
 
 describe("formatAuthDoctorHint", () => {
+  beforeEach(() => {
+    buildProviderAuthDoctorHintWithPluginMock.mockReset();
+    buildProviderAuthDoctorHintWithPluginMock.mockResolvedValue(undefined);
+  });
+
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
     const hint = await formatAuthDoctorHint({
       store: {
@@ -27,6 +39,7 @@ describe("formatAuthDoctorHint", () => {
     expect(hint).toBe(
       "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
     );
+    expect(buildProviderAuthDoctorHintWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("guides an unsupported github-copilot enterprise profile to login again", async () => {
@@ -50,6 +63,7 @@ describe("formatAuthDoctorHint", () => {
 
     expect(hint).toContain("unsupported enterprise domain");
     expect(hint).toContain("openclaw models auth login --provider github-copilot --force");
+    expect(buildProviderAuthDoctorHintWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("accepts a github-copilot profile on a ghe.com tenant", async () => {
@@ -72,6 +86,7 @@ describe("formatAuthDoctorHint", () => {
     });
 
     expect(hint).not.toContain("unsupported enterprise domain");
+    expect(buildProviderAuthDoctorHintWithPluginMock).toHaveBeenCalledOnce();
   });
 
   it("accepts a public github.com profile", async () => {
@@ -93,5 +108,6 @@ describe("formatAuthDoctorHint", () => {
     });
 
     expect(hint).not.toContain("unsupported enterprise domain");
+    expect(buildProviderAuthDoctorHintWithPluginMock).toHaveBeenCalledOnce();
   });
 });

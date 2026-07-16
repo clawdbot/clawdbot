@@ -12,7 +12,12 @@ import {
   isWebSocketUrl,
   parseBrowserHttpUrl as parseHttpUrl,
 } from "./cdp.helpers.js";
-import { createTargetViaCdp, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import {
+  createTargetViaCdp,
+  normalizeCdpWsUrl,
+  snapshotAria,
+  waitForCdpCommittedNavigationUrl,
+} from "./cdp.js";
 import {
   BrowserCdpEndpointBlockedError,
   BrowserValidationError,
@@ -146,6 +151,174 @@ describe("cdp", () => {
       "Runtime.runIfWaitingForDebugger",
       "Target.detachFromTarget",
     ]);
+  });
+
+  it("returns the stable browser-owned frame URL when requested", async () => {
+    let frameReadCount = 0;
+    const methods: string[] = [];
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
+      if (msg.method === "Target.createTarget") {
+        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_REDIRECT" } }));
+        return;
+      }
+      if (msg.method === "Page.getFrameTree") {
+        frameReadCount += 1;
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              frameTree: {
+                frame:
+                  frameReadCount === 1
+                    ? { loaderId: "LOADER_BLANK", url: "about:blank" }
+                    : {
+                        loaderId: "LOADER_BLOCKED",
+                        url: "http://127.0.0.1:61501/blocked",
+                        urlFragment: "#fragment",
+                      },
+              },
+            },
+          }),
+        );
+      }
+    });
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+    });
+
+    const created = await createTargetViaCdp({
+      cdpUrl: `http://127.0.0.1:${httpPort}`,
+      url: "https://redirect.example/start",
+      waitForNavigationResult: true,
+    });
+
+    expect(created).toEqual({
+      targetId: "TARGET_REDIRECT",
+      finalUrl: "http://127.0.0.1:61501/blocked#fragment",
+    });
+    expect(frameReadCount).toBeGreaterThan(2);
+    expect(methods).not.toContain("Runtime.evaluate");
+  });
+
+  it("preserves caller cancellation after target creation while navigation is settling", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancel after target creation");
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Target.createTarget") {
+        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "TARGET_CANCEL" } }));
+        return;
+      }
+      if (msg.method === "Page.getFrameTree") {
+        controller.abort(reason);
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: {
+              frameTree: {
+                frame: { loaderId: "LOADER_CANCEL", url: "https://example.com" },
+              },
+            },
+          }),
+        );
+      }
+    });
+    const httpPort = await startVersionHttpServer({
+      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+    });
+
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+        signal: controller.signal,
+        waitForNavigationResult: true,
+      }),
+    ).rejects.toBe(reason);
+  });
+
+  it("does not create a target when cancellation arrives during endpoint discovery", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancel during endpoint discovery");
+    const methods: string[] = [];
+    const wsPort = await startWsServerWithMessages((msg) => {
+      if (msg.method) {
+        methods.push(msg.method);
+      }
+    });
+    httpServer = createServer((req, res) => {
+      if (req.url !== "/json/version") {
+        res.statusCode = 404;
+        res.end("not found");
+        return;
+      }
+      controller.abort(reason);
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
+    const httpPort = (httpServer.address() as AddressInfo).port;
+
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: `http://127.0.0.1:${httpPort}`,
+        url: "https://example.com",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(methods).toEqual([]);
+  });
+
+  it("reads the browser frame URL with its fragment", async () => {
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method !== "Page.getFrameTree") {
+        return;
+      }
+      socket.send(
+        JSON.stringify({
+          id: msg.id,
+          result: {
+            frameTree: {
+              frame: {
+                loaderId: "LOADER_FINAL",
+                url: "https://example.com/final",
+                urlFragment: "#section",
+              },
+            },
+          },
+        }),
+      );
+    });
+
+    await expect(
+      waitForCdpCommittedNavigationUrl({
+        wsUrl: `ws://127.0.0.1:${wsPort}/devtools/page/TARGET`,
+        configuredCdpUrl: `http://127.0.0.1:${wsPort}`,
+        requestedUrl: "https://example.com/start",
+      }),
+    ).resolves.toBe("https://example.com/final#section");
+  });
+
+  it("propagates a policy-blocked discovered page websocket", async () => {
+    await expect(
+      waitForCdpCommittedNavigationUrl({
+        wsUrl: "ws://169.254.169.254:9222/devtools/page/PIVOT",
+        configuredCdpUrl: "http://127.0.0.1:9222",
+        cdpPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+        requestedUrl: "about:blank",
+      }),
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
   it("creates a target via direct WebSocket URL (skips /json/version)", async () => {

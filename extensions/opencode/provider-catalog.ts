@@ -214,7 +214,7 @@ type OpencodeZenModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
-export type FetchOpencodeZenLiveModelIdsParams = {
+type FetchOpencodeZenLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

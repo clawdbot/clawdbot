@@ -1534,5 +1534,21 @@
   {
     "source": "Linux Canvas plugin",
     "target": "Linux Canvas plugin"
+  },
+  {
+    "source": "Baseten",
+    "target": "Baseten"
+  },
+  {
+    "source": "Baseten plugin",
+    "target": "Baseten 插件"
+  },
+  {
+    "source": "baseten",
+    "target": "baseten"
+  },
+  {
+    "source": "Baseten (Inkling + Model APIs)",
+    "target": "Baseten（Inkling + Model APIs）"
   }
 ]

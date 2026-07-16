@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   app_version TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   spawned_by TEXT,
   display_name TEXT,
   FOREIGN KEY (primary_conversation_id) REFERENCES conversations(conversation_id) ON DELETE SET NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
   ON sessions(updated_at DESC, session_id);
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS session_routes (
   session_id TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_routes_session_id
   ON session_routes(session_id);
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   metadata_json TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_lookup
   ON conversations(channel, account_id, kind, peer_id, thread_id);
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS session_conversations (
   PRIMARY KEY (session_id, conversation_id, role),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS session_entries (
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
   ON session_entries(updated_at DESC, session_key);
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   session_id TEXT NOT NULL,
@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
   ON trajectory_runtime_events(session_id, run_id, seq)
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS transcript_event_identities (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, event_id),
   FOREIGN KEY (session_id, seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
-);
+) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
   ON transcript_event_identities(session_id, message_idempotency_key)
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS cache_entries (
   expires_at INTEGER,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (scope, key)
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_cache_expiry
   ON cache_entries(scope, expires_at, key)
@@ -192,28 +192,28 @@ CREATE TABLE IF NOT EXISTS auth_profile_store (
   store_key TEXT NOT NULL PRIMARY KEY,
   store_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS auth_profile_state (
   state_key TEXT NOT NULL PRIMARY KEY,
   state_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_sources (
   id INTEGER PRIMARY KEY,
   path TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'memory',
   hash TEXT NOT NULL,
-  mtime INTEGER NOT NULL,
+  mtime REAL NOT NULL,
   size INTEGER NOT NULL,
   UNIQUE (path, source)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunks (
   id TEXT PRIMARY KEY,
@@ -226,7 +226,7 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   text TEXT NOT NULL,
   embedding TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   provider TEXT NOT NULL,
@@ -237,12 +237,12 @@ CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   dims INTEGER,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (provider, model, provider_key, hash)
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -250,7 +250,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   leaf_event_id TEXT,
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,

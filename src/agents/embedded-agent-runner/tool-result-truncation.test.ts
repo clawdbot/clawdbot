@@ -37,6 +37,7 @@ let estimateToolResultReductionPotential: typeof import("./tool-result-truncatio
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
+let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -53,6 +54,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
+    toolResultWarningDedupe,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -74,6 +76,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  toolResultWarningDedupe.promptPressure.clear();
+  toolResultWarningDedupe.sessionRecovery.clear();
   clearEmbeddedSessionPromptStates(["session-99495", "session-99495-shrink"]);
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
@@ -94,6 +98,28 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
     timestamp: nextTimestamp(),
   };
 }
+
+describe("tool-result warning dedupe", () => {
+  const warningDedupeLimit = 1_024;
+
+  it.each([
+    ["prompt pressure", () => toolResultWarningDedupe.promptPressure],
+    ["session recovery", () => toolResultWarningDedupe.sessionRecovery],
+  ])("bounds and evicts the oldest %s warning keys", (_name, getCache) => {
+    const cache = getCache();
+
+    for (let index = 0; index <= warningDedupeLimit; index += 1) {
+      expect(cache.check(`session-${index}`)).toBe(false);
+    }
+
+    expect(cache.size()).toBe(warningDedupeLimit);
+    expect(cache.peek("session-0")).toBe(false);
+    expect(cache.peek("session-1")).toBe(true);
+    expect(cache.peek(`session-${warningDedupeLimit}`)).toBe(true);
+    expect(cache.check("session-0")).toBe(false);
+    expect(cache.check(`session-${warningDedupeLimit}`)).toBe(true);
+  });
+});
 
 function textWithFullOutputFooter(text: string, fullOutputPath: string): string {
   return `${text}\n\n[Showing truncated output. ${formatFullOutputFooter(fullOutputPath)}]`;

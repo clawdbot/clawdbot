@@ -247,6 +247,13 @@ describe("msteamsOutbound cfg threading", () => {
               action: { type: "web-app" as const, url: "https://example.com/app" },
             },
             {
+              label: "Hosted widget",
+              action: {
+                type: "web-app" as const,
+                widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+              },
+            },
+            {
               label: "Allow",
               action: {
                 type: "approval" as const,

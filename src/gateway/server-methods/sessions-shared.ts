@@ -278,7 +278,7 @@ export function emitSessionOperation(
 }
 
 export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore" | "dispatch" | "reclaim";
+  action: "patch" | "delete" | "compact" | "branch" | "restore" | "dispatch" | "reclaim";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;

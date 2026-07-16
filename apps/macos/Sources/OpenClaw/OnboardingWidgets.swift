@@ -51,8 +51,8 @@ extension OnboardingView {
     }
 
     /// The hero mascot mirrors what setup is doing: curious while choosing,
-    /// thinking while work is in flight, sad on failures, celebrating once
-    /// the AI answers and on the final page.
+    /// hard-hat working while setup is in flight, sad on failures,
+    /// celebrating once the AI answers and on the final page.
     var mascotMood: OpenClawMascotMood {
         Self.mascotMood(for: MascotMoodSnapshot(
             page: self.mascotPage,
@@ -109,7 +109,7 @@ extension OnboardingView {
                 // Mirrors the page's install-failed card.
                 .sad
             } else {
-                .thinking
+                .working
             }
         case .ai:
             if snapshot.aiPhase == .connected {

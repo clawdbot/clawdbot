@@ -94,6 +94,14 @@ const LINE_TEST_CFG = {
   },
 };
 
+function createCredentialBearingHttpUrl(): string {
+  const url = new URL("http://example.com/image.jpg");
+  url.username = ["line", "user"].join("-");
+  url.password = ["line", "fixture"].join("-");
+  url.searchParams.set("auth", ["line", "query"].join("-"));
+  return url.href;
+}
+
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
 
@@ -348,6 +356,48 @@ describe("LINE send helpers", () => {
     ).rejects.toThrow(/private network/i);
 
     expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "send media URL",
+      run: () =>
+        sendModule.sendMessageLine("line:user:U200", "Image", {
+          cfg: LINE_TEST_CFG,
+          mediaUrl: createCredentialBearingHttpUrl(),
+        }),
+    },
+    {
+      name: "send preview URL",
+      run: () =>
+        sendModule.sendMessageLine("line:user:U200", "Video", {
+          cfg: LINE_TEST_CFG,
+          mediaUrl: "https://example.com/video.mp4",
+          mediaKind: "video",
+          previewImageUrl: createCredentialBearingHttpUrl(),
+        }),
+    },
+    {
+      name: "push image URL",
+      run: () =>
+        sendModule.pushImageMessage("line:user:U200", createCredentialBearingHttpUrl(), undefined, {
+          cfg: LINE_TEST_CFG,
+        }),
+    },
+    {
+      name: "push image preview URL",
+      run: () =>
+        sendModule.pushImageMessage(
+          "line:user:U200",
+          "https://example.com/image.jpg",
+          createCredentialBearingHttpUrl(),
+          { cfg: LINE_TEST_CFG },
+        ),
+    },
+  ])("does not expose credentials from an insecure $name", async ({ run }) => {
+    await expect(run()).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
+    expect(pushMessageMock).not.toHaveBeenCalled();
+    expect(replyMessageMock).not.toHaveBeenCalled();
   });
 
   it("omits trackingId for non-user destinations", async () => {

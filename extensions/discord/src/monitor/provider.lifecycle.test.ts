@@ -741,6 +741,52 @@ describe("runDiscordGatewayLifecycle", () => {
   });
 });
 
+describe("waitForGatewayReady", () => {
+  let waitForGatewayReady: (typeof import("../../test-api.js"))["discordGatewayLifecycleTesting"]["waitForGatewayReady"];
+
+  beforeAll(async () => {
+    waitForGatewayReady = (await import("../../test-api.js")).discordGatewayLifecycleTesting
+      .waitForGatewayReady;
+  });
+
+  it("returns promptly when abortSignal fires during the READY retry backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const gateway = {
+        isConnected: false,
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        ws: null,
+      };
+      const runtime: RuntimeEnv = {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      };
+
+      const readyPromise = waitForGatewayReady({
+        gateway,
+        abortSignal: controller.signal,
+        readyTimeoutMs: 200,
+        runtime,
+      });
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      controller.abort();
+
+      await expect(readyPromise).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;

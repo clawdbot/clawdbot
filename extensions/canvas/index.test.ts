@@ -223,6 +223,13 @@ describe("Canvas plugin entry", () => {
       title: "Status",
       widget_code: "<p>ready</p>",
     });
+
+    const showWidgetRegistration = tools[1];
+    if (!showWidgetRegistration || typeof showWidgetRegistration.tool !== "function") {
+      throw new Error("expected show_widget factory registration");
+    }
+    const discordShowWidget = showWidgetRegistration.tool({ messageChannel: "discord" });
+    expect(discordShowWidget).toBeNull();
   });
 
   it.each([

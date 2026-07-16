@@ -93,10 +93,10 @@ export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
-  const shouldReadDisk =
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK === "1" ||
+  const shouldReadPersisted =
+    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1" ||
     !(process.env.VITEST || process.env.NODE_ENV === "test");
-  if (shouldReadDisk) {
+  if (shouldReadPersisted) {
     try {
       // Persisted state lets other worker processes observe active runs.
       // Cache this hot cross-process snapshot briefly; writes refresh the local

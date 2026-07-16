@@ -53,7 +53,7 @@ exec "$@"
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
-export class UpdateInvariantError extends Error {
+class UpdateInvariantError extends Error {
   constructor(code, message) {
     super(message);
     this.name = "UpdateInvariantError";
@@ -282,7 +282,7 @@ export function inspectBuildState(checkout, expectedSha) {
   };
 }
 
-export function verifyCheckout(checkout, { remote }) {
+function verifyCheckout(checkout, { remote }) {
   let resolvedCheckout;
   try {
     resolvedCheckout = realpathSync(checkout);
@@ -369,7 +369,7 @@ export function verifyCheckout(checkout, { remote }) {
   };
 }
 
-export function updateMain({ checkout, remote }, dependencies = {}) {
+function updateMain({ checkout, remote }, dependencies = {}) {
   const before = verifyCheckout(checkout, { remote });
   const fetchMain =
     dependencies.fetchMain ??
@@ -2164,7 +2164,7 @@ function parseArgs(argv) {
   return options;
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   try {
     console.log(JSON.stringify(maintainMain(parseArgs(argv))));
   } catch (error) {

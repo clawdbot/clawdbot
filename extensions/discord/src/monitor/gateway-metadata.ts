@@ -284,9 +284,14 @@ export async function fetchDiscordGatewayMetadataGuarded(
   init?: DiscordGatewayFetchInit,
   options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
+  const requestInit = init as RequestInit | undefined;
+  const signal = requestInit?.signal ?? undefined;
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
-    init: init as RequestInit,
+    init: requestInit,
+    // DNS and proxy preflight run before RequestInit reaches fetch. Surface the
+    // existing metadata watchdog here so the whole lookup shares one deadline.
+    ...(signal ? { signal } : {}),
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",

@@ -521,7 +521,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         target: "openai/gpt-5.5",
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
         fixHint:
-          "Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
+          "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny; or set the affected OpenAI models to an OpenClaw runtime policy.",
       }),
     ]);
     expect(findings[0]?.message).toContain("Codex plugin is disabled by config");

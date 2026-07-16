@@ -7,8 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  checkKnipUnusedFileScanResult,
   checkUnusedFiles,
-  compareUnusedFilesToAllowlist,
   KNIP_MAX_BUFFER_BYTES,
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
@@ -82,6 +82,15 @@ function waitForChildClose(
 }
 
 describe("check-deadcode-unused-files", () => {
+  it("has no checked-in unused-file allowlist", () => {
+    expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
+    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mjs"), "utf8");
+    expect(script).not.toContain("allowlist");
+    expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
+    expect(script).toContain('"config/knip.all-exports.config.ts"');
+    expect(script).toContain("result.status !== 0");
+  });
+
   it("parses the compact Knip unused-file section", () => {
     expect(
       parseKnipCompactUnusedFiles(`
@@ -91,6 +100,9 @@ describe("check-deadcode-unused-files", () => {
 Unused files (2)
 src/b.ts: src/b.ts
 src/a.ts: src/a.ts
+C:\\tmp\\outside.ts: C:\\tmp\\outside.ts
+C:outside.ts: C:outside.ts
+\\\\server\\share\\outside.ts: \\\\server\\share\\outside.ts
 
 Unused dependencies (1)
 left-pad: package.json
@@ -105,6 +117,14 @@ left-pad: package.json
     ]);
   });
 
+  it("keeps dot-directory and root entry files", () => {
+    expect(
+      parseKnipCompactUnusedFiles(
+        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+      ),
+    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
+  });
+
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
     expect(
       parseKnipCompactUnusedFiles(`
@@ -116,71 +136,39 @@ src/a.ts: src/a.ts
     ).toEqual(["src/a.ts", "src/b.ts"]);
   });
 
-  it("reports unexpected and stale allowlist entries", () => {
-    expect(
-      compareUnusedFilesToAllowlist(["src/a.ts", "src/new.ts"], ["src/a.ts", "src/old.ts"]),
-    ).toStrictEqual({
-      actual: ["src/a.ts", "src/new.ts"],
-      allowed: ["src/a.ts", "src/old.ts"],
-      unexpected: ["src/new.ts"],
-      stale: ["src/old.ts"],
-      duplicateAllowedCount: 0,
-      allowlistIsSorted: true,
-    });
-  });
-
-  it("accepts optional allowlist entries whether Knip reports them or not", () => {
-    expect(
-      compareUnusedFilesToAllowlist(
-        ["src/a.ts", "src/platform.ts"],
-        ["src/a.ts"],
-        ["src/platform.ts"],
-      ),
-    ).toStrictEqual({
-      actual: ["src/a.ts", "src/platform.ts"],
-      allowed: ["src/a.ts"],
-      allowlistIsSorted: true,
-      duplicateAllowedCount: 0,
-      unexpected: [],
-      stale: [],
-    });
-    expect(
-      compareUnusedFilesToAllowlist(["src/a.ts"], ["src/a.ts"], ["src/platform.ts"]),
-    ).toStrictEqual({
-      actual: ["src/a.ts"],
-      allowed: ["src/a.ts"],
-      allowlistIsSorted: true,
-      duplicateAllowedCount: 0,
-      unexpected: [],
-      stale: [],
-    });
-  });
-
-  it("accepts exactly allowlisted unused files", () => {
-    expect(checkUnusedFiles("Unused files (1)\nsrc/a.ts: src/a.ts\n", ["src/a.ts"])).toStrictEqual({
-      comparison: {
-        actual: ["src/a.ts"],
-        allowed: ["src/a.ts"],
-        allowlistIsSorted: true,
-        duplicateAllowedCount: 0,
-        stale: [],
-        unexpected: [],
-      },
+  it("accepts an empty compact report with zero unused files", () => {
+    expect(checkUnusedFiles("")).toStrictEqual({
+      files: [],
       ok: true,
       message: "",
     });
   });
 
-  it("rejects unsorted allowlists", () => {
+  it("rejects a nonzero Knip exit even when no unused files were printed", () => {
     expect(
-      compareUnusedFilesToAllowlist(["src/a.ts", "src/b.ts"], ["src/b.ts", "src/a.ts"]),
+      checkKnipUnusedFileScanResult({
+        errorCode: undefined,
+        output: "",
+        signal: null,
+        status: 2,
+      }),
     ).toStrictEqual({
-      actual: ["src/a.ts", "src/b.ts"],
-      allowed: ["src/a.ts", "src/b.ts"],
-      allowlistIsSorted: false,
-      duplicateAllowedCount: 0,
-      stale: [],
-      unexpected: [],
+      failureReason: "exit status 2",
+      message: "",
+      ok: false,
+    });
+  });
+
+  it("rejects every unused file without an allowlist", () => {
+    expect(
+      checkUnusedFiles("Unused files (2)\nsrc/z.ts: src/z.ts\nsrc/a.ts: src/a.ts\n"),
+    ).toStrictEqual({
+      files: ["src/a.ts", "src/z.ts"],
+      ok: false,
+      message: `Unused files are not allowed:
+  src/a.ts
+  src/z.ts
+Delete the files or model their real entrypoints in Knip.`,
     });
   });
 
@@ -321,7 +309,7 @@ src/a.ts: src/a.ts
       expect(kills).toContain("SIGTERM");
       expect(result).toStrictEqual({
         errorCode: "ETIMEDOUT",
-        errorMessage: expect.stringContaining("Knip unused-file scan timed out"),
+        errorMessage: expect.stringContaining("Knip production unused-file scan timed out"),
         output: "",
         signal: "SIGTERM",
         status: null,
@@ -493,7 +481,7 @@ src/a.ts: src/a.ts
 
       await expect(resultPromise).resolves.toStrictEqual({
         errorCode: "ENOBUFS",
-        errorMessage: "Knip unused-file scan exceeded 4 output bytes",
+        errorMessage: "Knip production unused-file scan exceeded 4 output bytes",
         output: "too ",
         signal: "SIGTERM",
         status: null,

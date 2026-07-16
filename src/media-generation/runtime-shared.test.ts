@@ -3,13 +3,11 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  deriveAspectRatioFromSize,
   normalizeDurationToClosestMax,
   resolveCapabilityModelCandidates,
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
-  resolveMediaProviderDefaultTimeoutMs,
   resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
@@ -241,9 +239,6 @@ describe("media-generation runtime shared candidates", () => {
 
 describe("media-generation runtime shared normalization", () => {
   it("caps media provider timeouts to the timer-safe range", () => {
-    expect(resolveMediaProviderDefaultTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
     expect(
       resolveMediaProviderRequestTimeoutMs({
         timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -258,13 +253,7 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe(45_000);
   });
 
-  it("derives reduced aspect ratios from size strings", () => {
-    expect(deriveAspectRatioFromSize("1280x720")).toBe("16:9");
-    expect(deriveAspectRatioFromSize("1024x1536")).toBe("2:3");
-  });
-
   it("rejects unsafe size dimensions before deriving ratios", () => {
-    expect(deriveAspectRatioFromSize("9007199254740993x3")).toBeUndefined();
     expect(
       resolveClosestSize({
         requestedSize: "9007199254740993x3",

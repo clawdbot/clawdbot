@@ -10,7 +10,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
 }));
 
-import { openaiCodexOAuthProvider, testing } from "./openai-chatgpt-oauth-flow.runtime.js";
+import {
+  createOpenAIAuthorizationFlow,
+  resolveOpenAICallbackHost,
+  resolveOpenAIRedirectUri,
+} from "./openai-chatgpt-oauth-authorization.runtime.js";
+import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
+import {
+  exchangeOpenAIAuthorizationCode,
+  refreshOpenAIAccessToken,
+} from "./openai-chatgpt-oauth-token.runtime.js";
 
 function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
@@ -40,7 +49,7 @@ describe("OpenAI Codex OAuth flow", () => {
     controller.abort();
 
     await expect(
-      openaiCodexOAuthProvider.login({
+      loginOpenAICodex({
         onAuth: vi.fn(),
         onPrompt: vi.fn(async () => "unused-code"),
         signal: controller.signal,
@@ -51,7 +60,7 @@ describe("OpenAI Codex OAuth flow", () => {
   it("does not open the OAuth flow after cancellation during setup", async () => {
     const controller = new AbortController();
     const onAuth = vi.fn();
-    const loginPromise = openaiCodexOAuthProvider.login({
+    const loginPromise = loginOpenAICodex({
       onAuth,
       onPrompt: vi.fn(async () => "unused-code"),
       signal: controller.signal,
@@ -64,7 +73,11 @@ describe("OpenAI Codex OAuth flow", () => {
   });
 
   it("waits for Node OAuth runtime before creating an authorization flow", async () => {
-    const flow = await testing.createAuthorizationFlow("openclaw-test");
+    const callbackHost = resolveOpenAICallbackHost();
+    const flow = await createOpenAIAuthorizationFlow(
+      "openclaw-test",
+      resolveOpenAIRedirectUri(callbackHost),
+    );
     const url = new URL(flow.url);
 
     expect(flow.state).toMatch(/^[a-f0-9]{32}$/u);
@@ -73,15 +86,15 @@ describe("OpenAI Codex OAuth flow", () => {
     const redirectUri = url.searchParams.get("redirect_uri");
     expect(redirectUri).toBeTruthy();
     expect(flow.redirectUri).toBe(redirectUri);
-    expect(testing.callbackHost).toBe(new URL(redirectUri ?? "").hostname);
+    expect(callbackHost).toBe(new URL(redirectUri ?? "").hostname);
   });
 
   it("builds callback redirect URIs from the configured loopback host", () => {
-    expect(testing.resolveRedirectUri("127.0.0.1")).toBe("http://127.0.0.1:1455/auth/callback");
+    expect(resolveOpenAIRedirectUri("127.0.0.1")).toBe("http://127.0.0.1:1455/auth/callback");
   });
 
   it("rejects non-loopback callback bind hosts", () => {
-    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
+    expect(() => resolveOpenAICallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
       "callback host must be localhost, 127.0.0.1, or ::1",
     );
   });
@@ -89,10 +102,10 @@ describe("OpenAI Codex OAuth flow", () => {
   it("times out token exchange requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
-    const result = await testing.exchangeAuthorizationCode(
+    const result = await exchangeOpenAIAuthorizationCode(
       "code",
       "verifier",
-      testing.resolveRedirectUri("localhost"),
+      resolveOpenAIRedirectUri("localhost"),
       { timeoutMs: 5 },
     );
 
@@ -112,10 +125,10 @@ describe("OpenAI Codex OAuth flow", () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = await testing.exchangeAuthorizationCode(
+    const result = await exchangeOpenAIAuthorizationCode(
       "code",
       "verifier",
-      testing.resolveRedirectUri("localhost"),
+      resolveOpenAIRedirectUri("localhost"),
       { signal: controller.signal, timeoutMs: 5 },
     );
 
@@ -131,10 +144,10 @@ describe("OpenAI Codex OAuth flow", () => {
       '{"access_token":"access-token","refresh_token":"refresh-token","expires_in":1e309}',
     );
 
-    const result = await testing.exchangeAuthorizationCode(
+    const result = await exchangeOpenAIAuthorizationCode(
       "code",
       "verifier",
-      testing.resolveRedirectUri("localhost"),
+      resolveOpenAIRedirectUri("localhost"),
       { timeoutMs: 5 },
     );
 
@@ -147,7 +160,7 @@ describe("OpenAI Codex OAuth flow", () => {
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
-    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+    const result = await refreshOpenAIAccessToken("old-refresh-token", { timeoutMs: 5 });
 
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -168,7 +181,7 @@ describe("OpenAI Codex OAuth flow", () => {
       expires_in: 0,
     });
 
-    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+    const result = await refreshOpenAIAccessToken("old-refresh-token", { timeoutMs: 5 });
 
     expect(result).toEqual({
       type: "failed",
@@ -221,7 +234,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
         return { response, release };
       });
 
-      const result = await testing.exchangeAuthorizationCode(
+      const result = await exchangeOpenAIAuthorizationCode(
         "code-loopback",
         "verifier-loopback",
         "http://localhost:1455/auth/callback",
@@ -260,7 +273,7 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
         return { response, release };
       });
 
-      const result = await testing.exchangeAuthorizationCode(
+      const result = await exchangeOpenAIAuthorizationCode(
         "code-loopback",
         "verifier-loopback",
         "http://localhost:1455/auth/callback",

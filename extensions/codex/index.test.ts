@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
+import openAIPlugin from "../openai/index.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 import {
@@ -45,12 +46,13 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 }
 
 describe("codex plugin", () => {
-  it("is opt-in by default", () => {
+  it("is opt-in and does not advertise a text provider", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { enabledByDefault?: unknown };
+    ) as { enabledByDefault?: unknown; providers?: unknown };
 
     expect(manifest.enabledByDefault).toBeUndefined();
+    expect(manifest.providers).toBeUndefined();
   });
 
   it("does not open plugin state while registering with the base runtime", () => {
@@ -73,7 +75,7 @@ describe("codex plugin", () => {
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
   });
 
-  it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
+  it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
@@ -106,7 +108,6 @@ describe("codex plugin", () => {
       }),
     );
 
-    const providerRegistration = mockCallArg(registerProvider) as Record<string, unknown>;
     const agentHarnessRegistration = mockCallArg(registerAgentHarness) as Record<string, unknown>;
     const mediaProviderRegistration = mockCallArg(registerMediaUnderstandingProvider) as
       | Record<string, unknown>
@@ -116,14 +117,14 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(providerRegistration.id).toBe("codex");
-    expect(providerRegistration.label).toBe("Codex");
+    expect(registerProvider).not.toHaveBeenCalled();
     expect(agentHarnessRegistration.id).toBe("codex");
     expect(agentHarnessRegistration.label).toBe("Codex agent harness");
     expect(agentHarnessRegistration.deliveryDefaults).toEqual({
       sourceVisibleReplies: "message_tool",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
+    expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
@@ -184,7 +185,7 @@ describe("codex plugin", () => {
     );
 
     expect(registerAgentHarness).toHaveBeenCalledOnce();
-    expect(registerProvider).toHaveBeenCalledOnce();
+    expect(registerProvider).not.toHaveBeenCalled();
     const nodeCommands = registerNodeHostCommand.mock.calls.map(
       ([command]) => (command as { command: string }).command,
     );
@@ -192,6 +193,34 @@ describe("codex plugin", () => {
     expect(nodeCommands).not.toContain("codex.appServer.threads.list.v1");
     expect(nodeCommands).not.toContain("codex.appServer.thread.turns.list.v1");
     expect(registerSessionCatalog).not.toHaveBeenCalled();
+  });
+
+  it("leaves OpenAI as the only text provider when both plugins register", () => {
+    const providers: Array<{ id: string }> = [];
+    const registerProvider = (provider: { id: string }) => providers.push(provider);
+    openAIPlugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerProvider,
+      }),
+    );
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(),
+        registerProvider,
+      }),
+    );
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
   });
 
   it("registers the five shipped supervision tools only when supervision is enabled", () => {
@@ -382,8 +411,7 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(registerProvider).toHaveBeenCalledTimes(1);
-    expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
+    expect(registerProvider).not.toHaveBeenCalled();
   });
 
   it("claims the Codex routing providers by default", () => {

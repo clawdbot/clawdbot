@@ -23,6 +23,7 @@ import {
   assertSqliteSchemaContains,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
+import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -69,13 +70,14 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v8 = per-transcript session provenance. v7 added per-entry lifecycle status projection.
+// v9 = SQLite STRICT tables. v8 added per-transcript session provenance.
+// v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 8;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 9;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -679,7 +681,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       // Ownership and version checks must share the write transaction with the
       // schema update; concurrent openers must not overwrite another agent.
       // Role/ownership gates before version: user_version is only meaningful
-      // within one schema role, and the global state DB now carries version 2.
+      // within one schema role, and the global state DB now carries version 3.
       assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
       assertSupportedAgentSchemaVersion(db, pathname);
       const previousVersion = readSqliteUserVersion(db);
@@ -693,6 +695,11 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      if (previousVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
+        migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_AGENT_SCHEMA_SQL, {
+          databaseLabel: pathname,
+        });
+      }
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
       backfillOpenClawAgentSchema(db, previousVersion);
       backfillSessionEntryProvenance(db, previousVersion);

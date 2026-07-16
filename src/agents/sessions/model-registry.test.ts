@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
-import { ModelRegistry } from "./model-registry.js";
+import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
@@ -81,6 +81,27 @@ function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+    },
+  };
+}
+
+function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
+  return {
+    oauth: {
+      name,
+      login: async () => ({
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: Date.now() + 60_000,
+      }),
+      async refreshToken(credentials) {
+        return {
+          ...credentials,
+          access: "test-token-placeholder",
+          expires: Date.now() + 60_000,
+        };
+      },
+      getApiKey: (credentials) => `${apiKeyPrefix}:${credentials.access}`,
     },
   };
 }
@@ -449,5 +470,58 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
+  });
+});
+
+describe("ModelRegistry OAuth provider ownership", () => {
+  it("keeps providers isolated when another registry refreshes", async () => {
+    const sessionAAuth = AuthStorage.inMemory({
+      "corporate-ai": {
+        type: "oauth",
+        access: "test-token-placeholder",
+        refresh: "test-token-placeholder",
+        expires: 0,
+      },
+    });
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("corporate-ai", oauthProviderConfig("Corporate AI", "corporate"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+    const sessionB = ModelRegistry.inMemory(sessionBAuth);
+    sessionB.registerProvider("team-proxy", oauthProviderConfig("Team Proxy", "team"));
+
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+
+    sessionB.unregisterProvider("team-proxy");
+
+    expect(sessionBAuth.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "team-proxy",
+    );
+    expect(sessionAAuth.getOAuthProviders().map((provider) => provider.id)).toContain(
+      "corporate-ai",
+    );
+    await expect(sessionA.getApiKeyForProvider("corporate-ai")).resolves.toBe(
+      "corporate:test-token-placeholder",
+    );
+  });
+
+  it("keeps a built-in override local to its registry", () => {
+    const sessionAAuth = AuthStorage.inMemory();
+    const sessionA = ModelRegistry.inMemory(sessionAAuth);
+    sessionA.registerProvider("anthropic", oauthProviderConfig("Corporate Anthropic", "corp"));
+
+    const sessionBAuth = AuthStorage.inMemory();
+
+    expect(
+      sessionAAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Corporate Anthropic");
+    expect(
+      sessionBAuth.getOAuthProviders().find((provider) => provider.id === "anthropic")?.name,
+    ).toBe("Anthropic (Claude Pro/Max)");
   });
 });

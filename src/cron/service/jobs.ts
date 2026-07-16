@@ -25,6 +25,7 @@ import type {
   CronDelivery,
   CronDeliveryPatch,
   CronFailureAlert,
+  CronFailureAlertPatch,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -1252,10 +1253,13 @@ function mergeCronDelivery(
 
 function mergeCronFailureAlert(
   existing: CronFailureAlert | false | undefined,
-  patch: CronFailureAlert | false | undefined,
+  patch: CronFailureAlertPatch | false | null | undefined,
 ): CronFailureAlert | false | undefined {
   if (patch === false) {
     return false;
+  }
+  if (patch === null) {
+    return undefined;
   }
   if (patch === undefined) {
     return existing;

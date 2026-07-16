@@ -42,10 +42,11 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends memory migration after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-3)).toEqual([
+    expect(listGatewayMethods().slice(-4)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "ui.command",
     ]);
   });
 
@@ -95,7 +96,6 @@ describe("listGatewayMethods", () => {
     ]);
     expect(methods).toContain("tts.speak");
     expect(coreMethods.slice(-10)).toEqual([
-      "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
       "approval.resolve",
@@ -105,6 +105,7 @@ describe("listGatewayMethods", () => {
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
+      "ui.command",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

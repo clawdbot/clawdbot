@@ -777,18 +777,18 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
-    expectSourceContains(
-      "memory-core-host-runtime-core",
-      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-cli",
-      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-files",
-      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
-    );
+    expectSourceContract("memory-core-host-runtime-core", {
+      mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-cli", {
+      mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-cli.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-files", {
+      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
+    });
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
       "registerProviderPlugin",

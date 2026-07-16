@@ -5,6 +5,7 @@ mod discovery;
 mod gateway;
 mod installer;
 mod tray;
+mod updater;
 
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot};
@@ -465,6 +466,10 @@ async fn gateway_action(
 
 fn main() {
     let builder = tauri::Builder::default();
+    let builder = builder
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
     #[cfg(target_os = "linux")]
     let builder = canvas::register_protocol(builder);
 
@@ -475,6 +480,7 @@ fn main() {
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
         app.manage(discovery::GatewayDiscovery::default());
+        app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
             Ok(bridge) => {
@@ -489,18 +495,26 @@ fn main() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
         canvas::canvas_a2ui_action,
+        updater::check_for_updates,
         discovery::connect_discovered_gateway,
         discovery::discover_gateways,
         install_cli,
-        gateway_action
+        gateway_action,
+        updater::open_release_page,
+        updater::relaunch,
+        updater::updater_ready
     ]);
     #[cfg(not(target_os = "linux"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        updater::check_for_updates,
         discovery::connect_discovered_gateway,
         discovery::discover_gateways,
         install_cli,
-        gateway_action
+        gateway_action,
+        updater::open_release_page,
+        updater::relaunch,
+        updater::updater_ready
     ]);
 
     let app = builder

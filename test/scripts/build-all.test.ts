@@ -352,18 +352,35 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("keeps canonical declarations enabled for package artifact builds", () => {
-    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+  it("skips global declarations on CI artifacts and self-builds the plugin-sdk gate", () => {
+    // Global dts emission is ~95% of the tsdown wall clock; PR CI dist
+    // consumers are runtime JS, and the plugin-sdk export gate validates
+    // self-built scoped declarations instead. Release/package builds keep
+    // canonical declarations (full profile, docker packaging).
+    const steps = resolveBuildAllSteps("ciArtifacts");
+    const tsdown = steps.find((step) => step.label === "tsdown");
     if (!tsdown) {
       throw new Error("Missing ciArtifacts tsdown step");
     }
-
-    expect(
-      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } }).options.env,
-    ).toMatchObject({
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     });
+
+    const entryDts = steps.find((step) => step.label === "write-plugin-sdk-entry-dts");
+    if (!entryDts) {
+      throw new Error("Missing ciArtifacts write-plugin-sdk-entry-dts step");
+    }
+    expect(entryDts.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0" });
+    // Self-build outputs depend on the SDK source graph the canonical cache
+    // inputs do not cover; the profile must drop the step cache.
+    expect(entryDts.cache).toBeUndefined();
+
+    const fullEntryDts = resolveBuildAllSteps("full").find(
+      (step) => step.label === "write-plugin-sdk-entry-dts",
+    );
+    expect(fullEntryDts?.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
+    expect(fullEntryDts?.cache).toBeDefined();
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {

@@ -215,9 +215,7 @@ export function createAnthropicServiceTierWrapper(
 }
 
 /** Wrap a stream function to strip trailing assistant prefill before thinking requests. */
-export function createAnthropicThinkingPrefillWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createAnthropicThinkingPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
     log.warn(
       `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
@@ -278,9 +276,3 @@ export function wrapAnthropicProviderStream(
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );
 }
-
-/** Test-only hooks for Anthropic stream wrapper behavior. */
-export const testing = {
-  log,
-};
-export { testing as __testing };

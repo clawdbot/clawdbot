@@ -2,50 +2,19 @@
 // Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
-import {
-  getTestPluginRegistry,
-  resetTestPluginRegistry,
-  setTestPluginRegistry,
-} from "./test-helpers.plugin-registry.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
   cronIsolatedRun,
-  dispatchInboundMessageMock,
   embeddedRunMock,
   type GetReplyFromConfigFn,
-  getReplyFromConfig,
   getGatewayTestHoistedState,
-  mockGetReplyFromConfigOnce,
   agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
   sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
   testTailnetIPv4,
   testTailscaleWhois,
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
-
-export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
-export {
-  agentCommand,
-  cronIsolatedRun,
-  dispatchInboundMessageMock,
-  embeddedRunMock,
-  getReplyFromConfig,
-  mockGetReplyFromConfigOnce,
-  agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
-  testTailnetIPv4,
-  testTailscaleWhois,
-};
 
 const gatewayTestHoisted = getGatewayTestHoistedState();
 

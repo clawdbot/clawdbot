@@ -13,12 +13,13 @@ describe("pending cloud recovery state", () => {
       message: "run remotely",
       gatewayUrl: "ws://gateway.example",
       recoveryScope: "principal-a",
-      createParams: { agentId: "cloud", message: "", worktree: true },
+      createParams: { agentId: "cloud", message: "", thinkingLevel: "high", worktree: true },
     });
 
     expect(createParams).toMatchObject({
       agentId: "cloud",
       key: expect.stringMatching(/^agent:cloud:dashboard:/),
+      thinkingLevel: "high",
       worktree: true,
     });
     expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toMatchObject({

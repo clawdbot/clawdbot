@@ -93,6 +93,9 @@ jobs:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
           RELEASE_TAG: ${{ inputs.tag }}
+          # Sign the AppImage updater artifact so the companion can verify updates.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
@@ -119,6 +122,33 @@ jobs:
             "dist/linux-app/OpenClaw-${version}-amd64.AppImage"
           (cd dist/linux-app && sha256sum ./* > SHA256SUMS.linux-app.txt)
           cat dist/linux-app/SHA256SUMS.linux-app.txt
+
+      - name: Generate updater manifest (latest.json)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          # The signature is over the AppImage bytes, so renaming the file does
+          # not invalidate it. The committed pubkey verifies it in the app.
+          sig_file=$(ls apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage.sig)
+          signature=$(cat "${sig_file}")
+          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Capture the full body (no early-closing pipe under pipefail), then
+          # truncate to 2000 Unicode chars inside jq so we never split a
+          # multibyte character or SIGPIPE the release-view command.
+          notes=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""')
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-${version}-amd64.AppImage"
+          jq -n \
+            --arg version "${version}" \
+            --arg notes "${notes}" \
+            --arg pub_date "${pub_date}" \
+            --arg signature "${signature}" \
+            --arg url "${url}" \
+            '{version: $version, notes: ($notes | .[0:2000]), pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $signature, url: $url}}}' \
+            > dist/linux-app/latest.json
+          cat dist/linux-app/latest.json
 
       - name: Attach bundles to the release
         env:

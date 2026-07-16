@@ -7,7 +7,7 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   listSessionEntries,
@@ -26,6 +26,8 @@ import {
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
@@ -906,7 +908,7 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
@@ -989,7 +991,7 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
     const logger = createMockLogger();

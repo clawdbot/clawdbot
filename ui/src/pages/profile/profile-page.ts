@@ -156,7 +156,11 @@ export class ProfilePage extends OpenClawLightDomElement {
         void this.context.agentIdentity.ensure([list.defaultId]);
       }
     });
-    if (clientChanged || becameConnected || (!this.costSummary && !this.loading && !this.error)) {
+    if (
+      clientChanged ||
+      (becameConnected && (!this.costSummary || this.isCacheSettling())) ||
+      (!this.costSummary && !this.loading && !this.error)
+    ) {
       void this.loadProfile();
     }
   }

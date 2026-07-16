@@ -1,7 +1,7 @@
 // Openai tests cover openai chatgpt oauth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./openai-chatgpt-oauth.runtime.js";
+import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
 describe("OpenAI Codex OAuth runtime", () => {
   afterEach(() => {
@@ -13,7 +13,7 @@ describe("OpenAI Codex OAuth runtime", () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 302 }));
 
     await expect(
-      testing.runOpenAIOAuthTlsPreflight({
+      runOpenAIOAuthTlsPreflight({
         timeoutMs: Number.MAX_SAFE_INTEGER,
         fetchImpl,
       }),
@@ -29,7 +29,7 @@ describe("OpenAI Codex OAuth runtime", () => {
     const fetchImpl = vi.fn(async () => response);
 
     await expect(
-      testing.runOpenAIOAuthTlsPreflight({
+      runOpenAIOAuthTlsPreflight({
         timeoutMs: 20,
         fetchImpl,
       }),

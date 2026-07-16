@@ -1,9 +1,9 @@
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import { resolveActivityUserAuthorized } from "./allowlist.js";
 import {
-  defaultReadVendorAsset,
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
   fetchDiscordJson,
@@ -34,9 +34,10 @@ const DISCORD_ACTIVITY_WIDGET_CSP =
 
 type DiscordActivityHttpDeps = {
   runtime: DiscordActivitiesRuntime;
+  vendorAssetPath: string;
   fetchGuard?: FetchGuard;
   now?: () => number;
-  readVendorAsset?: () => Promise<Buffer>;
+  readVendorAsset?: (assetPath: string) => Promise<Buffer>;
 };
 
 type DiscordOauthUser = {
@@ -142,7 +143,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
 } {
   const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
-  const readVendorAsset = deps.readVendorAsset ?? defaultReadVendorAsset;
+  const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
   let vendorAsset: Promise<Buffer> | undefined;
 
   async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<true> {
@@ -335,10 +336,14 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         return respond(res, 200, DISCORD_ACTIVITY_SHELL_JS, "text/javascript; charset=utf-8");
       }
       if (req.method === "GET" && relative === "/vendor/embedded-app-sdk.mjs") {
+        const pendingAsset = (vendorAsset ??= readVendorAsset(deps.vendorAssetPath));
         try {
-          vendorAsset ??= readVendorAsset();
-          return respond(res, 200, await vendorAsset, "text/javascript; charset=utf-8");
+          return respond(res, 200, await pendingAsset, "text/javascript; charset=utf-8");
         } catch {
+          // Clear only the failed read. A later request may already have installed a retry.
+          if (vendorAsset === pendingAsset) {
+            vendorAsset = undefined;
+          }
           return notFound(res);
         }
       }

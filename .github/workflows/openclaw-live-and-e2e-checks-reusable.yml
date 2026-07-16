@@ -851,7 +851,12 @@ jobs:
         run: |
           set -euo pipefail
           export OPENSHELL_VERSION=v0.0.68
-          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh | sh
+          installer_path="$(mktemp "${RUNNER_TEMP}/openshell-install.XXXXXX")"
+          trap 'rm -f "$installer_path"' EXIT
+          curl -LsSf --connect-timeout 10 --max-time 120 \
+            -o "$installer_path" \
+            https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh
+          sh "$installer_path"
           openshell --version
 
       - name: Bootstrap OpenShell gateway

@@ -5,10 +5,7 @@ import type { PluginRegistry } from "./registry.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
-export type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchResult,
-} from "./hook-types.js";
+export type { PluginHookReplyDispatchResult } from "./hook-types.js";
 export type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;

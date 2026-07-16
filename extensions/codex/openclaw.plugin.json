@@ -1,8 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness, model provider, and native session catalog.",
-  "providers": ["codex"],
+  "description": "Codex app-server harness and native session catalog.",
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
@@ -24,9 +23,6 @@
       }
     }
   },
-  "providerCatalogEntry": "./provider-discovery.ts",
-  "syntheticAuthRefs": ["codex"],
-  "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["codex"],

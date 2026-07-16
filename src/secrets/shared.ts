@@ -1,5 +1,4 @@
 /** Shared parsing and file helpers for secrets migration/runtime code. */
-import fs from "node:fs";
 import path from "node:path";
 import { privateFileStoreSync } from "../infra/private-file-store.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -59,32 +58,6 @@ export function parseDotPath(pathname: string): string[] {
  */
 export function toDotPath(segments: string[]): string {
   return segments.join(".");
-}
-
-/**
- * Ensures the parent directory for a secret-related file exists with private permissions.
- */
-export function ensureDirForFile(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-}
-
-/**
- * Writes a JSON file through the private file store so new files get secret-safe permissions.
- */
-export function writeJsonFileSecure(pathname: string, value: unknown): void {
-  privateFileStoreSync(path.dirname(pathname)).writeJson(path.basename(pathname), value, {
-    trailingNewline: true,
-  });
-}
-
-/**
- * Reads a text file when present, returning null instead of throwing for missing paths.
- */
-export function readTextFileIfExists(pathname: string): string | null {
-  if (!fs.existsSync(pathname)) {
-    return null;
-  }
-  return fs.readFileSync(pathname, "utf8");
 }
 
 /**

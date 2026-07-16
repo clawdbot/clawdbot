@@ -52,6 +52,37 @@ type EmbeddedRunContextWindowInfo = {
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
+type EmbeddedRunAttemptToolTerminalObservation = {
+  toolCallId?: string;
+  toolName: string;
+  arguments?: unknown;
+  meta?: string;
+  executionStarted?: boolean;
+  outcome: "success" | "failure";
+  failure?: Omit<
+    ToolErrorSummary,
+    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+  >;
+  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+  nativeMutation?: {
+    mutatingAction: boolean;
+    replaySafe: boolean;
+    actionFingerprint?: string;
+    fileTarget?: ToolErrorSummary["fileTarget"];
+  };
+};
+
+type EmbeddedRunAttemptToolTerminalResolution = {
+  lastToolError?: ToolErrorSummary;
+  executionStarted: boolean;
+  executedArguments?: Record<string, unknown>;
+  sideEffectEvidence: boolean;
+};
+
+type EmbeddedRunAttemptToolTerminalObserver = (
+  observation: EmbeddedRunAttemptToolTerminalObservation,
+) => EmbeddedRunAttemptToolTerminalResolution;
+
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -92,6 +123,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
+  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */

@@ -6,8 +6,6 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
-import type { QaProviderMode } from "../../run-config.js";
-import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
 
 export type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
@@ -271,11 +269,12 @@ export type WhatsAppQaConfigOverrides = {
       };
 };
 
-export type WhatsAppQaScenarioDefinition = LiveTransportScenarioDefinition<WhatsAppQaScenarioId> & {
+export type WhatsAppQaScenarioDefinition = {
+  id: WhatsAppQaScenarioId;
+  title: string;
+  timeoutMs: number;
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  defaultEnabled?: boolean;
-  defaultProviderModes?: readonly QaProviderMode[];
   requiresGroupJid?: boolean;
   requiredPluginIds?: readonly string[];
 };
@@ -300,7 +299,6 @@ export type WhatsAppQaScenarioResult = {
     responseObservedAt: string;
     source: "approval-request-to-resolution" | "request-to-observed-message";
   };
-  standardId?: string;
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -309,7 +307,6 @@ export function buildWhatsAppQaScenarioResultBase(scenario: WhatsAppQaScenarioDe
   return {
     id: scenario.id,
     title: scenario.title,
-    standardId: scenario.standardId,
     posture: WHATSAPP_QA_SCENARIO_POSTURES[scenario.id],
   };
 }

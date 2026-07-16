@@ -94,7 +94,18 @@ describe("docker build cache layout", () => {
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
     expect(dockerfile).toContain("ARG INSTALL_NODE=1");
     expect(dockerfile).toContain("ARG NODE_MAJOR=24");
-    expect(dockerfile).toContain('curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x"');
+    expect(
+      dockerfile.match(/curl -fsSL --connect-timeout 10 --max-time 120 -o "\$installer"/gu),
+    ).toHaveLength(3);
+    expect(dockerfile.match(/installer="\$\(mktemp\)"/gu)).toHaveLength(3);
+    expect(dockerfile.match(/bash "\$installer" \|\| exit 1/gu)).toHaveLength(2);
+    expect(dockerfile.match(/rm -f "\$installer"/gu)).toHaveLength(3);
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends nodejs");
+    expect(dockerfile).toContain('ln -sf "${BUN_INSTALL_DIR}/bin/bun"');
+    expect(dockerfile).toMatch(
+      /chmod 0644 "\$installer"; \\\n\s+su - linuxbrew -c "NONINTERACTIVE=1 CI=1 \/bin\/bash '\$installer'" \|\| exit 1/u,
+    );
+    expect(dockerfile).not.toMatch(/curl[^\n]+\|\s*(?:bash|sh)/u);
     expect(dockerfile).toContain(
       'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm && pnpm --version; fi',
     );

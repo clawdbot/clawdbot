@@ -11,7 +11,7 @@ import type {
 } from "@openclaw/whatsapp/api.js";
 import { describe, expect, it, vi } from "vitest";
 import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runtime.js";
-import { resolveWhatsAppQaScenarioIds } from "./profiles.js";
+import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import { resolveWhatsAppQaMessageTargets } from "./whatsapp-live.contracts.js";
@@ -188,7 +188,8 @@ const WHATSAPP_GROUP_CAPABILITY_SCENARIO_IDS = [
 
 function findMockWhatsAppScenario(id: WhatsAppScenarioIdFilter) {
   const scenario = getWhatsAppQaScenarioDefinition(id);
-  if (!scenario.standardId && !scenario.defaultProviderModes?.includes("mock-openai")) {
+  const mockScenarioIds = new Set(resolveWhatsAppQaScenarioIds({ providerMode: "mock-openai" }));
+  if (!mockScenarioIds.has(id)) {
     throw new Error(`missing WhatsApp mock-openai scenario ${id}`);
   }
   return scenario;
@@ -306,7 +307,6 @@ describe("WhatsApp QA live runtime", () => {
     }
 
     expect(scenario.id).toBe("whatsapp-agent-message-action-react");
-    expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
     expect(scenario.configOverrides).toMatchObject({ actions: true });
     expect(run.target).toBe("dm");
     expect(run.input).toMatch(/React to this WhatsApp message/i);
@@ -386,7 +386,6 @@ describe("WhatsApp QA live runtime", () => {
         throw new Error(`${scenario.id} unexpectedly built an approval run`);
       }
 
-      expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
       expect(run.target).toBe("dm");
     }
   });
@@ -403,7 +402,6 @@ describe("WhatsApp QA live runtime", () => {
         throw new Error(`${scenario.id} unexpectedly built an approval run`);
       }
 
-      expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
       expect(scenario.requiresGroupJid).toBe(true);
       expect(run.target).toBe("group");
     }
@@ -1059,7 +1057,6 @@ describe("WhatsApp QA live runtime", () => {
       }
 
       expect(scenario.requiresGroupJid).toBe(true);
-      expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
       expect(run.target).toBe("group");
       expect(run.configMode).toBe("open");
       expect(run.input).toContain("openclawqa");
@@ -1078,7 +1075,6 @@ describe("WhatsApp QA live runtime", () => {
       }
 
       expect(scenario.requiresGroupJid).toBe(true);
-      expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
       expect(scenario.configOverrides).toMatchObject({ groupPolicy: "open" });
       expect(run.target).toBe("group");
       expect(run.configMode).toBe("allowlist");
@@ -1405,20 +1401,17 @@ describe("WhatsApp QA live runtime", () => {
       runs.map(({ scenario, run }) => ({
         id: scenario.id,
         requiresGroupJid: scenario.requiresGroupJid,
-        standardId: scenario.standardId,
         target: run.target,
       })),
     ).toEqual([
       {
         id: "whatsapp-reply-to-message",
         requiresGroupJid: undefined,
-        standardId: "quote-reply",
         target: "dm",
       },
       {
         id: "whatsapp-group-reply-to-message",
         requiresGroupJid: true,
-        standardId: "quote-reply",
         target: "group",
       },
     ]);
@@ -1607,7 +1600,6 @@ describe("WhatsApp QA live runtime", () => {
       throw new Error("whatsapp-stream-final-message-accounting unexpectedly built approval run");
     }
 
-    expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
     expect(run.input).toContain("WhatsApp long final QA check");
     expect(run.matchText).toBe("WHATSAPP-LONG-FINAL-BEGIN");
     expect(run.expectedJoinedSutTextIncludes).toEqual([
@@ -1936,7 +1928,6 @@ describe("WhatsApp QA live runtime", () => {
     }
 
     expect(scenario.requiredPluginIds).toEqual(["openai"]);
-    expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
     expect(scenarioRun.expectReply).toBe(true);
     expect(scenarioRun.matchText).toBe("WHATSAPP_QA_AUDIO_TRANSCRIPT_OK");
     expect(scenarioRun.sendMode).toMatchObject({

@@ -89,11 +89,6 @@ const loadConfigMock = vi.fn(() => ({
   agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   session: { mainKey: "main", scope: "per-sender" },
 }));
-const registryStoreMocks = vi.hoisted(() => ({
-  loadRegistryMock: vi.fn(() => new Map()),
-  saveRegistryMock: vi.fn(() => {}),
-}));
-
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
@@ -114,11 +109,6 @@ vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: registryStoreMocks.loadRegistryMock,
-  saveSubagentRegistryToDisk: registryStoreMocks.saveRegistryMock,
-}));
-
 describe("subagent registry lifecycle error grace", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -128,8 +118,6 @@ describe("subagent registry lifecycle error grace", () => {
     vi.useFakeTimers();
     callGatewayMock.mockClear();
     onAgentEventMock.mockClear();
-    registryStoreMocks.loadRegistryMock.mockClear().mockReturnValue(new Map());
-    registryStoreMocks.saveRegistryMock.mockClear();
     loadConfigMock.mockClear().mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },

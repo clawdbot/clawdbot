@@ -11,9 +11,8 @@ const COHERE_MANIFEST_CATALOG = manifest.modelCatalog.providers.cohere;
 export const COHERE_BASE_URL = COHERE_MANIFEST_CATALOG.baseUrl;
 export const COHERE_MODEL_CATALOG = COHERE_MANIFEST_CATALOG.models;
 export const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
-export const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
-export const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
-export const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 const COHERE_MODERN_MODEL_IDS = new Set([
   COHERE_COMMAND_A_PLUS_MODEL_ID,

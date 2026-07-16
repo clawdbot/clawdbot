@@ -17,9 +17,18 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
-import { withCodexStartupTimeout } from "./attempt-timeouts.js";
+import {
+  CodexAppServerStartupError,
+  isCodexAppServerStartupError,
+  withCodexStartupTimeout,
+} from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
-import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerBrokenPipeError,
+  isCodexAppServerConnectionClosedError,
+  isCodexAppServerRequestTimeoutError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
@@ -257,10 +266,10 @@ export async function startCodexAttemptThread(params: {
             attemptedClient = activeStartupClient;
             startupClientForAbandonedRequestCleanup = activeStartupClient;
             if (startupAbandoned) {
-              throw new Error("codex app-server startup timed out");
+              throw new CodexAppServerStartupError("timed_out");
             }
             if (startupAbandonController.signal.aborted) {
-              throw new Error("codex app-server startup aborted");
+              throw new CodexAppServerStartupError("aborted");
             }
             let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
             if (params.runtimeArtifactRequest) {
@@ -372,7 +381,7 @@ export async function startCodexAttemptThread(params: {
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);
               if (startupAbandonController.signal.aborted) {
                 await releaseStartupSandboxEnvironment();
-                throw new Error("codex app-server startup aborted");
+                throw new CodexAppServerStartupError("aborted");
               }
               if (
                 params.sandbox?.enabled &&
@@ -493,7 +502,7 @@ export async function startCodexAttemptThread(params: {
                 throw error;
               }
               if (startupAbandonController.signal.aborted) {
-                throw new Error("codex app-server startup aborted");
+                throw new CodexAppServerStartupError("aborted");
               }
               const startupRoute = startupReservation;
               if (!startupRoute) {
@@ -672,17 +681,12 @@ export async function startCodexAttemptThread(params: {
 }
 
 function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message === "codex app-server startup timed out" ||
-      error.message === "codex app-server startup aborted")
-  );
+  return isCodexAppServerStartupError(error);
 }
 
 function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    (shouldClearSharedClientAfterStartupAbandon(error) || error.message.endsWith(" timed out"))
+    shouldClearSharedClientAfterStartupAbandon(error) || isCodexAppServerRequestTimeoutError(error)
   );
 }
 
@@ -693,7 +697,7 @@ function shouldClearSharedClientAfterStartupFailure(params: {
   if (!(params.error instanceof Error)) {
     return !params.spawnedBy;
   }
-  if (params.error.message.includes("write EPIPE")) {
+  if (isCodexAppServerBrokenPipeError(params.error)) {
     return true;
   }
   return !params.spawnedBy;

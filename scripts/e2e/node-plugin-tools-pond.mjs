@@ -7,6 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { PondGatewayRpc } from "./lib/pond-gateway-rpc.mjs";
 
 const DEFAULT_PORT = 18789;
 const SESSION_KEY = "agent:main:main";
@@ -44,12 +45,6 @@ function parseArgs(argv) {
     index += 1;
   }
   return args;
-}
-
-function requireWebSocket() {
-  if (typeof WebSocket !== "function") {
-    throw new Error("Node global WebSocket unavailable; run with Node 22+");
-  }
 }
 
 function repoRoot() {
@@ -498,102 +493,8 @@ function terminate(child) {
   });
 }
 
-class GatewayRpc {
-  constructor({ url, token, scopes }) {
-    requireWebSocket();
-    this.url = url;
-    this.token = token;
-    this.scopes = scopes;
-    this.pending = new Map();
-    this.nextId = 1;
-  }
-
-  async connect() {
-    this.ws = new WebSocket(this.url);
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`Gateway connect timeout: ${this.url}`)),
-        15_000,
-      );
-      this.ws.addEventListener("open", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      this.ws.addEventListener("error", () => {
-        clearTimeout(timer);
-        reject(new Error(`Gateway socket error: ${this.url}`));
-      });
-    });
-    this.ws.addEventListener("message", (event) => this.onMessage(event));
-    await this.request("connect", {
-      minProtocol: 1,
-      maxProtocol: 99,
-      client: {
-        id: "gateway-client",
-        displayName: "Pond proof verifier",
-        version: "0.0.0",
-        platform: process.platform,
-        mode: "backend",
-      },
-      auth: { token: this.token },
-      role: "operator",
-      scopes: this.scopes,
-    });
-  }
-
-  onMessage(event) {
-    let frame;
-    try {
-      frame = JSON.parse(String(event.data));
-    } catch {
-      return;
-    }
-    if (frame?.type !== "res" || typeof frame.id !== "string") {
-      return;
-    }
-    const pending = this.pending.get(frame.id);
-    if (!pending) {
-      return;
-    }
-    if (pending.expectFinal && frame.payload?.status === "accepted") {
-      return;
-    }
-    this.pending.delete(frame.id);
-    clearTimeout(pending.timer);
-    if (frame.ok) {
-      pending.resolve(frame.payload);
-      return;
-    }
-    pending.reject(new Error(frame.error?.message ?? `Gateway RPC failed: ${pending.method}`));
-  }
-
-  request(method, params = {}, options = {}) {
-    const id = `pond-proof-${this.nextId}`;
-    this.nextId += 1;
-    const timeoutMs = options.timeoutMs ?? 30_000;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Gateway RPC timeout: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, {
-        method,
-        expectFinal: options.expectFinal === true,
-        resolve,
-        reject,
-        timer,
-      });
-      this.ws.send(JSON.stringify({ type: "req", id, method, params }));
-    });
-  }
-
-  close() {
-    this.ws?.close();
-  }
-}
-
 async function connectVerifier(url, token) {
-  const rpc = new GatewayRpc({
+  const rpc = new PondGatewayRpc({
     url,
     token,
     scopes: ["operator.read", "operator.write", "operator.pairing", "operator.admin"],

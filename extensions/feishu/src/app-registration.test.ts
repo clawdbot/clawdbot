@@ -254,6 +254,39 @@ describe("Feishu app registration", () => {
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
   });
 
+  it("times out registration POSTs when accounts never return headers", async () => {
+    await withRegistrationServer(
+      // Accept TCP but never write headers — idle body timers never start.
+      (_req, _res) => {},
+      async (options) => {
+        const started = Date.now();
+        const outcome = await beginAppRegistration("feishu", {
+          ...options,
+          // Keep the real guarded-fetch path while shortening its production deadline.
+          timeoutMs: 80,
+        }).then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        const elapsedMs = Date.now() - started;
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) {
+          expect(outcome.error).toMatchObject({
+            name: "TimeoutError",
+            message: "request timed out",
+          });
+        }
+        expect(elapsedMs).toBeGreaterThanOrEqual(60);
+        expect(elapsedMs).toBeLessThan(2_000);
+        console.log(
+          `[feishu fetchFeishuJson hang proof] timed_out=${!outcome.ok} name=${
+            outcome.ok ? "n/a" : (outcome.error as Error).name
+          } elapsed_ms=${elapsedMs}`,
+        );
+      },
+    );
+  });
+
   // over-cap: body > 16 MiB, no Content-Length. The bounded reader cancels
   // through the real SSRF guard and rejects before full buffering.
   it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {

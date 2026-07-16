@@ -449,6 +449,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     shouldUseCodexSyntheticUsageForRuntime({
       provider: usageStatusProvider,
       effectiveHarness,
+      // A runtime fallback does not erase the session's Codex binding or its rate limits.
+      sessionHarnessId: sessionEntry?.agentHarnessId,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({

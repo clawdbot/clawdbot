@@ -77,15 +77,16 @@ function normalizeDdl(sql: string): string {
 
 function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
+  const tableTerminator = "\n) STRICT;";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
   const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "\n);\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry",
+    `${tableTerminator}\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry`,
     start,
   );
   if (start < 0 || end < 0) {
     throw new Error("canonical operator approval schema is unavailable");
   }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 3);
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
 // The only legacy shape this repair may destructively replace is the exact
@@ -98,16 +99,14 @@ function hasExactLegacyOperatorApprovalSchema(db: DatabaseSync): boolean {
   if (!live) {
     return false;
   }
-  const expectedLegacy = normalizeDdl(
-    canonicalOperatorApprovalCreateSql()
-      // sqlite_master stores the CREATE statement without "IF NOT EXISTS".
-      .replace(
-        "CREATE TABLE IF NOT EXISTS operator_approvals (",
-        "CREATE TABLE operator_approvals (",
-      )
-      .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'"),
-  );
-  return normalizeDdl(live) === expectedLegacy;
+  const exactStrictLegacy = canonicalOperatorApprovalCreateSql()
+    // sqlite_master stores the CREATE statement without "IF NOT EXISTS".
+    .replace("CREATE TABLE IF NOT EXISTS operator_approvals (", "CREATE TABLE operator_approvals (")
+    .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
+  const expectedStrictLegacy = normalizeDdl(exactStrictLegacy);
+  const expectedFlexibleLegacy = normalizeDdl(exactStrictLegacy.replace(/\) STRICT;$/u, ");"));
+  const normalizedLive = normalizeDdl(live);
+  return normalizedLive === expectedStrictLegacy || normalizedLive === expectedFlexibleLegacy;
 }
 
 function canonicalCreateSql(): string {

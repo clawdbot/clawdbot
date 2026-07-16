@@ -19,6 +19,15 @@ import {
 } from "./monitor.webhook.js";
 import { createTextUpdate, postWebhookReplay } from "./test-support/lifecycle-test-support.js";
 import type { ResolvedZaloAccount } from "./types.js";
+
+const runDetachedWebhookWork = vi.hoisted(() => vi.fn((run: () => Promise<void>) => run()));
+
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
+  return { ...actual, runDetachedWebhookWork };
+});
+
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
   enabled: true,
@@ -210,6 +219,7 @@ describe("handleZaloWebhookRequest", () => {
   });
 
   it("deduplicates webhook replay for the same event origin", async () => {
+    runDetachedWebhookWork.mockClear();
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay", statusSink: sink });
     const payload = createTextUpdate({
@@ -232,6 +242,7 @@ describe("handleZaloWebhookRequest", () => {
         expect(first.status).toBe(200);
         expect(replay.status).toBe(200);
         expect(sink).toHaveBeenCalledTimes(1);
+        expect(runDetachedWebhookWork).toHaveBeenCalledTimes(2);
       });
     } finally {
       unregister();

@@ -21,6 +21,8 @@ describe("managed worktree protocol schemas", () => {
     expect(validateWorktreesGcParams({})).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", worktree: true })).toBe(true);
     expect(validateSessionsCreateParams({ agentId: "main", catalogId: "claude" })).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", thinkingLevel: "high" })).toBe(true);
+    expect(validateSessionsCreateParams({ agentId: "main", thinkingLevel: "" })).toBe(false);
     expect(
       Value.Check(SessionsCreateResultSchema, {
         ok: true,

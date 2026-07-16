@@ -322,6 +322,16 @@ vi.mock("./codex-route-warnings.js", () => ({
   collectCodexRouteWarnings: vi.fn(() => []),
 }));
 
+async function useRealCodexRouteWarningsOnce(): Promise<void> {
+  const mocked = await import("./codex-route-warnings.js");
+  const actual = await vi.importActual<typeof import("./codex-route-warnings.js")>(
+    "./codex-route-warnings.js",
+  );
+  vi.mocked(mocked.collectCodexRouteWarnings).mockImplementationOnce(
+    actual.collectCodexRouteWarnings,
+  );
+}
+
 vi.mock("./context-engine-host-compat.js", () => ({
   collectContextEngineHostCompatibilityWarnings: vi.fn(async () => []),
 }));
@@ -525,6 +535,7 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns when a normalized legacy Codex provider cannot be auto-merged", async () => {
+    await useRealCodexRouteWarningsOnce();
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         models: {
@@ -551,7 +562,7 @@ describe("doctor preview warnings", () => {
       "models.providers.openai-codex cannot be merged automatically",
     );
     expect(warning).toContain("models.providers.openai.params");
-    expect(warning).toContain("Move the affected model/provider defaults manually");
+    expect(warning).toContain("remove the legacy provider entry");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {

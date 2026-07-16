@@ -504,7 +504,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_: Notification) {
-        if self.isDuplicateInstance() {
+        let environment = ProcessInfo.processInfo.environment
+        let hasReplacementHandoff = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = ApplicationRelocator.acceptReplacementHandoff(
+            environment: environment)
+        if hasReplacementHandoff, !isReplacementHandoff {
+            NSApp.terminate(nil)
+            return
+        }
+        // Only a child whose signed parent and inherited readiness pipe authenticate
+        // may overlap the old process during replacement handoff.
+        if !isReplacementHandoff, self.isDuplicateInstance() {
             NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return

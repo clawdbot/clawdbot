@@ -28,93 +28,98 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-const COMPACT_NODE_TEST_JOB_SECONDS = 260;
+// Fleet-loaded runners inflate measured hints by ~20-25%; a 220s packing cap
+// keeps the slowest bin near the 5-minute PR wall-clock budget under load.
+const COMPACT_NODE_TEST_JOB_SECONDS = 220;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
+const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
 // Advisory runtime estimates (seconds) per split shard, measured from a
-// Blacksmith compact PR run under two-plans-per-job concurrency (run
-// 29395969440). Packing only: a stale entry skews job balance but never
+// Blacksmith compact PR run with serial plans and 2 Vitest workers (run
+// 29481835688). Packing only: a stale entry skews job balance but never
 // correctness. Unknown shards fall back to a per-file estimate.
 const COMPACT_GROUP_SECONDS_HINTS = new Map([
-  ["agentic-agents-core-auth", 28],
-  ["agentic-agents-core-isolated", 12],
-  ["agentic-agents-core-models", 48],
-  ["agentic-agents-core-runner-cli", 120],
-  ["agentic-agents-core-runner-commands", 38],
-  ["agentic-agents-core-runner-embedded", 27],
-  ["agentic-agents-core-runner-sessions", 120],
+  ["agentic-agents-core-auth", 32],
+  ["agentic-agents-core-isolated", 10],
+  ["agentic-agents-core-models", 66],
+  ["agentic-agents-core-runner-cli-1", 60],
+  ["agentic-agents-core-runner-cli-2", 190],
+  ["agentic-agents-core-runner-cli-3", 60],
+  ["agentic-agents-core-runner-commands", 30],
+  ["agentic-agents-core-runner-embedded", 20],
+  ["agentic-agents-core-runner-sessions", 18],
   ["agentic-agents-core-runtime", 81],
-  ["agentic-agents-core-subagents", 30],
-  ["agentic-agents-core-tools", 41],
-  ["agentic-agents-embedded", 69],
-  ["agentic-agents-support", 104],
+  ["agentic-agents-core-subagents", 37],
+  ["agentic-agents-core-tools", 55],
+  ["agentic-agents-embedded", 59],
+  ["agentic-agents-support", 88],
   ["agentic-agents-tools", 43],
-  ["agentic-cli", 70],
-  ["agentic-command-support", 30],
-  ["agentic-commands-agent-channel", 43],
-  ["agentic-commands-doctor", 26],
-  ["agentic-commands-doctor-auth", 8],
-  ["agentic-commands-doctor-config-state", 58],
-  ["agentic-commands-doctor-gateway", 6],
-  ["agentic-commands-doctor-plugins-tools", 14],
-  ["agentic-commands-doctor-sessions-cron", 22],
-  ["agentic-commands-models", 17],
-  ["agentic-commands-onboard-config", 25],
-  ["agentic-commands-status-tools", 19],
-  ["agentic-control-plane-agent-chat", 74],
-  ["agentic-control-plane-auth-node", 105],
-  ["agentic-control-plane-http-models", 34],
-  ["agentic-control-plane-http-plugin-ws", 28],
-  ["agentic-control-plane-runtime-config", 32],
-  ["agentic-control-plane-runtime-cron", 22],
-  ["agentic-control-plane-runtime-server", 40],
-  ["agentic-control-plane-runtime-state", 29],
-  ["agentic-control-plane-runtime-ui-tools", 23],
-  ["agentic-control-plane-startup-core", 85],
-  ["agentic-control-plane-startup-health-runtime", 20],
-  ["agentic-control-plane-startup-restart-close", 19],
-  ["agentic-gateway-core", 112],
-  ["agentic-gateway-methods", 90],
-  ["agentic-plugin-sdk", 52],
-  ["auto-reply-core-top-level", 26],
-  ["auto-reply-reply-agent-runner", 33],
-  ["auto-reply-reply-commands-1", 179],
-  ["auto-reply-reply-commands-2", 39],
-  ["auto-reply-reply-commands-3", 28],
-  ["auto-reply-reply-dispatch", 41],
-  ["auto-reply-reply-session", 38],
-  ["auto-reply-reply-state-routing", 22],
-  ["core-runtime-cron-core", 29],
-  ["core-runtime-cron-isolated-agent", 55],
-  ["core-runtime-cron-service", 13],
+  ["agentic-cli", 81],
+  ["agentic-command-support", 28],
+  ["agentic-commands-agent-channel", 47],
+  ["agentic-commands-doctor", 23],
+  ["agentic-commands-doctor-auth", 10],
+  ["agentic-commands-doctor-config-state", 41],
+  ["agentic-commands-doctor-gateway", 7],
+  ["agentic-commands-doctor-plugins-tools", 10],
+  ["agentic-commands-doctor-sessions-cron", 24],
+  ["agentic-commands-models", 21],
+  ["agentic-commands-onboard-config", 15],
+  ["agentic-commands-status-tools", 30],
+  ["agentic-control-plane-agent-chat", 75],
+  ["agentic-control-plane-auth-node", 101],
+  ["agentic-control-plane-http-models", 40],
+  ["agentic-control-plane-http-plugin-ws", 43],
+  ["agentic-control-plane-runtime-config", 28],
+  ["agentic-control-plane-runtime-cron", 29],
+  ["agentic-control-plane-runtime-server", 26],
+  ["agentic-control-plane-runtime-state", 25],
+  ["agentic-control-plane-runtime-ui-tools", 24],
+  ["agentic-control-plane-startup-core", 113],
+  ["agentic-control-plane-startup-health-runtime", 24],
+  ["agentic-control-plane-startup-restart-close", 20],
+  ["agentic-gateway-core", 130],
+  ["agentic-gateway-methods", 79],
+  ["agentic-plugin-sdk", 50],
+  ["auto-reply-core-top-level", 33],
+  ["auto-reply-reply-agent-runner", 52],
+  ["auto-reply-reply-commands-1", 220],
+  ["auto-reply-reply-commands-2", 33],
+  ["auto-reply-reply-commands-3", 24],
+  ["auto-reply-reply-dispatch", 36],
+  ["auto-reply-reply-session", 21],
+  ["auto-reply-reply-state-routing", 21],
+  ["core-runtime-cron-core", 24],
+  ["core-runtime-cron-isolated-agent", 61],
+  ["core-runtime-cron-service", 24],
   ["core-runtime-hooks", 11],
-  ["core-runtime-infra-approval-exec", 35],
-  ["core-runtime-infra-channel-plugin", 20],
-  ["core-runtime-infra-heartbeat-runner", 44],
-  ["core-runtime-infra-net-install", 15],
-  ["core-runtime-infra-outbound-actions", 15],
-  ["core-runtime-infra-outbound-core", 37],
-  ["core-runtime-infra-process", 75],
-  ["core-runtime-infra-provider-push", 21],
-  ["core-runtime-infra-storage-state", 41],
-  ["core-runtime-infra-system-runtime", 29],
-  ["core-runtime-media-ui", 123],
-  ["core-runtime-secrets", 30],
-  ["core-runtime-shared", 49],
+  ["core-runtime-infra-approval-exec", 30],
+  ["core-runtime-infra-channel-plugin", 26],
+  ["core-runtime-infra-heartbeat-runner", 77],
+  ["core-runtime-infra-net-install", 14],
+  ["core-runtime-infra-outbound-actions", 21],
+  ["core-runtime-infra-outbound-core", 44],
+  ["core-runtime-infra-process", 83],
+  ["core-runtime-infra-provider-push", 20],
+  ["core-runtime-infra-storage-state", 58],
+  ["core-runtime-infra-system-runtime", 40],
+  ["core-runtime-media-ui", 131],
+  ["core-runtime-secrets", 43],
+  ["core-runtime-shared", 48],
   // PTY timing tests inflate badly next to co-runners; keep this group in a
   // lightly packed bin so its lane stays close to solo runtime.
   ["core-runtime-tui-pty", 200],
-  ["core-tooling-1", 88],
-  ["core-tooling-2", 84],
-  ["core-tooling-3", 100],
-  ["core-tooling-4", 79],
+  ["core-tooling-1", 113],
+  ["core-tooling-2", 111],
+  ["core-tooling-3", 134],
+  ["core-tooling-4", 94],
   ["core-tooling-docker", 6],
-  ["core-tooling-isolated", 50],
-  ["core-unit-fast", 157],
-  ["core-unit-src-security", 149],
-  ["core-unit-support", 28],
+  ["core-tooling-isolated", 55],
+  ["core-unit-fast", 190],
+  ["core-unit-src-security", 138],
+  ["core-unit-support", 19],
 ]);
 const DEFAULT_WHOLE_GROUP_SECONDS = 25;
 const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
@@ -128,6 +133,21 @@ const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
 function isExclusiveCompactGroup(group) {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+}
+
+// Spawn/signal/PTY-timing suites also flake under high in-process worker
+// counts; pin them to the proven 2-worker budget while the job-level default
+// scales with the runner class. infra-process spawns child processes per test
+// and hit worker-startup timeouts under contention before serialization.
+const PINNED_WORKER_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
+const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+
+function applyCompactGroupWorkerPins(group) {
+  if (!PINNED_WORKER_COMPACT_GROUP_RE.test(group.shard_name)) {
+    return group;
+  }
+  return { ...group, env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV } };
 }
 
 function estimateCompactGroupSeconds(group) {
@@ -161,7 +181,9 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-subagents",
   "agentic-agents-embedded",
   "agentic-agents-support",
-  "agentic-agents-core-runner-cli",
+  "agentic-agents-core-runner-cli-1",
+  "agentic-agents-core-runner-cli-2",
+  "agentic-agents-core-runner-cli-3",
   "agentic-agents-core-runner-commands",
   "agentic-agents-core-runner-embedded",
   "agentic-agents-core-runner-sessions",
@@ -170,8 +192,15 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-gateway-core",
   "agentic-gateway-methods",
   "auto-reply-reply-dispatch",
+  // The commands stripes and security suite are import-bound (30-45s of
+  // module-graph import per file); the 8 vCPU class with a higher Vitest
+  // worker budget cuts their wall clock roughly linearly.
+  "auto-reply-reply-commands-1",
+  "auto-reply-reply-commands-2",
+  "auto-reply-reply-commands-3",
   "core-runtime-media-ui",
   "core-unit-fast",
+  "core-unit-src-security",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
@@ -439,12 +468,30 @@ function createAgentCoreSplitShards() {
     "agentic-agents-core-runner-sessions",
     "agentic-agents-core-runtime",
   ]
-    .map((shardName) => ({
-      configs: ["test/vitest/vitest.agents-core.config.ts"],
-      includePatterns: groups.get(shardName) ?? [],
-      requiresDist: false,
-      shardName,
-    }))
+    .flatMap((shardName) => {
+      const includePatterns = groups.get(shardName) ?? [];
+      // agents-core runs files serially (fileParallelism false guards shared
+      // module state), so the import-heavy cli-runner suite (~35s of module
+      // import per file) stripes across bins to parallelize at the job level.
+      if (shardName === "agentic-agents-core-runner-cli") {
+        return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
+          (batch, index) => ({
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            includePatterns: batch,
+            requiresDist: false,
+            shardName: `${shardName}-${index + 1}`,
+          }),
+        );
+      }
+      return [
+        {
+          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          includePatterns,
+          requiresDist: false,
+          shardName,
+        },
+      ];
+    })
     .filter((shard) => shard.includePatterns.length > 0);
 
   return [
@@ -1333,7 +1380,7 @@ function createCompactNodeTestShardBundles(options = {}) {
       runner,
       shard_name: shard.shardName,
     };
-    groups.push(...expandCompactNodeTestGroup(group));
+    groups.push(...expandCompactNodeTestGroup(group).map(applyCompactGroupWorkerPins));
     groupsByRunner.set(key, groups);
   }
 

@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaUnderstandingConfig } from "../config/types.tools.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { clearMediaUnderstandingBinaryCacheForTests, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.test-support.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 

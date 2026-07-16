@@ -417,7 +417,7 @@ async function resolveTranscriptAppendQueueKey(transcriptPath: string): Promise<
   }
 }
 
-export async function withSessionTranscriptAppendQueue<T>(
+async function withSessionTranscriptAppendQueue<T>(
   transcriptPath: string,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -427,7 +427,7 @@ export async function withSessionTranscriptAppendQueue<T>(
   return await transcriptAppendQueue.enqueue(queueKey, fn);
 }
 
-export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
+type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
   now?: number;
@@ -443,7 +443,7 @@ export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   onHeaderCreated?: (serializedHeader: string) => void;
 };
 
-export type AppendSessionTranscriptMessageResult<TMessage> = {
+type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;

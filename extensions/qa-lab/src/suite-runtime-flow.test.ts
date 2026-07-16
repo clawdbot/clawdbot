@@ -60,7 +60,6 @@ const hasDiscoveryLabels = vi.hoisted(() => vi.fn());
 const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
 const hasModelSwitchContinuitySignal = vi.hoisted(() => vi.fn());
-const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
 const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
 const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
@@ -157,10 +156,6 @@ vi.mock("./runtime-tool-fixture.js", () => ({
 
 vi.mock("./model-switch-eval.js", () => ({
   hasModelSwitchContinuitySignal,
-}));
-
-vi.mock("./runtime-api.js", () => ({
-  qaChannelPlugin,
 }));
 
 vi.mock("./gateway-log-sentinel.js", () => ({
@@ -296,7 +291,6 @@ describe("qa suite runtime flow", () => {
           envArg: typeof env,
           configArg: Record<string, unknown>,
         ) => Promise<unknown>;
-        qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
       constants: {
@@ -330,7 +324,6 @@ describe("qa suite runtime flow", () => {
         ensureImageGenerationConfigured,
       },
     );
-    expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",

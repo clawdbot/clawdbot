@@ -1,10 +1,10 @@
 // Github Copilot tests cover connection bound ids plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  rewriteCopilotConnectionBoundResponseIds,
-  rewriteCopilotResponsePayloadConnectionBoundIds,
-  sanitizeCopilotReplayResponseIds,
-} from "./connection-bound-ids.js";
+import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+
+function rewriteInputIds(input: unknown): boolean {
+  return rewriteCopilotResponsePayloadConnectionBoundIds({ input });
+}
 
 describe("github-copilot connection-bound response IDs", () => {
   it("rewrites opaque message response item IDs deterministically", () => {
@@ -12,8 +12,8 @@ describe("github-copilot connection-bound response IDs", () => {
     const first = [{ id: originalId, type: "message" }];
     const second = [{ id: originalId, type: "message" }];
 
-    expect(rewriteCopilotConnectionBoundResponseIds(first)).toBe(true);
-    expect(rewriteCopilotConnectionBoundResponseIds(second)).toBe(true);
+    expect(rewriteInputIds(first)).toBe(true);
+    expect(rewriteInputIds(second)).toBe(true);
     expect(first[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
     expect(first[0]?.id).toBe(second[0]?.id);
   });
@@ -29,7 +29,7 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: messageId, type: "message" },
     ];
 
-    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(true);
+    expect(rewriteInputIds(input)).toBe(true);
     expect(input[0]?.id).toBe("rs_existing");
     expect(input[1]?.id).toBe("msg_existing");
     expect(input[2]?.id).toBe("fc_existing");
@@ -47,7 +47,7 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: withoutField, type: "reasoning" },
     ];
 
-    expect(rewriteCopilotConnectionBoundResponseIds(input)).toBe(false);
+    expect(rewriteInputIds(input)).toBe(false);
     expect(input[0]?.id).toBe(withEncrypted);
     expect(input[1]?.id).toBe(withNull);
     expect(input[2]?.id).toBe(withoutField);
@@ -61,7 +61,7 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: withoutEncrypted, type: "reasoning" },
     ];
 
-    expect(sanitizeCopilotReplayResponseIds(input)).toBe(false);
+    expect(rewriteInputIds(input)).toBe(false);
     expect(input.map((item) => item.id)).toEqual([withEncrypted, withoutEncrypted]);
   });
 
@@ -79,7 +79,7 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: "rs_valid", type: "reasoning", encrypted_content: "valid", summary: [] },
     ];
 
-    expect(sanitizeCopilotReplayResponseIds(input)).toBe(true);
+    expect(rewriteInputIds(input)).toBe(true);
     expect(input).toEqual([
       { type: "reasoning", encrypted_content: "missing-id", summary: [] },
       { id: "rs_valid", type: "reasoning", encrypted_content: "valid", summary: [] },

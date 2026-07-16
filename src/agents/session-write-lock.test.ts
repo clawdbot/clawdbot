@@ -633,7 +633,13 @@ describe("acquireSessionWriteLock", () => {
       }) as typeof fs.readFile);
 
       try {
-        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 800, staleMs: 10 });
+        // Keep the original lock stale while the replacement stays fresh for the full acquire
+        // budget. Worker scheduling must not turn the replacement into another stale report.
+        const lock = await acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 800,
+          staleMs: 60_000,
+        });
         await lock.release();
         expect(lockReads).toBeGreaterThanOrEqual(3);
         await expectPathMissing(lockPath);

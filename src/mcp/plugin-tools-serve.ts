@@ -21,6 +21,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV,
+  resolveToolsMcpAgentSessionKey,
+} from "./agent-session-env.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolvePluginToolPolicy(config: OpenClawConfig): {
@@ -40,14 +45,28 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
   };
 }
 
-function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
-  const pluginToolPolicy = resolvePluginToolPolicy(config);
+export function resolvePluginToolsForMcp(params: {
+  config: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool[] {
+  const agentSessionKey = (params.agentSessionKey ?? resolveToolsMcpAgentSessionKey())?.trim();
+  const parsedSession = agentSessionKey ? parseAgentSessionKey(agentSessionKey) : undefined;
+  if (agentSessionKey && !parsedSession) {
+    throw new Error(
+      `${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} must be a canonical agent session key`,
+    );
+  }
+  const context = {
+    config: params.config,
+    ...(parsedSession ? { agentId: parsedSession.agentId, sessionKey: agentSessionKey } : {}),
+  };
+  const pluginToolPolicy = resolvePluginToolPolicy(params.config);
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context: { config },
+    context,
     ...pluginToolPolicy,
   });
   return resolvePluginTools({
-    context: { config },
+    context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
     runtimeRegistry,
@@ -58,10 +77,13 @@ export function createPluginToolsMcpServer(
   params: {
     config?: OpenClawConfig;
     tools?: AnyAgentTool[];
+    agentSessionKey?: string;
   } = {},
 ): Server {
   const cfg = params.config ?? getRuntimeConfig();
-  const tools = params.tools ?? resolveTools(cfg);
+  const tools =
+    params.tools ??
+    resolvePluginToolsForMcp({ config: cfg, agentSessionKey: params.agentSessionKey });
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
@@ -71,7 +93,7 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   const config = getRuntimeConfig();
-  const tools = resolveTools(config);
+  const tools = resolvePluginToolsForMcp({ config });
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");

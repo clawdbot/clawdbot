@@ -235,7 +235,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
-    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
@@ -257,7 +257,6 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/node-host` | Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/cli-runtime` | Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
-    | `plugin-sdk/qa-live-transport-scenarios` | Shared live transport QA scenario ids, baseline coverage helpers, and scenario-selection helper |
     | `plugin-sdk/qa-runner-runtime` | Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
@@ -278,7 +277,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma and WAL maintenance setup for plugin-owned databases |
+    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers for plugin-owned databases |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -338,6 +337,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/html-entity-runtime` | Single-pass semicolon-terminated HTML5 entity decoding without broad text utilities |
     | `plugin-sdk/text-utility-runtime` | Low-level text and path helpers, including five-entity HTML escaping |
+    | `plugin-sdk/widget-html` | Complete-document detection, size validation, and tool input errors for self-contained HTML widgets |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Deprecated broad barrel for agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and the deprecated `resolveOpenClawAgentDir` compatibility export; prefer focused agent/runtime subpaths |

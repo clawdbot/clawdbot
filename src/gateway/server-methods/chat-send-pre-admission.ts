@@ -148,6 +148,7 @@ export async function runChatSendPreAdmission(params: {
     persistedSessionKey: legacyKey ?? sessionKey,
     reloadEntry: () => loadSessionEntry(rawSessionKey, sessionLoadOptions).entry,
     storePath,
+    recoveryRuntime: context.recoveryRuntime,
     warn: (message) =>
       context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   });

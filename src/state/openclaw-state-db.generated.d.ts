@@ -68,12 +68,18 @@ export interface AndroidNotificationRecentPackages {
   updated_at_ms: number;
 }
 
+export interface ApnsRegistrationTombstones {
+  deleted_at_ms: number;
+  node_id: string;
+}
+
 export interface ApnsRegistrations {
   distribution: string | null;
   environment: string;
   installation_id: string | null;
   node_id: string;
   relay_handle: string | null;
+  relay_origin: string | null;
   send_grant: string | null;
   token: string | null;
   token_debug_suffix: string | null;
@@ -1228,6 +1234,13 @@ export interface WorkspaceSetupState {
   workspace_path: string;
 }
 
+export interface WorktreeProvisionedFileChunks {
+  chunk_index: number;
+  data: Uint8Array;
+  path: string;
+  worktree_id: string;
+}
+
 export interface Worktrees {
   base_ref: string;
   branch: string;
@@ -1237,6 +1250,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  provisioned_paths_json: string | null;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
@@ -1250,6 +1264,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
+  apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
@@ -1330,5 +1345,6 @@ export interface DB {
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_setup_state: WorkspaceSetupState;
+  worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
   worktrees: Worktrees;
 }

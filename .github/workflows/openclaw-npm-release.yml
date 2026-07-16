@@ -203,6 +203,14 @@ jobs:
         id: ai_runtime_tarballs
         run: |
           set -euo pipefail
+          if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
+            echo "Frozen target does not depend on @openclaw/ai; packing OpenClaw without a separate AI runtime tarball."
+            exit 0
+          fi
+          if [[ ! -f packages/ai/package.json ]]; then
+            echo "OpenClaw depends on @openclaw/ai but packages/ai/package.json is missing." >&2
+            exit 1
+          fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           package_version="$(node -p "require('./packages/ai/package.json').version")"
           if [[ "$package_version" != "$PACKAGE_VERSION" ]]; then
@@ -343,13 +351,16 @@ jobs:
           AI_RUNTIME_TARBALL_DIR: ${{ steps.ai_runtime_tarballs.outputs.dir }}
         run: |
           set -euo pipefail
-          mapfile -t AI_TARBALLS < <(find "$AI_RUNTIME_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
-          if [[ "${#AI_TARBALLS[@]}" -ne 1 ]]; then
-            echo "Expected exactly one prepared @openclaw/ai tarball, found ${#AI_TARBALLS[@]}." >&2
-            exit 1
+          AI_TARBALL_PATH=""
+          if [[ -n "$AI_RUNTIME_TARBALL_DIR" ]]; then
+            mapfile -t AI_TARBALLS < <(find "$AI_RUNTIME_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
+            if [[ "${#AI_TARBALLS[@]}" -ne 1 ]]; then
+              echo "Expected exactly one prepared @openclaw/ai tarball, found ${#AI_TARBALLS[@]}." >&2
+              exit 1
+            fi
+            AI_TARBALL_PATH="${AI_TARBALLS[0]}"
+            node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
           fi
-          AI_TARBALL_PATH="${AI_TARBALLS[0]}"
-          node --import tsx scripts/prepare-openclaw-npm-shrinkwrap.ts "$AI_TARBALL_PATH"
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
           pnpm pack --json 2>&1 | tee "$PACK_OUTPUT"
           PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'
@@ -441,28 +452,27 @@ jobs:
           fi
           TARBALL_NAME="$PACK_NAME"
           TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
-          mapfile -t AI_TARBALLS < <(find "$AI_RUNTIME_TARBALL_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | sort)
-          if [[ "${#AI_TARBALLS[@]}" -ne 1 ]]; then
-            echo "Expected exactly one packed @openclaw/ai tarball, found ${#AI_TARBALLS[@]}." >&2
-            exit 1
-          fi
-          AI_TARBALL_PATH="${AI_TARBALLS[0]}"
-          AI_TARBALL_NAME="$(basename "$AI_TARBALL_PATH")"
-          AI_TARBALL_SHA256="$(sha256sum "$AI_TARBALL_PATH" | awk '{print $1}')"
-          AI_PACKAGE_VERSION="$(
-            tar -xOf "$AI_TARBALL_PATH" package/package.json |
-              node -e 'let raw = ""; process.stdin.on("data", (chunk) => (raw += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(raw).version));'
-          )"
-          if [[ "$AI_PACKAGE_VERSION" != "$PACKAGE_VERSION" ]]; then
-            echo "Prepared @openclaw/ai version ${AI_PACKAGE_VERSION} does not match openclaw ${PACKAGE_VERSION}." >&2
-            exit 1
-          fi
+          AI_TARBALL_NAME=""
+          AI_TARBALL_SHA256=""
+          AI_PACKAGE_VERSION=""
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
-          cp "$AI_TARBALL_PATH" "$ARTIFACT_DIR/"
-          cp "$AI_RUNTIME_TARBALL_DIR/SHA256SUMS" "$ARTIFACT_DIR/ai-runtime-SHA256SUMS"
+          if [[ -n "$AI_TARBALL_PATH" ]]; then
+            AI_TARBALL_NAME="$(basename "$AI_TARBALL_PATH")"
+            AI_TARBALL_SHA256="$(sha256sum "$AI_TARBALL_PATH" | awk '{print $1}')"
+            AI_PACKAGE_VERSION="$(
+              tar -xOf "$AI_TARBALL_PATH" package/package.json |
+                node -e 'let raw = ""; process.stdin.on("data", (chunk) => (raw += chunk)); process.stdin.on("end", () => process.stdout.write(JSON.parse(raw).version));'
+            )"
+            if [[ "$AI_PACKAGE_VERSION" != "$PACKAGE_VERSION" ]]; then
+              echo "Prepared @openclaw/ai version ${AI_PACKAGE_VERSION} does not match openclaw ${PACKAGE_VERSION}." >&2
+              exit 1
+            fi
+            cp "$AI_TARBALL_PATH" "$ARTIFACT_DIR/"
+            cp "$AI_RUNTIME_TARBALL_DIR/SHA256SUMS" "$ARTIFACT_DIR/ai-runtime-SHA256SUMS"
+          fi
           cp -R "$DEPENDENCY_EVIDENCE_DIR" "$ARTIFACT_DIR/dependency-evidence"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
@@ -479,14 +489,16 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
-            dependencyTarballs: [
-              {
-                packageName: "@openclaw/ai",
-                packageVersion: process.env.AI_PACKAGE_VERSION,
-                tarballName: process.env.AI_TARBALL_NAME,
-                tarballSha256: process.env.AI_TARBALL_SHA256,
-              },
-            ],
+            dependencyTarballs: process.env.AI_TARBALL_NAME
+              ? [
+                  {
+                    packageName: "@openclaw/ai",
+                    packageVersion: process.env.AI_PACKAGE_VERSION,
+                    tarballName: process.env.AI_TARBALL_NAME,
+                    tarballSha256: process.env.AI_TARBALL_SHA256,
+                  },
+                ]
+              : [],
             dependencyEvidenceDir: "dependency-evidence",
             dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
           };
@@ -511,8 +523,11 @@ jobs:
           fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           AI_TARBALL="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
-          node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
-            "$TARBALL_PATH" "$PACKAGE_VERSION" "$AI_TARBALL"
+          verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")
+          if [[ -n "$AI_TARBALL" ]]; then
+            verify_args+=("$AI_TARBALL")
+          fi
+          node --import tsx scripts/openclaw-npm-prepublish-verify.ts "${verify_args[@]}"
 
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -924,11 +939,16 @@ jobs:
             echo "Prepared preflight tarball digest mismatch." >&2
             exit 1
           fi
-          if [[ ! -f preflight-tarball/ai-runtime-SHA256SUMS ]]; then
-            echo "Prepared AI runtime dependency checksums are missing." >&2
+          if node -e 'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
+            if [[ ! -f preflight-tarball/ai-runtime-SHA256SUMS ]]; then
+              echo "Prepared AI runtime dependency checksums are missing." >&2
+              exit 1
+            fi
+            (cd preflight-tarball && sha256sum -c ai-runtime-SHA256SUMS)
+          elif [[ -f preflight-tarball/ai-runtime-SHA256SUMS ]] || find preflight-tarball -maxdepth 1 -type f -name 'openclaw-ai-*.tgz' -print -quit | grep -q .; then
+            echo "Frozen target without an @openclaw/ai dependency contains unexpected AI runtime artifacts." >&2
             exit 1
           fi
-          (cd preflight-tarball && sha256sum -c ai-runtime-SHA256SUMS)
           echo "tarball_name=$ARTIFACT_TARBALL_NAME" >> "$GITHUB_OUTPUT"
           echo "tarball_sha256=$ARTIFACT_TARBALL_SHA256" >> "$GITHUB_OUTPUT"
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"
@@ -1009,7 +1029,13 @@ jobs:
             fi
             bash scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"
           }
-          publish_if_missing "@openclaw/ai" "$(find preflight-tarball -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
+          ai_tarball="$(find preflight-tarball -type f -name 'openclaw-ai-*.tgz' -print | head -n 1)"
+          if [[ -n "$ai_tarball" ]]; then
+            publish_if_missing "@openclaw/ai" "$ai_tarball"
+          elif node -e 'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)'; then
+            echo "Prepared tarball for @openclaw/ai was not found." >&2
+            exit 1
+          fi
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
       - name: Verify extended-stable registry readback

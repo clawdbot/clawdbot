@@ -3,84 +3,97 @@
  * and avoid adding new imports here.
  */
 
-export * from "../agents/agent-scope.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
-export * from "../agents/current-time.js";
-export * from "../agents/date-time.js";
-export * from "../agents/defaults.js";
-export * from "../agents/identity-avatar.js";
-export * from "../agents/identity.js";
-export * from "../agents/model-auth-markers.js";
-export * from "../agents/model-auth.js";
-export * from "../agents/model-catalog.js";
-export * from "../agents/model-catalog-scope.js";
-export * from "../agents/model-selection.js";
-export * from "../agents/simple-completion-runtime.js";
-export * from "../agents/embedded-agent-block-chunker.js";
-export * from "../agents/embedded-agent-utils.js";
-export * from "../agents/provider-auth-aliases.js";
-export * from "../agents/sandbox-paths.js";
-export * from "../agents/schema/typebox.js";
-export * from "../agents/tools/common.js";
-export * from "../agents/tools/web-guarded-fetch.js";
-export * from "../agents/tools/web-shared.js";
-export * from "../agents/tools/web-fetch-utils.js";
-export * from "../tools/index.js";
-// Intentional public runtime surface: channel plugins use ingress agent helpers directly.
-export * from "../agents/agent-command.js";
-export * from "../tts/tts.js";
+export {
+  listAgentIds,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+  setAgentEffectiveModelPrimary,
+} from "../agents/agent-scope.js";
+
+export { DEFAULT_PROVIDER } from "../agents/defaults.js";
+// Consumed by the codex plugin's app-server usage surface.
+export { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
+export { resolveAgentAvatar } from "../agents/identity-avatar.js";
+export type { AgentAvatarResolution } from "../agents/identity-avatar.js";
+export {
+  resolveAckReaction,
+  resolveAgentIdentity,
+  resolveHumanDelayConfig,
+  resolveIdentityNamePrefix,
+} from "../agents/identity.js";
+
+export { resolveApiKeyForProvider } from "../agents/model-auth.js";
+export {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
+export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 
 export {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-  dedupeProfileIds,
+  buildModelAliasIndex,
+  findNormalizedProviderValue,
+  parseModelRef,
+  resolveAllowedModelRef,
+  resolveModelRefFromString,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "../agents/model-selection.js";
+
+export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
+export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
+export { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+export type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
+
+export {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+} from "../agents/tools/common.js";
+
+// Intentional public runtime surface: channel plugins use ingress agent helpers directly.
+export { agentCommandFromIngress } from "../agents/agent-command.js";
+export { getTtsProvider, resolveTtsConfig, resolveTtsPrefsPath } from "../tts/tts.js";
+export type { ResolvedTtsConfig } from "../tts/tts.js";
+
+export {
   listProfilesForProvider,
-  markAuthProfileSuccess,
-  setAuthProfileOrder,
-  upsertAuthProfile,
-  upsertAuthProfileWithLock,
-  repairOAuthProfileIdMismatch,
-  suggestOAuthProfileIdForLegacyDefault,
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
-  loadAuthProfileStore,
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
-  calculateAuthProfileCooldownMs,
-  clearAuthProfileCooldown,
   clearExpiredCooldowns,
-  getSoonestCooldownExpiry,
   isProfileInCooldown,
-  markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
-  markAuthProfileFailure,
   refreshOAuthCredentialForRuntime,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   resolveApiKeyForProfile,
-  resolveAuthProfileDisplayLabel,
-  formatAuthDoctorHint,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "../agents/auth-profiles.js";
 export type {
-  ApiKeyCredential,
-  AuthCredentialReasonCode,
-  AuthProfileBlockedReason,
-  AuthProfileBlockedSource,
   AuthProfileCredential,
-  AuthProfileEligibilityReasonCode,
   AuthProfileFailureReason,
-  AuthProfileIdRepairResult,
   AuthProfileStore,
   OAuthCredential,
-  ProfileUsageStats,
-  TokenCredential,
-  TokenExpiryState,
 } from "../agents/auth-profiles.js";
+
+export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
+export { extractAssistantText } from "../agents/embedded-agent-utils.js";
+export { jsonResult } from "../agents/tools/tool-results.js";
+export { readStringParam } from "../agents/tools/common.js";
+export {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope-config.js";
+export { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+export { resolveThinkingDefault } from "../agents/model-thinking-default.js";

@@ -726,7 +726,19 @@
     if (s.length <= maxLen) {
       return s;
     }
-    return s.slice(0, maxLen) + "...";
+    let endOffset = maxLen;
+    const beforeBoundary = s.charCodeAt(endOffset - 1);
+    const afterBoundary = s.charCodeAt(endOffset);
+    // Keep the existing UTF-16 unit ceiling, but retreat if it splits a surrogate pair.
+    if (
+      beforeBoundary >= 0xd800 &&
+      beforeBoundary <= 0xdbff &&
+      afterBoundary >= 0xdc00 &&
+      afterBoundary <= 0xdfff
+    ) {
+      endOffset -= 1;
+    }
+    return s.slice(0, endOffset) + "...";
   }
 
   /**

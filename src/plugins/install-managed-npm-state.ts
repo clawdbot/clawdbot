@@ -12,6 +12,7 @@ import {
   restoreManagedNpmRootPeerDependencySnapshot,
 } from "../infra/npm-managed-root.js";
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -602,7 +603,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   try {
     entries = await fs.readdir(projectsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isNotFoundPathError(error)) {
       return packageDirs;
     }
     throw error;

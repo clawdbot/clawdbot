@@ -114,7 +114,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
 }
 
 export function renderNewSessionDraftComposer(options: {
-  agentDefaultModel?: string;
+  agent?: import("../../api/types.ts").GatewayAgentRow;
   agentId: string;
   attachmentDraft: NewSessionAttachmentDraft;
   canSubmit: boolean;
@@ -137,7 +137,7 @@ export function renderNewSessionDraftComposer(options: {
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
-          agentDefaultModel: options.agentDefaultModel,
+          agent: options.agent,
           agentId: options.agentId,
           context: options.context,
           sending: options.submitting,

@@ -113,6 +113,30 @@ export type ProviderAuthMethodNonInteractiveContext = {
   ) => ApiKeyCredential | null;
 };
 
+/** Read-only context for app-guided discovery of already available inference. */
+export type ProviderAppGuidedSetupContext = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  signal?: AbortSignal;
+};
+
+export type ProviderAppGuidedSetupCandidate = {
+  /** Canonical provider/model reference returned unchanged during activation. */
+  modelRef: string;
+  /** Optional provider-owned detail shown beside the auth-choice label. */
+  detail?: string;
+};
+
+export type ProviderAppGuidedSetup = {
+  /** Detection is read-only: no model pull, download, login, or config write. */
+  detect: (ctx: ProviderAppGuidedSetupContext) => Promise<ProviderAppGuidedSetupCandidate | null>;
+  /** Recheck one detected model and return the config required for a live probe. */
+  prepare: (
+    ctx: ProviderAppGuidedSetupContext & { modelRef: string },
+  ) => Promise<ProviderAuthResult | null>;
+};
+
 export type ProviderAuthMethod = {
   id: string;
   label: string;
@@ -132,6 +156,8 @@ export type ProviderAuthMethod = {
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,
   ) => Promise<OpenClawConfig | null>;
+  /** Provider-owned local model discovery for the shared guided setup ladder. */
+  appGuidedSetup?: ProviderAppGuidedSetup;
 };
 
 export type ProviderPluginWizardSetup = {

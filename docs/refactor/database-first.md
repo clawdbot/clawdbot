@@ -397,7 +397,11 @@ The branch already has a real shared SQLite base:
   tables are rebuilt under their canonical names.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
-  `subagents/runs.json` file is doctor migration input only.
+  `subagents/runs.json` file is Doctor cleanup input only. Its run entries are
+  transient recovery state, so Doctor records the retirement receipt and
+  discards the file without importing it. Because a file cannot prove whether
+  its entries are live or stale after SQLite rows have been pruned, operators
+  must let file-era active runs settle before upgrading across this boundary.
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id, with
   target agent/session columns, conversation kind, status, expiry, and metadata
@@ -514,11 +518,16 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, update checks, and config health now use typed shared SQLite
   tables for subscriptions, VAPID keys, node registrations, trigger rows,
   routing rows, update-notification state, and config health entries instead of
-  whole opaque JSON blobs. Web push and APNs snapshot writes now reconcile
-  subscriptions/registrations by primary key instead of clearing their tables;
-  config health does the same by config path.
-  Their runtime modules keep SQLite snapshot readers/writers separate from
-  doctor-only legacy JSON import helpers.
+  whole opaque JSON blobs. Web Push and APNs writes upsert only the affected
+  primary-key row; config health reconciles by config path. Their runtime
+  modules remain separate from Doctor-only legacy JSON import helpers.
+- APNs runtime reads and writes only `apns_registrations`. Explicit
+  `openclaw doctor --fix` strictly imports the retired
+  `push/apns-registrations.json`, preserves existing canonical rows, verifies
+  the transaction, records a receipt, and removes the secret-bearing JSON.
+  Receipt-backed retries perform cleanup only, while
+  `apns_registration_tombstones` cover invalidations before first repair, so
+  stale relay grants or device tokens cannot resurrect.
 - Node-host config now uses a typed singleton row in the shared SQLite database.
   Runtime fails closed while the old `node.json` file or an interrupted claim
   remains; explicit `openclaw doctor --fix` strictly imports and removes it
@@ -1367,8 +1376,11 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   OpenClaw temp root. They are recreated as needed and are not backup or
   migration inputs.
 - Subagent run registry persistence uses typed shared `subagent_runs` rows. The
-  old `subagents/runs.json` path is now only a doctor migration input, and
-  runtime helper names no longer describe the state layer as disk-backed.
+  old `subagents/runs.json` path is now only a Doctor cleanup input. Doctor
+  claims it under the state maintenance lock, records the discard decision in
+  SQLite, and removes it without importing transient run state. No runtime JSON
+  reader, writer, cache, or fallback remains; cross-version recovery of file-only
+  in-flight runs is intentionally unsupported at this retirement boundary.
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
@@ -1483,7 +1495,8 @@ skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, r
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
 web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms)
 web_push_vapid_keys(key_id, public_key, private_key, subject, updated_at_ms)
-apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
+apns_registration_tombstones(node_id, deleted_at_ms)
 node_host_config(config_key, version, node_id, token, display_name, gateway_host, gateway_port, gateway_tls, gateway_tls_fingerprint, gateway_context_path, updated_at_ms)
 device_identities(identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms)
 device_auth_tokens(device_id, role, token, scopes_json, updated_at_ms)
@@ -2195,7 +2208,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `identity/device-auth.json`
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
-- `push/apns-registrations.json`
+- `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)
 - `process-leases.json`
 - `gateway-instance-id`
 - `session-toggles.json`

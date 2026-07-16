@@ -87,7 +87,7 @@ type ChannelSetupWizardEnvShortcut = {
 };
 
 /** Declarative secret/input step for a channel account credential. */
-type ChannelSetupWizardCredential = {
+export type ChannelSetupWizardCredential = {
   inputKey: keyof ChannelSetupInput;
   providerHint: string;
   credentialLabel: string;

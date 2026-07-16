@@ -6,12 +6,12 @@ scenario:
     primary:
       - channels.streaming
   execution:
+    profiles: { "matrix:all": 9, "matrix:transport": 8 }
     kind: flow
     channel: matrix
     timeoutMs: 60000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         streaming: quiet
         toolProfile: coding

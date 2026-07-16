@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
@@ -3408,6 +3412,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(dockerfile).toContain("procps");
   });
 
+  it("caches package downloads across prepared Docker E2E image builds", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "--mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked",
+    );
+  });
+
   it("keeps onboarding Docker E2E resource-guarded", () => {
     const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
 
@@ -4041,6 +4053,58 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).not.toContain("WARNING: Gateway status probe failed");
   });
 
+  it("keeps a stalled multi-node health request inside the probe deadline", () => {
+    const runner = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const startMarker = "if PORT=18789 node <<NODE\n";
+    const endMarker = "\nNODE\n  then";
+    const start = runner.indexOf(startMarker);
+    const end = runner.indexOf(endMarker, start + startMarker.length);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const probe = runner.slice(start + startMarker.length, end);
+    const workDir = tempDirs.make("openclaw-multi-node-health-timeout-");
+    const preloadPath = join(workDir, "stalling-fetch.mjs");
+
+    writeFileSync(
+      preloadPath,
+      [
+        "// Advance the deadline when the request aborts without waiting 30 wall-clock seconds.",
+        "const realSetTimeout = globalThis.setTimeout;",
+        "let now = 0;",
+        "Date.now = () => now;",
+        "Object.defineProperty(AbortSignal, 'timeout', { value(delayMs) {",
+        "  const controller = new AbortController();",
+        "  realSetTimeout(() => {",
+        "    now += delayMs;",
+        "    controller.abort(new DOMException('health deadline elapsed', 'TimeoutError'));",
+        "  }, 0);",
+        "  return controller.signal;",
+        "} });",
+        "globalThis.fetch = async (_url, init = {}) => await new Promise((_resolve, reject) => {",
+        "  init.signal.addEventListener('abort', () => {",
+        "    process.stderr.write('hung fetch aborted\\n');",
+        "    reject(init.signal.reason);",
+        "  }, { once: true });",
+        "});",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preloadPath).href, "--input-type=module", "--eval", probe],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PORT: "18789" },
+        timeout: 5_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr.match(/hung fetch aborted/gu)).toHaveLength(1);
+    expect(result.stderr).toContain("health deadline elapsed");
+  });
+
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
     const doctorScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
@@ -4284,8 +4348,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash');
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash');
+    expect(runner).toContain('OPENCLAW_BETA=1 bash "$installer"');
+    expect(runner).toContain('OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"');
     expect(runner).not.toContain('OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash');
     expect(runner).not.toContain(
       'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',

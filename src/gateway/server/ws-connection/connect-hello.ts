@@ -71,7 +71,9 @@ export async function sendGatewayHello(
     snapshot.stateVersion.health = getHealthVersion();
   }
   const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
-  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
+  const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
+    requireGatewayAuthGrant: resolvedAuth.mode !== "none",
+  });
   const helloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,

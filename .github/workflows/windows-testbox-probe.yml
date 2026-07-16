@@ -155,7 +155,12 @@ jobs:
               $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
               $rootfsUrl = Resolve-UbuntuWslRootfsUrl
               New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
-              Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfs -UseBasicParsing
+              Invoke-WebRequest `
+                -Uri $rootfsUrl `
+                -OutFile $rootfs `
+                -UseBasicParsing `
+                -ConnectionTimeoutSeconds 15 `
+                -OperationTimeoutSeconds 120
               $import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")
               Write-Host $import.Text
               Write-Host "wsl_import_exit=$($import.Code)"

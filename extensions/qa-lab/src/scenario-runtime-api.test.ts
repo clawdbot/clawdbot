@@ -86,7 +86,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     liveTurnTimeoutMs: fn,
     resolveQaLiveTurnTimeoutMs: fn,
     splitModelRef: fn,
-    qaChannelPlugin: { id: "qa-channel" },
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,

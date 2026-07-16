@@ -85,7 +85,13 @@ describe("memory session sync state", () => {
         {
           absPath: "/tmp/sessions/unchanged.jsonl",
           path: "sessions/unchanged.jsonl",
-          mtimeMs: 100,
+          mtimeMs: 100.75,
+          size: 10,
+        },
+        {
+          absPath: "/tmp/sessions/sub-ms-newer.jsonl",
+          path: "sessions/sub-ms-newer.jsonl",
+          mtimeMs: 100.75,
           size: 10,
         },
         {
@@ -108,13 +114,15 @@ describe("memory session sync state", () => {
         },
       ],
       existingRows: [
-        { path: "sessions/unchanged.jsonl", hash: "hash-unchanged", mtime: 100, size: 10 },
+        { path: "sessions/unchanged.jsonl", hash: "hash-unchanged", mtime: 100.75, size: 10 },
+        { path: "sessions/sub-ms-newer.jsonl", hash: "hash-sub-ms", mtime: 100.25, size: 10 },
         { path: "sessions/newer.jsonl", hash: "hash-newer", mtime: 200, size: 20 },
         { path: "sessions/resized.jsonl", hash: "hash-resized", mtime: 300, size: 30 },
       ],
     });
 
     expect(dirtyFiles).toEqual([
+      "/tmp/sessions/sub-ms-newer.jsonl",
       "/tmp/sessions/newer.jsonl",
       "/tmp/sessions/resized.jsonl",
       "/tmp/sessions/missing.jsonl",

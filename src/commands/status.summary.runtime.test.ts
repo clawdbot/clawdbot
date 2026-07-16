@@ -1,5 +1,6 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
+import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
@@ -157,12 +158,12 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
         model: "claude-sonnet-4-6",
         contextTokensOverride: 1_200_000,
       }),
-    ).toBe(1_048_576);
+    ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it.each([
     { contextTokens: 200_000, expected: 200_000 },
-    { contextTokens: 2_000_000, expected: 1_048_576 },
+    { contextTokens: 2_000_000, expected: ANTHROPIC_CONTEXT_1M_TOKENS },
   ])(
     "bounds Anthropic contextTokens=$contextTokens by the fixed native window",
     ({ contextTokens, expected }) => {
@@ -175,7 +176,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
                   models: [
                     {
                       id: "claude-sonnet-4-6",
-                      contextWindow: 1_048_576,
+                      contextWindow: ANTHROPIC_CONTEXT_1M_TOKENS,
                       contextTokens,
                     },
                   ],

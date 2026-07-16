@@ -93,6 +93,27 @@ describe("state database permission hardening without chmod support", () => {
     expect(database.db.isOpen).toBe(true);
   });
 
+  it("opens when EROFS leaves existing permissions restrictive", () => {
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    closeOpenClawStateDatabaseForTest();
+    chmodFailHook.error = chmodError("EROFS");
+
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+
+    expect(database.db.isOpen).toBe(true);
+  });
+
+  it("rethrows EROFS when existing permissions are too broad", () => {
+    stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
+    fs.chmodSync(stateDir, 0o755);
+    chmodFailHook.error = chmodError("EROFS");
+
+    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
+      /EROFS/,
+    );
+  });
+
   it("opens when the filesystem probe also rejects chmod with EPERM", () => {
     stateDir = fs.mkdtempSync(join(tmpdir(), "openclaw-state-chmod-"));
     fs.chmodSync(stateDir, 0o755);

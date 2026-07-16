@@ -23,7 +23,7 @@ import {
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliProgress } from "../cli/progress.js";
 import {
   autocompleteMultiselectWithNavigationFooter,
@@ -36,6 +36,10 @@ import {
 } from "./clack-navigation-prompts.js";
 import type { WizardProgress, WizardPrompter, WizardPromptNavigation } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
+
+// Same species as the pixel-mascot banner, compressed into a four-column
+// spinner for long-running wizard steps.
+const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
@@ -311,7 +315,15 @@ export function createClackPrompter(): WizardPrompter {
           }),
       ),
     progress: (label: string): WizardProgress => {
-      const spin = spinner();
+      const useClawSpinner =
+        process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
+      const spin = useClawSpinner
+        ? spinner({
+            frames: CLAW_SPINNER_FRAMES,
+            delay: 120,
+            styleFrame: theme.accent,
+          })
+        : spinner();
       spin.start(theme.accent(label));
       const osc = createCliProgress({
         label,

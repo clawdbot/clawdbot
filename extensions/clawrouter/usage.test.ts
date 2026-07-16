@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
-import { fetchClawRouterUsage, type ClawRouterUsageFetchGuard } from "./usage.js";
+import { fetchClawRouterUsage } from "./usage.js";
 
 const runningServers: Server[] = [];
 const runningSockets = new Set<Duplex>();
@@ -106,6 +106,10 @@ afterEach(async () => {
   }
   savedProxyEnv.clear();
 });
+
+type ClawRouterUsageFetchGuard = NonNullable<
+  Parameters<typeof fetchClawRouterUsage>[0]["fetchGuard"]
+>;
 
 function mockFetchGuard(response: Response): MockedFunction<ClawRouterUsageFetchGuard> {
   return vi.fn(async ({ url }) => ({

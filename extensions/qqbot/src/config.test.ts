@@ -32,6 +32,15 @@ function requireQQBotSetup() {
 }
 
 describe("qqbot config", () => {
+  it("rejects pairing because QQBot has no pairing flow", () => {
+    expect(requireRuntimeSchema().safeParse({ dmPolicy: "pairing" })).toMatchObject({
+      success: false,
+    });
+    expect(
+      requireRuntimeSchema().safeParse({ accounts: { work: { dmPolicy: "pairing" } } }),
+    ).toMatchObject({ success: false });
+  });
+
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),

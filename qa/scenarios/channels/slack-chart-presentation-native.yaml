@@ -5,6 +5,7 @@ scenario:
   coverage:
     primary: [channels.media-rich-content]
   execution:
+    profiles: { "slack:default": 4 }
     kind: flow
     channel: slack
     timeoutMs: 90000

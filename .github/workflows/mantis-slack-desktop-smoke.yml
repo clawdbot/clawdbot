@@ -203,7 +203,7 @@ jobs:
           mkdir -p "$install_dir" "$HOME/.local/bin"
           git init "$install_dir/src"
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -266,8 +266,29 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
           if [[ -z "${CRABBOX_LEASE_ID:-}" && "$CRABBOX_PROVIDER" == "aws" ]]; then
-            runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
-            if [[ -z "$runner_ip" ]]; then
+            runner_ip=""
+            for attempt in 1 2 3; do
+              if runner_ip="$(curl -fsS --connect-timeout 5 --max-time 15 https://checkip.amazonaws.com | tr -d '[:space:]')"; then
+                break
+              fi
+              runner_ip=""
+              if [[ "$attempt" != "3" ]]; then
+                sleep "$attempt"
+              fi
+            done
+            valid_runner_ip=true
+            if [[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]; then
+              valid_runner_ip=false
+            else
+              IFS=. read -r -a runner_ip_octets <<<"$runner_ip"
+              for octet in "${runner_ip_octets[@]}"; do
+                if ((10#$octet > 255)); then
+                  valid_runner_ip=false
+                  break
+                fi
+              done
+            fi
+            if [[ "$valid_runner_ip" != "true" ]]; then
               echo "Could not resolve GitHub runner public IPv4 for AWS SSH ingress." >&2
               exit 1
             fi

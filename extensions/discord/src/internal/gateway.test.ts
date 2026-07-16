@@ -365,13 +365,17 @@ describe("GatewayPlugin", () => {
           { user_id: "u2", channel_id: "c1" },
           { user_id: "u3", channel_id: "c2" },
         ],
+        members: [
+          { user: { id: "u1", username: "owner", bot: false } },
+          { user: { id: "u2", username: "friend", bot: false } },
+          { user: { id: "u3", username: "helper", bot: true } },
+        ],
       },
     });
 
-    expect(gateway.listVoiceChannelStates("g1", "c1").map((state) => state.user_id)).toEqual([
-      "u1",
-      "u2",
-    ]);
+    const initialStates = gateway.listVoiceChannelStates("g1", "c1");
+    expect(initialStates.map((state) => state.user_id)).toEqual(["u1", "u2"]);
+    expect(initialStates.map((state) => state.member?.user.username)).toEqual(["owner", "friend"]);
 
     const moveState = { guild_id: "g1", user_id: "u1", channel_id: "c2" };
     await handleDispatch({
@@ -384,13 +388,33 @@ describe("GatewayPlugin", () => {
       d: leaveState,
     });
     expect(gateway.takeVoiceStateTransition(moveState as never)).toEqual({
-      previous: { guild_id: "g1", user_id: "u1", channel_id: "c1" },
-      current: { guild_id: "g1", user_id: "u1", channel_id: "c2" },
+      previous: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u1",
+        channel_id: "c1",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "owner" }) }),
+      }),
+      current: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u1",
+        channel_id: "c2",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "owner" }) }),
+      }),
     });
     expect(gateway.takeVoiceStateTransition(moveState as never)).toBeNull();
     expect(gateway.takeVoiceStateTransition(leaveState as never)).toEqual({
-      previous: { guild_id: "g1", user_id: "u2", channel_id: "c1" },
-      current: { guild_id: "g1", user_id: "u2", channel_id: null },
+      previous: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u2",
+        channel_id: "c1",
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "friend" }) }),
+      }),
+      current: expect.objectContaining({
+        guild_id: "g1",
+        user_id: "u2",
+        channel_id: null,
+        member: expect.objectContaining({ user: expect.objectContaining({ username: "friend" }) }),
+      }),
     });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);

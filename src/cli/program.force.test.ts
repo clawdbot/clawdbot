@@ -47,6 +47,11 @@ describe("gateway --force helpers", () => {
 
     const parsed = forceFreePort(18789);
 
+    expect(execFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("lsof"),
+      ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFc"],
+      { encoding: "utf-8", killSignal: "SIGKILL", timeout: 10_000 },
+    );
     expect(parsed).toEqual<PortProcess[]>([
       { pid: 123, command: "node" },
       { pid: 456, command: "python" },
@@ -307,7 +312,12 @@ describe("gateway --force helpers", () => {
       ([cmd, args]) => cmd === "fuser" && Array.isArray(args) && args.includes("-TERM"),
     );
     expect(termCall?.[1]).toEqual(["-k", "-TERM", "18789/tcp"]);
-    expect((termCall?.[2] as { encoding?: string } | undefined)?.encoding).toBe("utf-8");
+    expect(termCall?.[2]).toEqual({
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      killSignal: "SIGKILL",
+      timeout: 10_000,
+    });
   });
 
   it("uses fuser SIGKILL escalation when port stays busy", async () => {
@@ -416,6 +426,8 @@ describe("gateway --force helpers (Windows netstat path)", () => {
     expect(forceFreeWindowsPort(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
     expect(execFileSync).toHaveBeenCalledWith(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
       encoding: "utf-8",
+      killSignal: "SIGKILL",
+      timeout: 10_000,
     });
   });
 

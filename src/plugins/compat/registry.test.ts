@@ -33,7 +33,7 @@ const publicSdkContractNarrowingTiers = [
   {
     name: "bundled-only public export",
     codeSuffix: "-public-demotion",
-    count: 158,
+    count: 157,
     replacement:
       "subpath becomes internal (private-local-only); no external successor — no known external consumers",
     releaseNote: /public export.*module stays available for bundled plugins.*private-local-only/u,

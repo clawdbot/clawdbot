@@ -1,11 +1,8 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  isMaxReasoningCodexModel,
-  isModernCodexModel,
-  resolveCodexFallbackReasoningEfforts,
-  resolveCodexSupportedReasoningEffort,
+  resolveCodexAppServerReasoningEffort,
   type CodexReasoningEffort,
-} from "../../provider.js";
+} from "./reasoning-effort.js";
 import {
   isCodexAppServerNativeAuthProfile,
   type CodexAppServerAuthProfileLookup,
@@ -138,7 +135,7 @@ export function resolveCodexAppServerModelProvider(params: {
 }
 
 // Modern Codex models reject the legacy CLI `minimal` default. Prefer
-// app-server metadata, then use the provider-owned fallback effort contract
+// app-server metadata, then use the app-server-owned fallback effort contract
 // for Pro models whose minimum supported effort is `medium`.
 // Other modern models translate `minimal` to `low`. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
@@ -147,39 +144,9 @@ export function resolveReasoningEffort(
   modelId: string,
   supportedReasoningEfforts?: readonly string[],
 ): CodexReasoningEffort | null {
-  if (thinkLevel === "off" || thinkLevel === "adaptive") {
-    return null;
-  }
-  if (supportedReasoningEfforts) {
-    return (
-      resolveCodexSupportedReasoningEffort({
-        requested: thinkLevel,
-        supportedReasoningEfforts,
-      }) ?? null
-    );
-  }
-  const fallbackReasoningEfforts = resolveCodexFallbackReasoningEfforts(modelId);
-  if (fallbackReasoningEfforts) {
-    return (
-      resolveCodexSupportedReasoningEffort({
-        requested: thinkLevel,
-        supportedReasoningEfforts: fallbackReasoningEfforts,
-      }) ?? null
-    );
-  }
-  if (thinkLevel === "minimal") {
-    return isModernCodexModel(modelId) ? "low" : "minimal";
-  }
-  if (
-    thinkLevel === "low" ||
-    thinkLevel === "medium" ||
-    thinkLevel === "high" ||
-    thinkLevel === "xhigh"
-  ) {
-    return thinkLevel;
-  }
-  if (thinkLevel === "max" && isMaxReasoningCodexModel(modelId)) {
-    return "max";
-  }
-  return null;
+  return resolveCodexAppServerReasoningEffort({
+    thinkLevel,
+    modelId,
+    supportedReasoningEfforts,
+  });
 }

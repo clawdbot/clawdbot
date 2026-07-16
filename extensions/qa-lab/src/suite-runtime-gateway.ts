@@ -16,10 +16,13 @@ type QaGatewayMutationEnv = Pick<
   "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
 >;
 
-async function fetchJson<T>(url: string): Promise<T> {
+const QA_SUITE_FETCH_JSON_TIMEOUT_MS = 15_000;
+
+async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT_MS): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
     policy: { allowPrivateNetwork: true },
+    timeoutMs,
     auditContext: "qa-lab-suite-fetch-json",
   });
   try {
@@ -33,12 +36,13 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, timeoutMs = 45_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const { response, release } = await fetchWithSsrFGuard({
         url: `${env.gateway.baseUrl}/readyz`,
         policy: { allowPrivateNetwork: true },
+        timeoutMs: Math.max(1, deadline - Date.now()),
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       });
       try {
@@ -51,7 +55,10 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     } catch {
       // retry
     }
-    await sleep(250);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(250, remainingMs));
+    }
   }
   throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }

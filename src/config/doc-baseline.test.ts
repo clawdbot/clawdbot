@@ -1,29 +1,39 @@
 // Verifies generated config documentation baselines stay stable.
-import { describe, expect, it } from "vitest";
-import { collectConfigDocBaselineEntries, dedupeConfigDocBaselineEntries } from "./doc-baseline.js";
+import { describe, expect, it, vi } from "vitest";
+import { renderConfigDocBaselineArtifacts } from "./doc-baseline.js";
+
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: () => ({ plugins: [] }),
+    collectChannelSchemaMetadata: () => [],
+    collectPluginSchemaMetadata: () => [],
+    buildConfigSchema: () => ({
+      schema: {
+        type: "object",
+        properties: {
+          tupleValues: {
+            type: "array",
+            items: [
+              { type: "string", enum: ["alpha"] },
+              { type: "number", enum: [42] },
+            ],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    }),
+  };
+});
 
 describe("config doc baseline", () => {
-  it("merges tuple item metadata instead of dropping earlier entries", () => {
-    const entries = dedupeConfigDocBaselineEntries(
-      collectConfigDocBaselineEntries(
-        {
-          type: "array",
-          items: [
-            {
-              type: "string",
-              enum: ["alpha"],
-            },
-            {
-              type: "number",
-              enum: [42],
-            },
-          ],
-        },
-        {},
-        "tupleValues",
-      ),
-    );
-    expect(entries).toEqual([
+  it("merges tuple item metadata through the public renderer", async () => {
+    const { baseline } = await renderConfigDocBaselineArtifacts();
+
+    expect(baseline.coreEntries).toEqual([
       {
         path: "tupleValues",
         kind: "core",

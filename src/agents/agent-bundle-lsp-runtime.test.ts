@@ -277,7 +277,7 @@ describe("bundle LSP runtime", () => {
     ["lsp_references_typescript", "textDocument/references"],
   ])("cancels pending %s requests when the tool signal aborts", async (toolName, method) => {
     configureSingleLspServer();
-    const child = new MockChildProcess("", new Set(["initialize"]));
+    const child = new MockChildProcess("", new Set(["initialize", "shutdown"]));
     spawnMock.mockReturnValue(child);
 
     const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });

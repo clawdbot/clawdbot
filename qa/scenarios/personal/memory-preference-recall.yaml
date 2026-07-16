@@ -29,8 +29,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify fake personal preference recall through the local QA memory path.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       sessionKey: agent:qa:personal-memory
       rememberPrompt: "Please remember this fact for later: my fake personal QA preference is that my preferred reminder label code is ORBIT-9. Use your normal memory mechanism and reply exactly `Remembered ORBIT-9.` once stored."
       rememberAckAny:

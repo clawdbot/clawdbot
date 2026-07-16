@@ -251,6 +251,37 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
 }
 
+async function readCodexHarnessSessionUsageFreshness(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<boolean> {
+  const result: {
+    sessions?: Array<{
+      key?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }>;
+  } = await params.client.request("sessions.list", {
+    includeGlobal: true,
+    limit: 200,
+  });
+  const row = result.sessions?.find((entry) => entry.key === params.sessionKey);
+  expect(row, `expected sessions.list row for ${params.sessionKey}`).toBeDefined();
+  const fresh = row?.totalTokensFresh === true;
+  if (fresh) {
+    expect(row?.totalTokens).toBeTypeOf("number");
+    expect(row?.totalTokens).toBeGreaterThan(0);
+  } else {
+    expect(row?.totalTokensFresh).toBe(false);
+  }
+  logCodexLiveStep("session-usage", row);
+  return fresh;
+}
+
 async function assertCodexHarnessTranscriptModelIdentity(params: {
   client: GatewayClient;
   modelKey: string;
@@ -1305,6 +1336,27 @@ describeLive("gateway live (Codex harness)", () => {
                 modelKey,
                 sessionKey,
               });
+              const sessionUsageFresh = await readCodexHarnessSessionUsageFreshness({
+                client: activeClient,
+                sessionKey,
+              });
+              const openClawStatusText = await requestCodexCommandText({
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+                command: "/status",
+                expectedText: "Context:",
+                isExpectedText: (text) =>
+                  text.split("\n").some((line) => {
+                    if (!line.includes("Context:")) {
+                      return false;
+                    }
+                    const reportsUnknown = line.includes("Context: ?/");
+                    return sessionUsageFresh ? !reportsUnknown : reportsUnknown;
+                  }),
+                predicateOnly: true,
+              });
+              logCodexLiveStep("openclaw-status-command", { statusText: openClawStatusText });
 
               if (CODEX_HARNESS_CODE_MODE_ONLY) {
                 logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });

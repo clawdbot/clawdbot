@@ -859,7 +859,6 @@ export async function processGatewayAllowlist(
     });
     if (
       shouldResolveExecApprovalUnavailableInline({
-        trigger: params.trigger,
         unavailableReason,
         preResolvedDecision,
       })

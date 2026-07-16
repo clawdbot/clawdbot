@@ -668,6 +668,31 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it("does not retry a lifecycle claim conflict after agent execution starts (#108428)", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error:
+        'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      executionStarted: true,
+    }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const job = await runIsolatedAnnounceJobAndWait({
+      cron,
+      events,
+      name: "post-execution lifecycle claim conflict",
+      status: "error",
+    });
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.consecutiveErrors).toBe(1);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("does not post fallback main summary for isolated delivery-target errors", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,

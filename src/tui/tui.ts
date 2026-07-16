@@ -45,6 +45,7 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
+  formatModelFooter,
   formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
@@ -1229,13 +1230,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model
-      ? sessionInfo.modelProvider
-        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
-        : sessionInfo.model
-      : "unknown";
+    const modelLabel = formatModelFooter(sessionInfo);
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
-    const think = sessionInfo.thinkingLevel ?? "off";
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
@@ -1249,7 +1245,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `session ${sessionLabel}`,
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
-      think !== "off" ? `think ${think}` : null,
       fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,

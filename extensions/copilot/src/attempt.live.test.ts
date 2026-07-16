@@ -6,7 +6,8 @@ import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { createCopilotAgentHarness, type CopilotClientPool } from "../harness.js";
+import { createCopilotAgentHarness } from "../harness.js";
+import type { CopilotClientPool } from "./runtime.js";
 
 const liveToolState = vi.hoisted(() => ({
   calls: [] as string[],

@@ -20,7 +20,6 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 type BrowserFixture = {
-  context: BrowserContext;
   page: Page;
 };
 
@@ -204,42 +203,49 @@ function sessionsTableHtml() {
 }
 
 async function openFixture(
-  browser: Browser,
+  context: BrowserContext,
   width: number,
   height: number,
 ): Promise<BrowserFixture> {
-  const context = await browser.newContext({ viewport: { width, height } });
   let page: Page | undefined;
   try {
     page = await context.newPage();
+    await page.setViewportSize({ width, height });
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
     );
-    return { context, page };
+    return { page };
   } catch (error) {
-    await context.close().catch(() => {});
+    await page?.close().catch(() => {});
     throw error;
   }
 }
 
 async function closeFixture(fixture: BrowserFixture): Promise<void> {
-  await fixture.context.close().catch(() => {});
+  await fixture.page.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
   let browser: Browser;
+  let context: BrowserContext;
 
   beforeAll(async () => {
-    // Browser startup dominates this suite; fresh contexts keep viewport state isolated.
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    try {
+      context = await browser.newContext();
+    } catch (error) {
+      await browser.close().catch(() => {});
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await context?.close().catch(() => {});
     await browser?.close().catch(() => {});
   });
 
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
-    const fixture = await openFixture(browser, width, height);
+    const fixture = await openFixture(context, width, height);
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {

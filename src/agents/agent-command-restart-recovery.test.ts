@@ -14,6 +14,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
         entry: { sessionId: "session-1", updatedAt: 1 },
         forceRestartSafeTools: true,
         runId: "media-run",
+        sourceIngress: "internal",
         sourceRunId: "media-run",
         sourceReplyDeliveryMode: "automatic",
         suppressTextDelivery: true,
@@ -24,6 +25,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
       restartRecoveryDisableMessageTool: true,
       restartRecoveryDeliveryRunId: "media-run",
       restartRecoveryDeliverySourceRunId: "media-run",
+      restartRecoverySourceIngress: "internal",
       restartRecoverySourceReplyDeliveryMode: "automatic",
       restartRecoveryForceSafeTools: true,
       restartRecoverySuppressTextDelivery: true,
@@ -46,6 +48,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
           restartRecoveryDeliverySourceRunId: "media-run",
           restartRecoveryDeliveryMediaUrls: ["/tmp/proof.png"],
           restartRecoveryDisableMessageTool: true,
+          restartRecoverySourceIngress: "internal",
           restartRecoverySourceReplyDeliveryMode: "automatic",
           restartRecoveryForceSafeTools: true,
           restartRecoverySuppressTextDelivery: true,
@@ -63,6 +66,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
       restartRecoveryDisableMessageTool: true,
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "media-run",
+      restartRecoverySourceIngress: "internal",
       restartRecoverySourceReplyDeliveryMode: "automatic",
       restartRecoveryForceSafeTools: true,
       restartRecoverySuppressTextDelivery: true,
@@ -82,6 +86,16 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
         runId: "recovery-run",
       }),
     ).toThrow("restart recovery delivery route changed after the run was claimed");
+  });
+
+  it("requires explicit ownership for a new source claim", () => {
+    expect(() =>
+      buildCurrentRunRestartRecoveryClaim({
+        entry: { sessionId: "session-1", updatedAt: 1 },
+        runId: "media-run",
+        sourceRunId: "media-run",
+      }),
+    ).toThrow("restart recovery source ownership is required for a new claim");
   });
 });
 

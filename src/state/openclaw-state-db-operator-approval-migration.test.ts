@@ -9,19 +9,19 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
 
 function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
+  const tableTerminator = "\n) STRICT;";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
   const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "\n);\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry",
+    `${tableTerminator}\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry`,
     start,
   );
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 3);
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
 function legacyTwoKindCreateSql(): string {
-  return canonicalOperatorApprovalCreateSql().replace(
-    /'exec',\s*'plugin',\s*'system-agent'/,
-    "'exec', 'plugin'",
-  );
+  return canonicalOperatorApprovalCreateSql()
+    .replace(/\) STRICT;$/u, ");")
+    .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
 }
 
 function seedRow(db: DatabaseSync, kind: string): void {
@@ -53,6 +53,9 @@ describe("repairOperatorApprovalKinds", () => {
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
     expect(rows).toEqual([{ approval_id: "a1", kind: "exec" }]);
+    expect(
+      db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
+    ).toEqual({ strict: 1 });
     db.close();
   });
 

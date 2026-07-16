@@ -356,7 +356,7 @@ function aggregateHistory(params: {
   };
 }
 
-export async function fetchOpenAIAdminUsage(params: {
+async function fetchOpenAIAdminUsage(params: {
   apiKey: string;
   projectId?: string;
   timeoutMs: number;

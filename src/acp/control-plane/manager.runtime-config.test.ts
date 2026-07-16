@@ -771,6 +771,101 @@ describe("AcpSessionManager runtime config", () => {
     );
   });
 
+  it("does not send automatic thinking when the backend advertises no thinking control", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["mode", "model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: readySessionMeta({
+        agent: "opencode",
+        runtimeOptions: { thinking: "high" },
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:opencode:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-opencode-no-thinking",
+    });
+
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
+    expect(runtimeState.runTurn).toHaveBeenCalledOnce();
+  });
+
+  it("maps automatic Codex thinking to the advertised reasoning effort control", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["model", "reasoning_effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta({ runtimeOptions: { thinking: "high" } }),
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-codex-reasoning",
+    });
+
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "reasoning_effort",
+      value: "high",
+    });
+  });
+
+  it("rejects an explicit thinking write when the backend does not advertise it", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option"],
+      configOptionKeys: ["mode", "model"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: readySessionMeta({ agent: "opencode" }),
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey: "agent:opencode:acp:session-1",
+        key: "thinking",
+        value: "high",
+      }),
+      { code: "ACP_BACKEND_UNSUPPORTED_CONTROL" },
+    );
+
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
+  });
+
   it("maps explicit thinking config updates to advertised effort keys", async () => {
     const runtimeState = createRuntime();
     runtimeState.getCapabilities.mockResolvedValue({

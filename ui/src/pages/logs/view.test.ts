@@ -24,7 +24,7 @@ function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
     loading: false,
-    error: null,
+    status: { error: null, hasLoaded: false, stale: false },
     file: null,
     entries: [
       {
@@ -115,4 +115,26 @@ describe("renderLogs", () => {
       );
     },
   );
+
+  it("renders a panel-local retry and stale marker without hiding loaded logs", () => {
+    const onRefresh = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderLogs(
+        createProps({
+          status: { error: "logs unavailable", hasLoaded: true, stale: true },
+          onRefresh,
+        }),
+      ),
+      container,
+    );
+
+    const status = container.querySelector(".logs-refresh-status");
+    expect(status?.textContent).toContain("logs unavailable");
+    expect(status?.textContent).toContain("Showing stale data");
+    expect(container.textContent).toContain("matched line");
+    status?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
 });

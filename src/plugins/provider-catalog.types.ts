@@ -127,11 +127,6 @@ export type ProviderDiscoveryOrder = ProviderCatalogOrder;
 export type ProviderDiscoveryContext = ProviderCatalogContext;
 
 /**
- * @deprecated Use ProviderCatalogResult.
- */
-export type ProviderDiscoveryResult = ProviderCatalogResult;
-
-/**
  * @deprecated Use ProviderPluginCatalog.
  */
 export type ProviderPluginDiscovery = ProviderPluginCatalog;

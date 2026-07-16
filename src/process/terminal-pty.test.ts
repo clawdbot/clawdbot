@@ -67,12 +67,65 @@ describe("terminal PTY teardown", () => {
 });
 
 describe("terminal PTY invocation", () => {
+  const nonInteractiveEnvironments: Array<Record<string, string>> = [
+    {},
+    { TERM: "" },
+    { TERM: "dumb" },
+    { TERM: "DUMB" },
+    { TERM: " dumb " },
+  ];
+
   beforeEach(() => {
     mocks.spawn.mockReset();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each(nonInteractiveEnvironments)(
+    "upgrades non-interactive TERM for a real PTY: %o",
+    async (env) => {
+      mocks.spawn.mockReturnValueOnce(fakePty());
+
+      await spawnTerminalPty({
+        file: "/usr/bin/codex",
+        args: ["resume", "thread"],
+        env,
+        cols: 80,
+        rows: 24,
+      });
+
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        "/usr/bin/codex",
+        ["resume", "thread"],
+        expect.objectContaining({
+          name: "xterm-256color",
+          env: expect.objectContaining({ TERM: "xterm-256color" }),
+        }),
+      );
+    },
+  );
+
+  it("preserves an interactive TERM", async () => {
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    await spawnTerminalPty({
+      file: "/usr/bin/codex",
+      args: [],
+      env: { TERM: "screen-256color" },
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "/usr/bin/codex",
+      [],
+      expect.objectContaining({
+        name: "screen-256color",
+        env: expect.objectContaining({ TERM: "screen-256color" }),
+      }),
+    );
   });
 
   it.each([".cmd", ".bat"])("wraps Windows %s shims through ComSpec", async (extension) => {

@@ -78,20 +78,23 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
+import {
+  assertCodexAppServerClientStartSelectionCurrent,
+  detachSharedCodexAppServerClientIfCurrent,
+  getSharedCodexAppServerClient,
+  readCodexAppServerClientProcessIdentity,
+} from "./shared-client.js";
+
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let clearSharedCodexAppServerClient: typeof import("./shared-client.js").clearSharedCodexAppServerClient;
-let assertCodexAppServerClientStartSelectionCurrent: typeof import("./shared-client.js").assertCodexAppServerClientStartSelectionCurrent;
 let clearSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrent;
 let clearSharedCodexAppServerClientIfCurrentAndWait: typeof import("./shared-client.js").clearSharedCodexAppServerClientIfCurrentAndWait;
 let createIsolatedCodexAppServerClient: typeof import("./shared-client.js").createIsolatedCodexAppServerClient;
-let detachSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").detachSharedCodexAppServerClientIfCurrent;
 let getLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").getLeasedSharedCodexAppServerClient;
-let getSharedCodexAppServerClient: typeof import("./shared-client.js").getSharedCodexAppServerClient;
 let isCodexAppServerStartSelectionChangedError: typeof import("./shared-client.js").isCodexAppServerStartSelectionChangedError;
 let retainSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retainSharedCodexAppServerClientIfCurrent;
 let releaseLeasedSharedCodexAppServerClient: typeof import("./shared-client.js").releaseLeasedSharedCodexAppServerClient;
 let releaseCodexAppServerClientLease: typeof import("./shared-client.js").releaseCodexAppServerClientLease;
-let readCodexAppServerClientProcessIdentity: typeof import("./shared-client.js").readCodexAppServerClientProcessIdentity;
 let resolveCodexNativeConfigFenceKey: typeof import("./shared-client.js").resolveCodexNativeConfigFenceKey;
 let resolveCodexAppServerSpawnIdentity: typeof import("./shared-client.js").resolveCodexAppServerSpawnIdentity;
 let retireSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retireSharedCodexAppServerClientIfCurrent;
@@ -183,19 +186,15 @@ describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
     ({
-      assertCodexAppServerClientStartSelectionCurrent,
       clearSharedCodexAppServerClient,
       clearSharedCodexAppServerClientIfCurrent,
       clearSharedCodexAppServerClientIfCurrentAndWait,
       createIsolatedCodexAppServerClient,
-      detachSharedCodexAppServerClientIfCurrent,
       getLeasedSharedCodexAppServerClient,
-      getSharedCodexAppServerClient,
       isCodexAppServerStartSelectionChangedError,
       retainSharedCodexAppServerClientIfCurrent,
       releaseLeasedSharedCodexAppServerClient,
       releaseCodexAppServerClientLease,
-      readCodexAppServerClientProcessIdentity,
       resolveCodexNativeConfigFenceKey,
       resolveCodexAppServerSpawnIdentity,
       retireSharedCodexAppServerClientIfCurrent,

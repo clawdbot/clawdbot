@@ -93,12 +93,7 @@ export function restoreFinalizedStartupRun(params: {
     state,
     job,
     {
-      status: entry.status,
-      error: entry.error,
-      deliveryError: entry.deliveryError,
-      diagnostics: entry.diagnostics,
-      delivered: entry.delivered,
-      provider: entry.provider,
+      ...entry,
       startedAt,
       endedAt: entry.ts,
     },
@@ -115,6 +110,11 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery?.status;
   job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery?.error;
   job.state.nextRunAtMs = entry.nextRunAtMs;
+  // The finalized ledger row owns the schedule decision made before the stale
+  // store write. No next run means that one-shot was permanently disabled.
+  if (job.schedule.kind === "at" && entry.nextRunAtMs === undefined) {
+    job.enabled = false;
+  }
   if (params.triggerEval) {
     applyTriggerRunResult(job, {
       status: entry.status,

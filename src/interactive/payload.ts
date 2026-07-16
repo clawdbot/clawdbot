@@ -41,7 +41,18 @@ export type MessagePresentationAction =
   | {
       /** Launch a channel-native web app. */
       type: "web-app";
+      /** External web app URL for channels that launch web apps by URL. */
       url: string;
+      /** OpenClaw hosted-widget ID whose launch mechanics are owned by the channel. */
+      widgetId?: string;
+    }
+  | {
+      /** Launch a channel-native web app. */
+      type: "web-app";
+      /** External web app URL for channels that launch web apps by URL. */
+      url?: string;
+      /** OpenClaw hosted-widget ID whose launch mechanics are owned by the channel. */
+      widgetId: string;
     };
 
 /** Portable action control rendered as a button or link by channel adapters. */
@@ -350,9 +361,17 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     }
     return { type: "approval", approvalId, approvalKind, decision };
   }
-  if (type === "url" || type === "web-app") {
+  if (type === "url") {
     const url = normalizeOptionalString(record.url);
-    return url ? { type, url } : undefined;
+    return url ? { type: "url", url } : undefined;
+  }
+  if (type === "web-app") {
+    const url = normalizeOptionalString(record.url);
+    const widgetId = normalizeOptionalString(record.widgetId);
+    if (url) {
+      return { type: "web-app", url, ...(widgetId ? { widgetId } : {}) };
+    }
+    return widgetId ? { type: "web-app", widgetId } : undefined;
   }
   return undefined;
 }
@@ -703,7 +722,7 @@ export function presentationToInteractiveReply(
               interactiveButton.value = actionValue;
             } else if (button.action.type === "url") {
               interactiveButton.url = button.action.url;
-            } else if (button.action.type === "web-app") {
+            } else if (button.action.type === "web-app" && button.action.url) {
               interactiveButton.webApp = { url: button.action.url };
             }
           } else {
@@ -898,7 +917,7 @@ export function renderMessagePresentationFallbackText(params: {
             return button.label;
           }
           const action = resolveMessagePresentationButtonAction(button);
-          if (action?.type === "url" || action?.type === "web-app") {
+          if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
             return `${button.label}: ${action.url}`;
           }
           if (action?.type === "command") {

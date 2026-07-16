@@ -19,7 +19,6 @@ scenario:
     suiteIsolation: isolated
     summary: Verify WhatsApp dmPolicy open behavior through the canonical adapter.
     config:
-      requiredChannelDriver: live
       policyKey: dmPolicy
       policyValue: open
       conversationKind: direct

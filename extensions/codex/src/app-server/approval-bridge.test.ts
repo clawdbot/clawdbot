@@ -1138,6 +1138,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
+      autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1433,6 +1434,7 @@ describe("Codex app-server approval bridge", () => {
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
+      autoApprove: true,
       nativeHookRelay: {
         relayId: "relay-1",
         generation: "generation-1",
@@ -1561,6 +1563,73 @@ describe("Codex app-server approval bridge", () => {
       status: "denied",
       message:
         "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay not found",
+    });
+  });
+
+  it("auto-approves when the expected native hook relay is unavailable in full-auto", async () => {
+    const params = createParams();
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay not found"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-full-auto-missing",
+        command: "pwd",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+      nativeHookRelay: {
+        relayId: "relay-missing",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("fails closed when the native hook relay fails after invocation in full-auto", async () => {
+    const params = createParams();
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    mockInvokeNativeHookRelay.mockRejectedValueOnce(new Error("native hook relay handler failed"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-native-relay-handler-failure",
+        command: "pwd",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+      nativeHookRelay: {
+        relayId: "relay-1",
+        generation: "generation-1",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw native hook relay unavailable for Codex app-server approval: native hook relay handler failed",
     });
   });
 

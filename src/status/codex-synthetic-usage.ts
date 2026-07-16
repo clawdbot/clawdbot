@@ -46,11 +46,14 @@ export function buildCodexSyntheticUsageAuth(
 export function shouldUseCodexSyntheticUsageForRuntime(params: {
   provider?: string;
   effectiveHarness?: string;
+  sessionHarnessId?: string;
 }): boolean {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const sessionHarness = normalizeOptionalLowercaseString(params.sessionHarnessId);
   const provider = normalizeOptionalLowercaseString(params.provider);
   return (
-    harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER &&
+    (harness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER ||
+      sessionHarness === CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER) &&
     (provider === CODEX_SYNTHETIC_USAGE_PROVIDER || provider === "codex")
   );
 }

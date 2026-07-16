@@ -186,6 +186,8 @@ export function loadRuntimePluginCandidate(params: {
 
   const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
+    pluginId,
+    entryKind: "runtime",
     source: candidate.source,
     rootDir: pluginRoot,
     origin: candidate.origin,
@@ -194,6 +196,8 @@ export function loadRuntimePluginCandidate(params: {
   });
   const runtimeSetupEntry = manifestRecord.setupSource
     ? resolvePluginRuntimeArtifact({
+        pluginId,
+        entryKind: "setup",
         source: manifestRecord.setupSource,
         rootDir: pluginRoot,
         origin: candidate.origin,

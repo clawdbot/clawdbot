@@ -39,8 +39,8 @@ export type DisabledCodexPluginRouteIssue = {
   modelRef: string;
   /** Canonical OpenAI model reference that should remain after migration. */
   canonicalModel: string;
-  /** True when global/plugin allow policy blocks auto-enabling the Codex plugin. */
-  blockedOutsideEntry: boolean;
+  /** True when explicit plugin policy blocks auto-enabling the Codex plugin. */
+  repairBlocked: boolean;
 };
 
 export type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, boolean>;

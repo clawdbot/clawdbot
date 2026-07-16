@@ -70,6 +70,12 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
         option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
       ),
     ),
+    unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
+      id: candidate.id,
+      label: candidate.label,
+      detail: candidate.detail,
+      reason: candidate.reason,
+    })),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
     setupComplete: result.setupComplete,

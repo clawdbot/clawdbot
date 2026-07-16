@@ -6,14 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -33,6 +36,7 @@ async function seedSessionEntry(
 describe("listSessionsFromStore subagent metadata", () => {
   afterEach(() => {
     resetAgentEventsForTest({ preserveListeners: true });
+    closeOpenClawStateDatabaseForTest();
     resetSubagentRegistryForTests({ persist: false });
   });
   beforeEach(() => {
@@ -722,50 +726,44 @@ describe("listSessionsFromStore subagent metadata", () => {
     try {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:disk-live";
-      const registryPath = path.join(stateDir, "subagents", "runs.json");
-      fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-      fs.writeFileSync(
-        registryPath,
-        JSON.stringify(
+      const persistedRuns = new Map<string, SubagentRunRecord>([
+        [
+          "run-complete",
           {
-            version: 2,
-            runs: {
-              "run-complete": {
-                runId: "run-complete",
-                childSessionKey,
-                requesterSessionKey: "agent:main:main",
-                requesterDisplayKey: "main",
-                task: "finished too early",
-                cleanup: "keep",
-                createdAt: now - 2_000,
-                startedAt: now - 1_900,
-                endedAt: now - 1_800,
-                outcome: { status: "ok" },
-              },
-              "run-live": {
-                runId: "run-live",
-                childSessionKey,
-                requesterSessionKey: "agent:main:main",
-                requesterDisplayKey: "main",
-                task: "still running",
-                cleanup: "keep",
-                createdAt: now - 10_000,
-                startedAt: now - 9_000,
-              },
-            },
+            runId: "run-complete",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "finished too early",
+            cleanup: "keep",
+            createdAt: now - 2_000,
+            startedAt: now - 1_900,
+            endedAt: now - 1_800,
+            outcome: { status: "ok" },
           },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+        ],
+        [
+          "run-live",
+          {
+            runId: "run-live",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "still running",
+            cleanup: "keep",
+            createdAt: now - 10_000,
+            startedAt: now - 9_000,
+          },
+        ],
+      ]);
 
       const row = withEnv(
         {
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
+          saveSubagentRegistryToSqlite(persistedRuns);
           const result = listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -792,17 +790,17 @@ describe("listSessionsFromStore subagent metadata", () => {
       expect(row?.endedAt).toBe(now - 1_800);
       expect(row?.runtimeMs).toBe(100);
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
-  test("reuses one subagent registry disk snapshot across sessions.list filtering and row enrichment", () => {
+  test("reuses one SQLite registry snapshot across sessions.list filtering and row enrichment", () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-session-utils-subagent-cache-"),
     );
     const stateDir = path.join(tempRoot, "state");
     const registryPath = path.join(stateDir, "subagents", "runs.json");
-    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     const now = Date.now();
     const controllerSessionKey = "agent:main:main";
     const childKeys = [
@@ -813,32 +811,21 @@ describe("listSessionsFromStore subagent metadata", () => {
     const firstChildKey = expectDefined(childKeys[0], "first child session key");
     const secondChildKey = expectDefined(childKeys[1], "second child session key");
     const thirdChildKey = expectDefined(childKeys[2], "third child session key");
-    fs.writeFileSync(
-      registryPath,
-      JSON.stringify(
+    const persistedRuns = new Map<string, SubagentRunRecord>(
+      childKeys.map((childSessionKey, index) => [
+        `run-cache-child-${index}`,
         {
-          version: 2,
-          runs: Object.fromEntries(
-            childKeys.map((childSessionKey, index) => [
-              `run-cache-child-${index}`,
-              {
-                runId: `run-cache-child-${index}`,
-                childSessionKey,
-                controllerSessionKey,
-                requesterSessionKey: controllerSessionKey,
-                requesterDisplayKey: "main",
-                task: "cache test child",
-                cleanup: "keep",
-                createdAt: now - 5_000 + index,
-                startedAt: now - 4_000 + index,
-              },
-            ]),
-          ),
+          runId: `run-cache-child-${index}`,
+          childSessionKey,
+          controllerSessionKey,
+          requesterSessionKey: controllerSessionKey,
+          requesterDisplayKey: "main",
+          task: "cache test child",
+          cleanup: "keep",
+          createdAt: now - 5_000 + index,
+          startedAt: now - 4_000 + index,
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      ]),
     );
 
     const store: Record<string, SessionEntry> = {
@@ -864,24 +851,27 @@ describe("listSessionsFromStore subagent metadata", () => {
       const result = withEnv(
         {
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
-        () =>
-          listSessionsFromStore({
+        () => {
+          saveSubagentRegistryToSqlite(persistedRuns);
+          return listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
             store,
             opts: { spawnedBy: controllerSessionKey },
-          }),
+          });
+        },
       );
 
       expect(result.sessions.map((session) => session.key)).toEqual(childKeys);
       const registryStatCount = statSpy.mock.calls.filter(
         ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
       ).length;
-      expect(registryStatCount).toBe(1);
+      expect(registryStatCount).toBe(0);
     } finally {
       statSpy.mockRestore();
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
@@ -892,15 +882,13 @@ describe("listSessionsFromStore subagent metadata", () => {
     );
     const stateDir = path.join(tempRoot, "state");
     const registryPath = path.join(stateDir, "subagents", "runs.json");
-    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-    fs.writeFileSync(registryPath, JSON.stringify({ version: 2, runs: {} }, null, 2), "utf-8");
 
     const statSpy = vi.spyOn(fs, "statSync");
     try {
       const result = withEnv(
         {
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () =>
           listSessionsFromStore({
@@ -923,6 +911,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       expect(registryStatCount).toBe(0);
     } finally {
       statSpy.mockRestore();
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });

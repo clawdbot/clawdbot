@@ -277,6 +277,16 @@ export const CronFailureAlertSchema = closedObject({
   accountId: Type.Optional(NonEmptyString),
 });
 
+const CronFailureAlertPatchSchema = closedObject({
+  after: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
+  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
+  cooldownMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+  includeSkipped: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()])),
+  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+});
+
 /** Delivery destination used when failure alerts need a separate target. */
 export const CronFailureDestinationSchema = closedObject({
   channel: Type.Optional(CronAnnounceChannelSchema),
@@ -500,7 +510,9 @@ export const CronJobPatchSchema = closedObject({
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
   delivery: Type.Optional(CronDeliveryPatchSchema),
-  failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureAlert: Type.Optional(
+    Type.Union([Type.Literal(false), CronFailureAlertPatchSchema, Type.Null()]),
+  ),
   state: Type.Optional(CronJobStatePatchSchema),
 });
 

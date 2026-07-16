@@ -1,8 +1,31 @@
 /** Tests plugin slot normalization and exclusive slot selection behavior. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyExclusiveSlotSelection, hasKind, kindsEqual } from "./slots.js";
-import type { PluginKind } from "./types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
+import {
+  applyExclusiveSlotSelection,
+  hasKind,
+  kindsEqual,
+  resetPluginSlotsToDefaults,
+} from "./slots.js";
+
+describe("resetPluginSlotsToDefaults", () => {
+  it("resets every slot owned by the plugin", () => {
+    expect(
+      resetPluginSlotsToDefaults(
+        { memory: "dual-plugin", contextEngine: "dual-plugin" },
+        "dual-plugin",
+      ),
+    ).toEqual({ memory: "memory-core", contextEngine: "legacy" });
+  });
+
+  it("preserves slot state when the plugin owns no slot", () => {
+    const slots = { memory: "memory-core", contextEngine: "legacy" };
+
+    expect(resetPluginSlotsToDefaults(slots, "other-plugin")).toBe(slots);
+    expect(resetPluginSlotsToDefaults(undefined, "other-plugin")).toBeUndefined();
+  });
+});
 
 describe("applyExclusiveSlotSelection", () => {
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({

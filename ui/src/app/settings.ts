@@ -458,6 +458,22 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   }
 }
 
+export function saveLocalUserIdentity(next: LocalUserIdentity): LocalUserIdentity {
+  const storage = getSafeLocalStorage();
+  const normalized = normalizeLocalUserIdentity(next);
+  try {
+    if (normalized.name === null && normalized.avatar === null) {
+      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
+    } else {
+      storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+    }
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory identity updates from being applied
+  }
+  return normalized;
+}
+
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();

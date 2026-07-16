@@ -48,6 +48,7 @@ describe("tool-catalog", () => {
       "session_status",
       "spawn_task",
       "dismiss_task",
+      "screen",
       "cron",
       "get_goal",
       "create_goal",

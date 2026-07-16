@@ -20,8 +20,8 @@ type GatewayResFrame = {
   payload?: unknown;
   error?: unknown;
 };
-export type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
-export type GatewayFrame =
+type GatewayEventFrame = { type: "event"; event: string; seq?: number; payload?: unknown };
+type GatewayFrame =
   | GatewayReqFrame
   | GatewayResFrame
   | GatewayEventFrame

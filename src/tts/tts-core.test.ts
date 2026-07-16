@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { summarizeText } from "./tts-core.js";
+import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
 const modelOverridePolicy: SpeechModelOverridePolicy = {
@@ -33,6 +33,13 @@ const usage: Usage = {
 };
 
 describe("TTS core", () => {
+  it("resolves the first non-blank speech provider API key", () => {
+    expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
+      "provider-key",
+    );
+    expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+  });
+
   it("clamps oversized summarization timeout timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {

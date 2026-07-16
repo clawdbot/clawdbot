@@ -104,6 +104,84 @@ function Complete-Install {
     throw "OpenClaw installation failed with exit code $($script:InstallExitCode)."
 }
 
+function Resolve-InstallerTempDirectory {
+    param([scriptblock]$LongPathResolver)
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in @($env:TEMP, $env:TMP, [System.IO.Path]::GetTempPath())) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) {
+        $candidates.Add((Join-Path $localAppData "Temp"))
+    }
+
+    $userHome = [Environment]::GetFolderPath("UserProfile")
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $candidates.Add((Join-Path $userHome "AppData\Local\Temp"))
+    }
+
+    foreach ($candidate in $candidates) {
+        $pathToResolve = $candidate
+        $candidateHasShortAlias = $candidate -match '(?i)~\d'
+        $requiresCanonicalization = (
+            $candidateHasShortAlias -or
+            $candidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)
+        )
+        if ($pathToResolve.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = "\\" + $pathToResolve.Substring(8)
+        } elseif ($pathToResolve.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $pathToResolve = $pathToResolve.Substring(4)
+        }
+        try {
+            if ($LongPathResolver) {
+                $resolvedCandidate = & $LongPathResolver $pathToResolve
+            } else {
+                # Windows PowerShell 5.1: FSO Folder.Path echoes 8.3 aliases; Get-Item.FullName expands them.
+                $resolvedCandidate = (Get-Item -LiteralPath $pathToResolve -ErrorAction Stop).FullName
+            }
+        } catch {
+            if ($requiresCanonicalization) {
+                continue
+            }
+            $resolvedCandidate = $pathToResolve
+        }
+        if ([string]::IsNullOrWhiteSpace($resolvedCandidate)) {
+            continue
+        }
+        if ($candidateHasShortAlias -and $resolvedCandidate -match '(?i)~\d') {
+            continue
+        }
+        if ($resolvedCandidate.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = "\\" + $resolvedCandidate.Substring(8)
+        } elseif ($resolvedCandidate.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolvedCandidate = $resolvedCandidate.Substring(4)
+        }
+        if (
+            Test-Path -LiteralPath $resolvedCandidate -PathType Container
+        ) {
+            return $resolvedCandidate
+        }
+        # Try the next existing root; archive and extraction children do not exist yet.
+    }
+
+    throw "Could not find a usable Windows temporary directory."
+}
+
+function Initialize-InstallerTempDirectory {
+    param([scriptblock]$LongPathResolver)
+
+    $tempDirectory = Resolve-InstallerTempDirectory -LongPathResolver $LongPathResolver
+    $script:InstallerTempDirectory = $tempDirectory
+    $env:TEMP = $tempDirectory
+    $env:TMP = $tempDirectory
+}
+
+Initialize-InstallerTempDirectory
+
 Write-Host ""
 Write-Host "  OpenClaw Installer" -ForegroundColor Cyan
 Write-Host ""
@@ -221,7 +299,7 @@ function Check-Node {
                 } else {
                     $sqliteVersion
                 }
-                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+ (or patched 3.50.7+/3.44.6+) is required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion uses SQLite $sqliteVersionLabel; SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x is required" -ForegroundColor Yellow
                 return $false
             } else {
                 Write-Host "[!] Node.js $nodeVersion found, but Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+ is required" -ForegroundColor Yellow
@@ -306,9 +384,30 @@ function Ensure-PortableNodeOnUserPath {
     }
 }
 
+function Get-WebRequestTimeoutParameters {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandName,
+        [Parameter(Mandatory = $true)]
+        [int]$LegacyTimeoutSec
+    )
+
+    $command = Get-Command $CommandName -ErrorAction Stop
+    # PowerShell 7.4+ exposes a per-read limit, which bounds body stalls without rejecting slow
+    # connections. Earlier versions only expose TimeoutSec, so downloads keep a longer allowance.
+    if ($command.Parameters.ContainsKey("OperationTimeoutSeconds")) {
+        return @{
+            OperationTimeoutSeconds = 30
+        }
+    }
+
+    return @{ TimeoutSec = $LegacyTimeoutSec }
+}
+
 function Resolve-PortableNodeDownload {
     $architecture = Get-WindowsPortableArchitecture
-    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json"
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
         Where-Object { $_.version -match '^v24\.' } |
         Select-Object -First 1
@@ -387,7 +486,7 @@ function Install-PortableNode {
     $download = Resolve-PortableNodeDownload
     $portableRoot = Get-PortableNodeRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tmpZip = Join-Path $env:TEMP $download.Name
+    $tmpZip = Join-Path $script:InstallerTempDirectory $download.Name
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -396,7 +495,8 @@ function Install-PortableNode {
 
     try {
         Write-Host "  Downloading Node.js $($download.Version)..." -ForegroundColor Gray
-        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-PortableNodeArchive -ZipPath $tmpZip -DestinationPath $portableRoot
     } finally {
         if (Test-Path $tmpZip) {
@@ -652,7 +752,8 @@ function Resolve-PortableGitDownload {
         "User-Agent" = "openclaw-installer"
         "Accept" = "application/vnd.github+json"
     }
-    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers
+    $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod" -LegacyTimeoutSec 30
+    $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers @requestTimeouts
     if (-not $release -or -not $release.assets) {
         throw "Could not resolve latest git-for-windows release metadata."
     }
@@ -694,8 +795,9 @@ function Install-PortableGit {
     $download = Resolve-PortableGitDownload
     $portableRoot = Get-PortableGitRoot
     $portableParent = Split-Path -Parent $portableRoot
-    $tmpZip = Join-Path $env:TEMP $download.Name
-    $tmpExtract = Join-Path $env:TEMP ("openclaw-portable-git-" + [guid]::NewGuid().ToString("N"))
+    $tempName = "openclaw-portable-git-" + [guid]::NewGuid().ToString("N")
+    $tmpZip = Join-Path $script:InstallerTempDirectory ($tempName + ".zip")
+    $tmpExtract = Join-Path $script:InstallerTempDirectory $tempName
 
     New-Item -ItemType Directory -Force -Path $portableParent | Out-Null
     if (Test-Path $portableRoot) {
@@ -708,8 +810,10 @@ function Install-PortableGit {
 
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip
+        $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
+        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
+        New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
     } finally {
         if (Test-Path $tmpZip) {
@@ -834,8 +938,8 @@ function Get-WindowsCommandSafeDirectory {
     if (-not [string]::IsNullOrWhiteSpace($userHome) -and (Test-Path $userHome)) {
         return $userHome
     }
-    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path $env:TEMP)) {
-        return $env:TEMP
+    if (Test-Path -LiteralPath $script:InstallerTempDirectory -PathType Container) {
+        return $script:InstallerTempDirectory
     }
     return $null
 }
@@ -1226,7 +1330,8 @@ function Get-NpmDebugLogRootCandidates {
 }
 
 function Get-LatestNpmDebugLogPath {
-    foreach ($cacheDir in (Get-NpmDebugLogRootCandidates)) {
+    param([object[]]$CacheRoots)
+    foreach ($cacheDir in @($CacheRoots)) {
         $logDir = Join-Path $cacheDir "_logs"
         if (-not (Test-Path -LiteralPath $logDir -PathType Container)) {
             continue
@@ -1242,7 +1347,10 @@ function Get-LatestNpmDebugLogPath {
 }
 
 function Write-NpmInstallFailureDetails {
-    param([object[]]$Output)
+    param(
+        [object[]]$Output,
+        [object[]]$CacheRoots
+    )
     $printedOutput = $false
     foreach ($line in @($Output)) {
         if ($null -eq $line) {
@@ -1256,7 +1364,7 @@ function Write-NpmInstallFailureDetails {
         $printedOutput = $true
     }
 
-    $latestLog = Get-LatestNpmDebugLogPath
+    $latestLog = Get-LatestNpmDebugLogPath -CacheRoots $CacheRoots
     if ($latestLog) {
         Write-Host "Latest npm debug log ($latestLog):" -ForegroundColor Yellow
         Get-Content -LiteralPath $latestLog -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
@@ -1314,8 +1422,17 @@ function Install-OpenClaw {
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
-        $npmOutput = Invoke-NpmCommand -Arguments (@("install", "-g") + $freshnessArgs + @("$installSpec")) 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        # Resolve cache roots before the install so failure reporting cannot create a newer npm log.
+        $npmDebugLogRoots = @(Get-NpmDebugLogRootCandidates)
+        $npmInstallArguments = @("install", "-g") + $freshnessArgs + @("$installSpec")
+        $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+        $npmInstallStatus = $LASTEXITCODE
+        if ($npmInstallStatus -ne 0) {
+            Write-Host "[!] npm install failed; retrying once" -ForegroundColor Yellow
+            $npmOutput = Invoke-NpmCommand -Arguments $npmInstallArguments 2>&1
+            $npmInstallStatus = $LASTEXITCODE
+        }
+        if ($npmInstallStatus -ne 0) {
             Write-Host "[!] npm install failed" -ForegroundColor Red
             if ($npmOutput -match "spawn git" -or $npmOutput -match "ENOENT.*git") {
                 Write-Host "Error: git is missing from PATH." -ForegroundColor Red
@@ -1325,7 +1442,7 @@ function Install-OpenClaw {
                 Write-Host "Re-run with verbose output to see the full error:" -ForegroundColor Yellow
                 Write-Host '  powershell -c "irm https://openclaw.ai/install.ps1 | iex"' -ForegroundColor Cyan
             }
-            Write-NpmInstallFailureDetails -Output $npmOutput
+            Write-NpmInstallFailureDetails -Output $npmOutput -CacheRoots $npmDebugLogRoots
             return $false
         }
     } finally {

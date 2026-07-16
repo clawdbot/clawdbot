@@ -13,7 +13,11 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { requireRecord } from "./test-helpers.assertions.js";
 import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -48,45 +52,52 @@ function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[]
   return call[0];
 }
 
-test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
-  const { dir } = await createSessionStoreDir();
+async function createPermissionCheckpointStore() {
+  const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
   if (!fixture.preCompactionSession || !fixture.preCompactionSessionFile) {
     throw new Error("expected legacy checkpoint fixture");
   }
 
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(fixture.sessionId, {
-        sessionFile: fixture.sessionFile,
-        compactionCheckpoints: [
-          {
-            checkpointId: "checkpoint-1",
-            sessionKey: "agent:main:main",
-            sessionId: fixture.sessionId,
-            createdAt: Date.now(),
-            reason: "manual",
-            tokensBefore: 123,
-            tokensAfter: 45,
-            summary: "checkpoint summary",
-            firstKeptEntryId: fixture.preCompactionLeafId,
-            preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
-              leafId: fixture.preCompactionLeafId,
-            },
-            postCompaction: {
-              sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
-              leafId: fixture.postCompactionLeafId,
-              entryId: fixture.postCompactionLeafId,
-            },
+  await upsertSessionEntry(
+    { sessionKey: "agent:main:main", storePath },
+    sessionStoreEntry(fixture.sessionId, {
+      sessionFile: fixture.sessionFile,
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-1",
+          sessionKey: "agent:main:main",
+          sessionId: fixture.sessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          tokensBefore: 123,
+          tokensAfter: 45,
+          summary: "checkpoint summary",
+          firstKeptEntryId: fixture.preCompactionLeafId,
+          preCompaction: {
+            sessionId: fixture.preCompactionSession.getSessionId(),
+            sessionFile: fixture.preCompactionSessionFile,
+            leafId: fixture.preCompactionLeafId,
           },
-        ],
-      }),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
-    },
-  });
+          postCompaction: {
+            sessionId: fixture.sessionId,
+            sessionFile: fixture.sessionFile,
+            leafId: fixture.postCompactionLeafId,
+            entryId: fixture.postCompactionLeafId,
+          },
+        },
+      ],
+    }),
+  );
+  await upsertSessionEntry(
+    { sessionKey: "agent:main:discord:group:dev", storePath },
+    sessionStoreEntry("sess-group"),
+  );
+  return { storePath };
+}
+
+test("webchat clients cannot mutate sessions", async () => {
+  const { storePath } = await createPermissionCheckpointStore();
 
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
@@ -112,6 +123,18 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
   });
   expect(compacted.ok).toBe(false);
   expect(compacted.error?.message ?? "").toMatch(/webchat clients cannot compact sessions/i);
+
+  const branched = await rpcReq(ws, "sessions.compaction.branch", {
+    key: "main",
+    checkpointId: "checkpoint-1",
+  });
+  expect(branched.ok).toBe(false);
+  expect(branched.error?.message ?? "").toMatch(/webchat clients cannot branch sessions/i);
+  expect(
+    listSessionEntries({ storePath })
+      .map(({ sessionKey }) => sessionKey)
+      .toSorted(),
+  ).toEqual(["agent:main:discord:group:dev", "agent:main:main"]);
 
   const restored = await rpcReq(ws, "sessions.compaction.restore", {
     key: "main",
@@ -304,22 +327,23 @@ test("session:patch hook mutations cannot change the response path", async () =>
   ws.close();
 });
 
-test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-control-ui-delete-");
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
-    },
-  });
-
+test("control-ui client can mutate sessions even in webchat mode", async () => {
+  const { storePath } = await createPermissionCheckpointStore();
   const ws = await openPermissionClient({
     id: GATEWAY_CLIENT_IDS.CONTROL_UI,
     mode: GATEWAY_CLIENT_MODES.WEBCHAT,
   });
+
+  const branched = await rpcReq<{
+    sourceKey: string;
+    entry: { parentSessionKey?: string };
+  }>(ws, "sessions.compaction.branch", {
+    key: "main",
+    checkpointId: "checkpoint-1",
+  });
+  expect(branched.ok).toBe(true);
+  expect(branched.payload?.sourceKey).toBe("agent:main:main");
+  expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
 
   const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
     key: "agent:main:discord:group:dev",

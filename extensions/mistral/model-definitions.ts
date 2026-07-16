@@ -16,7 +16,7 @@ export function buildMistralModelDefinition(): ModelDefinitionConfig {
   return model;
 }
 
-export function buildMistralCatalogModels(): ModelDefinitionConfig[] {
+function buildMistralCatalogModels(): ModelDefinitionConfig[] {
   return buildManifestModelProviderConfig({
     providerId: "mistral",
     catalog: MISTRAL_MANIFEST_CATALOG,

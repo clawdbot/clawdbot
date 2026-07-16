@@ -22,7 +22,10 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  configureSqliteConnectionPragmas,
+  migrateSqliteSchemaToStrict,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
@@ -41,6 +44,7 @@ const UNDO_RING_SIZE = 20;
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const BUSY_TIMEOUT_MS = 5000;
+const SCHEMA_VERSION = 1;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workspace (
@@ -48,12 +52,12 @@ CREATE TABLE IF NOT EXISTS workspace (
   version INTEGER NOT NULL,
   doc TEXT NOT NULL,
   updated_ms INTEGER NOT NULL
-);
+) STRICT;
 CREATE TABLE IF NOT EXISTS undo (
   version INTEGER PRIMARY KEY,
   doc TEXT NOT NULL,
   created_ms INTEGER NOT NULL
-);
+) STRICT;
 `;
 
 function serializeWorkspaceDoc(doc: WorkspaceDoc): string {
@@ -112,6 +116,7 @@ export class WorkspaceStore {
   readonly workspaceDir: string;
   readonly dbPath: string;
   private readonly db: DatabaseSync;
+  private readonly walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
   readonly assetTokens = new WidgetAssetTokens();
   /**
    * Single-slot cache of the parsed document. This process is the only writer
@@ -126,19 +131,47 @@ export class WorkspaceStore {
     this.workspaceDir = path.join(this.stateDir, "workspaces");
     this.dbPath = path.join(this.workspaceDir, "workspaces.sqlite");
     mkdirSync(this.workspaceDir, { recursive: true, mode: DIR_MODE });
-    this.db = new DatabaseSync(this.dbPath);
+    const db = new DatabaseSync(this.dbPath);
+    let walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
     try {
-      configureSqliteConnectionPragmas(this.db, { busyTimeoutMs: BUSY_TIMEOUT_MS });
+      walMaintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: BUSY_TIMEOUT_MS,
+        databaseLabel: "workspaces",
+        databasePath: this.dbPath,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
       // WAL/SHM sidecars inherit the main DB file's permissions.
       chmodSync(this.dbPath, FILE_MODE);
-      this.db.exec(SCHEMA);
+      const versionRow = db.prepare("PRAGMA user_version").get() as
+        | { user_version?: unknown }
+        | undefined;
+      const schemaVersion = Number(versionRow?.user_version ?? 0);
+      if (schemaVersion > SCHEMA_VERSION) {
+        throw new Error(
+          `Workspaces database uses newer schema version ${schemaVersion}; this build supports ${SCHEMA_VERSION}`,
+        );
+      }
+      db.exec(SCHEMA);
+      if (schemaVersion < SCHEMA_VERSION) {
+        migrateSqliteSchemaToStrict(db, SCHEMA, { databaseLabel: this.dbPath });
+        db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+      }
     } catch (error) {
-      this.db.close();
+      walMaintenance?.close();
+      db.close();
       throw error;
     }
+    if (!walMaintenance) {
+      db.close();
+      throw new Error("Workspaces SQLite maintenance failed to initialize");
+    }
+    this.db = db;
+    this.walMaintenance = walMaintenance;
   }
 
   close(): void {
+    this.walMaintenance.close();
     this.db.close();
   }
 

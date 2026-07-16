@@ -27,7 +27,7 @@ import {
   loadPluginManifest,
   type PackageManifest,
 } from "./manifest.js";
-import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
+import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
@@ -379,10 +379,10 @@ describe("bundled plugin metadata", () => {
   it(
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
-    () => {
-      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
-        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
-      );
+    async () => {
+      await expect(
+        writeBundledRuntimeSidecarPathBaseline({ repoRoot, check: true }),
+      ).resolves.toMatchObject({ changed: false });
     },
   );
 
@@ -496,7 +496,7 @@ describe("bundled plugin metadata", () => {
     });
   });
 
-  it("keeps bundled configured-state metadata on channel package manifests", () => {
+  it("keeps bundled configured-state env metadata on channel package manifests", () => {
     const configuredChannels = listRepoBundledPluginMetadata()
       .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
       .map((entry) => ({
@@ -510,8 +510,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["DISCORD_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasDiscordConfiguredState",
         },
       },
       {
@@ -520,8 +518,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["IRC_HOST", "IRC_NICK"],
           },
-          specifier: "./configured-state",
-          exportName: "hasIrcConfiguredState",
         },
       },
       {
@@ -530,8 +526,6 @@ describe("bundled plugin metadata", () => {
           env: {
             anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasSlackConfiguredState",
         },
       },
       {
@@ -540,8 +534,6 @@ describe("bundled plugin metadata", () => {
           env: {
             allOf: ["TELEGRAM_BOT_TOKEN"],
           },
-          specifier: "./configured-state",
-          exportName: "hasTelegramConfiguredState",
         },
       },
     ]);

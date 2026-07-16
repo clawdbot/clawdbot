@@ -8,6 +8,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { buildSessionUsageDateParams } from "../sessions/usage.ts";
+import { resolveActiveSlug } from "./tab-selection.ts";
+export {
+  customWidgetName,
+  customWidgetStatus,
+  findTab,
+  hiddenTabs,
+  orderedTabs,
+  visibleTabs,
+} from "./tab-selection.ts";
 import {
   WORKSPACE_GRID_COLUMNS,
   workspaceAgentProvenance,
@@ -25,11 +34,15 @@ const CHANGED_EVENT = "plugin.workspaces.changed";
 
 export type WorkspaceUiState = {
   loading: boolean;
+  loadGeneration: number;
+  loadingGeneration: number | null;
   loaded: boolean;
   error: string | null;
   workspace: WorkspaceDocument | null;
   /** Slug of the workspace tab in view; null until the doc resolves a default. */
   activeSlug: string | null;
+  /** Monotonic user/load selection revision used to reject stale navigation intent. */
+  activeSlugRevision: number;
   /** Whether the hidden-tabs overflow menu is open. */
   hiddenMenuOpen: boolean;
   /** Widgets with an in-flight mutation, for optimistic-state affordances. */
@@ -49,6 +62,8 @@ const workspaceEventClients = new WeakMap<WorkspaceHost, GatewayBrowserClient>()
 const workspacePollTimers = new WeakMap<WorkspaceHost, ReturnType<typeof setInterval>>();
 const workspacePollActive = new WeakMap<WorkspaceHost, boolean>();
 const workspaceMutationQueues = new WeakMap<WorkspaceUiState, Promise<void>>();
+type WorkspaceLoadIntent = { slug: string; activeSlugRevision: number };
+const workspaceLoadIntents = new WeakMap<WorkspaceUiState, WorkspaceLoadIntent>();
 
 /** Default data-refresh interval (ms); the L4 spec's 30–60s window, floored at 10s. */
 const WORKSPACE_POLL_INTERVAL_MS = 45_000;
@@ -88,10 +103,13 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
   if (!state) {
     state = {
       loading: false,
+      loadGeneration: 0,
+      loadingGeneration: null,
       loaded: false,
       error: null,
       workspace: null,
       activeSlug: null,
+      activeSlugRevision: 0,
       hiddenMenuOpen: false,
       pendingWidgetIds: new Set(),
       actionError: null,
@@ -254,83 +272,41 @@ function normalizeWorkspace(payload: unknown): WorkspaceDocument {
   };
 }
 
-/** The `custom:<name>` widget name, or null for builtin/unknown kinds. */
-export function customWidgetName(kind: string): string | null {
-  return kind.startsWith("custom:") ? kind.slice("custom:".length) || null : null;
-}
-
-/** Registry status for a custom widget kind, or null when not a tracked custom widget. */
-export function customWidgetStatus(
+function applyActiveWorkspaceSlug(
+  state: WorkspaceUiState,
   workspace: WorkspaceDocument,
-  kind: string,
-): WorkspaceWidgetStatus | null {
-  const name = customWidgetName(kind);
-  if (!name) {
-    return null;
-  }
-  return workspace.widgetsRegistry[name]?.status ?? null;
+  requestedSlug: string | null,
+): void {
+  state.activeSlug = resolveActiveSlug(workspace, requestedSlug);
+  state.activeSlugRevision += 1;
 }
 
-/**
- * Tabs in display order: honor `prefs.tabOrder` first, then any doc-order tabs the
- * ordering omits, so a partial `tabOrder` still shows every tab.
- */
-export function orderedTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  const bySlug = new Map(workspace.tabs.map((tab) => [tab.slug, tab]));
-  const ordered: WorkspaceTab[] = [];
-  const seen = new Set<string>();
-  for (const slug of workspace.prefs.tabOrder) {
-    const tab = bySlug.get(slug);
-    if (tab && !seen.has(slug)) {
-      ordered.push(tab);
-      seen.add(slug);
+/** Apply explicit navigation and invalidate navigation intent owned by older loads. */
+export function setActiveWorkspaceSlug(
+  state: WorkspaceUiState,
+  workspace: WorkspaceDocument,
+  requestedSlug: string | null,
+): void {
+  const intent = workspaceLoadIntents.get(state);
+  if (intent?.slug === requestedSlug) {
+    return;
+  }
+  if (requestedSlug === state.activeSlug) {
+    if (intent) {
+      workspaceLoadIntents.delete(state);
+      state.activeSlugRevision += 1;
     }
+    return;
   }
-  for (const tab of workspace.tabs) {
-    if (!seen.has(tab.slug)) {
-      ordered.push(tab);
-      seen.add(tab.slug);
-    }
-  }
-  return ordered;
+  workspaceLoadIntents.delete(state);
+  applyActiveWorkspaceSlug(state, workspace, requestedSlug);
 }
 
-export function visibleTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  return orderedTabs(workspace).filter((tab) => !tab.hidden);
-}
-
-export function hiddenTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
-  return orderedTabs(workspace).filter((tab) => tab.hidden);
-}
-
-export function findTab(
-  workspace: WorkspaceDocument,
-  slug: string | null,
-): WorkspaceTab | undefined {
-  if (!slug) {
-    return undefined;
+/** Cancel load-owned navigation while preserving the current tab selection. */
+export function cancelWorkspaceLoadIntent(state: WorkspaceUiState): void {
+  if (workspaceLoadIntents.delete(state)) {
+    state.activeSlugRevision += 1;
   }
-  return workspace.tabs.find((tab) => tab.slug === slug);
-}
-
-/**
- * Resolve which tab is active: prefer the requested slug if it exists and is not
- * hidden; otherwise fall back to the first visible tab (or first tab of any kind).
- */
-export function resolveActiveSlug(
-  workspace: WorkspaceDocument,
-  requested: string | null,
-): string | null {
-  const requestedTab = findTab(workspace, requested);
-  if (requestedTab) {
-    return requestedTab.slug;
-  }
-  const visible = visibleTabs(workspace);
-  const firstVisible = visible[0];
-  if (firstVisible) {
-    return firstVisible.slug;
-  }
-  return orderedTabs(workspace)[0]?.slug ?? null;
 }
 
 function formatError(error: unknown): string {
@@ -352,11 +328,28 @@ export async function loadWorkspace(
   if (!client) {
     return;
   }
+  let intent: WorkspaceLoadIntent | undefined;
+  if (opts?.requestedSlug != null) {
+    intent = {
+      slug: opts.requestedSlug,
+      activeSlugRevision: state.activeSlugRevision,
+    };
+    workspaceLoadIntents.set(state, intent);
+  } else if (opts?.silent) {
+    intent = workspaceLoadIntents.get(state);
+  } else if (!opts?.silent) {
+    workspaceLoadIntents.delete(state);
+  }
+  // Carry navigation intent into a superseding silent refresh without exposing
+  // an unvalidated slug as the active selection before a load succeeds.
+  const generation = ++state.loadGeneration;
   if (!opts?.silent) {
+    state.loadingGeneration = generation;
     state.loading = true;
     state.error = null;
     notify(state);
   }
+  let staleDocumentApplied = false;
   try {
     const payload = await client.request("workspaces.get", {});
     const workspace = normalizeWorkspace(
@@ -364,15 +357,71 @@ export async function loadWorkspace(
       // (a bare payload is tolerated for forward-compat).
       isRecord(payload) && "doc" in payload ? payload.doc : payload,
     );
+    const currentVersion = state.workspace?.workspaceVersion;
+    if (generation !== state.loadGeneration) {
+      // Request generation owns navigation and status, but workspaceVersion owns
+      // document freshness when handlers complete out of order.
+      if (currentVersion === undefined || workspace.workspaceVersion > currentVersion) {
+        const retainedIntent = workspaceLoadIntents.get(state);
+        const retainedIntentIsCurrent =
+          retainedIntent?.activeSlugRevision === state.activeSlugRevision;
+        state.workspace = workspace;
+        state.activeSlug = resolveActiveSlug(
+          workspace,
+          retainedIntentIsCurrent ? retainedIntent.slug : state.activeSlug,
+        );
+        if (retainedIntentIsCurrent && workspaceLoadIntents.get(state) === retainedIntent) {
+          workspaceLoadIntents.delete(state);
+          // Consuming the shared intent invalidates copies already captured by
+          // newer in-flight loads, so they cannot revive removed navigation.
+          state.activeSlugRevision += 1;
+        }
+        state.loaded = true;
+        staleDocumentApplied = true;
+      }
+      return;
+    }
+    if (currentVersion !== undefined && workspace.workspaceVersion < currentVersion) {
+      if (state.workspace && intent?.activeSlugRevision === state.activeSlugRevision) {
+        applyActiveWorkspaceSlug(state, state.workspace, intent.slug);
+      }
+      if (workspaceLoadIntents.get(state) === intent) {
+        workspaceLoadIntents.delete(state);
+      }
+      state.error = null;
+      state.loaded = true;
+      return;
+    }
+    const requestedSlug =
+      intent && intent.activeSlugRevision === state.activeSlugRevision
+        ? intent.slug
+        : state.activeSlug;
     state.workspace = workspace;
-    state.activeSlug = resolveActiveSlug(workspace, opts?.requestedSlug ?? state.activeSlug);
+    applyActiveWorkspaceSlug(state, workspace, requestedSlug);
+    if (workspaceLoadIntents.get(state) === intent) {
+      workspaceLoadIntents.delete(state);
+    }
     state.error = null;
     state.loaded = true;
   } catch (err) {
-    state.error = formatError(err);
+    if (generation === state.loadGeneration) {
+      // Retain intent for a later silent retry; explicit navigation or foreground
+      // reload cancels it through the owner paths above.
+      state.error = formatError(err);
+    }
   } finally {
-    state.loading = false;
-    notify(state);
+    const isCurrent = generation === state.loadGeneration;
+    let shouldNotify = isCurrent || staleDocumentApplied;
+    if (state.loadingGeneration === generation || (isCurrent && state.loadingGeneration !== null)) {
+      // A current silent completion supersedes any older foreground owner; keep
+      // no spinner tied to a response that can only finish stale.
+      state.loadingGeneration = null;
+      state.loading = false;
+      shouldNotify = true;
+    }
+    if (shouldNotify) {
+      notify(state);
+    }
   }
 }
 

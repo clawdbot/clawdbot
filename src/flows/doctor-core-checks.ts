@@ -757,9 +757,9 @@ const codexSessionRoutesCheck: HealthCheck = {
         path: issue.path,
         target: issue.canonicalModel,
         requirement: "Codex plugin enabled for routes that use the Codex runtime.",
-        fixHint: issue.blockedOutsideEntry
+        fixHint: issue.repairBlocked
           ? [
-              "Enable plugin loading and remove codex from plugins.deny,",
+              "Enable plugins.entries.codex and plugin loading, and remove codex from plugins.deny;",
               "or set the affected OpenAI models to an OpenClaw runtime policy.",
             ].join(" ")
           : [

@@ -13,6 +13,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -348,6 +349,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
     if (dock) {
       this.dock = dock;
+    }
+    if (detail?.open === false) {
+      this.closePanel();
+      return;
     }
     if (detail?.catalog || detail?.open === true) {
       if (!this.available) {
@@ -1060,7 +1065,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  static override styles = [terminalPanelStyles, terminalPanelUploadStyles];
+  static override styles = [panelTabStripStyles, terminalPanelStyles, terminalPanelUploadStyles];
 }
 
 declare global {

@@ -1,6 +1,6 @@
 // Xai tests cover stt plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { buildXaiMediaUnderstandingProvider, transcribeXaiAudio } from "./stt.js";
+import { buildXaiMediaUnderstandingProvider } from "./stt.js";
 
 const { postTranscriptionRequestMock } = vi.hoisted(() => ({
   postTranscriptionRequestMock: vi.fn(
@@ -49,7 +49,8 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 
 describe("xai stt", () => {
   it("posts audio files to the xAI STT endpoint", async () => {
-    const result = await transcribeXaiAudio({
+    const provider = buildXaiMediaUnderstandingProvider();
+    const result = await provider.transcribeAudio?.({
       buffer: Buffer.from("audio-bytes"),
       fileName: "sample.wav",
       mime: "audio/wav",

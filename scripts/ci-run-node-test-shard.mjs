@@ -50,12 +50,17 @@ export function resolveShardPlans(env = process.env) {
   }));
 }
 
-export function buildChildEnv(entry, baseEnv, scratchDir, index) {
+export function buildChildEnv(entry, baseEnv, scratchDir, index, options = {}) {
   const childEnv = {
     ...baseEnv,
-    // Concurrent children must not share a Vitest module cache directory;
-    // shared caches race with ENOTEMPTY when two runs rewrite the same entries.
-    [FS_MODULE_CACHE_PATH_ENV_KEY]: join(scratchDir, `vitest-cache-${index}`),
+    // Concurrent children must not share a Vitest module cache directory
+    // (shared caches race with ENOTEMPTY when two runs rewrite the same
+    // entries), but serial bins reuse one cache so later plans skip the cold
+    // module transforms the first plan already paid for.
+    [FS_MODULE_CACHE_PATH_ENV_KEY]: join(
+      scratchDir,
+      options.serial ? "vitest-cache-shared" : `vitest-cache-${index}`,
+    ),
     OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
     // This wrapper holds the repo heavy-check lock; children skipping it is
     // what lets two plans run concurrently instead of serializing on the lock.
@@ -117,9 +122,19 @@ function relayChildStream(stream, label) {
   };
 }
 
+export function resolveShardChildCommand(args, nodeExecPath = process.execPath) {
+  return {
+    command: nodeExecPath,
+    args: ["scripts/test-projects.mjs", ...args],
+  };
+}
+
 function runChild(args, childEnv, label) {
   return new Promise((resolve) => {
-    const child = spawn("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...args], {
+    // Use Node directly. `pnpm exec node` may reconcile the workspace before
+    // tests, which destroys the sticky dependency fast path.
+    const childCommand = resolveShardChildCommand(args);
+    const child = spawn(childCommand.command, childCommand.args, {
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -163,7 +178,9 @@ export async function runShardPlans(plans, options = {}) {
         exitCode = exitCode || 1;
         return;
       }
-      const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index);
+      const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
+        serial: concurrency === 1,
+      });
       const code = await runner(args, childEnv, entry.name);
       if (code !== 0) {
         // Stop scheduling new plans after a failure; the in-flight sibling

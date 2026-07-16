@@ -94,8 +94,5 @@ export function describeSessionStatusTool(): string {
 
 /** Describes the update_plan tool for model-facing instructions. */
 export function describeUpdatePlanTool(): string {
-  return [
-    "Update run plan for non-trivial multi-step work; keep current.",
-    "Short steps; max one `in_progress`; skip simple one-step.",
-  ].join(" ");
+  return "Use for multi-step work. Send the full list each call; keep statuses current and exactly one `in_progress` until done.";
 }

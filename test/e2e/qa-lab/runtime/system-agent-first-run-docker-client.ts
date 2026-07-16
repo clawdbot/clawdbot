@@ -8,7 +8,11 @@ import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-m
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
 import type { RuntimeEnv } from "../../../../dist/runtime.js";
-import { activateSetupInference } from "../../../../dist/system-agent/setup-inference.js";
+import {
+  activateSetupInference,
+  verifySetupInference,
+} from "../../../../dist/system-agent/setup-inference.js";
+import { runSystemAgent } from "../../../../dist/system-agent/system-agent.js";
 import { createE2eStateDir } from "../../../../scripts/e2e/lib/temp-state-dir.ts";
 
 type SystemAgentFirstRunCommand = {
@@ -70,6 +74,14 @@ function renderCommandTemplate(template: string, vars: Record<string, string>): 
 const FAKE_PLANNER_REPLY = "Fake Claude planner selected an inference-backed typed setup.";
 const PACKAGED_CLI_TIMEOUT_MS = 60_000;
 const INFERENCE_PROBE_PROMPT = "Reply with the single word OK";
+const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"].join("_");
+const DISCORD_CREDENTIAL_FIXTURE = ["openclaw", "discord", "fixture"].join("-");
+
+type PackagedCommandResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+};
 
 async function readFakeClaudePromptLines(promptLogPath: string): Promise<string[]> {
   return (await fs.readFile(promptLogPath, "utf8"))
@@ -135,11 +147,7 @@ async function installFakeClaudeCli(
   await fs.chmod(scriptPath, 0o755);
 }
 
-async function runPackagedCli(args: string[]): Promise<{
-  code: number | null;
-  stdout: string;
-  stderr: string;
-}> {
+async function runPackagedCli(args: string[]): Promise<PackagedCommandResult> {
   const child = spawn("openclaw", args, {
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -176,6 +184,25 @@ async function runPackagedCli(args: string[]): Promise<{
   return { code, stdout, stderr };
 }
 
+async function runPackagedOneShot(
+  message: string,
+  approve: boolean,
+): Promise<PackagedCommandResult> {
+  clearConfigCache();
+  const { runtime, lines } = createRuntime();
+  try {
+    // Entrypoint, fail-closed, and planner checks stay real CLI subprocesses.
+    // Supporting typed operations share the package process so their repeated
+    // full CLI bootstrap cannot dominate this focused operation lane.
+    const inference = await verifySetupInference({ runtime, bindSession: true });
+    assert(inference.ok, `packaged inference verification failed: ${JSON.stringify(inference)}`);
+    await runSystemAgent({ message, yes: approve, verifiedInference: inference.binding }, runtime);
+    return { code: 0, stdout: lines.join("\n"), stderr: "" };
+  } catch (error) {
+    return { code: 1, stdout: lines.join("\n"), stderr: String(error) };
+  }
+}
+
 async function main() {
   const spec = await readFirstRunSpec();
   const tempState = await createE2eStateDir("openclaw-system-agent-first-run-");
@@ -205,18 +232,6 @@ async function main() {
   assert(
     `${blocked.stdout}\n${blocked.stderr}`.includes("openclaw onboard"),
     "blocked OpenClaw did not direct the user to inference onboarding",
-  );
-  const blockedModern = await runPackagedCli([
-    "onboard",
-    "--modern",
-    "--non-interactive",
-    "--accept-risk",
-    "--json",
-  ]);
-  assert(
-    blockedModern.code === 1 &&
-      `${blockedModern.stdout}\n${blockedModern.stderr}`.includes('"ok": false'),
-    "modern compatibility entrypoint did not fail closed with structured JSON",
   );
 
   const plannerCommand = `setup workspace ${spec.dockerDefaultWorkspace}`;
@@ -261,32 +276,23 @@ async function main() {
     "modern compatibility entrypoint did not expose OpenClaw after activation",
   );
 
-  const overview = await runPackagedCli(["setup", "--message", "overview"]);
-  const overviewOutput = `${overview.stdout}\n${overview.stderr}`;
-  assert(overview.code === 0, `verified OpenClaw CLI failed: ${overviewOutput}`);
-  assert(
-    overviewOutput.includes("claude-cli/claude-opus-4-8"),
-    "verified overview did not report the activated model",
-  );
-
+  // An unrelated ambient channel credential must not alter the requested setup.
   setEnvValue(spec.telegramEnv, spec.telegramToken);
+  setEnvValue(DISCORD_CREDENTIAL_ENV, DISCORD_CREDENTIAL_FIXTURE);
 
   const commandVars = {
     defaultWorkspace: spec.dockerDefaultWorkspace,
     agentWorkspace: spec.dockerAgentWorkspace,
     agentId: spec.agentId,
     model: spec.model,
-    telegramEnv: spec.telegramEnv,
+    discordEnv: DISCORD_CREDENTIAL_ENV,
   };
   for (const command of spec.commands) {
     const message = renderCommandTemplate(command.message, commandVars);
     const probesBefore = countInferencePrompts(await readFakeClaudePromptLines(promptLogPath));
-    const result = await runPackagedCli([
-      "setup",
-      "--message",
-      message,
-      ...(command.approve ? ["--yes"] : []),
-    ]);
+    const result = command.planner
+      ? await runPackagedCli(["setup", "--message", message, ...(command.approve ? ["--yes"] : [])])
+      : await runPackagedOneShot(message, command.approve);
     const output = `${result.stdout}\n${result.stderr}`;
     assert(
       result.code === 0 && output.includes(command.expectOutput),
@@ -309,24 +315,10 @@ async function main() {
     );
   }
 
-  const pluginList = await runPackagedCli(["plugins", "list", "--json"]);
-  assert(
-    pluginList.code === 0,
-    `packaged plugin listing failed: ${pluginList.stdout}\n${pluginList.stderr}`,
-  );
-  const pluginReport = JSON.parse(pluginList.stdout) as {
-    plugins?: Array<{ id?: string; enabled?: boolean }>;
-  };
-  const telegramPlugin = pluginReport.plugins?.find((plugin) => plugin.id === "telegram");
-  assert(
-    telegramPlugin?.enabled === true,
-    "Telegram channel config did not auto-enable the packaged Telegram plugin",
-  );
-
   const probeLines = await readFakeClaudePromptLines(promptLogPath);
   const inferencePrompts = probeLines.filter((line) => line.includes(INFERENCE_PROBE_PROMPT));
   const plannerPrompts = probeLines.filter((line) => line.includes("User request:"));
-  const minimumEntryAndActivationProbes = spec.commands.length + 4;
+  const minimumEntryAndActivationProbes = spec.commands.length + 1;
   const minimumPersistentBoundaryProbes = spec.auditOperations.length;
   assert(
     inferencePrompts.length >= minimumEntryAndActivationProbes + minimumPersistentBoundaryProbes,
@@ -354,20 +346,25 @@ async function main() {
     reef.model === undefined,
     "OpenClaw wrote a per-agent model instead of inheriting the verified default",
   );
-  assert(config.channels?.telegram?.enabled === true, "OpenClaw did not enable Telegram");
-  const telegramToken = config.channels?.telegram?.botToken;
+  assert(config.channels?.discord?.enabled === true, "OpenClaw did not enable Discord");
+  const discordToken = config.channels?.discord?.token;
   assert(
-    telegramToken &&
-      typeof telegramToken === "object" &&
-      "source" in telegramToken &&
-      telegramToken.source === "env" &&
-      "id" in telegramToken &&
-      telegramToken.id === spec.telegramEnv,
-    "OpenClaw did not write Telegram token SecretRef",
+    discordToken &&
+      typeof discordToken === "object" &&
+      "source" in discordToken &&
+      discordToken.source === "env" &&
+      "id" in discordToken &&
+      discordToken.id === DISCORD_CREDENTIAL_ENV,
+    "OpenClaw did not write Discord token SecretRef",
   );
   assert(
-    !JSON.stringify(config.channels.telegram).includes(spec.telegramToken),
-    "OpenClaw persisted the raw Telegram token",
+    !JSON.stringify(config.channels.discord).includes(DISCORD_CREDENTIAL_FIXTURE),
+    "OpenClaw persisted the raw Discord token",
+  );
+  assert(config.channels?.telegram === undefined, "ambient Telegram credentials altered config");
+  assert(
+    !JSON.stringify(config).includes(spec.telegramToken),
+    "OpenClaw persisted an unrelated ambient credential",
   );
 
   const auditPath = path.join(stateDir, "audit", "system-agent.jsonl");

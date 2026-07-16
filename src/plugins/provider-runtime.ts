@@ -11,6 +11,7 @@ import {
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
+import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
@@ -688,7 +689,36 @@ export async function resolveProviderUsageSnapshotWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFetchUsageSnapshotContext;
 }) {
-  return await resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot?.(params.context);
+  const providerHook = resolveProviderRuntimePlugin(params)?.fetchUsageSnapshot;
+  if (providerHook) {
+    const snapshot = await providerHook(params.context);
+    if (snapshot != null) {
+      return snapshot;
+    }
+  }
+
+  // A distinct hook owner is an explicit synthetic contribution route. Avoid
+  // probing harness manifests for ordinary provider usage misses.
+  if (params.provider === params.context.provider) {
+    return undefined;
+  }
+
+  let harness = getRegisteredAgentHarness(params.provider)?.harness;
+  if (!harness) {
+    const workspaceDir =
+      params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState() ?? process.cwd();
+    const { ensureSelectedAgentHarnessPlugin } =
+      await import("../agents/harness/runtime-plugin.js");
+    await ensureSelectedAgentHarnessPlugin({
+      provider: params.context.provider,
+      modelId: "",
+      config: params.config,
+      agentHarnessId: params.provider,
+      workspaceDir,
+    });
+    harness = getRegisteredAgentHarness(params.provider)?.harness;
+  }
+  return await harness?.fetchUsageSnapshot?.(params.context);
 }
 
 export type ProviderUsagePluginDescriptor = {

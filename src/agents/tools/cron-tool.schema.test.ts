@@ -65,6 +65,15 @@ describe("createCronToolSchema", () => {
     );
   });
 
+  it("keeps declarationKey portable across model schema converters", () => {
+    const declarationKey = propertyAt(schemaRecord, "job.declarationKey");
+
+    expect(declarationKey).toMatchObject({ type: "string", minLength: 1, maxLength: 200 });
+    // Runtime and gateway validation own the nonblank invariant. An unanchored
+    // model-schema pattern prevents llama.cpp from compiling the entire tool.
+    expect(declarationKey).not.toHaveProperty("pattern");
+  });
+
   it("patch exposes the expected top-level fields", () => {
     expect(keysAt(schemaRecord, "patch")).toEqual(
       [

@@ -5,6 +5,7 @@ import { buildStatusText, formatStatusTextContinuationLine } from "./status-text
 
 const mocks = vi.hoisted(() => ({
   loadSessionCostSummariesFromCache: vi.fn(),
+  loadProviderUsageSummary: vi.fn(),
 }));
 
 vi.mock("../infra/session-cost-usage.js", async (importOriginal) => {
@@ -12,6 +13,14 @@ vi.mock("../infra/session-cost-usage.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionCostSummariesFromCache: mocks.loadSessionCostSummariesFromCache,
+  };
+});
+
+vi.mock("../infra/provider-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/provider-usage.js")>();
+  return {
+    ...actual,
+    loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   };
 });
 
@@ -150,6 +159,74 @@ describe("buildStatusText channel features", () => {
 
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
+  });
+});
+
+describe("Codex usage after runtime fallback", () => {
+  beforeEach(() => {
+    mocks.loadProviderUsageSummary.mockReset();
+    mocks.loadProviderUsageSummary.mockImplementation(async (params) => ({
+      updatedAt: Date.now(),
+      providers: params.auth
+        ? [
+            {
+              provider: "openai",
+              displayName: "Codex",
+              windows: [{ label: "5h", usedPercent: 25 }],
+            },
+          ]
+        : [],
+    }));
+  });
+
+  async function renderFallbackStatus(agentHarnessId: "codex" | "openclaw"): Promise<string> {
+    return await buildStatusText({
+      cfg: {},
+      sessionEntry: {
+        sessionId: `fallback-${agentHarnessId}`,
+        updatedAt: 0,
+        agentRuntimeOverride: "openclaw",
+        agentHarnessId,
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+      includeTranscriptUsage: false,
+    });
+  }
+
+  it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
+    const text = await renderFallbackStatus("codex");
+
+    expect(text).toContain("📊 Usage: 5h 75% left");
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providers: ["openai"],
+        auth: [expect.objectContaining({ provider: "openai", hookProvider: "codex" })],
+      }),
+    );
+  });
+
+  it("omits Codex rate-limit usage for a never-Codex session", async () => {
+    const text = await renderFallbackStatus("openclaw");
+
+    expect(text).not.toContain("📊 Usage:");
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.not.objectContaining({ auth: expect.anything() }),
+    );
   });
 });
 

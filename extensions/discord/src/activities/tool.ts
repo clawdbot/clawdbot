@@ -2,11 +2,16 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  assertWidgetHtmlSize,
+  isCompleteHtmlDocument,
+  WidgetHtmlInputError,
+} from "openclaw/plugin-sdk/widget-html";
 import { Type } from "typebox";
 import { resolveDiscordAccount } from "../accounts.js";
-import { buildDiscordActivityCustomId } from "../component-custom-id.js";
-import { Button, Row } from "../internal/discord.js";
-import { sendMessageDiscord } from "../send.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
+import { buildDiscordPresentationComponents } from "../shared-interactive.js";
+import { resolveDiscordChannelId as resolveDiscordTargetChannelId } from "../target-parsing.js";
 import type { DiscordActivitiesRuntime } from "./runtime.js";
 
 const DISCORD_WIDGET_HTML_MAX_BYTES = 48 * 1024;
@@ -17,21 +22,11 @@ const DiscordWidgetParameters = Type.Object({
   button_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 
-class DiscordWidgetInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
-}
-
-class DiscordWidgetLaunchButton extends Button {
-  constructor(
-    readonly customId: string,
-    readonly label: string,
-  ) {
-    super();
-  }
-}
+const ShowWidgetParameters = Type.Object({
+  title: Type.String({ minLength: 1, maxLength: 80 }),
+  widget_code: Type.String({ description: "Self-contained HTML document or body fragment" }),
+  button_label: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+});
 
 function currentConfig(context: OpenClawPluginToolContext, runtime: DiscordActivitiesRuntime) {
   return (
@@ -47,12 +42,15 @@ function resolveDiscordChannelId(context: OpenClawPluginToolContext): string | u
   if (!raw) {
     return undefined;
   }
-  const normalized = raw.replace(/^channel:/i, "");
-  return /^\d+$/.test(normalized) ? normalized : undefined;
+  try {
+    return resolveDiscordTargetChannelId(raw);
+  } catch {
+    return undefined;
+  }
 }
 
 function buildDiscordWidgetDocument(title: string, html: string): string {
-  if (/^(?:<!doctype\s+html\b|<html\b)/i.test(html.trimStart())) {
+  if (isCompleteHtmlDocument(html)) {
     return html;
   }
   return `<!doctype html>
@@ -62,13 +60,40 @@ function buildDiscordWidgetDocument(title: string, html: string): string {
 
 type DiscordWidgetToolDeps = {
   runtime: DiscordActivitiesRuntime;
-  sendMessage?: typeof sendMessageDiscord;
+  sendComponentMessage?: typeof sendDiscordComponentMessage;
   now?: () => number;
 };
 
-export function createDiscordWidgetTool(
+type DiscordWidgetToolVariant = {
+  name: "discord_widget" | "show_widget";
+  label: string;
+  description: string;
+  htmlParam: "html" | "widget_code";
+  parameters: typeof DiscordWidgetParameters | typeof ShowWidgetParameters;
+};
+
+const DISCORD_WIDGET_VARIANT: DiscordWidgetToolVariant = {
+  name: "discord_widget",
+  label: "Discord Widget",
+  description:
+    "Deprecated: use show_widget. Show an interactive, self-contained HTML widget to the user in Discord.",
+  htmlParam: "html",
+  parameters: DiscordWidgetParameters,
+};
+
+const SHOW_WIDGET_VARIANT: DiscordWidgetToolVariant = {
+  name: "show_widget",
+  label: "Show Widget",
+  description:
+    "Show an interactive, self-contained HTML widget to the user on their current surface. In Discord, posts an Activity launch button.",
+  htmlParam: "widget_code",
+  parameters: ShowWidgetParameters,
+};
+
+function createDiscordWidgetToolVariant(
   context: OpenClawPluginToolContext,
   deps: DiscordWidgetToolDeps,
+  variant: DiscordWidgetToolVariant,
 ): AnyAgentTool | null {
   if (context.messageChannel !== "discord") {
     return null;
@@ -83,34 +108,31 @@ export function createDiscordWidgetTool(
   }
 
   return {
-    label: "Discord Widget",
-    name: "discord_widget",
-    description:
-      "Show an interactive HTML widget to Discord users. Posts a message with an Open widget button; the widget opens inside Discord as an Activity. HTML must be fully self-contained with inline CSS and JavaScript and no external network access.",
-    parameters: DiscordWidgetParameters,
+    label: variant.label,
+    name: variant.name,
+    description: variant.description,
+    parameters: variant.parameters,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as Record<string, unknown>;
-      const html = readStringParam(params, "html", { required: true, trim: false });
+      const html = readStringParam(params, variant.htmlParam, { required: true, trim: false });
       const title = readStringParam(params, "title", { required: true });
       const buttonLabel = readStringParam(params, "button_label") || "Open widget";
       if (!html.trim()) {
-        throw new DiscordWidgetInputError("html is required");
+        throw new WidgetHtmlInputError(`${variant.htmlParam} is required`);
       }
-      if (Buffer.byteLength(html, "utf8") > DISCORD_WIDGET_HTML_MAX_BYTES) {
-        throw new DiscordWidgetInputError(
-          `html exceeds maximum size (${DISCORD_WIDGET_HTML_MAX_BYTES} bytes)`,
-        );
-      }
+      assertWidgetHtmlSize(html, DISCORD_WIDGET_HTML_MAX_BYTES, {
+        inputName: variant.htmlParam,
+      });
       if (title.length > 80) {
-        throw new DiscordWidgetInputError("title must be 80 characters or fewer");
+        throw new WidgetHtmlInputError("title must be 80 characters or fewer");
       }
       if (!buttonLabel.trim() || buttonLabel.length > 80) {
-        throw new DiscordWidgetInputError("button_label must be 1 to 80 characters");
+        throw new WidgetHtmlInputError("button_label must be 1 to 80 characters");
       }
       const channelId = resolveDiscordChannelId(context);
       if (!channelId) {
-        throw new DiscordWidgetInputError(
-          "discord_widget requires a concrete Discord channel in the current session",
+        throw new WidgetHtmlInputError(
+          `${variant.name} requires a concrete Discord channel in the current session`,
         );
       }
       // Persist before the button can be delivered so a launch never races an absent record;
@@ -122,26 +144,59 @@ export function createDiscordWidgetTool(
         accountId: account.accountId,
         createdAt: (deps.now ?? Date.now)(),
       });
-      let result: Awaited<ReturnType<typeof sendMessageDiscord>>;
+      let result: Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
+      let deliveredResult: Awaited<ReturnType<typeof sendDiscordComponentMessage>> | undefined;
       try {
-        result = await (deps.sendMessage ?? sendMessageDiscord)(`channel:${channelId}`, title, {
-          cfg: cfg as OpenClawConfig,
-          accountId: account.accountId,
-          components: [
-            new Row([
-              new DiscordWidgetLaunchButton(
-                buildDiscordActivityCustomId(widgetId),
-                buttonLabel.trim(),
-              ),
-            ]),
+        const components = buildDiscordPresentationComponents({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: buttonLabel.trim(),
+                  action: { type: "web-app", widgetId },
+                },
+              ],
+            },
           ],
-          allowedMentions: { parse: [] },
         });
+        if (!components) {
+          throw new Error("Discord widget launch button could not be rendered");
+        }
+        result = await (deps.sendComponentMessage ?? sendDiscordComponentMessage)(
+          `channel:${channelId}`,
+          { ...components, text: title },
+          {
+            cfg: cfg as OpenClawConfig,
+            accountId: account.accountId,
+            allowedMentions: { parse: [] },
+            onDeliveryResult: (deliveryResult) => {
+              deliveredResult = deliveryResult;
+            },
+          },
+        );
       } catch (error) {
-        await deps.runtime.store.deleteWidget(widgetId);
-        throw error;
+        if (!deliveredResult) {
+          await deps.runtime.store.deleteWidget(widgetId);
+          throw error;
+        }
+        result = deliveredResult;
       }
       return jsonResult({ widgetId, messageId: result.messageId, channelId: result.channelId });
     },
   };
+}
+
+export function createDiscordWidgetTool(
+  context: OpenClawPluginToolContext,
+  deps: DiscordWidgetToolDeps,
+): AnyAgentTool | null {
+  return createDiscordWidgetToolVariant(context, deps, DISCORD_WIDGET_VARIANT);
+}
+
+export function createDiscordShowWidgetTool(
+  context: OpenClawPluginToolContext,
+  deps: DiscordWidgetToolDeps,
+): AnyAgentTool | null {
+  return createDiscordWidgetToolVariant(context, deps, SHOW_WIDGET_VARIANT);
 }

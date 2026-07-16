@@ -8,7 +8,6 @@ import {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyXiaomiTokenPlanConfig,
-  applyXiaomiTokenPlanProviderConfig,
 } from "./onboard.js";
 import { buildXiaomiProvider, buildXiaomiTokenPlanProvider } from "./provider-catalog.js";
 
@@ -68,7 +67,7 @@ describe("xiaomi onboard", () => {
 
   it("merges Xiaomi Token Plan models and rewrites the selected regional base URL", () => {
     const provider = expectProviderOnboardMergedLegacyConfig({
-      applyProviderConfig: (config) => applyXiaomiTokenPlanProviderConfig(config, "sgp"),
+      applyProviderConfig: (config) => applyXiaomiTokenPlanConfig(config, "sgp"),
       providerId: "xiaomi-token-plan",
       providerApi: "openai-completions",
       baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",

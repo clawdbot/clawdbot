@@ -146,6 +146,42 @@ describe("renderPlugins", () => {
     ).toContain("manifest invalid");
   });
 
+  it("keeps plugin fallback monograms on complete grapheme clusters", () => {
+    const cases = [
+      { id: "emoji-tools", name: "😀 Tools", expected: "😀T" },
+      { id: "mixed-emoji", name: "A😀", expected: "A😀" },
+      { id: "heart-tools", name: "❤️ Tools", expected: "❤️T" },
+      { id: "flag-tools", name: "🇺🇸 Tools", expected: "🇺🇸T" },
+      { id: "developer-tools", name: "👩‍💻 Tools", expected: "👩‍💻T" },
+      { id: "developer-name", name: "👩‍💻Dev", expected: "👩‍💻D" },
+      { id: "combining-mark", name: "é Tools", expected: "ÉT" },
+    ];
+    const plugins = cases.map(({ id, name }) => createPlugin({ id, name, origin: "global" }));
+    const container = mount(createProps({ result: createResult(plugins) }));
+
+    for (const { id, expected } of cases) {
+      expect(
+        container.querySelector(`[data-plugin-id="${id}"] .plugins-tile--fallback > span`)
+          ?.textContent,
+      ).toBe(expected);
+    }
+  });
+
+  it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
+
+    try {
+      const { pluginMonogram } = await import("./presentation.ts");
+      expect(pluginMonogram("😀 Tools")).toBe("😀T");
+      expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
+    }
+  });
+
   it("filters the installed inventory by state", () => {
     const plugins = [
       createPlugin({ id: "on", name: "On", enabled: true, state: "enabled" }),

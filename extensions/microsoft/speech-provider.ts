@@ -119,7 +119,7 @@ function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string
   return personalities.length > 0 ? personalities.join(", ") : undefined;
 }
 
-export function isCjkDominant(text: string): boolean {
+function isCjkDominant(text: string): boolean {
   const stripped = text.replace(/\s+/g, "");
   if (stripped.length === 0) {
     return false;
@@ -142,7 +142,7 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(
+async function listMicrosoftVoices(
   timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
 ): Promise<SpeechVoiceOption[]> {
   const url =

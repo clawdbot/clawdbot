@@ -32,7 +32,10 @@ import {
   type ChannelKind,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
-import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
+import {
+  createExecApprovalIosPushDelivery,
+  createPluginApprovalIosPushDelivery,
+} from "./exec-approval-ios-push.js";
 import {
   ExecApprovalManager,
   type OperatorApprovalLifecycleEvent,
@@ -159,6 +162,7 @@ export function createGatewayAuxHandlers(params: {
     "plugin",
     resolveCanonicalPluginApprovalRequestAllowedDecisions,
   );
+  const pluginApprovalIosPushDelivery = createPluginApprovalIosPushDelivery({ log: params.log });
   const systemAgentApprovalManager = createApprovalManager<SystemAgentApprovalRequestPayload>(
     "system-agent",
     () => SYSTEM_AGENT_APPROVAL_DECISIONS,
@@ -168,6 +172,7 @@ export function createGatewayAuxHandlers(params: {
       import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
+          iosPushDelivery: pluginApprovalIosPushDelivery,
         }),
       ),
     { cacheRejections: true },
@@ -181,6 +186,7 @@ export function createGatewayAuxHandlers(params: {
           systemAgentApprovalManager,
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
+          pluginIosPushDelivery: pluginApprovalIosPushDelivery,
         }),
       ),
     { cacheRejections: true },
@@ -505,6 +511,7 @@ export function createGatewayAuxHandlers(params: {
   return {
     execApprovalManager,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
+    pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
     extraHandlers: {

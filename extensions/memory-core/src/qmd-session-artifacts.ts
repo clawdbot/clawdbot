@@ -3,8 +3,23 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { migrateSqliteSchemaToStrict } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const QMD_SESSION_ARTIFACT_TABLE = "openclaw_qmd_session_artifacts";
+const QMD_SESSION_ARTIFACT_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS ${QMD_SESSION_ARTIFACT_TABLE} (
+    collection TEXT NOT NULL,
+    artifact_path TEXT NOT NULL,
+    search_path TEXT NOT NULL,
+    docid TEXT,
+    memory_key TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (collection, artifact_path)
+  ) STRICT;
+`;
 
 const QMD_SESSION_ARTIFACT_HIT: unique symbol = Symbol("openclaw.qmdSessionArtifactHit");
 
@@ -49,26 +64,21 @@ type QmdSessionArtifactRow = {
 };
 
 function ensureQmdSessionArtifactSchema(db: DatabaseSync): void {
-  db.exec(
-    `CREATE TABLE IF NOT EXISTS ${QMD_SESSION_ARTIFACT_TABLE} (
-      collection TEXT NOT NULL,
-      artifact_path TEXT NOT NULL,
-      search_path TEXT NOT NULL,
-      docid TEXT,
-      memory_key TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      archived INTEGER NOT NULL DEFAULT 0,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (collection, artifact_path)
-    )`,
-  );
+  db.exec(QMD_SESSION_ARTIFACT_SCHEMA);
   try {
     db.exec(
       `ALTER TABLE ${QMD_SESSION_ARTIFACT_TABLE}
        ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {}
+  const table = db
+    .prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+    .get(QMD_SESSION_ARTIFACT_TABLE) as { strict?: unknown } | undefined;
+  if (Number(table?.strict ?? 0) !== 1) {
+    migrateSqliteSchemaToStrict(db, QMD_SESSION_ARTIFACT_SCHEMA, {
+      databaseLabel: "QMD session artifact mappings",
+    });
+  }
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_openclaw_qmd_session_artifacts_docid
      ON ${QMD_SESSION_ARTIFACT_TABLE} (docid)`,

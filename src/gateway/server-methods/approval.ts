@@ -34,6 +34,7 @@ import {
 import {
   publishAppliedApprovalResolution,
   type ExecApprovalIosPushDelivery,
+  type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
 import type {
   GatewayClient,
@@ -48,6 +49,7 @@ type CreateApprovalHandlersParams = {
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwarder?: ExecApprovalForwarder;
   iosPushDelivery?: ExecApprovalIosPushDelivery;
+  pluginIosPushDelivery?: PluginApprovalIosPushDelivery;
   databaseOptions?: OpenClawStateDatabaseOptions;
 };
 
@@ -484,6 +486,7 @@ export function createApprovalHandlers(
           context,
           forwarder: params.forwarder,
           iosPushDelivery: params.iosPushDelivery,
+          pluginIosPushDelivery: params.pluginIosPushDelivery,
         }).catch((error: unknown) => {
           context.logGateway?.error?.(
             `${terminalRecord.kind} approvals: unified resolve publication failed: ${String(error)}`,

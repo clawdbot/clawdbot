@@ -87,7 +87,7 @@ function writeStallingOpenClaw(
         "process.on('SIGTERM', () => {});",
         `setInterval(() => fs.appendFileSync(${JSON.stringify(
           options.gatewayDescendantMarkerPath,
-        )}, "x"), 20);`,
+        )}, "x"), 5);`,
       ].join("\n")
     : "";
   const scriptPath = path.join(root, "fake-openclaw.mjs");
@@ -283,7 +283,7 @@ describe("secret provider integration proof harness", () => {
 
     const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 40);
     });
     const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
     expect(sizeAfterWait).toBe(sizeAfterReturn);
@@ -737,7 +737,7 @@ describe("secret provider integration proof harness", () => {
       "import fs from 'node:fs';",
       `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
       "process.on('SIGTERM', () => {});",
-      `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
     ].join("\n");
     fs.writeFileSync(
       scriptPath,
@@ -763,7 +763,7 @@ describe("secret provider integration proof harness", () => {
 
     const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
     await new Promise((resolve) => {
-      setTimeout(resolve, 250);
+      setTimeout(resolve, 40);
     });
     const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
     expect(sizeAfterWait).toBe(sizeAfterReturn);

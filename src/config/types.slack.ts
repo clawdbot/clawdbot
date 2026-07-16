@@ -64,6 +64,15 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** Slack presence polling and agent wake mode for this channel. */
+  presenceEvents?: SlackPresenceEventsConfig;
+};
+
+type SlackPresenceEventsMode = "off" | "auto" | "on";
+
+type SlackPresenceEventsConfig = {
+  /** Presence wake mode. Default: off. */
+  mode?: SlackPresenceEventsMode;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -241,6 +250,8 @@ export type SlackAccountConfig = {
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
+  /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
+  presenceEvents?: SlackPresenceEventsConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**

@@ -197,6 +197,11 @@ const mocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
   removeInternalSessionEffectsSession: vi.fn(async () => {}),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
+  getGatewayRecoveryRuntime: vi.fn(() => ({
+    dispatchAgent: vi.fn(),
+    waitForAgent: vi.fn(),
+    sendRecoveryNotice: vi.fn(),
+  })),
   scheduleOrphanRecovery: vi.fn(),
 }));
 
@@ -325,6 +330,7 @@ describe("subagent registry seam flow", () => {
       callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
+      getGatewayRecoveryRuntime: mocks.getGatewayRecoveryRuntime,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
@@ -621,6 +627,51 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-interrupted-wait");
     expect(run?.endedAt).toBeUndefined();
     expect(run?.outcome).toBeUndefined();
+  });
+
+  it("does not fall back to network recovery without an instance-bound runtime", async () => {
+    mod.testing.setDepsForTest({
+      getGatewayRecoveryRuntime: () => undefined,
+    });
+
+    mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+    await Promise.resolve();
+
+    expect(mocks.scheduleOrphanRecovery).not.toHaveBeenCalled();
+  });
+
+  it("keeps a debounced recovery bound to the current Gateway runtime", async () => {
+    const originalImplementation = mocks.getGatewayRecoveryRuntime.getMockImplementation();
+    const firstRuntime = {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    };
+    const replacementRuntime = {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    };
+    mocks.getGatewayRecoveryRuntime.mockReturnValue(firstRuntime);
+
+    try {
+      mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+      await waitForFast(() => expect(mocks.scheduleOrphanRecovery).toHaveBeenCalledOnce());
+      const scheduled = requireRecord(
+        getMockCallArg(mocks.scheduleOrphanRecovery, 0, 0, "orphan recovery"),
+        "orphan recovery params",
+      );
+      const getGatewayRuntime = scheduled.getGatewayRuntime;
+      expect(typeof getGatewayRuntime).toBe("function");
+
+      mocks.getGatewayRecoveryRuntime.mockReturnValue(replacementRuntime);
+      mod.scheduleSubagentOrphanRecovery({ delayMs: 1 });
+
+      expect(mocks.scheduleOrphanRecovery).toHaveBeenCalledOnce();
+      expect((getGatewayRuntime as () => unknown)()).toBe(replacementRuntime);
+    } finally {
+      mocks.getGatewayRecoveryRuntime.mockImplementation(originalImplementation!);
+    }
   });
 
   it("keeps parent run active when agent.wait times out before child session settles", async () => {

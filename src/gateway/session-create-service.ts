@@ -187,6 +187,7 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -560,6 +561,7 @@ export async function createGatewaySession(params: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
             model: catalogModel ?? normalizeOptionalString(params.model),
+            thinkingLevel: normalizeOptionalString(params.thinkingLevel),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,

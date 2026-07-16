@@ -236,11 +236,12 @@ describe("production lint suppressions", () => {
         "src/system-agent/setup-inference.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/version.ts|eslint/no-underscore-dangle|1",
         "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
+        // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
+        "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),
     );
   });

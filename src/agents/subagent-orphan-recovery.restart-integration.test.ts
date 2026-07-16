@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { callGateway } from "../gateway/call.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import {
@@ -20,7 +20,7 @@ import {
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
+import { recoverOrphanedSubagentSessions as recoverOrphanedSubagentSessionsWithRuntime } from "./subagent-orphan-recovery.js";
 import {
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
@@ -36,9 +36,20 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async () => ({ runId: "resumed-run-id" })),
+const dispatchAgent = vi.fn(async (_payload: Record<string, unknown>, _timeoutMs?: number) => ({
+  runId: "resumed-run-id",
 }));
+const gatewayRuntime: GatewayRecoveryRuntime = {
+  dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+  waitForAgent: vi.fn(),
+  sendRecoveryNotice: vi.fn(),
+};
+
+function recoverOrphanedSubagentSessions(
+  params: Omit<Parameters<typeof recoverOrphanedSubagentSessionsWithRuntime>[0], "gatewayRuntime">,
+) {
+  return recoverOrphanedSubagentSessionsWithRuntime({ ...params, gatewayRuntime });
+}
 
 vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -77,8 +88,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
       runSubagentAnnounceFlow: vi.fn(async () => true),
       onAgentEvent: vi.fn(() => () => undefined),
     });
-    vi.mocked(callGateway).mockClear();
-    vi.mocked(callGateway).mockResolvedValue({ runId: "resumed-run-id" } as never);
+    dispatchAgent.mockReset();
+    dispatchAgent.mockResolvedValue({ runId: "resumed-run-id" });
   });
 
   afterEach(async () => {
@@ -134,7 +145,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
 
     const after = getSubagentRunByChildSessionKey(childSessionKey);
-    expect(vi.mocked(callGateway)).not.toHaveBeenCalled();
+    expect(dispatchAgent).not.toHaveBeenCalled();
     expect(after?.endedAt).toBeTypeOf("number");
     expect(after?.outcome?.status).toBe("error");
     expect(result.recovered).toBe(0);
@@ -181,16 +192,18 @@ describe("subagent orphan recovery — faithful restart path", () => {
     });
 
     console.log(
-      `[proof] fresh recovery: result=${JSON.stringify(result)} gatewayCalls=${
-        vi.mocked(callGateway).mock.calls.length
+      `[proof] fresh recovery: result=${JSON.stringify(result)} runtimeDispatches=${
+        dispatchAgent.mock.calls.length
       }`,
     );
 
-    // Fresh aborted run passed the stale gate and reached a real resume call.
-    const agentCalls = vi
-      .mocked(callGateway)
-      .mock.calls.filter((args) => (args[0] as { method?: string })?.method === "agent");
-    expect(agentCalls).toHaveLength(1);
+    // Fresh aborted run passed the stale gate and reached the instance-owned dispatcher.
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    expect(dispatchAgent.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: childSessionKey,
+      lane: "subagent",
+      deliver: false,
+    });
     expect(result.recovered).toBe(1);
   });
 
@@ -240,7 +253,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
 
     const runs = listSubagentRunsForRequester("agent:main:main");
     expect(updated).toBe(1);
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(dispatchAgent).not.toHaveBeenCalled();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
     expect(runs).toContainEqual(expect.objectContaining({ runId: freshRecord.runId }));
     expect(runs.find((entry) => entry.runId === freshRecord.runId)?.endedAt).toBeUndefined();

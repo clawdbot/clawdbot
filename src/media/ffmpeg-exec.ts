@@ -9,7 +9,7 @@ import {
 } from "./ffmpeg-limits.js";
 
 /** Process limits and optional stdin payload for ffmpeg/ffprobe helper calls. */
-export type MediaExecOptions = {
+type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
@@ -68,7 +68,7 @@ export async function runFfmpeg(args: string[], options?: MediaExecOptions): Pro
 }
 
 /** Splits ffprobe CSV-ish output into normalized lowercase fields. */
-export function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
+function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
   return stdout
     .trim()
     .split(/[,\r\n]+/, maxFields)

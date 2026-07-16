@@ -42,6 +42,7 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
 }
 
@@ -153,6 +154,20 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("runs queue media cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
 
     stopMaintenanceTimers(timers);
   });

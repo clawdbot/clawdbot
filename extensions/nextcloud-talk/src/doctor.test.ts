@@ -128,7 +128,7 @@ describe("nextcloud-talk doctor", () => {
 
     const guard = createNextcloudTalkReplayGuard({ stateDir });
     await expect(
-      guard.shouldProcessMessage({
+      guard.shouldProcess({
         accountId: "account-a",
         roomToken: "room-1",
         messageId: "msg-1",

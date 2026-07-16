@@ -41,7 +41,7 @@ export type PluginHookBeforePromptBuildResult = {
   appendSystemContext?: string;
 };
 
-export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
+const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
   "appendContext",
@@ -75,7 +75,7 @@ export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult
   PluginHookBeforeModelResolveResult;
 
 /** @deprecated Use before_model_resolve override result types. */
-export type PluginHookBeforeAgentStartOverrideResult = Omit<
+type PluginHookBeforeAgentStartOverrideResult = Omit<
   PluginHookBeforeAgentStartResult,
   keyof PluginHookBeforePromptBuildResult
 >;

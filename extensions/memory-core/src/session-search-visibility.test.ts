@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +97,78 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     }
     return attachQmdSessionArtifactHit(hit, identity);
   }
+
+  it("migrates legacy QMD artifact mappings to STRICT without losing rows", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-session-artifact-"));
+    tempRoots.push(root);
+    const indexPath = path.join(root, "index.sqlite");
+    const legacy = new DatabaseSync(indexPath);
+    legacy.exec(`
+      CREATE TABLE openclaw_qmd_session_artifacts (
+        collection TEXT NOT NULL,
+        artifact_path TEXT NOT NULL,
+        search_path TEXT NOT NULL,
+        docid TEXT,
+        memory_key TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (collection, artifact_path)
+      );
+      INSERT INTO openclaw_qmd_session_artifacts (
+        collection, artifact_path, search_path, docid, memory_key, agent_id, session_id, updated_at
+      ) VALUES ('legacy', 'old.md', 'qmd/legacy/old.md', NULL, 'old-key', 'main', 'old', 1);
+    `);
+    legacy.close();
+
+    replaceQmdSessionArtifactMappings({
+      collection: "current",
+      indexPath,
+      mappings: [
+        {
+          agentId: "main",
+          archived: true,
+          artifactPath: "new.md",
+          collection: "current",
+          memoryKey: "new-key",
+          searchPath: "qmd/current/new.md",
+          sessionId: "new",
+        },
+      ],
+    });
+
+    const migrated = new DatabaseSync(indexPath);
+    try {
+      expect(
+        migrated
+          .prepare(
+            "SELECT strict FROM pragma_table_list WHERE name = 'openclaw_qmd_session_artifacts'",
+          )
+          .get(),
+      ).toEqual({ strict: 1 });
+      expect(
+        migrated
+          .prepare(
+            `SELECT collection, artifact_path, archived
+             FROM openclaw_qmd_session_artifacts
+             ORDER BY collection`,
+          )
+          .all(),
+      ).toEqual([
+        { collection: "current", artifact_path: "new.md", archived: 1 },
+        { collection: "legacy", artifact_path: "old.md", archived: 0 },
+      ]);
+      expect(() =>
+        migrated
+          .prepare(
+            "UPDATE openclaw_qmd_session_artifacts SET archived = ? WHERE collection = 'legacy'",
+          )
+          .run("not-an-integer"),
+      ).toThrow();
+    } finally {
+      migrated.close();
+    }
+  });
 
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
     const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });

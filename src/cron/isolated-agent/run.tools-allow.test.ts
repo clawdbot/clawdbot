@@ -2,13 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
-  listWebSearchProvidersMock,
+  clearActiveRuntimeWebToolsMetadata,
+  setActiveRuntimeWebToolsMetadata,
+} from "../../secrets/runtime-web-tools-state.js";
+import {
+  hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
   resolveConfiguredModelRefMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
-  resolveWebSearchProviderIdMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -93,6 +96,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetRunCronIsolatedAgentTurnHarness();
+    clearActiveRuntimeWebToolsMetadata();
     resolveDeliveryTargetMock.mockResolvedValue({
       channel: "forum",
       to: "123",
@@ -106,6 +110,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   });
 
   afterEach(() => {
+    clearActiveRuntimeWebToolsMetadata();
     if (previousFastTestEnv == null) {
       vi.unstubAllEnvs();
       delete process.env.OPENCLAW_TEST_FAST;
@@ -156,9 +161,6 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     "adds cron diagnostics when web_search is allowed without a selected provider",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
-      listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
-      resolveWebSearchProviderIdMock.mockReturnValue("");
-
       const result = await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["web_search"]));
 
       expect(result.status).toBe("ok");
@@ -179,11 +181,53 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   );
 
   it(
+    "uses the prepared provider selected from a plugin-scoped web search key",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      setActiveRuntimeWebToolsMetadata({
+        search: {
+          providerSource: "auto-detect",
+          selectedProvider: "brave",
+          selectedProviderKeySource: "config",
+          diagnostics: [],
+        },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      });
+      const cfg = {
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+              config: {
+                webSearch: { apiKey: "token-oversized" },
+              },
+            },
+          },
+        },
+      };
+
+      const result = await runCronIsolatedAgentTurn({
+        ...makeParamsWithToolsAllow(["web_search"]),
+        cfg,
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.diagnostics).toBeUndefined();
+      expect(hasUsableWebSearchProviderMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentDir: "/tmp/agent-dir",
+          preferRuntimeProviders: true,
+          runtimeWebSearch: expect.objectContaining({ selectedProvider: "brave" }),
+        }),
+      );
+    },
+  );
+
+  it(
     "does not warn for default-derived toolsAllow that includes web_search",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
-
       const result = await runCronIsolatedAgentTurn(
         makeParamsWithDefaultToolsAllow(["web_search"]),
       );
@@ -197,7 +241,6 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     "does not warn when native web_search suppresses the managed provider tool",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
       resolveConfiguredModelRefMock.mockReturnValue({
         provider: "gateway",
         model: "gpt-5.5",
@@ -237,8 +280,6 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     "keeps web_search provider diagnostics when the run aborts",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
-      listWebSearchProvidersMock.mockReturnValue([]);
-      resolveWebSearchProviderIdMock.mockReturnValue("");
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [],

@@ -377,6 +377,7 @@ enum class GatewayMethod(
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  UiCommand("ui.command"),
 }
 
 enum class GatewayEvent(
@@ -385,6 +386,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
   SessionOperation("session.operation"),

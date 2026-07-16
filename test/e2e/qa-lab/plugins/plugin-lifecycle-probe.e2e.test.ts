@@ -220,12 +220,11 @@ describe("plugin lifecycle matrix probe", () => {
         ["--input-type=module", "-e", parentScript],
         {
           env: { ...process.env, OPENCLAW_TEST_DESCENDANT_PID: descendantPidPath },
-          timeoutKillGraceMs: 250,
+          timeoutKillGraceMs: 100,
           timeoutMs: 500,
         },
       );
       await waitForFile(descendantPidPath, 2_000);
-      await sleep(300);
 
       await expect(run).rejects.toThrow(/timed out after 500ms/u);
 

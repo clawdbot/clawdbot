@@ -181,7 +181,7 @@ async function writeConfig(params: {
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
-export async function main() {
+async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
   const previousEnv = {

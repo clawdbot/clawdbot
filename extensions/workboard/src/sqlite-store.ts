@@ -16,7 +16,10 @@ import type {
   WorkboardRunAttempt,
   WorkboardWorkerLog,
 } from "@openclaw/workboard-contract";
-import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  configureSqliteConnectionPragmas,
+  migrateSqliteSchemaToStrict,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
@@ -26,7 +29,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -132,13 +135,11 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, d
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
 }
 
-function ensureWorkboardSchema(db: DatabaseSync): void {
-  db.exec(`
-    PRAGMA foreign_keys = ON;
+const WORKBOARD_SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS workboard_schema_migrations (
       id TEXT PRIMARY KEY,
       applied_at INTEGER NOT NULL
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_boards (
       id TEXT PRIMARY KEY,
@@ -151,7 +152,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       archived_at INTEGER
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_cards (
       id TEXT PRIMARY KEY,
@@ -187,7 +188,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       stale_json TEXT,
       lifecycle_status_source_updated_at INTEGER,
       failure_count INTEGER
-    );
+    ) STRICT;
     CREATE INDEX IF NOT EXISTS workboard_cards_board_status_idx
       ON workboard_cards(board_id, status, position);
     CREATE INDEX IF NOT EXISTS workboard_cards_session_idx
@@ -198,7 +199,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       ordinal INTEGER NOT NULL,
       label TEXT NOT NULL,
       PRIMARY KEY(card_id, ordinal)
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_events (
       id TEXT PRIMARY KEY,
@@ -210,7 +211,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       to_status TEXT,
       session_key TEXT,
       run_id TEXT
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_attempts (
       id TEXT PRIMARY KEY,
@@ -225,7 +226,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       session_key TEXT,
       run_id TEXT,
       error TEXT
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_comments (
       id TEXT PRIMARY KEY,
@@ -234,7 +235,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       body TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_links (
       id TEXT PRIMARY KEY,
@@ -245,7 +246,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       title TEXT,
       url TEXT,
       created_at INTEGER NOT NULL
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_proof (
       id TEXT PRIMARY KEY,
@@ -257,7 +258,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       url TEXT,
       note TEXT,
       created_at INTEGER NOT NULL
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_artifacts (
       id TEXT PRIMARY KEY,
@@ -268,7 +269,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       path TEXT,
       mime_type TEXT,
       created_at INTEGER NOT NULL
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_diagnostics (
       card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
@@ -282,7 +283,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       count INTEGER NOT NULL,
       actions_json TEXT NOT NULL,
       PRIMARY KEY(card_id, ordinal)
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_notifications (
       id TEXT PRIMARY KEY,
@@ -294,7 +295,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       sequence INTEGER,
       session_key TEXT,
       run_id TEXT
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_worker_logs (
       id TEXT PRIMARY KEY,
@@ -305,14 +306,14 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       created_at INTEGER NOT NULL,
       session_key TEXT,
       run_id TEXT
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_worker_protocol (
       card_id TEXT PRIMARY KEY REFERENCES workboard_cards(id) ON DELETE CASCADE,
       state TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       detail TEXT
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_card_attachments (
       id TEXT PRIMARY KEY,
@@ -323,14 +324,14 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       mime_type TEXT,
       note TEXT,
       created_at INTEGER NOT NULL
-    );
+    ) STRICT;
     CREATE INDEX IF NOT EXISTS workboard_card_attachments_card_idx
       ON workboard_card_attachments(card_id, ordinal);
 
     CREATE TABLE IF NOT EXISTS workboard_attachment_blobs (
       attachment_id TEXT PRIMARY KEY,
       content BLOB NOT NULL
-    );
+    ) STRICT;
 
     CREATE TABLE IF NOT EXISTS workboard_notification_subscriptions (
       id TEXT PRIMARY KEY,
@@ -346,17 +347,29 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       delivered_event_ids_json TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
-    );
-  `);
+    ) STRICT;
+  `;
+
+function ensureWorkboardSchema(db: DatabaseSync): void {
+  db.exec(WORKBOARD_SCHEMA_SQL);
   ensureColumn(
     db,
     "workboard_cards",
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
   );
-  db.prepare(
-    "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
-  ).run(`schema-${SCHEMA_VERSION}`, Date.now());
+  const migrationId = `schema-${SCHEMA_VERSION}`;
+  const current = db
+    .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
+    .get(migrationId);
+  if (!current) {
+    migrateSqliteSchemaToStrict(db, WORKBOARD_SCHEMA_SQL, {
+      databaseLabel: "workboard database",
+    });
+    db.prepare(
+      "INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at) VALUES (?, ?)",
+    ).run(migrationId, Date.now());
+  }
 }
 
 function chmodIfExists(targetPath: string, mode: number): void {
@@ -459,10 +472,12 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   return {
     id,
     kind: "agent-session",
-    engine: requiredString(row, "execution_engine") as WorkboardExecution["engine"],
     mode: requiredString(row, "execution_mode") as WorkboardExecution["mode"],
     status: requiredString(row, "execution_status") as WorkboardExecution["status"],
-    model: requiredString(row, "execution_model"),
+    ...(stringValue(row, "execution_engine")
+      ? { engine: stringValue(row, "execution_engine") }
+      : {}),
+    ...(stringValue(row, "execution_model") ? { model: stringValue(row, "execution_model") } : {}),
     ...(stringValue(row, "execution_session_key")
       ? { sessionKey: stringValue(row, "execution_session_key") }
       : {}),

@@ -45,6 +45,12 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
+    default or configured LM Studio host. An existing LLM is offered through the
+    same CLI/macOS setup ladder and verified with a real completion before its
+    configuration is saved. The automatic check never downloads a model and
+    ignores embedding-only catalog entries.
+
   </Step>
 </Steps>
 

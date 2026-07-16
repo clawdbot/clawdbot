@@ -1,6 +1,7 @@
 import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cache-instances.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
 
 export const pluginLoaderCacheState = pluginLoaderCacheInstances.scoped;
 const fullWorkspacePluginLoaderCacheState = pluginLoaderCacheInstances.fullWorkspace;
@@ -69,6 +70,7 @@ export function getReusableCachedPluginRegistry(params: {
 }
 
 export function clearPluginRegistryLoadCache(): void {
+  clearPluginRuntimeArtifactResolutionMemo();
   pluginLoaderCacheState.clearCachedRegistries();
   fullWorkspacePluginLoaderCacheState.clearCachedRegistries();
 }

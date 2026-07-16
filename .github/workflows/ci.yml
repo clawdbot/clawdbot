@@ -86,7 +86,7 @@ jobs:
       contents: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -104,6 +104,7 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
+      run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -554,6 +555,13 @@ jobs:
             eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasQaSmokeAffectingChange !== "function" ||
             changedNodeTestPlan.hasQaSmokeAffectingChange(changedPaths);
+          // Prompt snapshots only change when the generator's import graph or
+          // its fixtures do; unaffected PR diffs skip the regeneration lane.
+          const changedScopeHasPromptSnapshotImpact =
+            changedPaths === null ||
+            eventName !== "pull_request" ||
+            typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
+            changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
           const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
           const runQaSmokeCi =
             runNodeFull &&
@@ -614,6 +622,7 @@ jobs:
             historical_target: historicalTarget,
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
+            run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -858,7 +867,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - &linux_node_checkout_step
@@ -920,7 +929,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -1135,7 +1144,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_native_i18n == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -1164,7 +1173,7 @@ jobs:
     name: checks-ui
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1210,7 +1219,7 @@ jobs:
     # Locale refresh runs separately on main and nightly. Keep drift visible on
     # automatic runs without blocking unrelated work; release CI stays strict.
     continue-on-error: ${{ github.event_name != 'workflow_dispatch' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - *linux_node_checkout_step
@@ -1230,7 +1239,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1395,25 +1404,38 @@ jobs:
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
     if: needs.preflight.outputs.run_qa_smoke_ci == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 4
       matrix:
         include:
-          - name: profile 1/2
+          - name: profile 1/4
             lane: profile-1
-            slug: profile-1-of-2
-          - name: profile 2/2
+            slug: profile-1-of-4
+          - name: profile 2/4
             lane: profile-2
-            slug: profile-2-of-2
+            slug: profile-2-of-4
+            docker_cache: true
+          - name: profile 3/4
+            lane: profile-3
+            slug: profile-3-of-4
+          - name: profile 4/4
+            lane: profile-4
+            slug: profile-4-of-4
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Set up Blacksmith Docker layer cache
+        if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
 
       - name: Build QA smoke runtime
         env:
@@ -1454,7 +1476,19 @@ jobs:
           const partId = process.env.PROFILE_PART ?? "";
           let runs;
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
-            runs = smokePlan.createQaSmokeCiPart(partId).runs;
+            try {
+              runs = smokePlan.createQaSmokeCiPart(partId).runs;
+            } catch (error) {
+              // Frozen/compat targets ship older planners that declare fewer
+              // profile parts; the declared parts still cover every scenario.
+              if (/unknown QA smoke CI profile part/.test(String(error)) && partId !== "profile-1") {
+                // stdout is the TSV contract consumed below. Keep diagnostics on stderr
+                // so an empty compatibility shard remains empty instead of becoming a run.
+                console.error(`[skip] ${partId} is not declared by this checkout's smoke plan`);
+                process.exit(0);
+              }
+              throw error;
+            }
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
             // Legacy planners select the entire profile and can mix long-lived
             // execution kinds. Reuse the current bounded smoke contract and
@@ -1555,7 +1589,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1593,7 +1627,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_channel_contracts_shards == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1631,7 +1665,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
       - *linux_node_checkout_step
@@ -1660,7 +1694,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -1675,6 +1709,11 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -1690,7 +1729,18 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        # Scale the in-process Vitest worker budget with the runner class. Bins
+        # run one Vitest process at a time (planConcurrency 1), so workers are
+        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Timing-sensitive groups stay pinned to 2 via plan-level env.
+        env:
+          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+        run: |
+          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -1746,7 +1796,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1875,7 +1925,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1980,6 +2030,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 6
@@ -2010,8 +2061,14 @@ jobs:
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
               # this unconditionally, and silent success would drop snapshot
-              # drift coverage.
-              run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              # drift coverage. The manifest gates the lane on the generator's
+              # import graph and fixtures; diffs outside both cannot change
+              # generated snapshots.
+              if [ "$RUN_PROMPT_SNAPSHOTS" != "true" ]; then
+                echo "[skip] changed scope cannot affect generated prompt snapshots"
+              else
+                run_check "prompt:snapshots:check" pnpm prompt:snapshots:check
+              fi
               ;;
             session-accessor-boundary)
               if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
@@ -2073,7 +2130,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -2138,7 +2195,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -2193,7 +2250,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -2339,7 +2396,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-15' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-6vcpu-macos-15' || 'macos-15') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2378,7 +2435,7 @@ jobs:
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 20
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -2417,7 +2474,9 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error --retry 3 \
+            curl --fail --location --silent --show-error \
+              --connect-timeout 10 --max-time 120 \
+              --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
               "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
@@ -2561,7 +2620,7 @@ jobs:
     name: "ios-build"
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -2622,7 +2681,9 @@ jobs:
             esac
             swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
             swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
-            curl --fail --location --silent --show-error --retry 3 \
+            curl --fail --location --silent --show-error \
+              --connect-timeout 10 --max-time 120 \
+              --retry 3 --retry-max-time 120 \
               --output "$swiftformat_archive" \
               "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
             if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
@@ -2663,7 +2724,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2714,54 +2775,18 @@ jobs:
           echo "checkout failed after 5 attempts" >&2
           exit 1
 
-      - name: Setup Java
-        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+      - name: Checkout CI Android toolchain action
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          distribution: temurin
-          # Keep sdkmanager on the stable JDK path for Linux CI runners.
-          java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            apps/android/**/*.gradle*
-            apps/android/**/gradle-wrapper.properties
-            apps/android/gradle/libs.versions.toml
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: .github/actions/setup-android-toolchain
+          persist-credentials: false
 
-      - name: Cache Android SDK
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-v1-
-
-      - name: Setup Android SDK cmdline-tools
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="14742923"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-
-          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          fi
-
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0"
+      - name: Setup Android toolchain
+        # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
+        # workflow-owned as before. Load them from the workflow revision so old targets work.
+        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android

@@ -5,13 +5,13 @@ import path from "node:path";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 /** Rendered baseline artifact for the sessions/transcripts SQLite schema. */
-export type SqliteSessionSchemaBaselineRender = {
+type SqliteSessionSchemaBaselineRender = {
   /** Normalized SQL for the session, conversation, and transcript schema objects. */
   sql: string;
 };
 
 /** Result returned after writing or checking SQLite schema baseline artifacts. */
-export type SqliteSessionSchemaBaselineWriteResult = {
+type SqliteSessionSchemaBaselineWriteResult = {
   /** True when generated artifact content differs from disk. */
   changed: boolean;
   /** True when changed artifacts were actually written. */

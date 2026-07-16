@@ -134,6 +134,9 @@ export type UserTurnTranscriptRecorder = {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    expectedSessionId?: string;
+    expectedSessionState?: SessionTranscriptTurnExpectedState;
+    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,
