@@ -13,7 +13,6 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../../config/sessions/session-accessor.js";
-import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
@@ -731,20 +730,7 @@ export async function directSessionReq<TPayload = unknown>(
   return result;
 }
 
-export function isInternalHookEvent(value: unknown): value is InternalHookEvent {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.type === "string" &&
-    typeof candidate.action === "string" &&
-    typeof candidate.sessionKey === "string" &&
-    Array.isArray(candidate.messages) &&
-    typeof candidate.context === "object" &&
-    candidate.context !== null
-  );
-}
+export { isInternalHookEvent } from "./server-sessions.internal-hook-event-test-helpers.js";
 
 export {
   bootstrapCacheMocks,

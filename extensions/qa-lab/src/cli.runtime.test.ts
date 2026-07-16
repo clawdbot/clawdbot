@@ -751,7 +751,6 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
-      evidenceMode: undefined,
       fastMode: undefined,
       scenarioIds: ["channel-chat-baseline"],
     });

@@ -3678,7 +3678,7 @@ export async function runReplyAgent(replyParams: {
       const { dispatchToolDelegates, loadContinuationChainState } =
         await import("../continuation/lazy.runtime.js");
       const dispatchChainState = loadContinuationChainState(activeSessionEntry, turnTokens);
-      const continuationRuntimeConfig = resolveLiveContinuationRuntimeConfig(cfg);
+      const liveContinuationRuntimeConfig = resolveLiveContinuationRuntimeConfig(cfg);
       toolDelegateDispatchResult = await dispatchToolDelegates({
         sessionKey,
         chainState: dispatchChainState,
@@ -3689,8 +3689,8 @@ export async function runReplyAgent(replyParams: {
           agentTo: followupRun.originatingTo ?? undefined,
           agentThreadId: followupRun.originatingThreadId ?? undefined,
         },
-        maxChainLength: continuationRuntimeConfig.maxChainLength,
-        config: continuationRuntimeConfig,
+        maxChainLength: liveContinuationRuntimeConfig.maxChainLength,
+        config: liveContinuationRuntimeConfig,
         reservedDelegateSlots:
           effectiveContinuationSignal?.kind === "delegate" &&
           (effectiveContinuationSignal.delayMs ?? 0) <= 0

@@ -620,27 +620,41 @@ export function consumeStagedPostCompactionDelegates(
   options?: { claimFor?: "release" | "next-seam-persist" },
 ): SessionPostCompactionDelegate[] {
   const now = Date.now();
-  return claimStagedPostCompactionTaskFlowDelegates(sessionKey, options).map((claimed) => {
+  const consumedDelegates: SessionPostCompactionDelegate[] = [];
+  for (const claimed of claimStagedPostCompactionTaskFlowDelegates(sessionKey, options)) {
     const firstArmedAt = claimed.firstArmedAt ?? now;
-    return {
+    const delegate: SessionPostCompactionDelegate = {
       task: claimed.task,
       createdAt: firstArmedAt,
       firstArmedAt,
       silent: true,
       silentWake: true,
-      ...(claimed.targetSessionKey ? { targetSessionKey: claimed.targetSessionKey } : {}),
-      ...(claimed.targetSessionKeys ? { targetSessionKeys: claimed.targetSessionKeys } : {}),
-      ...(claimed.fanoutMode ? { fanoutMode: claimed.fanoutMode } : {}),
-      ...(claimed.traceparent
-        ? { traceparent: claimed.traceparent, traceparentProvenance: "internal" as const }
-        : {}),
-      ...(claimed.model ? { model: claimed.model } : {}),
-      ...(claimed.flowId ? { flowId: claimed.flowId } : {}),
-      ...(claimed.expectedRevision !== undefined
-        ? { expectedRevision: claimed.expectedRevision }
-        : {}),
     };
-  });
+    if (claimed.targetSessionKey) {
+      delegate.targetSessionKey = claimed.targetSessionKey;
+    }
+    if (claimed.targetSessionKeys) {
+      delegate.targetSessionKeys = claimed.targetSessionKeys;
+    }
+    if (claimed.fanoutMode) {
+      delegate.fanoutMode = claimed.fanoutMode;
+    }
+    if (claimed.traceparent) {
+      delegate.traceparent = claimed.traceparent;
+      delegate.traceparentProvenance = "internal";
+    }
+    if (claimed.model) {
+      delegate.model = claimed.model;
+    }
+    if (claimed.flowId) {
+      delegate.flowId = claimed.flowId;
+    }
+    if (claimed.expectedRevision !== undefined) {
+      delegate.expectedRevision = claimed.expectedRevision;
+    }
+    consumedDelegates.push(delegate);
+  }
+  return consumedDelegates;
 }
 
 export function requeueReleasedPostCompactionDelegate(

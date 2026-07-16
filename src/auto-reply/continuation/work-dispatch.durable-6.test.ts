@@ -531,10 +531,12 @@ function claimMaturedWork(sessionKey: string) {
   return work;
 }
 const splitLintUse = [
+  fs,
   os,
   path,
   resolveReplyRunIdle,
   resolveCommandLaneIdle,
+  waitForMockWaiter,
   waitForTurnGrantCount,
   STALE_UNENDED_SUBAGENT_RUN_MS,
   deleteSubagentSessionForCleanup,
@@ -549,10 +551,12 @@ const splitLintUse = [
   computeBusySkipBackoffMs,
   partitionSupersededWork,
   recoverPendingContinuationWork,
-  scheduleContinuationWorkBatch,
   hasLiveOrRecentlyDispatchedContinuationWork,
+  markPendingWorkDelivered,
+  markPendingWorkFoldDelivered,
+  requeuePendingWork,
   addSubagentRun,
-  flushTimers,
+  claimMaturedWork,
 ];
 void splitLintUse;
 
@@ -613,316 +617,379 @@ describe("durable continuation_work dispatch", () => {
     vi.useRealTimers();
   });
 
-  it("returns the committed revision without mutating delivered-work input", () => {
-    const work = claimMaturedWork("agent:main:immutable-delivered");
-    const input = structuredClone(work);
-
-    const result = markPendingWorkDelivered(work);
-
-    expect(result).toEqual({
-      applied: true,
-      work: {
-        ...input,
-        expectedRevision: (input.expectedRevision ?? 0) + 1,
-        deliveredAt: Date.now(),
-        disposition: "granted",
-        succeeded: { point: "optimal", durability: "durable" },
-      },
+  it("enqueues warning events only for non-retryable skips", async () => {
+    const sessionKey = "agent:main:missing";
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "missing session",
     });
-    expect(work).toEqual(input);
-    expect(mockFlows.get(work.flowId ?? "")).toMatchObject({
-      revision: (input.expectedRevision ?? 0) + 1,
-      stateJson: {
-        deliveredAt: Date.now(),
-        disposition: "granted",
-        succeeded: { point: "optimal", durability: "durable" },
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 1, reaped: 0 });
+    expect(systemEvents).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("was not granted") }),
+    ]);
+  });
+
+  it("delivers a distinct wake for every continue_work election scheduled in one turn (#982)", async () => {
+    // Regression for #982: N continue_work() calls in one model turn must each
+    // deliver their own wake at their own offset. The single-variable capture
+    // dropped all but the last; the batch helper fans out all N, and the
+    // wake-timer re-arms for the soonest pending after each fire.
+    const sessionKey = "agent:main:multi-fanout";
+    mockSessionStore[sessionKey] = { sessionKey };
+
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-multi",
       },
+      requests: [
+        { reason: "work-A", delaySeconds: 1 },
+        { reason: "work-B", delaySeconds: 2 },
+        { reason: "work-C", delaySeconds: 3 },
+      ],
+      config,
+      parentRunId: "run-multi",
+    });
+
+    expect(batch).toMatchObject({ scheduledCount: 3, cappedCount: 0, capped: false });
+    expect(turnGrants).toHaveLength(0);
+
+    // Advance one offset at a time. Each fire delivers exactly one wake and
+    // re-arms for the next pending dueAt — proving distinct delivery, not the
+    // single collapsed wake of the regression. `advanceTimersByTimeAsync` only
+    // runs timers due within the window (unlike `flushTimers`, which drains the
+    // re-armed future timers too).
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(1);
+    expect(turnGrants[0]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-A") }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(2);
+    expect(turnGrants[1]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-B") }),
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(3);
+    expect(turnGrants[2]).toMatchObject({
+      context: expect.objectContaining({ Body: expect.stringContaining("work-C") }),
     });
   });
 
-  it("returns the committed revision without mutating fold-delivered input", () => {
-    const work = claimMaturedWork("agent:main:immutable-fold-delivered");
-    const input = structuredClone(work);
+  it("bounds the observed 3x same-turn continue_work delays as three scheduled terminal wakes (#1147)", async () => {
+    const sessionKey = "agent:main:three-continue-work";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const threeWorkConfig = { ...config, maxDelayMs: 65_000 } satisfies ContinuationRuntimeConfig;
 
-    const result = markPendingWorkFoldDelivered(work, {
-      foldedAt: Date.now(),
-      overdueByMs: 250,
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-three-work",
+      },
+      requests: [
+        { reason: "1 of 3 - did this fire for you", delaySeconds: 55 },
+        { reason: "2 of 3 - did this turn compress with the next", delaySeconds: 60 },
+        { reason: "3 of 3 - or this one?", delaySeconds: 61 },
+      ],
+      config: threeWorkConfig,
     });
 
-    expect(result).toEqual({
-      applied: true,
-      work: {
-        ...input,
-        expectedRevision: (input.expectedRevision ?? 0) + 1,
-        disposition: "folded-active",
-        foldedAt: Date.now(),
-        overdueByMs: 250,
-        busySkipCount: 0,
-        succeeded: { point: "optimal", durability: "durable" },
-      },
-    });
-    expect(work).toEqual(input);
-    expect(mockFlows.get(work.flowId ?? "")).toMatchObject({
-      revision: (input.expectedRevision ?? 0) + 1,
-      stateJson: {
-        disposition: "folded-active",
-        foldedAt: Date.now(),
-        overdueByMs: 250,
-        busySkipCount: 0,
-        succeeded: { point: "optimal", durability: "durable" },
-      },
-    });
+    expect(batch).toMatchObject({ scheduledCount: 3, cappedCount: 0, capped: false });
+    expect(turnGrants).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(55_000);
+    expect(turnGrants).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(turnGrants).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(turnGrants).toHaveLength(3);
+
+    expect(
+      turnGrants.map((grant) => (grant as { context: { Body: string } }).context.Body),
+    ).toEqual([
+      expect.stringContaining("1 of 3 - did this fire for you"),
+      expect.stringContaining("2 of 3 - did this turn compress with the next"),
+      expect.stringContaining("3 of 3 - or this one?"),
+    ]);
+    expect([...mockFlows.values()].map((flow) => flow.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(
+      [...mockFlows.values()].map(
+        (flow) =>
+          (
+            flow.stateJson as {
+              busySkipCount?: number;
+              parentRunId?: string;
+              turnGrantedAt?: number;
+            }
+          ).busySkipCount,
+      ),
+    ).toEqual([0, 0, 0]);
+    expect(
+      [...mockFlows.values()].map(
+        (flow) => (flow.stateJson as { parentRunId?: string }).parentRunId,
+      ),
+    ).toEqual([undefined, undefined, undefined]);
   });
 
-  it.each([
-    {
-      name: "delivered",
-      apply: (work: ReturnType<typeof claimMaturedWork>) => markPendingWorkDelivered(work),
-    },
-    {
-      name: "fold-delivered",
-      apply: (work: ReturnType<typeof claimMaturedWork>) =>
-        markPendingWorkFoldDelivered(work, { foldedAt: Date.now(), overdueByMs: 250 }),
-    },
-  ])("returns the original $name work on a CAS conflict", ({ apply }) => {
-    const work = claimMaturedWork("agent:main:immutable-cas-conflict");
-    const input = structuredClone(work);
-    const flow = mockFlows.get(work.flowId ?? "");
-    if (!flow) {
-      throw new Error("expected claimed continuation work flow");
-    }
-    const stateBeforeConflict = structuredClone(flow.stateJson);
-    flow.revision += 1;
-
-    const result = apply(work);
-
-    expect(result).toEqual({ applied: false, work });
-    expect(work).toEqual(input);
-    expect(flow.stateJson).toEqual(stateBeforeConflict);
-  });
-
-  it("keeps one reply-run registry identity across election, idle retry, and execution", async () => {
-    const sessionKey = "agent:main:registry-singleton";
+  it("parks a 3x same-turn continue_work burst while requests are in flight without a tight wake loop (#1147)", async () => {
+    const sessionKey = "agent:main:three-continue-work-busy";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);
-    const immediateConfig = {
-      ...config,
-      defaultDelayMs: 0,
-      minDelayMs: 0,
-    } satisfies ContinuationRuntimeConfig;
+    const threeWorkConfig = { ...config, maxDelayMs: 65_000 } satisfies ContinuationRuntimeConfig;
+
+    await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-three-work-busy",
+      },
+      requests: [
+        { reason: "1 of 3 - busy", delaySeconds: 55 },
+        { reason: "2 of 3 - busy", delaySeconds: 60 },
+        { reason: "3 of 3 - busy", delaySeconds: 61 },
+      ],
+      config: threeWorkConfig,
+    });
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await flushAsyncWork();
+
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(
+      [...mockFlows.values()].map((flow) => ({
+        status: flow.status,
+        busySkipCount: (flow.stateJson as { busySkipCount?: number }).busySkipCount,
+        anchorPending: (flow.stateJson as { anchorPending?: boolean }).anchorPending,
+        idleRetry: (flow.stateJson as { idleRetry?: unknown }).idleRetry,
+      })),
+    ).toEqual([
+      {
+        status: "queued",
+        busySkipCount: undefined,
+        anchorPending: true,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+      {
+        status: "queued",
+        busySkipCount: undefined,
+        anchorPending: true,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+      {
+        status: "queued",
+        busySkipCount: undefined,
+        anchorPending: true,
+        idleRetry: expect.objectContaining({ trigger: "reply-run-ended" }),
+      },
+    ]);
+
+    activeSessions.delete(sessionKey);
+    const recovered = await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+
+    expect(recovered).toEqual({ dispatched: 3, failed: 0, reaped: 0 });
+    expect(turnGrants).toHaveLength(3);
+    expect([...mockFlows.values()].map((flow) => flow.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+  });
+
+  it("does not let a delayed batch election postpone an already-due zero-delay wake", async () => {
+    const sessionKey = "agent:main:zero-delay-batch";
+    mockSessionStore[sessionKey] = { sessionKey };
+
+    await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-zero-delay",
+      },
+      requests: [
+        { reason: "immediate batch work", delaySeconds: 0 },
+        { reason: "delayed batch work", delaySeconds: 5 },
+      ],
+      config,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await flushAsyncWork();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("immediate batch work") }),
+      }),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    await flushAsyncWork();
+    expect(turnGrants).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAsyncWork();
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("immediate batch work") }),
+      }),
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("delayed batch work") }),
+      }),
+    ]);
+  });
+
+  it("schedules the valid elections and caps the overflow without dropping the earlier ones", async () => {
+    // Partial-success is load-bearing: when the cumulative chain cap rejects a
+    // later election, the earlier valid ones must still schedule and deliver.
+    const sessionKey = "agent:main:partial-cap";
+    mockSessionStore[sessionKey] = { sessionKey };
+    const cappedConfig = { ...config, maxChainLength: 2 } satisfies ContinuationRuntimeConfig;
+
+    const batch = await scheduleContinuationWorkBatch({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+        chainId: "chain-partial",
+      },
+      requests: [
+        { reason: "fit-1", delaySeconds: 1 },
+        { reason: "fit-2", delaySeconds: 1 },
+        { reason: "over-cap", delaySeconds: 1 },
+      ],
+      config: cappedConfig,
+      parentRunId: "run-partial",
+    });
+
+    expect(batch).toMatchObject({ scheduledCount: 2, cappedCount: 1, capped: true });
+    expect(batch.chainState.currentChainCount).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTimers();
+
+    const deliveredReasons = turnGrants.map(
+      (grant) => (grant as { context: { Body: string } }).context.Body,
+    );
+    expect(deliveredReasons).toHaveLength(2);
+    expect(deliveredReasons.some((body) => body.includes("fit-1"))).toBe(true);
+    expect(deliveredReasons.some((body) => body.includes("fit-2"))).toBe(true);
+    expect(deliveredReasons.some((body) => body.includes("over-cap"))).toBe(false);
+  });
+
+  it("does not let a hedge reclaim freshly running continuation work", async () => {
+    const sessionKey = "agent:main:fresh-running";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "fresh running",
+    });
+    const runningFlow = [...mockFlows.values()][0];
+    if (!runningFlow) {
+      throw new Error("expected mock flow");
+    }
+    runningFlow.status = "running";
+    runningFlow.updatedAt = Date.now();
 
     await scheduleContinuationWork({
       sessionKey,
       chainState: {
         currentChainCount: 0,
         chainStartedAt: Date.now(),
-        accumulatedChainTokens: 0,
+        accumulatedChainTokens: 1,
       },
-      request: { delaySeconds: 0, reason: "singleton registry proof" },
-      config: immediateConfig,
-    });
-    await waitForMockWaiter(replyIdleWaiters, sessionKey);
-    expect(replyRegistryReceivers.size).toBe(1);
-
-    // Drive the persisted idle-retry row directly after the active run ends.
-    // This keeps the identity proof deterministic even when the execution
-    // owner's first dynamic provider/session imports are cold on CI.
-    activeSessions.delete(sessionKey);
-    const result = await dispatchPendingContinuationWork({
-      sessionKey,
-      includeIdleRetry: true,
+      request: { delaySeconds: 0, reason: "new queued" },
+      config: { ...config, defaultDelayMs: 0, minDelayMs: 0 },
     });
 
-    expect(replyRegistryReceivers.size).toBe(1);
-    expect(result).toEqual({ dispatched: 1, failed: 0, reaped: 0 });
-    expect(turnGrants).toHaveLength(1);
-  });
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
 
-  it("keeps registry memoization singular and timer/controller state lifecycle-owned", () => {
-    const canonicalSource = fs.readFileSync(new URL("./work-dispatch.ts", import.meta.url), "utf8");
-    const executionUrl = new URL("./work-dispatch-execution.ts", import.meta.url);
-    const executionSource = fs.existsSync(executionUrl)
-      ? fs.readFileSync(executionUrl, "utf8")
-      : "";
-    const combinedSource = `${canonicalSource}\n${executionSource}`;
-
-    expect(combinedSource.match(/let replyRunRegistryModulePromise/g)).toHaveLength(1);
-    expect(
-      combinedSource.match(
-        /replyRunRegistryModulePromise \?\?= import\("\.\.\/reply\/reply-run-registry\.js"\)/g,
-      ),
-    ).toHaveLength(1);
-    expect(canonicalSource).toMatch(/const workTimers = new Map/);
-    expect(canonicalSource).toMatch(/const idleRetryFailureTimers = new Map/);
-    expect(canonicalSource).toMatch(/const idleRetryControllers = new Map/);
-    expect(executionSource).not.toMatch(
-      /const (?:workTimers|idleRetryFailureTimers|idleRetryControllers) =/,
-    );
-    expect(executionSource).not.toMatch(/from "\.\/work-dispatch\.js"/);
-    expect(executionSource).not.toMatch(
-      /\b(?:armWorkTimer|armNextWorkTimer|armIdleRetryFailureTimer|registerIdleRetry)\s*\(/,
-    );
-    expect(canonicalSource).not.toMatch(
-      /\b(?:markPendingWorkDelivered|markPendingWorkFoldDelivered|markPendingWorkTurnGranted|markPendingWorkFolded|markPendingWorkFailed|markPendingWorkReaped)\s*\(/,
-    );
-    expect(executionSource).toMatch(/export type ContinuationWorkExecutionDirective = Readonly</);
-    expect(canonicalSource).toMatch(/applyExecutionDirective\(directive\)/);
-  });
-
-  it("commits provider delivery before finishing the claimed row", async () => {
-    const sessionKey = "agent:main:provider-finish-order";
-    mockSessionStore[sessionKey] = { sessionKey };
-    enqueuePendingWork({
-      sessionKey,
-      hop: 1,
-      delayMs: 0,
-      electedAt: Date.now(),
-      dueAt: Date.now(),
-      maxChainLength: 8,
-      reason: "provider finish ordering",
-    });
-
-    await dispatchPendingContinuationWork({ sessionKey });
-
-    expect(workTransitionEvents).toEqual([
-      "provider-called",
-      "delivered-mark-committed",
-      "flow-finished:Same-session continuation turn granted",
-    ]);
-  });
-
-  it("commits an active-turn transcript and fold delivery before finishing the row", async () => {
-    const sessionKey = "agent:main:fold-finish-order";
-    mockSessionStore[sessionKey] = { sessionKey };
-    activeSessions.add(sessionKey);
-    enqueuePendingWork({
-      sessionKey,
-      hop: 1,
-      delayMs: 0,
-      electedAt: Date.now() - 1,
-      anchorFinalizedAt: Date.now() - 1,
-      dueAt: Date.now(),
-      maxChainLength: 8,
-      reason: "fold finish ordering",
-    });
-
-    await dispatchPendingContinuationWork({ sessionKey });
-
-    expect(workTransitionEvents).toEqual([
-      "fold-transcript-committed",
-      "fold-delivered-mark-committed",
-      "flow-finished:folded-into-active-turn: matured while a later turn was active",
-    ]);
-  });
-
-  it("reset aborts lifecycle-owned idle waiters and clears every dispatch timer", async () => {
-    const replySessionKey = "agent:main:reset-reply-idle";
-    const laneSessionKey = "agent:main:reset-lane-idle";
-    mockSessionStore[replySessionKey] = { sessionKey: replySessionKey };
-    mockSessionStore[laneSessionKey] = { sessionKey: laneSessionKey };
-    activeSessions.add(replySessionKey);
-    mainQueueSize = 1;
-    for (const sessionKey of [replySessionKey, laneSessionKey]) {
-      enqueuePendingWork({
-        sessionKey,
-        hop: 1,
-        delayMs: 0,
-        electedAt: Date.now(),
-        dueAt: Date.now(),
-        maxChainLength: 8,
-        reason: "reset cleanup proof",
-      });
-      await dispatchPendingContinuationWork({ sessionKey });
-    }
-    await waitForMockWaiter(replyIdleWaiters, replySessionKey);
-    await waitForMockWaiter(laneIdleWaiters, "main");
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-
-    resetContinuationWorkDispatchForTests();
-    await flushAsyncWork();
-
-    expect(replyIdleWaiters.has(replySessionKey)).toBe(false);
-    expect(laneIdleWaiters.has("main")).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("requeues without mutating its claimed work input and clears retry-only state", () => {
-    const sessionKey = "agent:main:immutable-requeue";
-    const enqueued = enqueuePendingWork({
-      sessionKey,
-      hop: 1,
-      delayMs: 0,
-      electedAt: Date.now(),
-      dueAt: Date.now(),
-      recoveryDueAt: Date.now(),
-      maxChainLength: 8,
-      idleRetry: {
-        trigger: "reply-run-ended",
-        reasonCategory: "wait-shaped",
-        armedAt: Date.now(),
-      },
-    });
-    if (!enqueued) {
-      throw new Error("expected continuation work enqueue");
-    }
-    const [work] = consumePendingWork(sessionKey, { includeIdleRetry: true });
-    if (!work) {
-      throw new Error("expected continuation work claim");
-    }
-    const input = structuredClone(work);
-    const nextDueAt = Date.now() + 5_000;
-
-    expect(
-      requeuePendingWork(work, {
-        dueAt: nextDueAt,
-        summary: "immutable requeue characterization",
-        busySkipCount: 2,
+    expect(runningFlow.status).toBe("running");
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({ Body: expect.stringContaining("new queued") }),
       }),
-    ).toBe(true);
-
-    expect(work).toEqual(input);
-    const flow = mockFlows.get(work.flowId ?? "");
-    expect(flow).toMatchObject({
-      status: "queued",
-      revision: (input.expectedRevision ?? 0) + 1,
-      stateJson: { dueAt: nextDueAt, busySkipCount: 2 },
-    });
-    expect(flow?.stateJson).not.toMatchObject({ idleRetry: expect.anything() });
-    expect(flow?.stateJson).not.toMatchObject({ recoveryDueAt: expect.anything() });
+    ]);
   });
 
-  it("honors hot-disabled continuation before consuming or driving queued work (#1144)", async () => {
-    const sessionKey = "agent:main:disabled-gate";
+  it("never supersedes a recovered running wake folded against a newer queued election (#988-P2-1)", async () => {
+    // End-to-end proof that the PRE-claim status is carried through
+    // consumePendingWork into partitionSupersededWork: a stale, recovered
+    // `running` wake co-drained with a newer `queued` election must DRIVE, not
+    // be finished-as-superseded. Without the carry-status guard the running
+    // wake (stale, not newest) would be folded and only the queued one would run.
+    const sessionKey = "agent:main:recovered-running-fold";
     mockSessionStore[sessionKey] = { sessionKey };
+    const now = Date.now();
+
     enqueuePendingWork({
       sessionKey,
       hop: 1,
       delayMs: 1_000,
-      electedAt: Date.now(),
-      dueAt: Date.now() + 1_000,
+      electedAt: now - 500_000,
+      dueAt: now - 500_000, // matured and stale (overdue >> 120s grace)
       maxChainLength: 8,
-      reason: "disabled gate",
+      reason: "recovered running",
     });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const runningFlow = [...mockFlows.values()][0];
+    if (!runningFlow) {
+      throw new Error("expected running mock flow");
+    }
+    runningFlow.status = "running";
+    runningFlow.updatedAt = now - 200_000; // older than the 60s recovery staleness window
 
-    // Operator hot-disables continuation after the wake was armed.
-    continuationEnabledForTest = false;
-    const result = await dispatchPendingContinuationWork({ sessionKey });
-    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
-    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-
-    // The queued row was not consumed/mutated, and the disabled callback left a
-    // recheck timer so hot re-enable recovers it without waiting for startup or
-    // unrelated traffic.
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
-    continuationEnabledForTest = true;
-    await dispatchPendingContinuationWork({
+    enqueuePendingWork({
       sessionKey,
-      includeIdleRetry: true,
+      hop: 2,
+      delayMs: 1_000,
+      electedAt: now - 1_000, // newest election
+      dueAt: now - 1_000, // matured
+      maxChainLength: 8,
+      reason: "newest queued",
     });
-    await vi.waitFor(() => {
-      expect(turnGrants).toHaveLength(1);
+
+    const result = await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: now - 60_000,
     });
+
+    expect(result).toEqual({ dispatched: 2, failed: 0, reaped: 0 });
+    const bodies = turnGrants.map((grant) => (grant as { context: { Body: string } }).context.Body);
+    expect(bodies.some((body) => body.includes("recovered running"))).toBe(true);
+    expect(bodies.some((body) => body.includes("newest queued"))).toBe(true);
+    expect(systemEvents.some((event) => (event as { text: string }).text.includes("folded"))).toBe(
+      false,
+    );
   });
 });

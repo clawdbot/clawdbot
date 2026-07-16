@@ -285,7 +285,7 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
 
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
-const splitLintUse = [expectDefined, validTraceparent];
+const splitLintUse = [validTraceparent];
 void splitLintUse;
 
 describe("subagent-announce continuation drain (F7)", () => {
@@ -360,30 +360,161 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("drains the child session's continue_delegate queue using inherited chain state", async () => {
+  it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails (#1144)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-fail": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 10_000,
+        outputTokens: 20_000,
+      },
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // The child chain-cost persist throws, so the run-cost fallback lives only in
+    // memory for this drain and cannot survive a restart.
+    updateSessionEntryMock.mockRejectedValue(new Error("session store write failed"));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-fail",
+      childRunId: "run-bracket-fail",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    // Fail closed: a durable delayed delegate would recover from the stale child
+    // entry and under-enforce the cost cap, so the hop is spawned immediately via
+    // the in-process path (correct live folded cost basis) and NOT enqueued
+    // durably where restart recovery could re-drive it on stale cost.
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a bracket delegate when the parent chain-cost persist fails and the folded basis exceeds the cap (#1144)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-guard": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 150_000,
+        outputTokens: 100_000,
+      },
+      // Parent chain cost is UNDER the cap without the run fold, OVER with it.
+      "agent:main:main": {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        continuationChainTokens: 300_000,
+      },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // Parent-entry persist throws, so the guard's requester basis stays stale.
+    updateSessionEntryMock.mockRejectedValue(new Error("session store write failed"));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-guard",
+      childRunId: "run-bracket-guard",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    // Parent persist failed → the guard folds the run cost: 300_000 + (150_000 +
+    // 100_000) = 550_000 > costCapTokens (500_000) → rejected. The bracket must
+    // NOT spawn (immediate) or enqueue (durable) on the stale pre-run basis.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
+      requireWriteSuccess: true,
+    });
+  });
+
+  it("treats a no-op parent token persist as failed and folds the run cost (#1158)", async () => {
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:bracket-parent-missing": {
+        sessionId: "session-child",
+        updatedAt: Date.now(),
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 1_000,
+        inputTokens: 150_000,
+        outputTokens: 100_000,
+      },
+      "agent:main:main": {
+        sessionId: "session-main",
+        updatedAt: Date.now(),
+        continuationChainTokens: 300_000,
+      },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    // The requester entry is readable for budget checks, but the write mutator
+    // touches no entry (legacy/normalized-key mismatch shape). It returns
+    // normally, so production must detect "no row mutated" and fold the run cost.
+    updateSessionEntryMock.mockResolvedValueOnce(null);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-parent-missing",
+      childRunId: "run-bracket-parent-missing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+    });
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(enqueuePendingDelegateMock).not.toHaveBeenCalled();
+    expect(updateSessionEntryMock.mock.calls[0]?.[2]).toMatchObject({
+      requireWriteSuccess: true,
+    });
+  });
+
+  // The in-function tool-delegate chain-hop (sibling to the chainSignal hop that
+  // already propagates model) must forward an explicit continue_delegate model
+  // override to the grandchild spawn so a tool-delegated hop honors the requested
+  // provider/model instead of silently inheriting the parent's.
+  it("propagates a tool-delegate model override into the in-function chain-hop spawn", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
-          "agent:main:subagent:test": {
-            sessionId: "session-child",
-            updatedAt: Date.now(),
-            continuationChainCount: 1,
-            continuationChainStartedAt: 1_700_000_000_000,
-            continuationChainTokens: 5_000,
-          },
-          "agent:main:main": {
-            sessionId: "session-main",
-            updatedAt: Date.now(),
-          },
+          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
         }) as Record<string, unknown>,
     );
+    consumePendingDelegatesMock.mockReturnValue([
+      { task: "investigate the failing shard", model: "github-copilot/claude-sonnet-4.6" },
+    ]);
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-chain-hop",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "chain hop task",
+      task: "[continuation:chain-hop:1] Tool-delegated from sub-agent (depth 1): prior hop",
       timeoutMs: 100,
       cleanup: "delete",
       waitForCompletion: false,
@@ -393,35 +524,23 @@ describe("subagent-announce continuation drain (F7)", () => {
       roundOneReply: "done",
     });
 
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      sessionKey?: string;
-      chainState?: {
-        currentChainCount?: number;
-        chainStartedAt?: number;
-        accumulatedChainTokens?: number;
-      };
-      ctx?: { sessionKey?: string };
-      maxChainLength?: number;
-    };
+    // The chain-hop spawn is fire-and-forget inside the drain loop; flush the
+    // microtask/timer queue so the spawn lands before asserting.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
-    // Dispatch targets the CHILD session's queue so delegates the subagent
-    // enqueued via continue_delegate during its turn are consumed.
-    expect(call?.sessionKey).toBe("agent:main:subagent:test");
-    expect(call?.ctx?.sessionKey).toBe("agent:main:subagent:test");
-
-    // Chain state must be inherited from the child session entry — NOT
-    // hardcoded zero. Hop labels depend on this to stay sequential.
-    expect(call?.chainState?.currentChainCount).toBe(1);
-    expect(call?.chainState?.chainStartedAt).toBe(1_700_000_000_000);
-    expect(call?.chainState?.accumulatedChainTokens).toBe(5_000);
-    expect(call?.maxChainLength).toBe(10);
+    expect(consumePendingDelegatesMock).toHaveBeenCalledWith("agent:main:subagent:test");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const [spawnParams] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");
+    expect(spawnParams.task).toEqual(
+      expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
+    );
+    expect(spawnParams.drainsContinuationDelegateQueue).toBe(true);
+    expect(spawnParams.model).toBe("github-copilot/claude-sonnet-4.6");
   });
 
-  it("threads a silent/wake parent's inherited policy into the early child drain (#1158)", async () => {
-    // Finding r3517437268: this early drain runs BEFORE the later parentWasSilent
-    // chain-hop guards. It must pass the parent's silent/wake policy so a
-    // default-mode delegate the child queued stays internal instead of announcing.
+  it("omits model from the in-function chain-hop spawn when the tool delegate has none", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
@@ -429,13 +548,14 @@ describe("subagent-announce continuation drain (F7)", () => {
           "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
         }) as Record<string, unknown>,
     );
+    consumePendingDelegatesMock.mockReturnValue([{ task: "inherit the parent model" }]);
 
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-silent-parent",
+      childRunId: "run-chain-hop",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "silent chain hop",
+      task: "[continuation:chain-hop:1] Tool-delegated from sub-agent (depth 1): prior hop",
       timeoutMs: 100,
       cleanup: "delete",
       waitForCompletion: false,
@@ -443,460 +563,129 @@ describe("subagent-announce continuation drain (F7)", () => {
       endedAt: 20,
       outcome: { status: "ok" },
       roundOneReply: "done",
-      silentAnnounce: true,
-      wakeOnReturn: true,
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      inheritedSilent?: boolean;
-      inheritedWake?: boolean;
-    };
-    expect(call?.inheritedSilent).toBe(true);
-    expect(call?.inheritedWake).toBe(true);
-  });
-
-  it("does not set inherited silent/wake for a normal (visible) parent (#1158)", async () => {
-    loadSessionStoreMock.mockImplementation(
-      () =>
-        ({
-          "agent:main:subagent:test": { sessionId: "session-child", updatedAt: Date.now() },
-          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-        }) as Record<string, unknown>,
-    );
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-visible-parent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "visible chain hop",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      inheritedSilent?: boolean;
-      inheritedWake?: boolean;
-    };
-    expect(call?.inheritedSilent).toBeFalsy();
-    expect(call?.inheritedWake).toBeFalsy();
-  });
-
-  it("passes loadFresh/persist callbacks so a hedge-fired delayed delegate advances chain state durably (#1158)", async () => {
-    // Finding r3517500714: the drain arms the shared hedge for delayed delegates.
-    // The hedge-fired dispatch has no enclosing runner frame, so the drain must
-    // supply loadFreshChainState + persistChainState — otherwise multiple delayed
-    // delegates hedge-fire against the stale pre-spawn count and bypass maxChainLength.
-    loadSessionStoreMock.mockImplementation(
-      () =>
-        ({
-          "agent:main:subagent:test": {
-            sessionId: "session-child",
-            updatedAt: Date.now(),
-            continuationChainCount: 2,
-            continuationChainStartedAt: 1_700_000_000_000,
-            continuationChainTokens: 4_000,
-          },
-          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-        }) as Record<string, unknown>,
-    );
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-hedge-callbacks",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "delayed chain hop",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      loadFreshChainState?: () => unknown;
-      persistChainState?: (state: unknown) => unknown;
-    };
-    expect(typeof call?.loadFreshChainState).toBe("function");
-    expect(typeof call?.persistChainState).toBe("function");
-    // The fresh loader reads the child entry's persisted chain basis.
-    expect(call?.loadFreshChainState?.()).toMatchObject({
-      currentChainCount: 2,
-      accumulatedChainTokens: 4_000,
-    });
-    updateSessionEntryMock.mockRejectedValueOnce(new Error("session store write failed"));
-    await expect(
-      call?.persistChainState?.({
-        currentChainCount: 3,
-        chainStartedAt: 1_700_000_000_000,
-        accumulatedChainTokens: 4_500,
-      }),
-    ).rejects.toThrow("not durably persisted");
-  });
-
-  it("preserves post-bracket chain override for hedge-fired delayed tool drains (#1159)", async () => {
-    const childEntry = {
-      sessionId: "session-child",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1_700_000_000_000,
-      continuationChainTokens: 7_000,
-      continuationChainId: "chain-post-bracket",
-    };
-    const store: Record<string, Record<string, unknown>> = {
-      "agent:main:subagent:delayed-tool": childEntry,
-      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-    };
-    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:delayed-tool",
-      childRunId: "run-delayed-tool",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done\n[[CONTINUE_DELEGATE: bracket delegate]]",
     });
 
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
     });
 
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      chainState?: {
-        currentChainCount?: number;
-        accumulatedChainTokens?: number;
-        chainId?: string;
-      };
-      loadFreshChainState?: () => {
-        currentChainCount: number;
-        accumulatedChainTokens: number;
-        chainId?: string;
-      };
-    };
-    expect(call?.chainState).toMatchObject({
-      currentChainCount: 2,
-      accumulatedChainTokens: 7_000,
-      chainId: "chain-post-bracket",
-    });
-    expect(call?.loadFreshChainState?.()).toMatchObject({
-      currentChainCount: 2,
-      accumulatedChainTokens: 7_000,
-      chainId: "chain-post-bracket",
-    });
-    expect(childEntry).toMatchObject({
-      continuationChainCount: 2,
-      continuationChainTokens: 7_000,
-      continuationChainId: "chain-post-bracket",
-    });
-  });
-
-  it("force-dispatches delayed child drains when the post-bracket override cannot be persisted (#1159)", async () => {
-    const childEntry = {
-      sessionId: "session-child",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1_700_000_000_000,
-      continuationChainTokens: 7_000,
-    };
-    const store: Record<string, Record<string, unknown>> = {
-      "agent:main:subagent:override-persist-fail": childEntry,
-      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-    };
-    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-    updateSessionEntryMock.mockRejectedValueOnce(new Error("session store write failed"));
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:override-persist-fail",
-      childRunId: "run-override-persist-fail",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done\n[[CONTINUE_DELEGATE: bracket delegate]]",
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
-      dispatchQueuedRegardlessOfDelay?: boolean;
-    };
-    expect(call.chainState).toMatchObject({
-      currentChainCount: 2,
-      accumulatedChainTokens: 7_000,
-    });
-    expect(call.dispatchQueuedRegardlessOfDelay).toBe(true);
-  });
-
-  it("clears queued fold markers after a post-bracket override persists (#1159)", async () => {
-    const childEntry = {
-      sessionId: "session-child",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1_700_000_000_000,
-      continuationChainTokens: 7_000,
-    };
-    const store: Record<string, Record<string, unknown>> = {
-      "agent:main:subagent:override-persist-clear-fold": childEntry,
-      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-    };
-    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:override-persist-clear-fold",
-      childRunId: "run-override-persist-clear-fold",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done\n[[CONTINUE_DELEGATE: delayed bracket +30s]]",
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    expect(clearQueuedDelegatesChainTokensFoldMock).toHaveBeenCalledWith(
-      "agent:main:subagent:override-persist-clear-fold",
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const [spawnParams] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");
+    expect(spawnParams.task).toEqual(
+      expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
     );
+    // Backward-compat: omitted model => no key => grandchild inherits parent model.
+    expect("model" in spawnParams).toBe(false);
   });
 
-  it("defaults chain state to 0 when child session has no chain fields", async () => {
+  it("orders mixed bracket and tool delegates on distinct hops", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
-          "agent:main:subagent:leaf": {
-            sessionId: "session-leaf",
-            updatedAt: Date.now(),
-          },
-          "agent:main:main": {
-            sessionId: "session-main",
-            updatedAt: Date.now(),
-          },
-        }) as Record<string, unknown>,
-    );
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:leaf",
-      childRunId: "run-leaf",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "leaf task",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
-      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
-    };
-    expect(call?.chainState?.currentChainCount).toBe(0);
-    expect(call?.chainState?.accumulatedChainTokens).toBe(0);
-  });
-
-  it("does not dispatch when continuation is disabled", async () => {
-    mockConfig = {
-      session: { mainKey: "main", scope: "per-sender" },
-    };
-    loadSessionStoreMock.mockImplementation(
-      () =>
-        ({
-          "agent:main:subagent:test": {
+          "agent:main:subagent:mixed": {
             sessionId: "session-child",
             updatedAt: Date.now(),
             continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 7_000,
           },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
         }) as Record<string, unknown>,
     );
+    consumePendingDelegatesMock.mockReturnValue([
+      { task: "tool-row delegate", flowId: "flow-tool-mixed", expectedRevision: 2 },
+    ]);
 
     await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-disabled",
+      childSessionKey: "agent:main:subagent:mixed",
+      childRunId: "run-mixed",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "test",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
       timeoutMs: 100,
       cleanup: "delete",
       waitForCompletion: false,
       startedAt: 10,
       endedAt: 20,
       outcome: { status: "ok" },
-      roundOneReply: "done",
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: bracket delegate]]",
     });
 
-    expect(dispatchToolDelegatesMock).not.toHaveBeenCalled();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    const [bracketSpawnValue, toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(
+      ([params]) => params,
+    );
+    const bracketSpawn = expectDefined(bracketSpawnValue, "bracket spawn");
+    const toolSpawn = expectDefined(toolSpawnValue, "tool spawn");
+    expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
+    expect(bracketSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
+    expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:3]"));
+    expect(toolSpawn.continuationChainState).toMatchObject({ count: 3, tokens: 7_000 });
+    expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-mixed");
   });
 
-  it("does not fail the announce when dispatch throws", async () => {
+  it("counts a bracket delegate against max-chain before tool delegates drain", async () => {
+    resolveContinuationRuntimeConfigMock.mockImplementation((_cfg?: unknown) => ({
+      enabled: true,
+      defaultDelayMs: 15_000,
+      minDelayMs: 5_000,
+      maxDelayMs: 300_000,
+      maxChainLength: 2,
+      costCapTokens: 500_000,
+      maxDelegatesPerTurn: 5,
+      contextPressureThreshold: undefined,
+    }));
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
-          "agent:main:subagent:test": {
+          "agent:main:subagent:mixed-cap": {
             sessionId: "session-child",
             updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 7_000,
           },
-          "agent:main:main": {
-            sessionId: "session-main",
-            updatedAt: Date.now(),
-          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
         }) as Record<string, unknown>,
     );
-    dispatchToolDelegatesMock.mockRejectedValueOnce(new Error("spawn failed"));
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-dispatch-error",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "test",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-    });
-
-    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
-    // Dispatch failure must not break the announce path — it is best-effort.
-    expect(didAnnounce).toBe(true);
-  });
-
-  it("persists advanced child chain state after delegates dispatched", async () => {
-    // `drainChildContinuationQueue` must consume
-    // the `chainState` returned by `dispatchToolDelegates` (advanced past
-    // the dispatched hops) and write it back to both the in-memory child
-    // entry AND the durable session store. Without this, the next drain
-    // reloads stale counters and `maxChainLength` enforcement breaks.
-    const childEntry = {
-      sessionId: "session-child",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1_700_000_000_000,
-      continuationChainTokens: 5_000,
+    const toolDelegate = {
+      task: "tool-row delegate past cap",
+      flowId: "flow-tool-cap",
+      expectedRevision: 2,
     };
-    const store: Record<string, Record<string, unknown>> = {
-      "agent:main:subagent:test": childEntry,
-      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-    };
-    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-
-    dispatchToolDelegatesMock.mockResolvedValueOnce({
-      dispatched: 2,
-      rejected: 0,
-      chainState: {
-        currentChainCount: 3,
-        chainStartedAt: 1_700_000_000_000,
-        accumulatedChainTokens: 12_500,
-      },
-    });
+    consumePendingDelegatesMock.mockReturnValue([toolDelegate]);
 
     await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-persist",
+      childSessionKey: "agent:main:subagent:mixed-cap",
+      childRunId: "run-mixed-cap",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
-      task: "persist test",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
       timeoutMs: 100,
       cleanup: "delete",
       waitForCompletion: false,
       startedAt: 10,
       endedAt: 20,
       outcome: { status: "ok" },
-      roundOneReply: "done",
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: bracket delegate]]",
     });
 
-    // In-memory child entry must reflect the advanced chain state so any
-    // post-drain readers (e.g. a second drain on the same entry) see fresh
-    // counters rather than the pre-dispatch snapshot.
-    expect(childEntry.continuationChainCount).toBe(3);
-    expect(childEntry.continuationChainStartedAt).toBe(1_700_000_000_000);
-    expect(childEntry.continuationChainTokens).toBe(12_500);
-  });
-
-  it("skips persist when no delegates dispatched", async () => {
-    // Negative case: when `dispatched` is 0, the chain state is unchanged
-    // and we must not re-write the entry (avoid spurious `updatedAt` churn
-    // and unnecessary store I/O).
-    const childEntry = {
-      sessionId: "session-child",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1_700_000_000_000,
-      continuationChainTokens: 5_000,
-    };
-    const store: Record<string, Record<string, unknown>> = {
-      "agent:main:subagent:test": childEntry,
-      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
-    };
-    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
-
-    dispatchToolDelegatesMock.mockResolvedValueOnce({
-      dispatched: 0,
-      rejected: 0,
-      chainState: {
-        currentChainCount: 1,
-        chainStartedAt: 1_700_000_000_000,
-        accumulatedChainTokens: 5_000,
-      },
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
     });
 
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-no-dispatch",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "no dispatch test",
-      timeoutMs: 100,
-      cleanup: "delete",
-      waitForCompletion: false,
-      startedAt: 10,
-      endedAt: 20,
-      outcome: { status: "ok" },
-      roundOneReply: "done",
-    });
-
-    // Counter unchanged — no advance to persist.
-    expect(childEntry.continuationChainCount).toBe(1);
-    expect(childEntry.continuationChainTokens).toBe(5_000);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[0].task).toEqual(
+      expect.stringContaining("[continuation:chain-hop:2]"),
+    );
+    expect(markPendingDelegateFailedMock).toHaveBeenCalledWith(
+      toolDelegate,
+      "Tool delegate rejected: chain length 3 exceeds maxChainLength 2.",
+      "Delegate rejected",
+    );
   });
 });

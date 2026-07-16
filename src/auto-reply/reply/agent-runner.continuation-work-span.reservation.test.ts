@@ -363,343 +363,22 @@ async function runWorkTurn(
   });
 }
 
+const splitLintUse = [enqueuePendingWork, UUID_REGEX];
+void splitLintUse;
+
 describe("runReplyAgent :: continuation.work span", () => {
-  it("emits exactly one `continuation.work` span on accepted WORK with UUID chain.id and clamped chain.step.remaining", async () => {
+  it("preserves child-token updates committed while a work reservation is active", async () => {
     vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
-
-    const run = createContinuationRun({ sessionKey: "continuation-work-span-accept" });
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
-      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-    });
-    await runWorkTurn(
-      run,
-      { [run.sessionKey]: run.sessionEntry },
-      "Working on it\nCONTINUE_WORK:1",
-    );
-
-    const workSpans = spans.filter((s) => s.name === "continuation.work");
-    expect(workSpans).toHaveLength(1);
-
-    const span = workSpans[0];
-    if (!span) {
-      throw new Error("expected a recorded continuation.work span");
-    }
-    expect(span.status).toBe("OK");
-    expect(span.ended).toBe(true);
-
-    const attrs = span.attributes;
-    expect(attrs["delay.ms"]).toBe(1_000);
-    // maxChainLength=2, nextChainCount=1 → remaining=1 (clamped to ≥0)
-    expect(attrs["chain.step.remaining"]).toBe(1);
-    // chain.id minted by persistContinuationChainState on the 0→1
-    // transition; emitter consumes the same id (no re-derivation)
-    expect(typeof attrs["chain.id"]).toBe("string");
-    expect(attrs["chain.id"] as string).toMatch(UUID_REGEX);
-  });
-
-  it("uses a hot-reloaded continuation enablement value at the next enforcement point", async () => {
-    vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
-
-    const staleChainId = "00000000-0000-4000-8000-000000000001";
+    const chainId = "00000000-0000-4000-8000-000000000010";
     const run = createContinuationRun({
-      sessionKey: "continuation-work-hot-reload",
+      sessionKey: "continuation-work-concurrent-token-accounting",
       sessionEntry: {
         sessionId: "session",
         updatedAt: Date.now(),
-        continuationChainCount: 2,
+        continuationChainCount: 1,
         continuationChainStartedAt: 1,
-        continuationChainTokens: 50,
-        continuationChainId: staleChainId,
-      },
-      config: {
-        agents: {
-          defaults: {
-            continuation: {
-              enabled: false,
-              minDelayMs: 0,
-              maxDelayMs: 1_000,
-              defaultDelayMs: 1_000,
-              maxChainLength: 2,
-            },
-          },
-        },
-      },
-    });
-    runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      setRuntimeConfigSnapshot({
-        ...run.followupRun.run.config,
-        agents: {
-          ...run.followupRun.run.config.agents,
-          defaults: {
-            ...run.followupRun.run.config.agents?.defaults,
-            continuation: {
-              ...run.followupRun.run.config.agents?.defaults?.continuation,
-              enabled: true,
-            },
-          },
-        },
-      });
-      return {
-        payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
-        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-      };
-    });
-
-    await runWorkTurn(
-      run,
-      { [run.sessionKey]: run.sessionEntry },
-      "Working on it\nCONTINUE_WORK:1",
-    );
-
-    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(1);
-    expect(run.sessionEntry.continuationChainCount).toBe(1);
-    expect(run.sessionEntry.continuationChainId).not.toBe(staleChainId);
-  });
-
-  it("does not arm continue_work after enablement is disabled at the scheduling seam", async () => {
-    vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
-
-    const run = createContinuationRun({
-      sessionKey: "continuation-work-disabled-before-schedule",
-    });
-    runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const continuation = run.followupRun.run.config.agents?.defaults?.continuation;
-      if (!continuation) {
-        throw new Error("expected continuation config");
-      }
-      let enabledReads = 0;
-      Object.defineProperty(continuation, "enabled", {
-        configurable: true,
-        get: () => {
-          enabledReads += 1;
-          if (enabledReads === 2) {
-            queueMicrotask(() => {
-              setRuntimeConfigSnapshot({
-                ...run.followupRun.run.config,
-                agents: {
-                  ...run.followupRun.run.config.agents,
-                  defaults: {
-                    ...run.followupRun.run.config.agents?.defaults,
-                    continuation: {
-                      ...continuation,
-                      enabled: false,
-                    },
-                  },
-                },
-              });
-            });
-          }
-          return true;
-        },
-      });
-      return {
-        payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
-        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-      };
-    });
-
-    await runWorkTurn(
-      run,
-      { [run.sessionKey]: run.sessionEntry },
-      "Working on it\nCONTINUE_WORK:1",
-    );
-
-    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
-    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
-  });
-
-  it("does not arm continue_work when durable chain-state reservation fails", async () => {
-    vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
-
-    const run = createContinuationRun({
-      sessionKey: "continuation-work-persistence-failure",
-    });
-    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    patchSessionEntryMock.mockRejectedValueOnce(new Error("session database unavailable"));
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
-      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-    });
-    const sessionStore = { [run.sessionKey]: run.sessionEntry };
-
-    await runWorkTurn(
-      run,
-      sessionStore,
-      "Working on it\nCONTINUE_WORK:1",
-      false,
-      "/tmp/openclaw-continuation-work-persistence-failure.json",
-    );
-
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
-    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
-    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
-  });
-
-  it("rolls back the reservation when continuation is disabled during persistence", async () => {
-    vi.useFakeTimers();
-    const { tracer, spans } = createRecordingTracer();
-    setContinuationTracer(tracer);
-
-    const run = createContinuationRun({
-      sessionKey: "continuation-work-disabled-during-reservation",
-    });
-    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    let persistedEntry = run.sessionEntry;
-    let persistenceCalls = 0;
-    patchSessionEntryMock.mockImplementation(
-      async (
-        _scope: unknown,
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
-      ): Promise<SessionEntry | null> => {
-        const patch = update(persistedEntry);
-        persistenceCalls += 1;
-        if (persistenceCalls === 1) {
-          setRuntimeConfigSnapshot({
-            ...run.followupRun.run.config,
-            agents: {
-              ...run.followupRun.run.config.agents,
-              defaults: {
-                ...run.followupRun.run.config.agents?.defaults,
-                continuation: {
-                  ...run.followupRun.run.config.agents?.defaults?.continuation,
-                  enabled: false,
-                },
-              },
-            },
-          });
-        }
-        if (!patch) {
-          return null;
-        }
-        persistedEntry = { ...persistedEntry, ...patch };
-        return persistedEntry;
-      },
-    );
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
-      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-    });
-    const sessionStore = { [run.sessionKey]: run.sessionEntry };
-
-    await runWorkTurn(
-      run,
-      sessionStore,
-      "Working on it\nCONTINUE_WORK:1",
-      false,
-      "/tmp/openclaw-continuation-work-disable-reservation.json",
-    );
-
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
-    expect(spans.filter((span) => span.name === "continuation.work")).toHaveLength(0);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(0);
-    const storedEntry = sessionStore[run.sessionKey];
-    expect(storedEntry).toBeDefined();
-    if (!storedEntry) {
-      throw new Error("expected persisted session entry");
-    }
-    expect(storedEntry.continuationChainCount).toBe(0);
-    expect(storedEntry.continuationChainTokens).toBe(0);
-    expect(storedEntry.continuationChainId).toBeUndefined();
-  });
-
-  it("uses hot-reloaded continuation limits after durable reservation", async () => {
-    vi.useFakeTimers();
-    const run = createContinuationRun({
-      sessionKey: "continuation-work-limits-reloaded-after-reservation",
-    });
-    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    let persistedEntry = run.sessionEntry;
-    let persistenceCalls = 0;
-    patchSessionEntryMock.mockImplementation(
-      async (
-        _scope: unknown,
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
-      ): Promise<SessionEntry | null> => {
-        const patch = update(persistedEntry);
-        persistenceCalls += 1;
-        if (persistenceCalls === 1) {
-          setRuntimeConfigSnapshot({
-            ...run.followupRun.run.config,
-            agents: {
-              ...run.followupRun.run.config.agents,
-              defaults: {
-                ...run.followupRun.run.config.agents?.defaults,
-                continuation: {
-                  ...run.followupRun.run.config.agents?.defaults?.continuation,
-                  maxChainLength: 1,
-                },
-              },
-            },
-          });
-        }
-        if (!patch) {
-          return null;
-        }
-        persistedEntry = { ...persistedEntry, ...patch };
-        return persistedEntry;
-      },
-    );
-    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
-      const options = args as {
-        continueWorkOpts?: {
-          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
-        };
-      };
-      options.continueWorkOpts?.requestContinuation?.({
-        reason: "first reserved election",
-        delaySeconds: 1,
-      });
-      options.continueWorkOpts?.requestContinuation?.({
-        reason: "second election rejected by live limit",
-        delaySeconds: 1,
-      });
-      return {
-        payloads: [{ text: "Working on it" }],
-        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-      };
-    });
-    const sessionStore = { [run.sessionKey]: run.sessionEntry };
-
-    await runWorkTurn(
-      run,
-      sessionStore,
-      "Working on it",
-      false,
-      "/tmp/openclaw-continuation-work-live-limits.json",
-    );
-
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
-    expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
-  });
-
-  it("does not schedule beyond the durable reservation when the live chain limit increases", async () => {
-    vi.useFakeTimers();
-    const run = createContinuationRun({
-      sessionKey: "continuation-work-limit-increased-after-reservation",
-      config: {
-        agents: {
-          defaults: {
-            continuation: {
-              enabled: true,
-              minDelayMs: 0,
-              maxDelayMs: 1_000,
-              defaultDelayMs: 1_000,
-              maxChainLength: 1,
-            },
-          },
-        },
+        continuationChainTokens: 10,
+        continuationChainId: chainId,
       },
     });
     loadSessionEntryMock.mockReturnValue(run.sessionEntry);
@@ -712,22 +391,12 @@ describe("runReplyAgent :: continuation.work span", () => {
       ): Promise<SessionEntry | null> => {
         persistenceCalls += 1;
         if (persistenceCalls === 2) {
-          throw new Error("session database unavailable during reconciliation");
+          persistedEntry = {
+            ...persistedEntry,
+            continuationChainTokens: (persistedEntry.continuationChainTokens ?? 0) + 7,
+          };
         }
         const patch = update(persistedEntry);
-        setRuntimeConfigSnapshot({
-          ...run.followupRun.run.config,
-          agents: {
-            ...run.followupRun.run.config.agents,
-            defaults: {
-              ...run.followupRun.run.config.agents?.defaults,
-              continuation: {
-                ...run.followupRun.run.config.agents?.defaults?.continuation,
-                maxChainLength: 2,
-              },
-            },
-          },
-        });
         if (!patch) {
           return null;
         }
@@ -735,103 +404,40 @@ describe("runReplyAgent :: continuation.work span", () => {
         return persistedEntry;
       },
     );
-    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
-      const options = args as {
-        continueWorkOpts?: {
-          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
-        };
-      };
-      options.continueWorkOpts?.requestContinuation?.({
-        reason: "durably reserved election",
-        delaySeconds: 1,
-      });
-      options.continueWorkOpts?.requestContinuation?.({
-        reason: "election beyond durable reservation",
-        delaySeconds: 1,
-      });
-      return {
-        payloads: [{ text: "Working on it" }],
-        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-      };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Working on it\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 2, output: 3 } } },
     });
     const sessionStore = { [run.sessionKey]: run.sessionEntry };
 
     await runWorkTurn(
       run,
       sessionStore,
-      "Working on it",
-      false,
-      "/tmp/openclaw-continuation-work-live-limit-increase.json",
+      "Working on it\nCONTINUE_WORK:1",
+      true,
+      "/tmp/openclaw-continuation-work-concurrent-token-accounting.json",
     );
 
     expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    const storedEntry = sessionStore[run.sessionKey];
+    expect(storedEntry).toBeDefined();
+    if (!storedEntry) {
+      throw new Error("expected persisted session entry");
+    }
+    expect(storedEntry.continuationChainCount).toBe(2);
+    expect(storedEntry.continuationChainTokens).toBe(22);
+    expect(storedEntry.continuationChainId).toBe(chainId);
     expect(listTaskFlowsForOwnerKey(run.sessionKey)).toHaveLength(1);
-    expect(persistedEntry.continuationChainCount).toBe(1);
-    expect(sessionStore[run.sessionKey]?.continuationChainCount).toBe(1);
   });
 
-  it("preserves parked work when concurrency leaves no newly reserved scheduling slots", async () => {
+  it("suppresses continue_work tool callbacks from incomplete non-replay-safe turns", async () => {
     vi.useFakeTimers();
-    const chainId = "00000000-0000-4000-8000-000000000011";
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
     const run = createContinuationRun({
-      sessionKey: "continuation-work-zero-new-reservation",
-      config: {
-        agents: {
-          defaults: {
-            continuation: {
-              enabled: true,
-              minDelayMs: 0,
-              maxDelayMs: 1_000,
-              defaultDelayMs: 1_000,
-              maxChainLength: 1,
-            },
-          },
-        },
-      },
+      sessionKey: "continuation-work-incomplete-replay-unsafe",
     });
-    const existingWork = enqueuePendingWork({
-      sessionKey: run.sessionKey,
-      hop: 1,
-      delayMs: 1_000,
-      electedAt: Date.now(),
-      dueAt: Date.now() + 1_000,
-      maxChainLength: 1,
-      chainStartedAt: 1,
-      accumulatedChainTokens: 0,
-      reason: "preserve existing parked work",
-      chainId,
-      anchorPending: true,
-      idleRetry: {
-        trigger: "reply-run-ended",
-        reasonCategory: "follow-up-work",
-        armedAt: Date.now(),
-      },
-    });
-    if (!existingWork?.flowId) {
-      throw new Error("expected existing parked continuation work");
-    }
-    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    let persistedEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      continuationChainCount: 1,
-      continuationChainStartedAt: 1,
-      continuationChainTokens: 0,
-      continuationChainId: chainId,
-    };
-    patchSessionEntryMock.mockImplementation(
-      async (
-        _scope: unknown,
-        update: (entry: SessionEntry) => Partial<SessionEntry> | null,
-      ): Promise<SessionEntry | null> => {
-        const patch = update(persistedEntry);
-        if (!patch) {
-          return null;
-        }
-        persistedEntry = { ...persistedEntry, ...patch };
-        return persistedEntry;
-      },
-    );
     runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
       const options = args as {
         continueWorkOpts?: {
@@ -839,7 +445,134 @@ describe("runReplyAgent :: continuation.work span", () => {
         };
       };
       options.continueWorkOpts?.requestContinuation?.({
-        reason: "concurrently capped election",
+        reason: "tool requested more work before incomplete turn surfaced",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Agent couldn't generate a response.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: true,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent couldn't generate a response.",
+            fallbackSafe: false,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent couldn't generate a response.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
+    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
+  });
+
+  it("fails queued continue_delegate rows from incomplete non-replay-safe turns", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-delegate-incomplete-replay-unsafe",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      enqueuePendingDelegate(run.sessionKey, { task: "unsafe delegate" });
+      return {
+        payloads: [{ text: "Agent could not generate a response.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: true,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not generate a response.",
+            fallbackSafe: false,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent could not generate a response.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([
+      {
+        status: "failed",
+        currentStep: "Rejected replay-unsafe continuation delegate election",
+        blockedSummary:
+          "Continuation delegate election ignored because the enclosing turn was incomplete and replay-unsafe.",
+      },
+    ]);
+  });
+
+  it("still honors continue_work from incomplete replay-safe turns", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-incomplete-replay-safe",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "safe incomplete turn requested more work",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Agent could not generate a response yet.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: false,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not generate a response yet.",
+            fallbackSafe: true,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent could not generate a response yet.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(1);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+  });
+
+  it("treats continue_work tool callbacks as accepted WORK signals", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({ sessionKey: "continuation-work-tool-callback" });
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "tool requested more work",
         delaySeconds: 1,
       });
       return {
@@ -848,51 +581,109 @@ describe("runReplyAgent :: continuation.work span", () => {
       };
     });
 
-    await runWorkTurn(
-      run,
-      { [run.sessionKey]: run.sessionEntry },
-      "Working on it",
-      false,
-      "/tmp/openclaw-continuation-work-zero-new-reservation.json",
-    );
+    await runWorkTurn(run, { [run.sessionKey]: run.sessionEntry }, "Working on it");
 
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([
-      { flowId: existingWork.flowId, status: "queued" },
-    ]);
-    expect(persistedEntry.continuationChainCount).toBe(1);
-    expect(persistedEntry.continuationChainTokens).toBe(0);
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(1);
+    expect(workSpans[0]?.attributes["delay.ms"]).toBe(1_000);
+    expect(workSpans[0]?.attributes["chain.step.remaining"]).toBe(1);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
   });
 
-  it("keeps hedge-fired delegates recoverable when chain-state persistence fails", async () => {
+  it("reuses chain.id across consecutive accepted steps (mint-at-0→1, reuse-for-step-2)", async () => {
     vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // Pre-seed the session entry with an existing chain.id at
+    // continuationChainCount=1, simulating a fresh chain that has
+    // already taken its first step. This step arrives as a continuation
+    // WAKE (work-wake) — a mid-chain step, NOT a fresh entry — so the
+    // #987 chain-break reset must NOT fire and the count carries forward.
+    // The next accepted WORK should bump count to 2 and REUSE the same
+    // chain.id (mint-or-reuse contract). chain.step.remaining =
+    // max(0, maxChainLength=2 - 2) = 0.
+    const seededChainId = "019dcf57-b536-77cc-834b-b803d9262032";
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: Date.now() - 10_000,
+      continuationChainTokens: 100,
+      continuationChainId: seededChainId,
+    };
     const run = createContinuationRun({
-      sessionKey: "continuation-delegate-hedge-persistence-failure",
+      sessionKey: "continuation-work-span-stable",
+      sessionEntry: seededEntry,
     });
-    loadSessionEntryMock.mockReturnValue(run.sessionEntry);
-    patchSessionEntryMock.mockRejectedValueOnce(new Error("session database unavailable"));
-    runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      enqueuePendingDelegate(run.sessionKey, {
-        task: "persist before terminalizing this delayed delegate",
-        delayMs: 1_000,
-      });
-      return {
-        payloads: [{ text: "Working on it" }],
-        meta: { agentMeta: { usage: { input: 2, output: 3 } } },
-      };
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Step two\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
+    await runWorkTurn(run, sessionStore, "Step two\nCONTINUE_WORK:1", true);
 
-    await runWorkTurn(
-      run,
-      { [run.sessionKey]: run.sessionEntry },
-      "Working on it",
-      false,
-      "/tmp/openclaw-continuation-delegate-hedge-persist.json",
-    );
-    await vi.advanceTimersByTimeAsync(1_000);
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(1);
 
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
-    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([{ status: "running" }]);
+    const span = workSpans[0];
+    if (!span) {
+      throw new Error("expected a recorded continuation.work span");
+    }
+    // CRITICAL: chain.id MUST be the seeded value, not a freshly minted
+    // UUID — proves mint-or-reuse picks the existing one.
+    expect(span.attributes["chain.id"]).toBe(seededChainId);
+    expect(span.attributes["chain.step.remaining"]).toBe(0);
+  });
+
+  it("does NOT emit `continuation.work` on the chain-cap reject path (rejected requests don't advance the chain)", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    // Pre-seed at maxChainLength=2 — the next CONTINUE_WORK request
+    // hits chain-cap reject and MUST NOT emit `continuation.work`. This is
+    // a continuation WAKE (mid-runaway chain step), so the #987 chain-break
+    // reset must NOT fire: the runaway leash's whole job is to keep tripping
+    // the cap as long as the chain advances without a fresh re-entry.
+    const seededChainId = "019dcf57-aaaa-77cc-834b-b803d9262032";
+    const seededEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      continuationChainCount: 2, // already at maxChainLength
+      continuationChainStartedAt: Date.now() - 20_000,
+      continuationChainTokens: 200,
+      continuationChainId: seededChainId,
+    };
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-span-cap",
+      sessionEntry: seededEntry,
+    });
+    const sessionStore = { [run.sessionKey]: seededEntry };
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Step 3 attempts\nCONTINUE_WORK:1" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    await runWorkTurn(run, sessionStore, "Step 3 attempts\nCONTINUE_WORK:1", true);
+
+    // No `continuation.work` span emitted — accept-only contract.
+    const workSpans = spans.filter((s) => s.name === "continuation.work");
+    expect(workSpans).toHaveLength(0);
+
+    // The chain-cap reject branch emits exactly one `continuation.disabled`
+    // span. Span carries `disabled.reason =
+    // cap.chain` and `signal.kind = bracket-work` (CONTINUE_WORK signal).
+    expect(spans).toHaveLength(1);
+    expect(spans[0]).toMatchObject({
+      name: "continuation.disabled",
+      attributes: {
+        "disabled.reason": "cap.chain",
+        "signal.kind": "bracket-work",
+        "continuation.disabled": true,
+        "chain.id": seededChainId,
+      },
+    });
   });
 });

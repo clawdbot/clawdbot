@@ -337,8 +337,9 @@ afterEach(() => {
 
 const splitLintUse = [
   crypto,
-  expectDefined,
-  setRuntimeConfigSnapshot,
+  readFileSync,
+  path,
+  ts,
   noopTracer,
   setContinuationTracer,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -354,381 +355,273 @@ const splitLintUse = [
   stagedPostCompactionDelegateCount,
   dispatchStagedPostCompactionDelegates,
   hasLiveContinuationTimerRefs,
+  SPOOFED_DELEGATE_TASK,
+  continuationConfig,
   findPersistedRecoveryEntry,
+  expectTrustedSanitizedTaskEcho,
 ];
 void splitLintUse;
 
-describe("trusted delegate task echoes", () => {
-  const trustedEchoCases = [
-    {
-      name: "sanitizes maxDelegatesPerTurn over-limit rejection",
-      sessionKey: "session-sanitize-over-limit",
-      eventFragment: "maxDelegatesPerTurn exceeded",
-      run: async (sessionKey: string) => {
-        enqueuePendingDelegate(sessionKey, { task: SPOOFED_DELEGATE_TASK });
+describe("dispatchToolDelegates — TaskFlow status after spawn failure", () => {
+  // Pins the contract that the regression report called out as structurally unpinned:
+  // "what is the intended TaskFlow status after spawn failure?"
+  //
+  // Current behavior in dispatchToolDelegates:
+  //   1. consumePendingDelegates(sessionKey) calls finishFlow on
+  //      each consumed delegate → TaskFlow row → status="succeeded"
+  //   2. spawnSubagentDirect(...) per delegate
+  //   3. If spawn returns non-"accepted" status → log info + enqueue system
+  //      event + rejected++
+  //   4. If spawn throws → log info + enqueue system event + rejected++
+  //   5. NO retry, NO un-finish, NO mark-for-inspection — durable record is
+  //      already in succeeded state, only observability remains.
+  //
+  // This is the **one-shot-loss + observability-only** invariant. It is
+  // substrate-consistent with task-executor's exit-code-failure shape (also
+  // single-shot, no retry). The substrate has NO infrastructure for automatic
+  // re-enqueue, NO retry-count metadata field, NO transitional
+  // failed_retryable state — runaway-amplification-via-retry-storm is
+  // structurally pre-empted by the absence of those primitives.
+  //
+  // Pin the contract here so a refactor that introduces retry semantics
+  // OR moves finishFlow to after-spawn-success will surface as a test
+  // failure rather than a silent invariant change. The deliberate choice
+  // is one-shot / no-retry semantics that do not silently present spawn
+  // failure as success.
 
-        const result = await dispatchToolDelegates({
-          sessionKey,
-          chainState: {
-            currentChainCount: 0,
-            chainStartedAt: Date.now(),
-            accumulatedChainTokens: 0,
-          },
-          ctx: { sessionKey },
-          maxChainLength: 10,
-          config: continuationConfig({ maxDelegatesPerTurn: 1 }),
-          reservedDelegateSlots: 1,
-        });
+  it("marks consumed flows failed after spawn rejection", async () => {
+    const sessionKey = "session-449-rejected";
+    enqueuePendingDelegate(sessionKey, { task: "rejected-task" });
+    spawnSubagentDirectMock.mockResolvedValueOnce({ status: "forbidden" });
 
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-      },
-    },
-    {
-      name: "sanitizes cross-session targeting disabled rejection",
-      sessionKey: "session-sanitize-cross-session",
-      eventFragment: "cross-session targeting is disabled by policy",
-      run: async (sessionKey: string) => {
-        enqueuePendingDelegate(sessionKey, {
-          task: SPOOFED_DELEGATE_TASK,
-          targetSessionKey: "agent:other:root",
-        });
+    // Capture flowId before dispatch so we can inspect its post-dispatch state.
+    const queuedBefore = [...mockFlows.values()].filter(
+      (f) => f.ownerKey === sessionKey && f.status === "queued",
+    );
+    expect(queuedBefore).toHaveLength(1);
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
 
-        const result = await dispatchToolDelegates({
-          sessionKey,
-          chainState: {
-            currentChainCount: 0,
-            chainStartedAt: Date.now(),
-            accumulatedChainTokens: 0,
-          },
-          ctx: { sessionKey },
-          maxChainLength: 10,
-          config: continuationConfig({ crossSessionTargeting: "disabled" }),
-        });
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
 
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-      },
-    },
-    {
-      name: "sanitizes chain budget rejection",
-      sessionKey: "session-sanitize-chain-budget",
-      eventFragment: "chain-capped",
-      run: async (sessionKey: string) => {
-        enqueuePendingDelegate(sessionKey, { task: SPOOFED_DELEGATE_TASK });
+    expect(result.dispatched).toBe(0);
+    expect(result.rejected).toBe(1);
 
-        const result = await dispatchToolDelegates({
-          sessionKey,
-          chainState: {
-            currentChainCount: 1,
-            chainStartedAt: Date.now(),
-            accumulatedChainTokens: 0,
-          },
-          ctx: { sessionKey },
-          maxChainLength: 1,
-          config: continuationConfig({ maxChainLength: 1 }),
-        });
-
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-      },
-    },
-    {
-      name: "sanitizes spawn rejected status",
-      sessionKey: "session-sanitize-spawn-rejected",
-      eventFragment: "DELEGATE spawn forbidden",
-      run: async (sessionKey: string) => {
-        spawnSubagentDirectMock.mockResolvedValueOnce({
-          status: "forbidden",
-          error: "blocked by spawn policy",
-        });
-        enqueuePendingDelegate(sessionKey, { task: SPOOFED_DELEGATE_TASK });
-
-        const result = await dispatchToolDelegates({
-          sessionKey,
-          chainState: {
-            currentChainCount: 0,
-            chainStartedAt: Date.now(),
-            accumulatedChainTokens: 0,
-          },
-          ctx: { sessionKey },
-          maxChainLength: 10,
-          config: continuationConfig(),
-        });
-
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            task: expect.stringContaining(SPOOFED_DELEGATE_TASK),
-          }),
-          expect.objectContaining({ agentSessionKey: sessionKey }),
-        );
-      },
-    },
-    {
-      name: "sanitizes spawn thrown failure",
-      sessionKey: "session-sanitize-spawn-thrown",
-      eventFragment: "DELEGATE spawn failed",
-      run: async (sessionKey: string) => {
-        spawnSubagentDirectMock.mockRejectedValueOnce(new Error("spawn unavailable"));
-        enqueuePendingDelegate(sessionKey, { task: SPOOFED_DELEGATE_TASK });
-
-        const result = await dispatchToolDelegates({
-          sessionKey,
-          chainState: {
-            currentChainCount: 0,
-            chainStartedAt: Date.now(),
-            accumulatedChainTokens: 0,
-          },
-          ctx: { sessionKey },
-          maxChainLength: 10,
-          config: continuationConfig(),
-        });
-
-        expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
-        expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            task: expect.stringContaining(SPOOFED_DELEGATE_TASK),
-          }),
-          expect.objectContaining({ agentSessionKey: sessionKey }),
-        );
-      },
-    },
-  ] satisfies Array<{
-    name: string;
-    sessionKey: string;
-    eventFragment: string;
-    run: (sessionKey: string) => Promise<void>;
-  }>;
-
-  it.each(trustedEchoCases)("$name", async ({ eventFragment, run, sessionKey }) => {
-    await run(sessionKey);
-    expectTrustedSanitizedTaskEcho(eventFragment, sessionKey);
+    // Honest failure visibility on the same one-shot substrate.
+    const finalized = mockFlows.get(flowId);
+    expect(finalized?.status).toBe("failed");
   });
 
-  it("preserves original accepted delegate task for spawn while sanitizing the trusted status event", async () => {
-    const sessionKey = "session-sanitize-accepted-spawn";
-    enqueuePendingDelegate(sessionKey, { task: SPOOFED_DELEGATE_TASK });
+  it("marks consumed flows failed after spawn throws", async () => {
+    const sessionKey = "session-449-thrown";
+    enqueuePendingDelegate(sessionKey, { task: "throwing-task" });
+    spawnSubagentDirectMock.mockRejectedValueOnce(new Error("spawn unavailable"));
+
+    const queuedBefore = [...mockFlows.values()].filter(
+      (f) => f.ownerKey === sessionKey && f.status === "queued",
+    );
+    expect(queuedBefore).toHaveLength(1);
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result.dispatched).toBe(0);
+    expect(result.rejected).toBe(1);
+
+    // Same shape for the throw-path: no retry, but durable failed-state.
+    const finalized = mockFlows.get(flowId);
+    expect(finalized?.status).toBe("failed");
+  });
+
+  it("preserves per-delegate terminal truth across mixed spawn outcomes (rejected + thrown + accepted)", async () => {
+    const sessionKey = "session-449-mixed";
+    enqueuePendingDelegate(sessionKey, { task: "rejected" });
+    enqueuePendingDelegate(sessionKey, { task: "throws" });
+    enqueuePendingDelegate(sessionKey, { task: "accepted" });
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "forbidden" })
+      .mockRejectedValueOnce(new Error("spawn unavailable"))
+      .mockResolvedValueOnce({ status: "accepted" });
+
+    const queuedBefore = [...mockFlows.values()]
+      .filter((f) => f.ownerKey === sessionKey && f.status === "queued")
+      .map((f) => f.flowId as string);
+    expect(queuedBefore).toHaveLength(3);
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(mockFlows.get(expectDefined(queuedBefore.at(0), "first flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(1), "second flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(2), "third flow id"))?.status).toBe(
+      "succeeded",
+    );
+  });
+});
+
+describe("dispatchToolDelegates — nonexistent target session", () => {
+  it("passes a nonexistent targetSessionKey through to spawn without throwing", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const sessionKey = "session-nonexistent-target";
+    enqueuePendingDelegate(sessionKey, {
+      task: "deliver to ghost",
+      mode: "silent-wake",
+      targetSessionKey: "agent:main:never-existed",
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result.dispatched).toBe(1);
+    expect(result.rejected).toBe(0);
+    expect(result.chainState.currentChainCount).toBe(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.stringContaining("deliver to ghost"),
+        silentAnnounce: true,
+        wakeOnReturn: true,
+        continuationTargetSessionKey: "agent:main:never-existed",
+      }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
+  it("passes nonexistent targetSessionKeys (plural) through to spawn", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const sessionKey = "session-nonexistent-targets-plural";
+    enqueuePendingDelegate(sessionKey, {
+      task: "deliver to ghosts",
+      mode: "silent-wake",
+      targetSessionKeys: ["agent:main:ghost", "agent:main:phantom"],
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result.dispatched).toBe(1);
+    expect(result.rejected).toBe(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continuationTargetSessionKeys: ["agent:main:ghost", "agent:main:phantom"],
+      }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
+  it("normalizes empty-string targetSessionKey away from spawn params", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const sessionKey = "session-empty-target";
+    enqueuePendingDelegate(sessionKey, {
+      task: "deliver to empty",
+      targetSessionKey: "",
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result.dispatched).toBe(1);
+    expect(result.rejected).toBe(0);
+    const spawnParams = expectDefined(
+      spawnSubagentDirectMock.mock.calls.at(0)?.at(0),
+      "spawn params",
+    ) as Record<string, unknown>;
+    expect(spawnParams).not.toHaveProperty("continuationTargetSessionKey");
+  });
+
+  it("advances chain state correctly when targeting a nonexistent session", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const sessionKey = "session-nonexistent-chain";
+    enqueuePendingDelegate(sessionKey, {
+      task: "chained ghost delivery",
+      targetSessionKey: "agent:main:stale-removed",
+    });
 
     const result = await dispatchToolDelegates({
       sessionKey,
       chainState: {
-        currentChainCount: 0,
-        chainStartedAt: Date.now(),
-        accumulatedChainTokens: 0,
+        currentChainCount: 3,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 500,
       },
       ctx: { sessionKey },
       maxChainLength: 10,
-      config: continuationConfig(),
     });
 
-    expect(result).toMatchObject({ dispatched: 1, rejected: 0 });
+    expect(result.chainState).toEqual({
+      currentChainCount: 4,
+      chainStartedAt: 1_700_000_000_000,
+      accumulatedChainTokens: 500,
+      chainId: expect.any(String),
+    });
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        task: expect.stringContaining(SPOOFED_DELEGATE_TASK),
+        task: expect.stringContaining("[continuation:chain-hop:4]"),
+        continuationTargetSessionKey: "agent:main:stale-removed",
       }),
       expect.objectContaining({ agentSessionKey: sessionKey }),
     );
-    expectTrustedSanitizedTaskEcho("[continuation:delegate-spawned]", sessionKey);
   });
 
-  it("keeps every prompt-facing delegate task echo behind the sanitizer helper", () => {
-    const sourceFiles = ["./delegate-dispatch.ts", "./post-compaction-staged-dispatch.ts"].map(
-      (sourcePath) =>
-        ts.createSourceFile(
-          sourcePath,
-          readFileSync(new URL(sourcePath, import.meta.url), "utf8"),
-          ts.ScriptTarget.Latest,
-          true,
-          ts.ScriptKind.TS,
-        ),
+  it("marks the TaskFlow record succeeded for a nonexistent target (same as normal)", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
+    });
+    const sessionKey = "session-nonexistent-taskflow";
+    enqueuePendingDelegate(sessionKey, {
+      task: "taskflow ghost",
+      targetSessionKey: "agent:main:never-existed",
+    });
+
+    const queuedBefore = [...mockFlows.values()].filter(
+      (f) => f.ownerKey === sessionKey && f.status === "queued",
     );
-    const taskReferences: ts.Expression[] = [];
-    const visit = (node: ts.Node): void => {
-      if (
-        (ts.isPropertyAccessExpression(node) && node.name.text === "task") ||
-        (ts.isElementAccessExpression(node) &&
-          ts.isStringLiteralLike(node.argumentExpression) &&
-          node.argumentExpression.text === "task")
-      ) {
-        taskReferences.push(node);
-      }
-      ts.forEachChild(node, visit);
-    };
-    for (const sourceFile of sourceFiles) {
-      const enqueueCalls: ts.CallExpression[] = [];
-      const collectEnqueueCalls = (node: ts.Node): void => {
-        if (
-          ts.isCallExpression(node) &&
-          ts.isIdentifier(node.expression) &&
-          node.expression.text === "enqueueSystemEvent"
-        ) {
-          enqueueCalls.push(node);
-        }
-        ts.forEachChild(node, collectEnqueueCalls);
-      };
-      collectEnqueueCalls(sourceFile);
-      for (const call of enqueueCalls) {
-        const eventArgument = call.arguments[0];
-        if (eventArgument) {
-          visit(eventArgument);
-        }
-      }
-    }
+    expect(queuedBefore).toHaveLength(1);
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
 
-    expect(taskReferences).toHaveLength(11);
-    expect(
-      taskReferences.every((taskReference) => {
-        const parent = taskReference.parent;
-        return (
-          ts.isCallExpression(parent) &&
-          parent.arguments.length === 1 &&
-          parent.arguments[0] === taskReference &&
-          ts.isIdentifier(parent.expression) &&
-          parent.expression.text === "formatDelegateTaskForSystemEvent"
-        );
-      }),
-    ).toBe(true);
-  });
-});
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
 
-describe("delegate dispatch ownership graph", () => {
-  const moduleFiles = [
-    "src/auto-reply/continuation/delegate-dispatch.ts",
-    "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
-    "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-    "src/auto-reply/continuation/post-compaction-release.ts",
-    "src/gateway/server-runtime-services.ts",
-  ] as const;
-
-  type ModuleFile = (typeof moduleFiles)[number];
-  type ImportKind = "dynamic-import" | "static-export" | "static-import";
-  type OwnershipEdge = { from: ModuleFile; kind: ImportKind; to: ModuleFile };
-
-  function resolveStaticString(expression: ts.Expression): string | undefined {
-    if (ts.isStringLiteralLike(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
-      return expression.text;
-    }
-    if (ts.isParenthesizedExpression(expression)) {
-      return resolveStaticString(expression.expression);
-    }
-    if (
-      ts.isBinaryExpression(expression) &&
-      expression.operatorToken.kind === ts.SyntaxKind.PlusToken
-    ) {
-      const left = resolveStaticString(expression.left);
-      const right = resolveStaticString(expression.right);
-      return left === undefined || right === undefined ? undefined : left + right;
-    }
-    if (ts.isTemplateExpression(expression)) {
-      let value = expression.head.text;
-      for (const span of expression.templateSpans) {
-        const substitution = resolveStaticString(span.expression);
-        if (substitution === undefined) {
-          return undefined;
-        }
-        value += substitution + span.literal.text;
-      }
-      return value;
-    }
-    return undefined;
-  }
-
-  function resolveCoveredModule(from: ModuleFile, specifier: string): ModuleFile | undefined {
-    if (!specifier.startsWith(".")) {
-      return undefined;
-    }
-    const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier));
-    const sourcePath = resolved.endsWith(".js") ? `${resolved.slice(0, -3)}.ts` : resolved;
-    return moduleFiles.find((candidate) => candidate === sourcePath);
-  }
-
-  function collectOwnershipEdges(): OwnershipEdge[] {
-    const edges: OwnershipEdge[] = [];
-    for (const from of moduleFiles) {
-      const sourceUrl =
-        from === "src/gateway/server-runtime-services.ts"
-          ? new URL("../../gateway/server-runtime-services.ts", import.meta.url)
-          : new URL(`./${path.posix.basename(from)}`, import.meta.url);
-      const sourceFile = ts.createSourceFile(
-        from,
-        readFileSync(sourceUrl, "utf8"),
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.TS,
-      );
-      const recordEdge = (specifier: string, kind: ImportKind): void => {
-        const to = resolveCoveredModule(from, specifier);
-        if (to) {
-          edges.push({ from, kind, to });
-        }
-      };
-      const visit = (node: ts.Node): void => {
-        if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
-          recordEdge(node.moduleSpecifier.text, "static-import");
-        } else if (
-          ts.isExportDeclaration(node) &&
-          node.moduleSpecifier &&
-          ts.isStringLiteralLike(node.moduleSpecifier)
-        ) {
-          recordEdge(node.moduleSpecifier.text, "static-export");
-        } else if (
-          ts.isCallExpression(node) &&
-          node.expression.kind === ts.SyntaxKind.ImportKeyword
-        ) {
-          const argument = node.arguments[0];
-          const specifier = argument ? resolveStaticString(argument) : undefined;
-          if (specifier === undefined) {
-            throw new Error(
-              `${from} contains a dynamic import that the ownership guard cannot resolve`,
-            );
-          }
-          recordEdge(specifier, "dynamic-import");
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(sourceFile);
-    }
-    return edges.toSorted((left, right) =>
-      `${left.from}\0${left.to}\0${left.kind}`.localeCompare(
-        `${right.from}\0${right.to}\0${right.kind}`,
-      ),
-    );
-  }
-
-  it("keeps live, recovery, neutral staged dispatch, release, and gateway edges one-way", () => {
-    const edges = collectOwnershipEdges();
-    const recoveryModule = "src/auto-reply/continuation/delegate-dispatch-recovery.ts";
-    const recoveryImporters = edges.filter((edge) => edge.to === recoveryModule);
-
-    expect(recoveryImporters).toEqual([
-      {
-        from: "src/gateway/server-runtime-services.ts",
-        kind: "dynamic-import",
-        to: recoveryModule,
-      },
-    ]);
-    expect(edges).toEqual([
-      {
-        from: "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
-        kind: "static-import",
-        to: "src/auto-reply/continuation/delegate-dispatch.ts",
-      },
-      {
-        from: "src/auto-reply/continuation/delegate-dispatch-recovery.ts",
-        kind: "static-import",
-        to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-      },
-      {
-        from: "src/auto-reply/continuation/post-compaction-release.ts",
-        kind: "dynamic-import",
-        to: "src/auto-reply/continuation/post-compaction-staged-dispatch.ts",
-      },
-      {
-        from: "src/gateway/server-runtime-services.ts",
-        kind: "dynamic-import",
-        to: recoveryModule,
-      },
-    ]);
+    expect(mockFlows.get(flowId)?.status).toBe("succeeded");
   });
 });

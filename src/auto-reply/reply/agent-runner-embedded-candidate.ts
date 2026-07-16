@@ -254,7 +254,7 @@ export async function runEmbeddedFallbackCandidate(params: {
                 try {
                   const { compactEmbeddedAgentSession } =
                     await import("../../agents/embedded-agent-runner/compact.queued.js");
-                  const result = await compactEmbeddedAgentSession({
+                  const compactionResult = await compactEmbeddedAgentSession({
                     sessionId: turn.followupRun.run.sessionId ?? "",
                     runId: request.runId ?? params.runId,
                     sessionKey: turn.sessionKey,
@@ -270,10 +270,10 @@ export async function runEmbeddedFallbackCandidate(params: {
                     diagId: request.diagId,
                     traceparent: request.traceparent,
                   });
-                  if (result.ok && result.compacted) {
+                  if (compactionResult.ok && compactionResult.compacted) {
                     await releaseQueuedCompactionTolerant({
                       activeSessionStore: turn.activeSessionStore,
-                      compactionResult: result,
+                      compactionResult,
                       followupRun: turn.followupRun,
                       getActiveSessionEntry: turn.getActiveSessionEntry,
                       sessionKey: turn.sessionKey,
@@ -282,9 +282,9 @@ export async function runEmbeddedFallbackCandidate(params: {
                     });
                   }
                   return {
-                    ok: result.ok,
-                    compacted: result.compacted,
-                    reason: result.reason,
+                    ok: compactionResult.ok,
+                    compacted: compactionResult.compacted,
+                    reason: compactionResult.reason,
                   };
                 } catch (error) {
                   return {
