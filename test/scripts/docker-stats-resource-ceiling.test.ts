@@ -118,9 +118,7 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
   it("accepts large stats sample lines within the line cap", () => {
     const padding = "x".repeat(1024);
     const result = runAssert(
-      writeStats(
-        `{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"${padding}"}\n`,
-      ),
+      writeStats(`{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"${padding}"}\n`),
     );
 
     expect(result.status).toBe(0);
