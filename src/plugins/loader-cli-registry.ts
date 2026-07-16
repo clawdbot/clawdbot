@@ -330,7 +330,7 @@ export async function loadOpenClawPluginCliRegistry(
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       },
     });
-    const transaction = createPluginRegistrationTransaction({ registry });
+    const transaction = createPluginRegistrationTransaction({ registry, activeRecord: record });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
         runPluginRegisterSync(register, api),

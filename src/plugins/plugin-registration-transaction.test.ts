@@ -322,6 +322,81 @@ describe("plugin registration transaction", () => {
     expect(rollbackSideEffects).toHaveBeenCalledOnce();
   });
 
+  it("restores the active PluginRecord's array fields after a failed registration (loader #106647)", () => {
+    const registry = createEmptyPluginRegistry();
+
+    // Simulate the loader pattern: record exists before transaction,
+    // register() mutates its id-collection arrays and the registry,
+    // then loader pushes record to registry.plugins.
+    const record = {
+      id: "test-plugin",
+      name: "Test Plugin",
+      source: "test-source",
+      origin: "global" as const,
+      enabled: true,
+      status: "loaded" as const,
+      toolNames: [] as string[],
+      hookNames: [] as string[],
+      providerIds: [] as string[],
+      channelIds: [] as string[],
+      cliBackendIds: [] as string[],
+      embeddingProviderIds: [] as string[],
+      speechProviderIds: [] as string[],
+      realtimeTranscriptionProviderIds: [] as string[],
+      realtimeVoiceProviderIds: [] as string[],
+      mediaUnderstandingProviderIds: [] as string[],
+      transcriptSourceProviderIds: [] as string[],
+      imageGenerationProviderIds: [] as string[],
+      videoGenerationProviderIds: [] as string[],
+      musicGenerationProviderIds: [] as string[],
+      webFetchProviderIds: [] as string[],
+      webSearchProviderIds: [] as string[],
+      migrationProviderIds: [] as string[],
+      memoryEmbeddingProviderIds: [] as string[],
+      agentHarnessIds: [] as string[],
+      cliCommands: [] as string[],
+      services: [] as string[],
+      gatewayDiscoveryServiceIds: [] as string[],
+      commands: [] as string[],
+      httpRoutes: 0,
+      hookCount: 0,
+      configSchema: false,
+    };
+
+    const transaction = createPluginRegistrationTransaction({
+      registry,
+      activeRecord: record,
+    });
+
+    // During register(), plugin API mutates record arrays and the registry
+    record.toolNames.push("bad-tool");
+    record.hookNames.push("bad-hook");
+    record.providerIds.push("bad-provider");
+    registry.tools.push({
+      pluginId: "test-plugin",
+      factory: () => ({}) as unknown as import("./types.js").AnyAgentTool,
+      names: ["bad-tool"],
+      optional: false,
+      source: "test-source",
+    });
+
+    // Loader pushes record to registry.plugins (loader-runtime-candidate L505)
+    registry.plugins.push(record);
+
+    // Plugin fails, loader calls rollback (L509)
+    transaction.rollback();
+
+    // Registry snapshot correctly removes the record from plugins
+    expect(registry.plugins).toHaveLength(0);
+    expect(registry.tools).toHaveLength(0);
+
+    // Active record's array fields are restored — recordPluginError can safely
+    // re-push the record without stale ids from the failed registration.
+    expect(record.toolNames).toEqual([]);
+    expect(record.hookNames).toEqual([]);
+    expect(record.providerIds).toEqual([]);
+  });
+
   it("keeps snapshot registry writes while restoring globals for non-activating commits", () => {
     const registry = createEmptyPluginRegistry();
     const activePromptBuilder = () => ["active"];

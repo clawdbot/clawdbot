@@ -31,7 +31,7 @@ import {
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
   getSessionDiscussionProvider,
   restoreSessionDiscussionProvider,
@@ -151,6 +151,34 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   Object.assign(registry, snapshot);
 }
 
+/**
+ * Snapshot the active PluginRecord's array-valued fields so they can be
+ * restored on rollback.  The record is not yet in the registry when the
+ * transaction starts, but loader callers mutate the record's id-collection
+ * arrays during register() and push the record to registry.plugins after
+ * commit.  On rollback the registry snapshot correctly removes the record,
+ * but recordPluginError later re-pushes it — with mutated arrays unless
+ * we capture them here.
+ */
+type ActiveRecordSnapshot = Record<string, readonly unknown[]>;
+
+function snapshotActiveRecord(record: PluginRecord): ActiveRecordSnapshot {
+  const snap: Record<string, unknown> = {};
+  for (const key of Object.keys(record)) {
+    const val = (record as Record<string, unknown>)[key];
+    if (Array.isArray(val)) {
+      snap[key] = [...val];
+    }
+  }
+  return snap as ActiveRecordSnapshot;
+}
+
+function restoreActiveRecord(record: PluginRecord, snapshot: ActiveRecordSnapshot): void {
+  for (const key of Object.keys(snapshot)) {
+    (record as Record<string, unknown>)[key] = snapshot[key];
+  }
+}
+
 type PluginRegistrationTransaction = {
   commit: (params: { activate: boolean }) => void;
   rollback: () => void;
@@ -159,9 +187,16 @@ type PluginRegistrationTransaction = {
 export function createPluginRegistrationTransaction(params: {
   registry?: PluginRegistry;
   rollbackGlobalSideEffects?: () => void;
+  /** Active PluginRecord being registered by the caller (mutated during
+   *  register() before being pushed to registry.plugins).  When set, its
+   *  mutable array fields are snapshotted and restored on rollback. */
+  activeRecord?: PluginRecord;
 }): PluginRegistrationTransaction {
   const registrySnapshot = params.registry ? snapshotPluginRegistry(params.registry) : undefined;
   const processGlobalState = snapshotPluginProcessGlobalState();
+  const activeRecordSnapshot = params.activeRecord
+    ? snapshotActiveRecord(params.activeRecord)
+    : null;
   let settled = false;
 
   const settle = (action: () => void): void => {
@@ -187,6 +222,9 @@ export function createPluginRegistrationTransaction(params: {
           restorePluginRegistry(params.registry, registrySnapshot);
         }
         restorePluginProcessGlobalState(processGlobalState);
+        if (activeRecordSnapshot && params.activeRecord) {
+          restoreActiveRecord(params.activeRecord, activeRecordSnapshot);
+        }
       });
     },
   };
