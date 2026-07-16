@@ -432,6 +432,7 @@ describe("withReplyDispatcher", () => {
 
   it("correlates reply_payload_sending usageState with the generated run id", async () => {
     const usageState = { provider: "openai", model: "gpt-5.5" };
+    let generatedRunId: string | undefined;
     const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
       payload,
     }));
@@ -442,8 +443,8 @@ describe("withReplyDispatcher", () => {
     });
     hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
     hoisted.dispatchReplyFromConfigMock.mockImplementationOnce(async ({ replyOptions }) => {
-      replyOptions?.onAgentRunStart?.("generated-run");
-      recordReplyUsageState("generated-run", usageState);
+      generatedRunId = replyOptions?.runId;
+      recordReplyUsageState(generatedRunId ?? "", usageState);
       return { text: "ok" };
     });
 
@@ -469,16 +470,17 @@ describe("withReplyDispatcher", () => {
         kind: "final",
         channel: "telegram",
         sessionKey: "agent:test:session",
-        runId: "generated-run",
+        runId: generatedRunId,
         usageState,
       },
       {
         accountId: "acct-1",
         channelId: "threads",
         conversationId: "conv-1",
-        runId: "generated-run",
+        runId: generatedRunId,
       },
     );
+    expect(generatedRunId).toEqual(expect.any(String));
   });
 
   it("runs message_sending after reply_payload_sending for inbound dispatcher delivery", async () => {
@@ -820,13 +822,14 @@ describe("withReplyDispatcher", () => {
         kind: "final",
         channel: "telegram",
         sessionKey: "agent:test:session",
-        runId: undefined,
+        runId: expect.any(String),
+        usageState: undefined,
       },
       {
         accountId: "acct-1",
         channelId: "threads",
         conversationId: "conv-1",
-        runId: undefined,
+        runId: expect.any(String),
       },
     );
     expect(payload).toEqual({ text: "original [custom] [plugin]" });

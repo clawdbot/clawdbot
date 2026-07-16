@@ -127,6 +127,7 @@ export function deriveInboundMessageHookContext(
   overrides?: {
     content?: string;
     messageId?: string;
+    runId?: string;
   },
 ): CanonicalInboundMessageHookContext {
   const content =
@@ -175,6 +176,7 @@ export function deriveInboundMessageHookContext(
     conversationId,
     sessionKey: ctx.SessionKey,
     agentId: ctx.AgentId,
+    runId: overrides?.runId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??

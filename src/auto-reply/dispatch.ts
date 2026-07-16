@@ -524,7 +524,12 @@ export async function dispatchInboundMessage(params: {
   const replyPayloadRunState = params.replyPayloadRunState ?? {
     runId: replyOptions?.runId,
   };
-  const replyOptionsWithRunState = bindReplyPayloadRunState(replyOptions, replyPayloadRunState);
+  const runId = replyOptions?.runId ?? replyPayloadRunState.runId ?? crypto.randomUUID();
+  replyPayloadRunState.runId = runId;
+  const replyOptionsWithRunState = bindReplyPayloadRunState(
+    { ...replyOptions, runId },
+    replyPayloadRunState,
+  );
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",
     () => finalizeInboundContext(params.ctx),

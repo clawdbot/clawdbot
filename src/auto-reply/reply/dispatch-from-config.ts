@@ -520,6 +520,7 @@ async function dispatchReplyFromConfigInner(
   const buildHookState = (sourceCtx: FinalizedMsgContext) => {
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
       messageId: messageIdForHook,
+      runId: params.replyOptions?.runId,
     });
     return {
       hookContext: nextHookContext,

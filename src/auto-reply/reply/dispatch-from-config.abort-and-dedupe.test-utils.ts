@@ -1577,8 +1577,18 @@ describe("dispatchReplyFromConfig", () => {
       GroupChannel: "alerts",
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    let agentRunId: string | undefined;
+    const replyResolver = async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      agentRunId = options?.runId;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { runId: "caller-run-id" },
+    });
 
     const [event, hookContext] = firstMockCall(
       hookMocks.runner.runMessageReceived,
@@ -1591,7 +1601,7 @@ describe("dispatchReplyFromConfig", () => {
             metadata?: Record<string, unknown>;
             timestamp?: unknown;
           },
-          { accountId?: unknown; channelId?: unknown; conversationId?: unknown },
+          { accountId?: unknown; channelId?: unknown; conversationId?: unknown; runId?: unknown },
         ]
       | [];
     expect(event?.from).toBe(ctx.From);
@@ -1609,6 +1619,8 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookContext?.channelId).toBe("telegram");
     expect(hookContext?.accountId).toBe("acc-1");
     expect(hookContext?.conversationId).toBe("telegram:999");
+    expect(hookContext?.runId).toBe("caller-run-id");
+    expect(agentRunId).toBe("caller-run-id");
   });
 
   it("does not emit shared message_received hooks when the channel emitted them itself", async () => {
