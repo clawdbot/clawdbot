@@ -136,6 +136,10 @@ function resolveCopilotApiForVendor(
     return "anthropic-messages";
   }
   if (Array.isArray(supportedEndpoints)) {
+    const hasMessages = supportedEndpoints.some((ep) => ep.includes("messages"));
+    if (hasMessages) {
+      return "anthropic-messages";
+    }
     const hasResponses = supportedEndpoints.some((ep) => ep.includes("responses"));
     const hasCompletions = supportedEndpoints.some((ep) => ep.includes("completions"));
     if (hasResponses && !hasCompletions) {
