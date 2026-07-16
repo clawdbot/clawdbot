@@ -768,7 +768,9 @@ export async function dispatchOutbound(
   // surface a terminal notice to the user.  All other errors retain the
   // same silent cleanup semantics that existed before this guard was added.
   if (dispatchError !== undefined && isReplySessionInitConflictError(dispatchError)) {
-    throw dispatchError instanceof Error ? dispatchError : new Error(String(dispatchError));
+    throw dispatchError instanceof Error
+      ? dispatchError
+      : new Error(typeof dispatchError === "string" ? dispatchError : "ReplySessionInitConflict");
   }
 }
 

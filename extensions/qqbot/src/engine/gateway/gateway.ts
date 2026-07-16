@@ -342,7 +342,12 @@ async function startTypingForEvent(
 
 // ============ terminal notice for exhausted session-init conflicts ============
 
-/** Dependencies injected to keep the function testable without a full gateway. */
+/** Dependencies injected to keep the function testable without a full gateway.
+ *
+ * The interface and function are kept exported because the test suite
+ * imports them via `await import("./gateway.js")` to side-step module
+ * evaluation side effects; the production caller (`handleMessage`) uses
+ * them as module-local references. */
 export interface SessionConflictTerminalNoticeDeps {
   event: QueuedMessage;
   account: GatewayAccount;
@@ -395,10 +400,11 @@ export async function sendReplySessionConflictTerminalNotice(
       msgId: event.messageId,
     });
   } catch (sendErr) {
+    const sendErrDetail = sendErr instanceof Error ? sendErr.message : String(sendErr);
     log?.error(
       `terminal_notice_failed — errorId=${errorId} ` +
         `messageId=${event.messageId}: ` +
-        `${sendErr instanceof Error ? sendErr.message : String(sendErr)}`,
+        sendErrDetail,
     );
   }
 }
