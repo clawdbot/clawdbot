@@ -17,13 +17,17 @@ import {
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
+  externalCliDiscoveryForProviderAuth,
+  removeProviderAuthProfilesWithLock,
+} from "../../agents/auth-profiles.js";
+import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
+import {
+  listProfilesForProvider,
   promoteAuthProfileInOrder,
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
-import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import {
   loadAuthProfileStoreForRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,

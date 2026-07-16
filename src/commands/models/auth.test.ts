@@ -378,17 +378,19 @@ describe("modelsAuthClearCooldownCommand", () => {
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
     mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
-    mocks.clearAuthProfileCooldown.mockImplementation(async ({ store, profileId }) => {
-      store.usageStats = {
-        ...store.usageStats,
-        [profileId]: {
-          ...store.usageStats?.[profileId],
-          errorCount: 0,
-          blockedUntil: undefined,
-          blockedReason: undefined,
-        },
-      };
-    });
+    mocks.clearAuthProfileCooldown.mockImplementation(
+      async ({ store, profileId: targetProfileId }) => {
+        store.usageStats = {
+          ...store.usageStats,
+          [targetProfileId]: {
+            ...store.usageStats?.[targetProfileId],
+            errorCount: 0,
+            blockedUntil: undefined,
+            blockedReason: undefined,
+          },
+        };
+      },
+    );
     mocks.callGateway.mockResolvedValue({});
   });
 
