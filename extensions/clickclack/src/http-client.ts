@@ -22,6 +22,10 @@ type ClientOptions = {
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Match Slack relay / Mattermost / Signal channel gateway handshake floors.
+// Without this, gateway.ts waits forever for close/error when TCP accepts but
+// never upgrades, pinning the monitor reconnect loop.
+const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
  * Creates a typed client for the ClickClack API using bearer-token auth.
@@ -146,6 +150,7 @@ export function createClickClackClient(options: ClientOptions) {
         headers: {
           Authorization: `Bearer ${options.token}`,
         },
+        handshakeTimeout: CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
       });
     },
   };
