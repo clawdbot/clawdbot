@@ -199,6 +199,7 @@ export function resolveOneShotResumeIdentity(
   const identity = resolveSessionIdentityFromMeta(meta);
   return meta.mode === "oneshot" &&
     terminalStatus === "completed" &&
+    identity?.state === "resolved" &&
     identity?.sessionResumeSupported === true &&
     identityHasStableSessionId(identity)
     ? identity

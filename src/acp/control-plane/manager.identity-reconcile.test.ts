@@ -92,6 +92,7 @@ describe("manager identity reconciliation", () => {
           identity: {
             state: "pending",
             source: "ensure",
+            acpxSessionId: "provisional-acpx-session-1",
             sessionResumeSupported: true,
             lastUpdatedAt: 2,
           },
