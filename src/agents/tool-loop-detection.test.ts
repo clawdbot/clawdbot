@@ -493,6 +493,53 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("counts critical loop vetoes toward the global no-progress breaker", () => {
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: CRITICAL_THRESHOLD,
+      });
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        expect(
+          detectToolCallLoop(state, fixture.toolName, fixture.params, enabledLoopDetectionConfig),
+        ).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+          count: i,
+        });
+        const recorded = recordToolCallOutcome(state, {
+          toolName: fixture.toolName,
+          toolParams: fixture.params,
+          toolCallId: `loop-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+        expect(recorded).toMatchObject({
+          toolCallId: `loop-veto-${i}`,
+          outcomeKind: "tool-loop-veto",
+          resultHash: undefined,
+        });
+      }
+
+      expect(
+        detectToolCallLoop(state, fixture.toolName, fixture.params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
     it("warns on repeated stable argument churn without vetoing the next call", () => {
       const state = createState();
       const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
