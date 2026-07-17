@@ -134,10 +134,6 @@ extensions/google-meet/index.ts
 extensions/google-meet/src/cli.test.ts
 extensions/google-meet/src/cli.ts
 extensions/google-meet/src/meet.ts
-extensions/google-meet/src/realtime-node.ts
-extensions/google-meet/src/realtime.ts
-extensions/google-meet/src/runtime.ts
-extensions/google-meet/src/transports/chrome.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -282,7 +278,6 @@ extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
-extensions/slack/src/monitor/context.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
@@ -322,7 +317,6 @@ extensions/telegram/src/send.test.ts
 extensions/telegram/src/send.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
-extensions/telegram/src/webhook.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
 extensions/voice-call/index.ts
@@ -893,7 +887,6 @@ src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
-src/gateway/session-transcript-readers.ts
 src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
