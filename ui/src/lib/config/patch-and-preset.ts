@@ -95,6 +95,14 @@ export async function applyPresetConfig(
   loadConfig: LoadConfigFn,
   resolveSnapshot: ResolveSnapshotFn,
 ): Promise<boolean> {
+  // Block preset application while Raw JSON has unsaved edits — merging a
+  // preset into a dirty raw document would silently overwrite the user's
+  // in-progress edits, and the post-patch reload can't reconcile them.
+  if (state.configFormMode === "raw" && state.configFormDirty) {
+    state.lastError =
+      "Cannot apply preset while Raw JSON has unsaved edits. Save or discard your changes first.";
+    return false;
+  }
   const ok = await patchConfig(state, { raw: patch, note }, guard);
   if (!ok) {
     return false;
