@@ -190,6 +190,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
 
   it("per-turn cap reject for tool-delegate carries delegate axes and live headroom", () => {
     const { tracer, spans } = makeRecordingTracer();
+    const reason = "poll change status";
     setContinuationTracer(tracer);
     emitContinuationDisabledSpan({
       chainId: "019dcf57-b536-77cc-834b-b803d9262099",
@@ -198,7 +199,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       signalKind: "tool-delegate",
       delegateDelivery: "timer",
       delegateMode: "silent-wake",
-      reason: "poll change status",
+      reason,
     });
     expect(expectDefined(spans.at(0), "disabled span").options?.attributes).toMatchObject({
       "disabled.reason": "cap.delegates_per_turn",
@@ -208,14 +209,14 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       "chain.step.remaining": 12,
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262099",
       "reason.present": true,
-      "reason.length": 19,
+      "reason.length": reason.length,
       "reason.hash": expect.stringMatching(REASON_HASH_RE),
       "reason.redacted": false,
       "continuation.disabled": true,
     });
     expectNoAttributeValueContains(
       expectDefined(spans.at(0), "disabled span").options?.attributes,
-      "poll change status",
+      reason,
     );
   });
 
