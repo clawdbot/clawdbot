@@ -83,6 +83,43 @@ it("keeps multibyte stderr intact when pipe chunks split a character", async () 
   await expect(result).rejects.toThrow("fd 失败：权限被拒绝");
 });
 
+it("rejects and kills fd when the search stalls without output past the deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  // The child never writes output and never closes, mimicking fd stalled on a
+  // broken mount; the tool must reject instead of hanging for the outer abort.
+  const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+
+  const rejection = expect(result).rejects.toThrow("fd timed out after 60 seconds without output");
+  await vi.advanceTimersByTimeAsync(60_000);
+  await rejection;
+  expect(child.killMock).toHaveBeenCalledOnce();
+  vi.useRealTimers();
+});
+
+it("clears the stall timer when fd exits normally", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end("/workspace/a.ts\n");
+  child.emit("close", 0, null);
+  await result;
+
+  expect(vi.getTimerCount()).toBe(0);
+  expect(child.killMock).not.toHaveBeenCalled();
+  vi.useRealTimers();
+});
+
 it.each(["stdout", "stderr"] as const)(
   "rejects and stops fd when %s emits an error",
   async (stream) => {

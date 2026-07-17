@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -50,6 +51,11 @@ const grepSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
 });
 const DEFAULT_LIMIT = 100;
+// ripgrep can stall on a broken filesystem or network mount without exiting or
+// emitting output. Bound the silence, not the total runtime: any stdout line
+// or stderr chunk re-arms the timer, so a healthy long search keeps running
+// and only a silent child is killed.
+const RG_STALL_TIMEOUT_MS = 60_000;
 
 /**
  * Pluggable operations for the grep tool.
@@ -168,8 +174,10 @@ export function createGrepToolDefinition(
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
+        let execTimeout: NodeJS.Timeout | undefined;
         const cleanup = () => {
           rl?.close();
+          clearTimeout(execTimeout);
           signal?.removeEventListener("abort", onAbort);
         };
         const settle = (fn: () => void): boolean => {
@@ -268,12 +276,34 @@ export function createGrepToolDefinition(
             }
             const spawnedChild = spawnCommand([rgPath, ...args], {
               buffer: false,
+              // A wedged ripgrep can ignore the initial SIGTERM from the
+              // timeout or abort path; execa escalates to SIGKILL after this
+              // grace window.
+              forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
             releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
+            execTimeout = setTimeout(() => {
+              if (
+                settle(() =>
+                  reject(
+                    new Error(
+                      `ripgrep timed out after ${RG_STALL_TIMEOUT_MS / 1000} seconds without output`,
+                    ),
+                  ),
+                )
+              ) {
+                stopChild();
+                // If ripgrep ignores the SIGTERM above, forceKillAfterDelay
+                // reaps it after the grace window; release the pipes now so a
+                // defiant child cannot pin stream handles past settlement.
+                spawnedChild.stdout?.destroy();
+                spawnedChild.stderr?.destroy();
+              }
+            }, RG_STALL_TIMEOUT_MS);
             let stderr = "";
             let matchCount = 0;
             let matchLimitReached = false;
@@ -284,6 +314,9 @@ export function createGrepToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             spawnedChild.stderr?.setEncoding("utf8");
             spawnedChild.stderr?.on("data", (chunk: string) => {
+              // Stream activity proves the child is alive; re-arm the stall
+              // timer so only a silent ripgrep is killed.
+              execTimeout?.refresh();
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
@@ -331,6 +364,9 @@ export function createGrepToolDefinition(
             // Collect matches during streaming, then format them after rg exits.
             const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
             rl.on("line", (line) => {
+              // Stream activity proves the child is alive; re-arm the stall
+              // timer so only a silent ripgrep is killed.
+              execTimeout?.refresh();
               if (!line.trim() || matchLimitReached) {
                 return;
               }
@@ -370,6 +406,11 @@ export function createGrepToolDefinition(
             });
             spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
+              // The child exited, so the stall timer no longer measures ripgrep
+              // activity. Clear it here rather than at settle: context
+              // formatting below can await readFile() past the stall window,
+              // and an exited child cannot be "silent".
+              clearTimeout(execTimeout);
               void (async () => {
                 if (settled) {
                   return;

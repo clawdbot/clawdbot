@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
@@ -48,6 +49,11 @@ const findSchema = Type.Object({
   limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
 });
 const DEFAULT_LIMIT = 1000;
+// fd can stall on a broken filesystem or network mount without exiting or
+// emitting output. Bound the silence, not the total runtime: any stdout line
+// or stderr chunk re-arms the timer, so a healthy long search keeps running
+// and only a silent child is killed.
+const FD_STALL_TIMEOUT_MS = 60_000;
 
 /**
  * Pluggable operations for the find tool.
@@ -175,11 +181,13 @@ export function createFindToolDefinition(
 
         let settled = false;
         let stopChild: (() => void) | undefined;
+        let execTimeout: NodeJS.Timeout | undefined;
         const settle = (fn: () => void) => {
           if (settled) {
             return;
           }
           settled = true;
+          clearTimeout(execTimeout);
           signal?.removeEventListener("abort", onAbort);
           stopChild = undefined;
           fn();
@@ -282,6 +290,9 @@ export function createFindToolDefinition(
 
             const child = spawnCommand([fdPath, ...args], {
               buffer: false,
+              // A wedged fd can ignore the initial SIGTERM from the timeout or
+              // abort path; execa escalates to SIGKILL after this grace window.
+              forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
@@ -295,6 +306,23 @@ export function createFindToolDefinition(
                 child.kill();
               }
             };
+
+            execTimeout = setTimeout(() => {
+              stopChild?.();
+              settle(() =>
+                reject(
+                  new Error(
+                    `fd timed out after ${FD_STALL_TIMEOUT_MS / 1000} seconds without output`,
+                  ),
+                ),
+              );
+              // If fd ignores the SIGTERM above, forceKillAfterDelay reaps it
+              // after the grace window; release the pipes now so a defiant
+              // child cannot pin stream handles past settlement.
+              rl.close();
+              child.stdout?.destroy();
+              child.stderr?.destroy();
+            }, FD_STALL_TIMEOUT_MS);
 
             const cleanup = () => {
               rl.close();
@@ -312,6 +340,9 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
+              // Stream activity proves the child is alive; re-arm the stall
+              // timer so only a silent fd is killed.
+              execTimeout?.refresh();
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             // Readline re-emits input failures, while the stream listener also catches
@@ -321,6 +352,9 @@ export function createFindToolDefinition(
             child.stderr?.on("error", (error) => onStreamError("stderr", error));
 
             rl.on("line", (line) => {
+              // Stream activity proves the child is alive; re-arm the stall
+              // timer so only a silent fd is killed.
+              execTimeout?.refresh();
               lines.push(line);
             });
 
