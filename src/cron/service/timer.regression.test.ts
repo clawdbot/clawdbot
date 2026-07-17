@@ -5096,4 +5096,81 @@ it("#83933: quiet trigger tick perturbs scheduler state for timer but not operat
   expect(operatorJob.state.triggerEvalCount).toBe(1);
 });
 
+it("#83538: manual ok run on a deleteAfterRun one-shot survives maintenance recompute and still fires+deletes on schedule", async () => {
+  const scheduledAt = Date.parse("2026-05-22T10:00:00.000Z");
+  const endedAt = scheduledAt + 100;
+  const store = timerRegressionFixtures.makeStorePath();
+
+  // A DUE `at` one-shot armed at its scheduled slot; "at" defaults to
+  // deleteAfterRun, so a scheduled/watcher run would consume it.
+  const oneShot = createIsolatedRegressionJob({
+    id: "manual-ok-oneshot-survives",
+    name: "one-shot reminder",
+    scheduledAt,
+    schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+    payload: { kind: "agentTurn", message: "ping" },
+    state: { nextRunAtMs: scheduledAt },
+  });
+  oneShot.deleteAfterRun = true;
+
+  // Operator `cron run` returns ok: applyJobResult with operator origin is the
+  // exact state mutation a manual run performs.
+  const manualState = createRunningCronServiceState({
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => endedAt,
+    jobs: [oneShot],
+  });
+  const shouldDelete = applyJobResult(
+    manualState,
+    oneShot,
+    { status: "ok", delivered: true, startedAt: scheduledAt, endedAt },
+    { origin: "operator" },
+  );
+
+  // The manual ok run records its outcome but never consumes the one-shot: the
+  // pending scheduled slot is preserved and the job is not deleted (#83538).
+  expect(shouldDelete).toBe(false);
+  expect(oneShot.enabled).toBe(true);
+  expect(oneShot.state.lastStatus).toBe("ok");
+  expect(oneShot.state.lastRunWasManual).toBe(true);
+  expect(oneShot.state.nextRunAtMs).toBe(scheduledAt);
+  // lastRun >= nextRun is the alreadyExecutedSlot condition maintenance keys on;
+  // without the manual guard it would collapse the preserved slot into a zombie.
+  expect(oneShot.state.lastRunAtMs).toBeGreaterThanOrEqual(scheduledAt);
+
+  // Maintenance recompute of the expired slot must not wipe nextRunAtMs. This is
+  // the zombie path: computeJobNextRunAtMs's at-branch returned undefined for an
+  // ok status, but a manual ok run must stay armed for the scheduled fire.
+  recomputeNextRunsForMaintenance(manualState, { recomputeExpired: true, nowMs: endedAt });
+  expect(oneShot.state.nextRunAtMs).toBe(scheduledAt);
+  expect(computeJobNextRunAtMs(oneShot, endedAt)).toBe(scheduledAt);
+
+  // Restart/reload: recompute from persisted state still preserves the slot.
+  await saveCronStore(store.storePath, { version: 1, jobs: [oneShot] });
+  const reloaded = await loadCronStore(store.storePath);
+  const reloadedJob = requireJob({ store: reloaded }, oneShot.id);
+  expect(reloadedJob.state.nextRunAtMs).toBe(scheduledAt);
+  expect(computeJobNextRunAtMs(reloadedJob, endedAt)).toBe(scheduledAt);
+
+  // A real scheduled timer tick owns scheduler state (origin=timer): it fires the
+  // preserved slot and then consumes the deleteAfterRun one-shot.
+  const runIsolatedAgentJob = createDefaultIsolatedRunner();
+  const timerState = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    log: noopLogger,
+    nowMs: () => endedAt,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob,
+  });
+  await onTimer(timerState);
+
+  expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  expect(timerState.store?.jobs.find((j) => j.id === oneShot.id)).toBeUndefined();
+  const finalPersisted = await loadCronStore(store.storePath);
+  expect(finalPersisted.jobs.find((j) => j.id === oneShot.id)).toBeUndefined();
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
