@@ -7,6 +7,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import pMap from "p-map";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -90,8 +91,9 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   if (!files || files.length === 0) {
     return [];
   }
-  return await Promise.all(
-    files.map(async (filePath) => {
+  return await pMap(
+    files,
+    async (filePath) => {
       const resolvedPath = path.resolve(filePath);
       const buffer = await fs.readFile(resolvedPath);
       const mimeType = normalizeMimeType(
@@ -120,7 +122,8 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
         mimeType,
         data: buffer.toString("base64"),
       };
-    }),
+    },
+    { concurrency: 20 },
   );
 }
 

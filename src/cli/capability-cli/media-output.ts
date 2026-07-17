@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import pMap from "p-map";
 import { saveMediaBuffer } from "../../media/store.js";
 
 export async function writeOutputAsset(params: {
@@ -54,10 +55,12 @@ export async function writeOutputAsset(params: {
 export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
-  return await Promise.all(
-    files.map(async (filePath) => ({
+  return await pMap(
+    files,
+    async (filePath) => ({
       path: path.resolve(filePath),
       buffer: await fs.readFile(path.resolve(filePath)),
-    })),
+    }),
+    { concurrency: 20 },
   );
 }

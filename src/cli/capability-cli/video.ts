@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import type { Command } from "commander";
+import pMap from "p-map";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { assertOkOrThrowHttpError } from "../../agents/provider-http-errors.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -127,8 +128,9 @@ async function runVideoGenerate(params: {
     watermark: params.watermark,
     timeoutMs: params.timeoutMs,
   });
-  const outputs = await Promise.all(
-    result.videos.map(async (video, index) => {
+  const outputs = await pMap(
+    result.videos,
+    async (video, index) => {
       if (!video.buffer && !video.url) {
         throw new Error(`Video asset at index ${index} has neither buffer nor url`);
       }
@@ -196,7 +198,8 @@ async function runVideoGenerate(params: {
           subdir: "generated",
         })),
       };
-    }),
+    },
+    { concurrency: 20 },
   );
   return {
     ok: true,

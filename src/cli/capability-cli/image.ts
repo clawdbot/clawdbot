@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import pMap from "p-map";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runWithImageModelFallback } from "../../agents/model-fallback.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -71,13 +72,15 @@ async function runImageGenerate(params: {
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
-      ? await Promise.all(
-          (await readInputFiles(params.file)).map(async (entry) => ({
+      ? await pMap(
+          await readInputFiles(params.file),
+          async (entry) => ({
             buffer: entry.buffer,
             fileName: path.basename(entry.path),
             mimeType:
               (await detectMime({ buffer: entry.buffer, filePath: entry.path })) ?? "image/png",
-          })),
+          }),
+          { concurrency: 20 },
         )
       : undefined;
   const result = await generateImage({
@@ -104,8 +107,9 @@ async function runImageGenerate(params: {
     timeoutMs: params.timeoutMs,
     inputImages,
   });
-  const outputs = await Promise.all(
-    result.images.map(async (image, index) => {
+  const outputs = await pMap(
+    result.images,
+    async (image, index) => {
       const written = await writeOutputAsset({
         buffer: image.buffer,
         mimeType: image.mimeType,
@@ -122,7 +126,8 @@ async function runImageGenerate(params: {
         height: metadata?.height,
         revisedPrompt: image.revisedPrompt,
       };
-    }),
+    },
+    { concurrency: 20 },
   );
   return {
     ok: true,
@@ -150,8 +155,9 @@ async function runImageDescribe(params: {
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
   const prompt = normalizeOptionalString(params.prompt);
-  const outputs = await Promise.all(
-    params.files.map(async (filePath) => {
+  const outputs = await pMap(
+    params.files,
+    async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const preparedImage = activeModel
@@ -212,7 +218,8 @@ async function runImageDescribe(params: {
         attempts: result.attempts,
         kind: "image.description",
       };
-    }),
+    },
+    { concurrency: 20 },
   );
   return {
     ok: true,
