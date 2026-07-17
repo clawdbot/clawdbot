@@ -74,12 +74,14 @@ function createInMemoryHostedCatalogSnapshotStore(
 function hostedCatalogFeed(params: {
   sequence: number;
   pluginName: string;
+  expiresAt?: string;
 }): OfficialExternalPluginCatalogFeed {
   const pluginId = params.pluginName.replace(/^@[^/]+\//u, "");
   return {
     schemaVersion: 1,
     id: "openclaw-official-external-plugins",
     generatedAt: `2026-06-22T00:00:${String(params.sequence).padStart(2, "0")}.000Z`,
+    expiresAt: params.expiresAt ?? "2099-01-01T00:00:00.000Z",
     sequence: params.sequence,
     entries: [
       {
@@ -370,6 +372,60 @@ describe("official external plugin catalog", () => {
     expect(result.source).toBe("hosted");
     expect(result.feed?.id).toBe("clawhub-official");
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
+  });
+
+  it("preserves default ClawHub trust when the built-in profile is customized", async () => {
+    const feed = {
+      ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-configured" }),
+      id: "clawhub-official",
+    };
+    const signed = signedHostedCatalogFeed({ feed });
+    const result = await loadHostedCatalog({
+      catalogConfig: {
+        feeds: {
+          "clawhub-public": {
+            url: "https://clawhub.ai/v1/feeds/plugins",
+            feedId: "clawhub-official",
+          },
+        },
+      },
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
+          signed.publicKeyPem,
+      },
+      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
+  });
+
+  it("allows an explicit unsigned downgrade of the default ClawHub profile", async () => {
+    const body = JSON.stringify({
+      ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-unsigned" }),
+      id: "clawhub-official",
+    });
+    const result = await loadHostedCatalog({
+      catalogConfig: {
+        feeds: {
+          "clawhub-public": {
+            url: "https://clawhub.ai/v1/feeds/plugins",
+            feedId: "clawhub-official",
+            verification: { mode: "unsigned" },
+          },
+        },
+      },
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "incomplete",
+      },
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.trust).toBeUndefined();
   });
 
   it("rejects a valid default-profile envelope for a different feed identity", async () => {
@@ -1160,6 +1216,174 @@ describe("official external plugin catalog", () => {
 
     expect(offline.source).toBe("hosted-snapshot");
     expect(offline.entries.map((entry) => entry.name)).toEqual(["@openclaw/legacy-snapshot"]);
+  });
+
+  it("rejects expired signed feeds and keeps expired snapshots visible but not installable", async () => {
+    const feed = {
+      ...hostedCatalogFeed({
+        sequence: 8,
+        pluginName: "@openclaw/expiring",
+        expiresAt: "2026-06-22T00:01:00.000Z",
+      }),
+      entries: [
+        {
+          id: "@openclaw/expiring",
+          name: "@openclaw/expiring",
+          type: "plugin",
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          install: {
+            candidates: [
+              { sourceRef: "acme-npm", package: "@openclaw/expiring", version: "1.0.0" },
+            ],
+          },
+        },
+      ],
+    } satisfies OfficialExternalPluginCatalogFeed;
+    const signed = signedHostedCatalogFeed({ feed });
+    const catalogConfig = signedCatalogConfig(signed.publicKeyPem);
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    const seeded = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(
+        async () => new Response(signed.body, { status: 200, headers: { etag: '"expiring"' } }),
+      ),
+      now: () => new Date("2026-06-22T00:00:30.000Z"),
+      snapshotStore,
+    });
+    expect(seeded.source).toBe("hosted");
+    expect(
+      resolveOfficialExternalPluginInstall(seeded.entries[0]!, { catalogConfig }),
+    ).not.toBeNull();
+
+    const expiredFresh = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:01:01.000Z"),
+      snapshotStore: null,
+    });
+    expect(expiredFresh.source).toBe("bundled-fallback");
+    expect(expiredFresh.entries).toEqual([]);
+    expect(expiredFresh.error).toContain("signed feed expired");
+
+    const expiredSnapshot = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      ifNoneMatch: '"expiring"',
+      fetchImpl: vi.fn(
+        async () => new Response(null, { status: 304, headers: { etag: '"expiring"' } }),
+      ),
+      now: () => new Date("2026-06-22T00:01:01.000Z"),
+      snapshotStore,
+    });
+    expect(expiredSnapshot.source).toBe("hosted-snapshot");
+    expect(expiredSnapshot.entries).toHaveLength(1);
+    expect(expiredSnapshot.entries[0]).toMatchObject({
+      id: "@openclaw/expiring",
+      state: "unavailable",
+    });
+    expect(expiredSnapshot.entries[0]?.install).toBeUndefined();
+    expect(expiredSnapshot.feed.entries[0]?.install).toBeUndefined();
+    expect(
+      resolveOfficialExternalPluginInstall(expiredSnapshot.entries[0]!, { catalogConfig }),
+    ).toBeNull();
+    expect(expiredSnapshot.error).toContain("signed feed expired");
+
+    const expiredOffline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      offline: true,
+      now: () => new Date("2026-06-22T00:01:01.000Z"),
+      snapshotStore,
+    });
+    expect(expiredOffline.source).toBe("hosted-snapshot");
+    expect(expiredOffline.entries[0]).toMatchObject({ state: "unavailable" });
+    expect(expiredOffline.error).toContain("signed feed expired");
+
+    const expiredAfterError = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(null, { status: 503 })),
+      now: () => new Date("2026-06-22T00:01:01.000Z"),
+      snapshotStore,
+    });
+    expect(expiredAfterError.source).toBe("hosted-snapshot");
+    expect(expiredAfterError.entries[0]).toMatchObject({ state: "unavailable" });
+    expect(expiredAfterError.error).toContain("signed feed expired");
+  });
+
+  it("rejects signed feeds whose expiry does not follow generation", async () => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({
+        sequence: 8,
+        pluginName: "@openclaw/invalid-expiry",
+        expiresAt: "2026-06-21T23:59:59.000Z",
+      }),
+    });
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(signed.publicKeyPem),
+      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:00:30.000Z"),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    expect(result.error).toContain("expiresAt must be later than generatedAt");
+  });
+
+  it("uses legacy signed snapshots for rollback state without preserving install authority", async () => {
+    const legacyFeed = hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy" });
+    delete legacyFeed.expiresAt;
+    const legacy = signedHostedCatalogFeed({ feed: legacyFeed });
+    const newer = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 9, pluginName: "@openclaw/current" }),
+      privateKeyPem: legacy.privateKeyPem,
+    });
+    const url = "https://packages.acme.example/openclaw/feed";
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore([
+      {
+        body: legacy.body,
+        metadata: {
+          url,
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(legacy.body).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T00:00:08.000Z",
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-22T00:00:08.000Z",
+        },
+      },
+    ]);
+    const catalogConfig = signedCatalogConfig(legacy.publicKeyPem);
+
+    const stale = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      offline: true,
+      snapshotStore,
+    });
+    expect(stale.source).toBe("hosted-snapshot");
+    expect(stale.entries[0]).toMatchObject({ name: "@openclaw/legacy", state: "unavailable" });
+    expect(resolveOfficialExternalPluginInstall(stale.entries[0]!, { catalogConfig })).toBeNull();
+    expect(stale.error).toContain("has no expiresAt");
+
+    const updated = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(newer.body, { status: 200 })),
+      now: () => new Date("2026-06-22T00:00:30.000Z"),
+      snapshotStore,
+    });
+    expect(updated.source).toBe("hosted");
+    expect(updated.entries.map((entry) => entry.name)).toEqual(["@openclaw/current"]);
   });
 
   it.each([
