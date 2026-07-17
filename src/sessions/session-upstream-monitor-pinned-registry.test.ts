@@ -34,7 +34,7 @@ function provider(
     id,
     label: id,
     list: async () => [],
-    read: async () => ({ items: [] }),
+    read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
     checkUpstreamActivity,
   };
 }
