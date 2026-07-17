@@ -64,6 +64,49 @@ describe("sessions_yield orchestration", () => {
     expect(queueResult.reason).toBe("no_active_run");
   });
 
+  it("accepts a later inbound turn on the same session after yield", async () => {
+    const sessionId = "yield-resume-session";
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: sessionId,
+        yieldDetected: true,
+      }),
+    );
+    const yielded = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      sessionId,
+      runId: "run-yield-before-resume",
+    });
+
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: sessionId,
+        assistantTexts: ["Answer received."],
+      }),
+    );
+    const resumed = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      sessionId,
+      runId: "run-after-yield-resume",
+      prompt: "The user answered the question.",
+    });
+
+    expect(yielded.meta).toMatchObject({
+      livenessState: "paused",
+      stopReason: "end_turn",
+      yielded: true,
+    });
+    expect(resumed.meta.yielded).toBeUndefined();
+    expect(resumed.payloads).toBeDefined();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ prompt: "The user answered the question." }),
+    );
+    expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
+  });
+
   it("clientToolCalls takes precedence over yieldDetected", async () => {
     // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

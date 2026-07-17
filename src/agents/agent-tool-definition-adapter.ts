@@ -242,7 +242,7 @@ function describeToolFailureInputs(params: {
   return parts.join(" ");
 }
 
-function normalizeToolExecutionResult(params: {
+export function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
 }): AgentToolResult<unknown> {
@@ -270,26 +270,6 @@ function buildToolExecutionErrorResult(params: {
     tool: params.toolName,
     error: params.message,
   });
-}
-
-async function applyToolResultControl(params: {
-  toolName: string;
-  result: AgentToolResult<unknown>;
-  hookContext?: HookContext;
-}): Promise<AgentToolResult<unknown>> {
-  const control = params.result.control;
-  if (!control) {
-    return params.result;
-  }
-  const message = control.message?.trim() || "Turn yielded.";
-  if (!params.hookContext?.onYield) {
-    return buildToolExecutionErrorResult({
-      toolName: params.toolName,
-      message: "Tool requested yield, but yield is not supported in this context",
-    });
-  }
-  await params.hookContext.onYield(message);
-  return params.result;
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -446,14 +426,9 @@ export function toToolDefinitions(
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
-          const result = normalizeToolExecutionResult({
+          return normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
-          });
-          return await applyToolResultControl({
-            toolName: normalizedName,
-            result,
-            ...(hookContext ? { hookContext } : {}),
           });
         } catch (err) {
           if (signal?.aborted) {

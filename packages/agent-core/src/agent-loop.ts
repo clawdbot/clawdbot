@@ -1175,48 +1175,72 @@ async function finalizeToolCallOutcome(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<FinalizedToolCallOutcome> {
-  if (!config.afterToolOutcome) {
-    return finalized;
+  let outcome = finalized;
+  if (config.afterToolOutcome) {
+    try {
+      const afterResult = await config.afterToolOutcome(
+        {
+          assistantMessage,
+          toolCall: finalized.toolCall,
+          args,
+          result: finalized.result,
+          isError: finalized.isError,
+          executionStarted: finalized.executionStarted,
+          ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+          context: currentContext,
+        },
+        signal,
+      );
+      if (afterResult) {
+        outcome = {
+          ...finalized,
+          result: {
+            ...finalized.result,
+            content: afterResult.content ?? finalized.result.content,
+            details: afterResult.details ?? finalized.result.details,
+            terminate: afterResult.terminate ?? finalized.result.terminate,
+            control: afterResult.control ?? finalized.result.control,
+          },
+          isError: afterResult.isError ?? finalized.isError,
+        };
+      }
+    } catch (error) {
+      const errorResult = createErrorToolResult(
+        error instanceof Error ? error.message : String(error),
+      );
+      outcome = {
+        ...finalized,
+        result: {
+          ...errorResult,
+          ...(finalized.result.terminate === undefined
+            ? {}
+            : { terminate: finalized.result.terminate }),
+        },
+        isError: true,
+      };
+    }
+  }
+
+  const control = outcome.result.control;
+  if (!control) {
+    return outcome;
+  }
+  if (!config.onToolResultControl) {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool requested ${control.type}, but ${control.type} is not supported in this runtime`,
+      ),
+      isError: true,
+    };
   }
   try {
-    const afterResult = await config.afterToolOutcome(
-      {
-        assistantMessage,
-        toolCall: finalized.toolCall,
-        args,
-        result: finalized.result,
-        isError: finalized.isError,
-        executionStarted: finalized.executionStarted,
-        ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
-        context: currentContext,
-      },
-      signal,
-    );
-    if (!afterResult) {
-      return finalized;
-    }
-    return {
-      ...finalized,
-      result: {
-        ...finalized.result,
-        content: afterResult.content ?? finalized.result.content,
-        details: afterResult.details ?? finalized.result.details,
-        terminate: afterResult.terminate ?? finalized.result.terminate,
-      },
-      isError: afterResult.isError ?? finalized.isError,
-    };
+    await config.onToolResultControl(control);
+    return outcome;
   } catch (error) {
-    const errorResult = createErrorToolResult(
-      error instanceof Error ? error.message : String(error),
-    );
     return {
-      ...finalized,
-      result: {
-        ...errorResult,
-        ...(finalized.result.terminate === undefined
-          ? {}
-          : { terminate: finalized.result.terminate }),
-      },
+      ...outcome,
+      result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
     };
   }

@@ -1363,6 +1363,127 @@ describe("agentLoop tool termination", () => {
     });
   });
 
+  it.each([
+    {
+      name: "added",
+      toolControl: undefined,
+      hookControl: { type: "yield" as const, message: "Added after execution" },
+    },
+    {
+      name: "replaced",
+      toolControl: { type: "yield" as const, message: "Original request" },
+      hookControl: { type: "yield" as const, message: "Replaced after execution" },
+    },
+  ])("applies a $name control only after afterToolCall finalizes it", async (scenario) => {
+    const controller = new AbortController();
+    const handledControls: unknown[] = [];
+    const tool: AgentTool = {
+      ...makeTool("ask_user", []),
+      execute: async () => ({
+        content: [{ type: "text", text: "Question sent." }],
+        details: { status: "pending" },
+        ...(scenario.toolControl ? { control: scenario.toolControl } : {}),
+      }),
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-ask-user", name: tool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "ask", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          afterToolCall: async () => ({ control: scenario.hookControl }),
+          onToolResultControl: async (control) => {
+            handledControls.push(control);
+            controller.abort({ code: "sessions_yield", turnHandoff: true });
+          },
+        },
+        controller.signal,
+        streamFn,
+      ),
+    );
+    const toolEnd = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(handledControls).toEqual([scenario.hookControl]);
+    expect(toolEnd?.result).toMatchObject({
+      content: [{ type: "text", text: "Question sent." }],
+      details: { status: "pending" },
+      control: scenario.hookControl,
+    });
+  });
+
+  it("turns an unsupported finalized control into a tool error", async () => {
+    let turn = 0;
+    const tool: AgentTool = {
+      ...makeTool("ask_user", []),
+      execute: async () => ({
+        content: [{ type: "text", text: "Question sent." }],
+        details: { status: "pending" },
+        control: { type: "yield", message: "Waiting for answer" },
+      }),
+    };
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-ask-user", name: tool.name, arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "unsupported" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "ask", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      ),
+    );
+    const toolEnd = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(toolEnd).toMatchObject({
+      isError: true,
+      result: {
+        details: {},
+        content: [
+          {
+            type: "text",
+            text: "Tool requested yield, but yield is not supported in this runtime",
+          },
+        ],
+      },
+    });
+  });
+
   it("marks policy-blocked tool calls as not executed", async () => {
     const executed: string[] = [];
     let turn = 0;

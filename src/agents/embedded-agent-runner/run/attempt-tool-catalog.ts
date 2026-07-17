@@ -74,7 +74,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       agentId: input.sessionAgentId,
     }),
     onToolOutcome: attempt.onToolOutcome,
-    onYield: preparedToolBase.onYield,
     allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
   };
   const codeModeTools = codeModeControlsEnabledForRun

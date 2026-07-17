@@ -317,7 +317,10 @@ side effect succeeds. OpenClaw records the tool result, ends the current turn
 with the same runtime path as `sessions_yield`, and waits for a later inbound
 event to resume the session. Use this for flows such as native channel approval
 cards where continuing the model loop before the callback would create stale or
-duplicate work.
+duplicate work. OpenClaw applies the control only after host result-finalization
+hooks have finished, so a hook-added or hook-replaced control is the value the
+runtime uses. Runtimes that do not support the control return an explicit tool
+error instead of silently continuing the turn.
 
 ```typescript
 import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";

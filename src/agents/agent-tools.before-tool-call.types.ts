@@ -55,8 +55,6 @@ export type HookContext = {
   turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
-  /** Runtime callback used by tools that need to end the current turn cooperatively. */
-  onYield?: (message: string) => Promise<void> | void;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
   skillUsagePaths?: SkillUsagePath[];
