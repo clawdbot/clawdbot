@@ -354,7 +354,13 @@ export async function runSubagentAnnounceFlow(params: {
       subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (requesterIsInternalSession()) {
         if (!subagentRegistryRuntime.isSubagentSessionRunActive(targetRequesterSessionKey)) {
+          // A cleaned-up intermediate child normally must not receive a late
+          // ordinary completion announcement. A tree continuation return is
+          // different: its ancestor set is resolved from that intermediate
+          // child, so dropping here strands a completed grandchild before the
+          // targeted-return router can deliver to the root.
           if (
+            params.continuationFanoutMode !== "tree" &&
             subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
               targetRequesterSessionKey,
             )

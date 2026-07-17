@@ -183,16 +183,20 @@ describe("subagent announce targeted continuation return integration", () => {
     });
   });
 
-  it("delivers fanoutMode=tree returns under the default disabled cross-session policy", async () => {
+  it("delivers fanoutMode=tree returns after its inactive intermediate requester was cleaned up", async () => {
     await withTempDir({ prefix: "openclaw-targeted-return-tree-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const nonce = "TREE-TARGETED-RETURN-NONCE-641";
-      const requesterSessionKey = "agent:main:dispatcher-tree";
+      const requesterSessionKey = "agent:main:subagent:dispatcher-tree";
       const rootSessionKey = "agent:main:root-tree";
       registryRuntimeMock.listAncestorSessionKeys.mockReturnValueOnce([
         requesterSessionKey,
         rootSessionKey,
       ]);
+      registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
+      registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
+        (sessionKey: string) => sessionKey === requesterSessionKey,
+      );
 
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: "agent:main:subagent:tree-return",
@@ -214,14 +218,17 @@ describe("subagent announce targeted continuation return integration", () => {
 
       expect(runtimeErrorMock.mock.calls).toEqual([]);
       expect(didAnnounce).toBe(true);
+      expect(registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession).toHaveBeenCalledWith(
+        requesterSessionKey,
+      );
+      expect(registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession).toHaveBeenCalledWith(
+        rootSessionKey,
+      );
       expect(registryRuntimeMock.listAncestorSessionKeys).toHaveBeenCalledWith(requesterSessionKey);
 
       const persisted = await readQueuedSystemEventDeliveries(stateDir);
-      expect(persisted).toHaveLength(2);
-      expect(persisted.map((entry) => entry.sessionKey).toSorted()).toEqual([
-        requesterSessionKey,
-        rootSessionKey,
-      ]);
+      expect(persisted).toHaveLength(1);
+      expect(persisted.map((entry) => entry.sessionKey)).toEqual([rootSessionKey]);
       for (const entry of persisted) {
         expect(entry.kind).toBe("systemEvent");
         if (entry.kind === "systemEvent") {
@@ -229,20 +236,13 @@ describe("subagent announce targeted continuation return integration", () => {
         }
       }
 
-      for (const sessionKey of [requesterSessionKey, rootSessionKey]) {
+      for (const sessionKey of [rootSessionKey]) {
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
         expect(
           expectDefined(peekSystemEventEntries(sessionKey).at(0), "system event").text,
         ).toContain(nonce);
       }
-      expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(2);
-      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: requesterSessionKey,
-          reason: "delegate-return",
-          parentRunId: "run-tree-targeted-return",
-        }),
-      );
+      expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
       expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: rootSessionKey,
@@ -251,9 +251,7 @@ describe("subagent announce targeted continuation return integration", () => {
         }),
       );
       expect(runtimeLogMock).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `[continuation:targeted-return] Delivered to ${requesterSessionKey},${rootSessionKey}`,
-        ),
+        expect.stringContaining(`[continuation:targeted-return] Delivered to ${rootSessionKey}`),
       );
     });
   });

@@ -18,6 +18,7 @@ const continuationLog = createSubsystemLogger("continuation/announce");
 
 type RegistryReturnRuntime = {
   listAncestorSessionKeys: (sessionKey: string) => string[];
+  shouldIgnorePostCompletionAnnounceForSession: (sessionKey: string) => boolean;
 };
 
 async function listKnownSessionKeysOnHost(cfg: OpenClawConfig): Promise<string[]> {
@@ -93,7 +94,12 @@ export async function routeSubagentContinuationReturn(params: {
   if (hasTargeting) {
     const treeSessionKeys =
       params.continuationFanoutMode === "tree"
-        ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
+        ? params.registryRuntime
+            ?.listAncestorSessionKeys(params.targetRequesterSessionKey)
+            .filter(
+              (sessionKey) =>
+                !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
+            )
         : undefined;
     const allSessionKeys =
       params.continuationFanoutMode === "all"
