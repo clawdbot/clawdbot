@@ -124,7 +124,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000) {
     if (predicate()) {
       return;
     }
-    await new Promise((resolveTurn) => setTimeout(resolveTurn, 20));
+    await new Promise<void>((resolveTurn) => {
+      setTimeout(resolveTurn, 20);
+    });
   }
   throw new Error("timed out waiting for condition");
 }
