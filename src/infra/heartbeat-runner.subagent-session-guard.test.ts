@@ -7,6 +7,7 @@ import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { markTrustedContinuationHeartbeatWake } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -146,22 +147,86 @@ describe("runHeartbeatOnce", () => {
         toJid: "jid",
       });
 
-      await runHeartbeatOnce({
-        cfg,
-        sessionKey: subagentSessionKey,
-        reason: "delegate-return",
-        trustedContinuationRouting: true,
-        deps: {
-          getReplyFromConfig: replySpy,
-          whatsapp: sendWhatsApp,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
+      await runHeartbeatOnce(
+        markTrustedContinuationHeartbeatWake({
+          cfg,
+          sessionKey: subagentSessionKey,
+          reason: "delegate-return",
+          deps: {
+            getReplyFromConfig: replySpy,
+            whatsapp: sendWhatsApp,
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        }),
+      );
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;
       expect(replyParams?.SessionKey).toBe(subagentSessionKey);
+    });
+  });
+
+  it("rejects trusted continuation routing for unscoped legacy subagent keys", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const legacySubagentSessionKey = "subagent:legacy";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-main-heartbeat-target",
+          },
+          [legacySubagentSessionKey]: {
+            sessionId: "sid-legacy-subagent",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-legacy-subagent-target",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue({ text: "NO_REPLY" });
+      await runHeartbeatOnce(
+        markTrustedContinuationHeartbeatWake({
+          cfg,
+          sessionKey: legacySubagentSessionKey,
+          reason: "delegate-return",
+          deps: {
+            getReplyFromConfig: replySpy,
+            whatsapp: vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" }),
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        }),
+      );
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;
+      expect(replyParams?.SessionKey).toBe(mainSessionKey);
     });
   });
 
@@ -223,19 +288,20 @@ describe("runHeartbeatOnce", () => {
       });
       replySpy.mockResolvedValue({ text: "NO_REPLY" });
 
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "ops",
-        sessionKey: "agent:main:subagent:demo",
-        reason: "delegate-return",
-        trustedContinuationRouting: true,
-        deps: {
-          getReplyFromConfig: replySpy,
-          whatsapp: vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" }),
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
-      });
+      await runHeartbeatOnce(
+        markTrustedContinuationHeartbeatWake({
+          cfg,
+          agentId: "ops",
+          sessionKey: "agent:main:subagent:demo",
+          reason: "delegate-return",
+          deps: {
+            getReplyFromConfig: replySpy,
+            whatsapp: vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" }),
+            getQueueSize: () => 0,
+            nowMs: () => 0,
+          },
+        }),
+      );
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;

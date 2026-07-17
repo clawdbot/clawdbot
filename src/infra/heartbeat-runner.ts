@@ -158,7 +158,6 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
-  type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
   hasTrustedContinuationHeartbeatWake,
   isRetryableHeartbeatBusySkipReason,
@@ -604,11 +603,12 @@ function resolveHeartbeatSession(
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    const forcedAgentId = resolveAgentIdFromSessionKey(forced);
+    const forcedAgentId = parseAgentSessionKey(forced)?.agentId;
     const canRouteTrustedContinuationWake =
       opts?.allowTrustedContinuationRouting === true &&
       isContinuationHeartbeatWakeReason(opts?.reason) &&
-      forcedAgentId === normalizeAgentId(resolvedAgentId);
+      forcedAgentId !== undefined &&
+      normalizeAgentId(forcedAgentId) === normalizeAgentId(resolvedAgentId);
     if (canRouteTrustedContinuationWake) {
       return {
         sessionKey: forced,
@@ -2879,17 +2879,7 @@ export function startHeartbeatRunner(opts: {
     }
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>
-    run({
-      reason: params.reason,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      heartbeat: params.heartbeat,
-      source: params.source,
-      intent: params.intent,
-      parentRunId: params.parentRunId,
-    });
-  const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
+  const disposeWakeHandler = setHeartbeatWakeHandler(run);
   updateConfig(state.cfg);
 
   const cleanup = () => {

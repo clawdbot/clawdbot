@@ -11,6 +11,7 @@ import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heart
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  markTrustedContinuationHeartbeatWake,
   requestHeartbeat,
 } from "./heartbeat-wake.js";
 
@@ -564,6 +565,30 @@ describe("startHeartbeatRunner", () => {
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
         parentRunId: "run-targeted-parent",
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("preserves trusted continuation routing through the wake-handler handoff", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "30m" } }]),
+      runSpy,
+      wake: markTrustedContinuationHeartbeatWake(
+        wake("delegate-return", {
+          agentId: "main",
+          sessionKey: "agent:main:subagent:trusted",
+          coalesceMs: 0,
+        }),
+      ),
+      expectedCall: {
+        agentId: "main",
+        reason: "delegate-return",
+        sessionKey: "agent:main:subagent:trusted",
+        trustedContinuationRouting: true,
       },
     });
 
