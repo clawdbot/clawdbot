@@ -89,6 +89,17 @@ function canonicalOperatorApprovalCreateSql(): string {
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
+function canonicalOperatorApprovalIndexSql(): string {
+  const marker = "CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry";
+  const nextTableMarker = "\n\nCREATE TABLE IF NOT EXISTS schema_meta (";
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(nextTableMarker, start);
+  if (start < 0 || end < 0) {
+    throw new Error("canonical operator approval indexes are unavailable");
+  }
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end);
+}
+
 // The only legacy shape this repair may destructively replace is the exact
 // prior canonical table with the two-kind constraint (before 'system-agent').
 // Matching column names alone is not fail-closed: a table with the same names
@@ -136,7 +147,7 @@ function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
       DROP TABLE operator_approvals;
       ALTER TABLE operator_approvals_migration_new RENAME TO operator_approvals;
     `);
-    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec(canonicalOperatorApprovalIndexSql());
   });
   return true;
 }

@@ -2099,6 +2099,51 @@ describe("openclaw state database", () => {
     expect(migratedSql.sql).toContain("'system-agent'");
   });
 
+  it("repairs additive columns after migrating legacy operator approvals", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    const currentApprovalSql = (
+      legacyDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    legacyDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    legacyDb.exec(
+      currentApprovalSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin'"),
+    );
+    legacyDb.exec(`
+      DROP TABLE operator_approvals_current;
+      DROP INDEX idx_managed_outgoing_images_agent_session;
+      DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
+      warnings: [],
+    });
+
+    const reopened = openOpenClawStateDatabase(options);
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM pragma_table_info('managed_outgoing_image_records')")
+        .all(),
+    ).toContainEqual({ name: "agent_id" });
+    const indexes = reopened.db
+      .prepare("SELECT name FROM pragma_index_list('managed_outgoing_image_records')")
+      .all();
+    expect(indexes).toContainEqual({ name: "idx_managed_outgoing_images_agent_session" });
+    expect(indexes).toContainEqual({ name: "idx_managed_outgoing_images_agent_message" });
+  });
+
   it("adds managed-image typed columns before creating canonical indexes", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
