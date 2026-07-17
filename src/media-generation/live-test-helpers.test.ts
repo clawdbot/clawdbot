@@ -1,6 +1,5 @@
 // Tests for media-generation live test helpers.
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   parseLiveCsvFilter,
   parseProviderModelMap,
@@ -37,9 +36,9 @@ describe("media-generation live-test helpers", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
-    expect(resolveConfiguredLiveProviderModels(cfg.agents.defaults.videoGenerationModel)).toEqual(
+    expect(resolveConfiguredLiveProviderModels(cfg.agents!.defaults!.videoGenerationModel)).toEqual(
       new Map([
         ["google", "google/veo-3.1-fast-generate-preview"],
         ["openai", "openai/sora-2"],
