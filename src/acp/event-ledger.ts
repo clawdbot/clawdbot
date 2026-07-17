@@ -3,6 +3,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
@@ -399,18 +405,18 @@ type AcpReplayEventRow = {
 };
 
 function sqliteRowToLedgerSession(db: DatabaseSync, row: AcpReplaySessionRow): LedgerSession {
-  const events = db
-    .prepare(
-      `SELECT session_id, seq, at, session_key, run_id, update_json
-         FROM acp_replay_events
-        WHERE session_id = ?
-        ORDER BY seq ASC`,
-    )
-    .all(row.session_id)
-    .flatMap((eventRow) => {
-      const normalized = sqliteRowToLedgerEvent(eventRow as AcpReplayEventRow);
-      return normalized ? [normalized] : [];
-    });
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const events = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("acp_replay_events")
+      .select(["session_id", "seq", "at", "session_key", "run_id", "update_json"])
+      .where("session_id", "=", row.session_id)
+      .orderBy("seq", "asc"),
+  ).rows.flatMap((eventRow) => {
+    const normalized = sqliteRowToLedgerEvent(eventRow as AcpReplayEventRow);
+    return normalized ? [normalized] : [];
+  });
   return {
     sessionId: row.session_id,
     sessionKey: row.session_key,
@@ -441,13 +447,22 @@ function sqliteRowToLedgerEvent(row: AcpReplayEventRow): AcpEventLedgerEntry | u
 }
 
 function readSqliteSessionById(db: DatabaseSync, sessionId: string): LedgerSession | undefined {
-  const row = db
-    .prepare(
-      `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
-         FROM acp_replay_sessions
-        WHERE session_id = ?`,
-    )
-    .get(sessionId) as AcpReplaySessionRow | undefined;
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("acp_replay_sessions")
+      .select([
+        "session_id",
+        "session_key",
+        "cwd",
+        "complete",
+        "created_at",
+        "updated_at",
+        "next_seq",
+      ])
+      .where("session_id", "=", sessionId),
+  ) as AcpReplaySessionRow | undefined;
   return row ? sqliteRowToLedgerSession(db, row) : undefined;
 }
 
@@ -455,15 +470,26 @@ function readLatestCompleteSqliteSessionByKey(
   db: DatabaseSync,
   sessionKey: string,
 ): LedgerSession | undefined {
-  const row = db
-    .prepare(
-      `SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq
-         FROM acp_replay_sessions
-        WHERE session_key = ? AND complete = 1
-        ORDER BY updated_at DESC, session_id ASC
-        LIMIT 1`,
-    )
-    .get(sessionKey) as AcpReplaySessionRow | undefined;
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("acp_replay_sessions")
+      .select([
+        "session_id",
+        "session_key",
+        "cwd",
+        "complete",
+        "created_at",
+        "updated_at",
+        "next_seq",
+      ])
+      .where("session_key", "=", sessionKey)
+      .where("complete", "=", 1)
+      .orderBy("updated_at", "desc")
+      .orderBy("session_id", "asc")
+      .limit(1),
+  ) as AcpReplaySessionRow | undefined;
   return row ? sqliteRowToLedgerSession(db, row) : undefined;
 }
 
@@ -483,6 +509,7 @@ function upsertSqliteSession(
   if (!params.reset && existing) {
     const cwd = params.cwd || existing.cwd;
     const complete = existing.complete || params.complete ? 1 : 0;
+    // sqlite-allow-raw: SET with arithmetic on column refs not expressible in Kysely
     // SET expressions read the pre-update row, so the aggregate sheds the old
     // key/cwd lengths and gains the new ones; drift here would silently
     // unbound the byte budget.
@@ -509,7 +536,11 @@ function upsertSqliteSession(
   }
 
   if (params.reset) {
-    db.prepare("DELETE FROM acp_replay_events WHERE session_id = ?").run(params.sessionId);
+    const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("acp_replay_events").where("session_id", "=", params.sessionId),
+    );
   }
   // A fresh or reset session's footprint is just its own row overhead; event
   // bytes accumulate onto the aggregate as appends land.
@@ -518,6 +549,7 @@ function upsertSqliteSession(
     sessionKey: params.sessionKey,
     cwd: params.cwd,
   });
+  // sqlite-allow-raw: ON CONFLICT with COALESCE subquery not expressible in Kysely
   db.prepare(
     `INSERT INTO acp_replay_sessions (
        session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes
@@ -559,9 +591,13 @@ function upsertSqliteSession(
 // sums over at most maxSessions rows instead of scanning every event per
 // append, which was O(events) per message and quadratic while trimming.
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare("SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions")
-    .get() as { total?: number | bigint } | undefined;
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("acp_replay_sessions")
+      .select((eb) => [eb.fn.sum("estimated_bytes").as("total")]),
+  ) as { total?: number | bigint | null } | undefined;
   return normalizeSqliteInteger(row?.total ?? 0);
 }
 
@@ -590,6 +626,7 @@ function estimateEventRowBytes(params: {
 
 const LEDGER_TRIM_EVENT_BATCH = 64;
 
+// sqlite-allow-raw: subquery in DELETE with RETURNING not expressible in Kysely
 // Deletes up to `limit` oldest events for one session and returns the bytes
 // released, keeping the session aggregate in sync in the same statement pair.
 function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: number): number {
@@ -610,6 +647,7 @@ function deleteOldestSqliteEvents(db: DatabaseSync, sessionId: string, limit: nu
     return 0;
   }
   const freed = rows.reduce((sum, row) => sum + normalizeSqliteInteger(row.estimated_bytes), 0);
+  // sqlite-allow-raw: MAX(0, estimated_bytes - ?) arithmetic on column ref not expressible in Kysely
   db.prepare(
     `UPDATE acp_replay_sessions
         SET estimated_bytes = MAX(0, estimated_bytes - ?), complete = 0
@@ -622,6 +660,7 @@ function trimSqliteLedger(
   db: DatabaseSync,
   state: Pick<MutableLedgerState, "maxEventsPerSession" | "maxSessions" | "maxSerializedBytes">,
 ): void {
+  // sqlite-allow-raw: correlated subquery with GROUP BY + HAVING not cleanly expressible in Kysely
   // Cheap precheck: only sessions actually above the per-session cap pay for
   // event deletion (Codex log-partition pattern).
   const overCapSessions = db
@@ -641,6 +680,7 @@ function trimSqliteLedger(
     }
   }
 
+  // sqlite-allow-raw: Kysely cannot express LIMIT -1 (SQLite's no-limit-with-offset idiom)
   const oldSessions = db
     .prepare(
       `SELECT session_id
@@ -649,29 +689,38 @@ function trimSqliteLedger(
         LIMIT -1 OFFSET ?`,
     )
     .all(state.maxSessions) as Array<{ session_id: string }>;
+  const kyselyTrim = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   for (const session of oldSessions) {
-    db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
+    executeSqliteQuerySync(
+      db,
+      kyselyTrim.deleteFrom("acp_replay_sessions").where("session_id", "=", session.session_id),
+    );
   }
 
   // Byte budget: evict from the least-recently-updated session in bounded
   // batches, dropping the session row itself once its events are exhausted.
   // Aggregates keep every recheck O(maxSessions); no event scans occur.
   let serializedBytes = estimateSqliteLedgerBytes(db);
+  const kyselyBudget = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   while (serializedBytes > state.maxSerializedBytes) {
-    const session = db
-      .prepare(
-        `SELECT session_id
-           FROM acp_replay_sessions
-          ORDER BY updated_at ASC, session_id ASC
-          LIMIT 1`,
-      )
-      .get() as { session_id: string } | undefined;
+    const session = executeSqliteQueryTakeFirstSync(
+      db,
+      kyselyBudget
+        .selectFrom("acp_replay_sessions")
+        .select("session_id")
+        .orderBy("updated_at", "asc")
+        .orderBy("session_id", "asc")
+        .limit(1),
+    ) as { session_id: string } | undefined;
     if (!session) {
       break;
     }
     const deleted = deleteOldestSqliteEvents(db, session.session_id, LEDGER_TRIM_EVENT_BATCH);
     if (deleted === 0) {
-      db.prepare("DELETE FROM acp_replay_sessions WHERE session_id = ?").run(session.session_id);
+      executeSqliteQuerySync(
+        db,
+        kyselyBudget.deleteFrom("acp_replay_sessions").where("session_id", "=", session.session_id),
+      );
     }
     serializedBytes = estimateSqliteLedgerBytes(db);
   }
@@ -704,20 +753,20 @@ function appendSqliteUpdate(
     ...(params.runId !== undefined ? { runId: params.runId } : {}),
     updateJson,
   });
-  db.prepare(
-    `INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    params.sessionId,
-    session.nextSeq,
-    now,
-    params.sessionKey,
-    params.runId ?? null,
-    updateJson,
-    eventBytes,
+  const kyselyAppend = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  executeSqliteQuerySync(
+    db,
+    kyselyAppend.insertInto("acp_replay_events").values({
+      session_id: params.sessionId,
+      seq: session.nextSeq,
+      at: now,
+      session_key: params.sessionKey,
+      run_id: params.runId ?? null,
+      update_json: updateJson,
+      estimated_bytes: eventBytes,
+    }),
   );
-  // The delta covers the new event plus any session-key length change; SET
-  // expressions read the pre-update row, keeping the aggregate exact.
+  // sqlite-allow-raw: SET with arithmetic expression on column reference not expressible in Kysely
   db.prepare(
     `UPDATE acp_replay_sessions
         SET estimated_bytes = estimated_bytes - length(session_key) + ?,
@@ -787,11 +836,15 @@ export function createSqliteAcpEventLedger(
 
     async markIncomplete(markParams) {
       mutate((db) => {
-        db.prepare(
-          `UPDATE acp_replay_sessions
-              SET complete = 0, updated_at = ?
-            WHERE session_id = ? AND session_key = ?`,
-        ).run(state.now(), markParams.sessionId, markParams.sessionKey);
+        const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("acp_replay_sessions")
+            .set({ complete: 0, updated_at: state.now() })
+            .where("session_id", "=", markParams.sessionId)
+            .where("session_key", "=", markParams.sessionKey),
+        );
       });
     },
 
