@@ -23,7 +23,9 @@ export function readStreamingSandboxHttpResponse(params: {
     let streamFailure: string | null = null;
     let lastBodySeq = 0;
     let stdoutBuffer = "";
+    const stdoutDecoder = new TextDecoder();
     let stderr = "";
+    const stderrDecoder = new TextDecoder();
     const finalizeOnClose = async (status: "completed" | "failed", exitCode: number | null) => {
       await params.finalizeExec?.({
         status,
@@ -58,7 +60,7 @@ export function readStreamingSandboxHttpResponse(params: {
       }
     };
     params.child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
+      stdoutBuffer += stdoutDecoder.decode(chunk, { stream: true });
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -101,7 +103,7 @@ export function readStreamingSandboxHttpResponse(params: {
       }
     });
     params.child.stderr.on("data", (chunk: Buffer) => {
-      stderr = sliceUtf16Safe(`${stderr}${chunk.toString("utf8")}`, -4096);
+      stderr = sliceUtf16Safe(`${stderr}${stderrDecoder.decode(chunk, { stream: true })}`, -4096);
     });
     onChildOutputStreamError(params.child, (message) => {
       if (failed) {
@@ -126,6 +128,8 @@ export function readStreamingSandboxHttpResponse(params: {
       childFailure ??= error.message;
     });
     params.child.once("close", (code) => {
+      stdoutBuffer += stdoutDecoder.decode();
+      stderr = sliceUtf16Safe(`${stderr}${stderrDecoder.decode()}`, -4096);
       const exitCode = code ?? 1;
       if (streamFailure) {
         finalizeAfterClose("failed", exitCode);

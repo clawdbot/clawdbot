@@ -11,6 +11,7 @@
  * (no `error` listener on the stream) and the test fails.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Capture every child the exec-server spawns so tests can drive real stream
@@ -45,6 +46,7 @@ import {
 } from "./sandbox-exec-server.test-helpers.js";
 
 const TMPDIR = process.env.TMPDIR ?? "/tmp";
+const TMPDIR_URL = pathToFileURL(TMPDIR).href;
 const WS_OPEN = 1;
 
 function delay(ms: number): Promise<void> {
@@ -98,7 +100,7 @@ describe("sandbox exec-server pipe survival", () => {
     const start = (await rpc(socket, "process/start", {
       processId,
       argv: [process.execPath, "-e", SCRIPT],
-      cwd: TMPDIR,
+      cwd: TMPDIR_URL,
       tty: false,
       pipeStdin: false,
     })) as { processId: string };
@@ -122,7 +124,7 @@ describe("sandbox exec-server pipe survival", () => {
     await rpc(socket, "process/start", {
       processId: followId,
       argv: [process.execPath, "-e", "process.stdout.write('bridge-survived')"],
-      cwd: TMPDIR,
+      cwd: TMPDIR_URL,
       tty: false,
       pipeStdin: false,
     });
