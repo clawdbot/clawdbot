@@ -108,4 +108,98 @@ describe("readMemoryHostResponseTextSnippet", () => {
       readResponseJsonWithLimit(new Response(body), { errorPrefix: "remote memory" }),
     ).rejects.toThrow(/not valid for encoding/);
   });
+  it("accepts repeated identical JSON content-length values before reading", async () => {
+    let readStarted = false;
+    let done = false;
+    const response = {
+      headers: new Headers({ "content-length": "11, 11" }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              if (done) {
+                return { done: true, value: undefined };
+              }
+              done = true;
+              return { done: false, value: new TextEncoder().encode('{"ok":true}') };
+            },
+            async cancel() {},
+            releaseLock() {},
+          };
+        },
+      },
+    } as unknown as Response;
+
+    await expect(
+      readResponseJsonWithLimit(response, {
+        errorPrefix: "remote memory",
+        maxBytes: 11,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(readStarted).toBe(true);
+  });
+
+  it("rejects oversized repeated JSON content-length values before reading", async () => {
+    let readStarted = false;
+    let canceled = false;
+    const response = {
+      headers: new Headers({ "content-length": "12, 12" }),
+      body: {
+        async cancel() {
+          canceled = true;
+        },
+        getReader() {
+          return {
+            async read() {
+              readStarted = true;
+              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+            },
+            async cancel() {
+              canceled = true;
+            },
+            releaseLock() {},
+          };
+        },
+      },
+    } as unknown as Response;
+
+    await expect(
+      readResponseJsonWithLimit(response, {
+        errorPrefix: "remote memory",
+        maxBytes: 11,
+      }),
+    ).rejects.toThrow("remote memory: response body too large: 12 bytes (limit: 11 bytes)");
+    expect(readStarted).toBe(false);
+    expect(canceled).toBe(true);
+  });
+
+  it.each(["11, 12", "011, 11", "11,", "1e1"])(
+    "rejects invalid JSON content-length %j before reading",
+    async (contentLength) => {
+      let readStarted = false;
+      const response = {
+        headers: new Headers({ "content-length": contentLength }),
+        body: {
+          getReader() {
+            return {
+              async read() {
+                readStarted = true;
+                return { done: false, value: new TextEncoder().encode('{"ok":true}') };
+              },
+              async cancel() {},
+              releaseLock() {},
+            };
+          },
+        },
+      } as unknown as Response;
+
+      await expect(
+        readResponseJsonWithLimit(response, {
+          errorPrefix: "remote memory",
+        }),
+      ).rejects.toThrow(`remote memory: invalid content-length header: ${contentLength}`);
+      expect(readStarted).toBe(false);
+    },
+  );
 });
