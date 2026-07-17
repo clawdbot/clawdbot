@@ -54,7 +54,7 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
-    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+    /** Keep this tool model-visible; sequential tools are also always kept direct. */
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];

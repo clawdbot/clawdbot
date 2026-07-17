@@ -15,7 +15,6 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { normalizeToolExecutionResult } from "../../agent-tool-definition-adapter.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -338,19 +337,14 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: async () => {
-          const rawResult = await toolParams.tool.execute(
+        execute: async () =>
+          await toolParams.tool.execute(
             toolParams.toolCallId,
             toolParams.input,
             toolParams.signal ?? input.runAbortController.signal,
             toolParams.onUpdate,
             undefined as never,
-          );
-          return normalizeToolExecutionResult({
-            toolName: toolParams.toolName,
-            result: rawResult,
-          });
-        },
+          ),
       });
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.

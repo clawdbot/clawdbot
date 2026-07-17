@@ -324,9 +324,11 @@ runtime uses.
 A tool that can return a yield control must declare
 `executionMode: "sequential"`. The scheduler reads that declaration before the
 batch starts, so a successful yield aborts the turn before later sibling tools
-run. OpenClaw rejects yield controls from tools without that declaration.
-Runtimes that do not support the control also return an explicit tool error
-instead of silently continuing the turn.
+run. OpenClaw keeps sequential tools model-visible instead of hiding them behind
+Tool Search or Code Mode, because those catalog bridges cannot preserve the
+target tool's pre-execution scheduling identity. OpenClaw rejects yield controls
+from tools without that declaration. Runtimes that do not support the control
+also return an explicit tool error instead of silently continuing the turn.
 
 ```typescript
 import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
