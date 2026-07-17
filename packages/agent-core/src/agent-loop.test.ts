@@ -1379,6 +1379,7 @@ describe("agentLoop tool termination", () => {
     const handledControls: unknown[] = [];
     const tool: AgentTool = {
       ...makeTool("ask_user", []),
+      executionMode: "sequential",
       execute: async () => ({
         content: [{ type: "text", text: "Question sent." }],
         details: { status: "pending" },
@@ -1424,6 +1425,126 @@ describe("agentLoop tool termination", () => {
       details: { status: "pending" },
       control: scenario.hookControl,
     });
+  });
+
+  it("rejects yield controls from tools that are not sequential", async () => {
+    let turn = 0;
+    const handledControls: unknown[] = [];
+    const tool: AgentTool = {
+      ...makeTool("ask_user", []),
+      execute: async () => ({
+        content: [{ type: "text", text: "Question sent." }],
+        details: { status: "pending" },
+        control: { type: "yield", message: "Waiting for answer" },
+      }),
+    };
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-ask-user", name: tool.name, arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "ask", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        {
+          ...config,
+          onToolResultControl: async (control) => {
+            handledControls.push(control);
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+    const toolEnd = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(handledControls).toEqual([]);
+    expect(toolEnd).toMatchObject({
+      isError: true,
+      result: {
+        details: {},
+        content: [
+          {
+            type: "text",
+            text: 'Tool ask_user requested yield, but yielding tools must declare executionMode: "sequential"',
+          },
+        ],
+      },
+    });
+  });
+
+  it("does not start later sibling tools after a sequential tool yields", async () => {
+    const controller = new AbortController();
+    const executed: string[] = [];
+    const yieldingTool: AgentTool = {
+      ...makeTool("ask_user", executed),
+      executionMode: "sequential",
+      execute: async () => {
+        executed.push("ask_user");
+        return {
+          content: [{ type: "text", text: "Question sent." }],
+          details: { status: "pending" },
+          control: { type: "yield", message: "Waiting for answer" },
+        };
+      },
+    };
+    const sideEffectTool = makeTool("side_effect", executed);
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-ask-user", name: yieldingTool.name, arguments: {} },
+          { type: "toolCall", id: "call-side-effect", name: sideEffectTool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "ask", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [yieldingTool, sideEffectTool] },
+        {
+          ...config,
+          onToolResultControl: async () => {
+            controller.abort({ code: "sessions_yield", turnHandoff: true });
+          },
+        },
+        controller.signal,
+        streamFn,
+      ),
+    );
+
+    expect(executed).toEqual(["ask_user"]);
+    expect(
+      events
+        .filter(
+          (event): event is Extract<AgentEvent, { type: "tool_execution_start" }> =>
+            event.type === "tool_execution_start",
+        )
+        .map((event) => event.toolName),
+    ).toEqual(["ask_user"]);
   });
 
   it("turns an unsupported finalized control into a tool error", async () => {
