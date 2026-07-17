@@ -23,6 +23,7 @@ export function wrapToolDefinition<
     ...(definition.resultContentSource
       ? { resultContentSource: definition.resultContentSource }
       : {}),
+    ...(definition.canYield === true ? { canYield: true } : {}),
     description: definition.description,
     parameters: definition.parameters,
     ...(definition.outputSchema ? { outputSchema: definition.outputSchema } : {}),
@@ -53,6 +54,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefiniti
     label: tool.label,
     ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
+    ...(tool.canYield === true ? { canYield: true } : {}),
     description: tool.description,
     parameters: tool.parameters,
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),

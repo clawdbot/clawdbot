@@ -859,6 +859,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  toolCanYield?: boolean;
   toolExecutionMode?: AgentTool["executionMode"];
   errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
@@ -1157,6 +1158,7 @@ async function finalizeExecutedToolCall(
       result,
       isError,
       executionStarted: executed.executionStarted,
+      toolCanYield: prepared.tool.canYield,
       toolExecutionMode: prepared.tool.executionMode,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(prepared.tool.resultContentSource
@@ -1232,6 +1234,15 @@ async function finalizeToolCallOutcome(
       ...outcome,
       result: createErrorToolResult(
         `Tool requested ${control.type}, but ${control.type} is not supported in this runtime`,
+      ),
+      isError: true,
+    };
+  }
+  if (outcome.toolCanYield !== true) {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool ${outcome.toolCall.name} requested ${control.type}, but yielding tools must declare canYield: true`,
       ),
       isError: true,
     };

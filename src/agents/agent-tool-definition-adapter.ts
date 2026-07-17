@@ -357,6 +357,7 @@ export function toToolDefinitions(
       label: tool.label ?? name,
       ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
+      ...(tool.canYield === true ? { canYield: true } : {}),
       description: tool.description ?? "",
       parameters: tool.parameters,
       prepareArguments: tool.prepareArguments,

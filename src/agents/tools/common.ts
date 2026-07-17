@@ -54,7 +54,7 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
-    /** Keep this tool model-visible; sequential tools are also always kept direct. */
+    /** Keep this tool model-visible; tools with `canYield` are also kept direct. */
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];

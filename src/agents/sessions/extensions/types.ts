@@ -499,6 +499,8 @@ export interface ToolDefinition<
   hideFromChannelProgress?: boolean;
   /** Tool results contain externally controlled network content. */
   resultContentSource?: AgentTool["resultContentSource"];
+  /** Declare that this tool may request a turn handoff via its finalized result. */
+  canYield?: boolean;
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */

@@ -321,14 +321,16 @@ duplicate work. OpenClaw applies the control only after host result-finalization
 hooks have finished, so a hook-added or hook-replaced control is the value the
 runtime uses.
 
-A tool that can return a yield control must declare
-`executionMode: "sequential"`. The scheduler reads that declaration before the
+A tool that can return a yield control must declare both `canYield: true` and
+`executionMode: "sequential"`. The scheduler reads the execution mode before the
 batch starts, so a successful yield aborts the turn before later sibling tools
-run. OpenClaw keeps sequential tools model-visible instead of hiding them behind
-Tool Search or Code Mode, because those catalog bridges cannot preserve the
-target tool's pre-execution scheduling identity. OpenClaw rejects yield controls
-from tools without that declaration. Runtimes that do not support the control
-also return an explicit tool error instead of silently continuing the turn.
+run. OpenClaw keeps only `canYield` tools model-visible instead of hiding them
+behind Tool Search or Code Mode, because those catalog bridges cannot preserve
+the target tool's pre-execution scheduling identity. Ordinary non-yielding
+sequential tools retain their existing catalog behavior. OpenClaw rejects yield
+controls from tools without both declarations. Runtimes that do not support the
+control also return an explicit tool error instead of silently continuing the
+turn.
 
 ```typescript
 import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
@@ -338,6 +340,7 @@ api.registerTool({
   name: "ask_user",
   description: "Ask the user a question and wait for the answer",
   parameters: Type.Object({ questionId: Type.String() }),
+  canYield: true,
   executionMode: "sequential",
   async execute(_id, { questionId }) {
     return yieldToolResult({

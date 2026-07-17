@@ -325,6 +325,8 @@ describe("agent tool definition adapter", () => {
       label: "Ask User",
       description: "sends a native question card",
       parameters: Type.Object({}),
+      canYield: true,
+      executionMode: "sequential",
       execute: async () => ({
         content: [{ type: "text" as const, text: "Card sent." }],
         details: { status: "pending" },
@@ -349,6 +351,7 @@ describe("agent tool definition adapter", () => {
 
     expect(result.details).toEqual({ status: "pending" });
     expect(result.control).toEqual({ type: "yield", message: "Waiting for card response" });
+    expect(definition.canYield).toBe(true);
   });
 
   it("does not re-run hook preparation for an already wrapped tool", async () => {

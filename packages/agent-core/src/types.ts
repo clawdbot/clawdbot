@@ -522,6 +522,8 @@ export interface AgentTool<
   hideFromChannelProgress?: boolean;
   /** Tool results contain externally controlled network content. */
   resultContentSource?: ToolResultContentSource;
+  /** Declare that this tool may request a turn handoff via `AgentToolResult.control`. */
+  canYield?: boolean;
   /**
    * Optional compatibility shim for raw tool-call arguments before schema validation.
    * Must return an object that matches `TParameters`.

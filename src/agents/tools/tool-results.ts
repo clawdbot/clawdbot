@@ -11,7 +11,7 @@ export function jsonResult<TDetails>(payload: TDetails): AgentToolResult<TDetail
   return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
-/** Build a turn-handoff result for a tool declared with `executionMode: "sequential"`. */
+/** Build a turn-handoff result for a tool declared with `canYield` and sequential execution. */
 export function yieldToolResult<TDetails>(params: {
   message: string;
   details: TDetails;

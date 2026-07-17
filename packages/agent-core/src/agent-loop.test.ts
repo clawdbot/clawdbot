@@ -1379,6 +1379,7 @@ describe("agentLoop tool termination", () => {
     const handledControls: unknown[] = [];
     const tool: AgentTool = {
       ...makeTool("ask_user", []),
+      canYield: true,
       executionMode: "sequential",
       execute: async () => ({
         content: [{ type: "text", text: "Question sent." }],
@@ -1427,11 +1428,25 @@ describe("agentLoop tool termination", () => {
     });
   });
 
-  it("rejects yield controls from tools that are not sequential", async () => {
+  it.each([
+    {
+      name: "not yield-capable",
+      toolConfig: { executionMode: "sequential" as const },
+      expectedError:
+        "Tool ask_user requested yield, but yielding tools must declare canYield: true",
+    },
+    {
+      name: "not sequential",
+      toolConfig: { canYield: true },
+      expectedError:
+        'Tool ask_user requested yield, but yielding tools must declare executionMode: "sequential"',
+    },
+  ])("rejects yield controls from tools that are $name", async (scenario) => {
     let turn = 0;
     const handledControls: unknown[] = [];
     const tool: AgentTool = {
       ...makeTool("ask_user", []),
+      ...scenario.toolConfig,
       execute: async () => ({
         content: [{ type: "text", text: "Question sent." }],
         details: { status: "pending" },
@@ -1485,7 +1500,7 @@ describe("agentLoop tool termination", () => {
         content: [
           {
             type: "text",
-            text: 'Tool ask_user requested yield, but yielding tools must declare executionMode: "sequential"',
+            text: scenario.expectedError,
           },
         ],
       },
@@ -1497,6 +1512,7 @@ describe("agentLoop tool termination", () => {
     const executed: string[] = [];
     const yieldingTool: AgentTool = {
       ...makeTool("ask_user", executed),
+      canYield: true,
       executionMode: "sequential",
       execute: async () => {
         executed.push("ask_user");
@@ -1551,6 +1567,8 @@ describe("agentLoop tool termination", () => {
     let turn = 0;
     const tool: AgentTool = {
       ...makeTool("ask_user", []),
+      canYield: true,
+      executionMode: "sequential",
       execute: async () => ({
         content: [{ type: "text", text: "Question sent." }],
         details: { status: "pending" },
