@@ -16,7 +16,7 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
-// #1144: controllable so a test can force the child chain-cost persist to fail
+// controllable so a test can force the child chain-cost persist to fail
 // and exercise the in-memory fallback fold. Default routes the entry patch
 // through the same in-memory store the drain reads.
 const updateSessionEntryInStore = async (
@@ -77,7 +77,7 @@ type ConsumedToolDelegate = {
 };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
-// #1144: capture durable delayed-bracket delegate enqueues (replaces the old
+// capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
@@ -360,7 +360,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("does not reserve a current-chain hop when an immediate bracket delegate is rejected (#1159)", async () => {
+  it("does not reserve a current-chain hop when an immediate bracket delegate is rejected", async () => {
     resolveContinuationRuntimeConfigMock.mockImplementation((_cfg?: unknown) => ({
       enabled: true,
       defaultDelayMs: 15_000,
@@ -434,7 +434,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
-  it("does not reserve a current-chain hop for a post-compaction bracket delegate before tool delegates drain (#1159)", async () => {
+  it("does not reserve a current-chain hop for a post-compaction bracket delegate before tool delegates drain", async () => {
     resolveContinuationRuntimeConfigMock.mockImplementation((_cfg?: unknown) => ({
       enabled: true,
       defaultDelayMs: 15_000,
@@ -496,7 +496,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-post-compaction");
   });
 
-  it("arms a delayed bracket hedge after same-child tool delegates advance the override (#1159)", async () => {
+  it("arms a delayed bracket hedge after same-child tool delegates advance the override", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
@@ -549,7 +549,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("arms a delayed bracket hedge from accepted tool hops only when a sibling tool is rejected (#1159)", async () => {
+  it("arms a delayed bracket hedge from accepted tool hops only when a sibling tool is rejected", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),
@@ -622,7 +622,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
-  it("does not add tool hops to a delayed bracket hedge when all sibling tools are rejected (#1159)", async () => {
+  it("does not add tool hops to a delayed bracket hedge when all sibling tools are rejected", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),

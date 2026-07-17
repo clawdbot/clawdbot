@@ -60,7 +60,7 @@ export async function dispatchStagedPostCompactionDelegates(
     /**
      * Optional TaskFlow claim handle. Carried through so a caller (startup
      * recovery) can finalize ONLY the rows whose spawn was accepted, terminalize
-     * deterministic rejections, and leave transient failures recoverable (#1158).
+     * deterministic rejections, and leave transient failures recoverable.
      */
     flowId?: string;
     expectedRevision?: number;

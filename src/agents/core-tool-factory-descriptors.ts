@@ -25,7 +25,6 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
   { name: "heartbeat_respond", family: "openclaw" },
-  { name: "heartbeat_response", family: "openclaw" },
   { name: "image", family: "openclaw" },
   { name: "image_generate", family: "openclaw" },
   { name: "message", family: "openclaw" },

@@ -572,7 +572,7 @@ describe("tool-delegate chain guard (nextToolHop > toolMaxChainLength)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Announce-path post-compaction routing (#978 fix #3)
+// Announce-path post-compaction routing (fix)
 // ---------------------------------------------------------------------------
 
 /**

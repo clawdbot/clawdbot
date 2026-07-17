@@ -203,8 +203,8 @@ describe("persistContinuationChainState", () => {
     ).not.toThrow();
   });
 
-  it("persists the chain id alongside depth/start/tokens when provided (#918 codex P2)", () => {
-    // Regression anchor for the codex finding (state.ts:186): the delegate-drain
+  it("persists the chain id alongside depth/start/tokens when provided", () => {
+    // Regression anchor for chain-id persistence (state.ts:186): the delegate-drain
     // callers persist an advanced `chainState` carrying the minted chain id;
     // without writing `continuationChainId` here it was dropped and the next
     // drain re-minted a fresh id, breaking stable multi-hop chain correlation.

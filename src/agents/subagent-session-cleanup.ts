@@ -70,7 +70,7 @@ export async function deleteSubagentSessionForCleanup(
   // child's chain/requester state to deletion before they finish. The delegate
   // gate must count queued AND `running` (claimed) flows; the registry gate must
   // cover the post-accept window after the TaskFlow row has finished but the
-  // spawned continuation still depends on this requester session (#1144).
+  // spawned continuation still depends on this requester session.
   // Post-compaction rows are failed below only when cleanup is actually going to
   // delete the child: if same-session re-entry is pending, the child may still
   // reach a future compaction seam.

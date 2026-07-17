@@ -218,43 +218,6 @@ describe("Codex agent harness supports()", () => {
     expect(result.supported).toBe(false);
   });
 
-  it("rejects legacy multi-token provider ids by default", () => {
-    for (const provider of ["openai-codex", "OpenAI-Codex", "openai_codex", "openai:codex"]) {
-      const result = harness.supports({ provider, requestedRuntime: "codex" });
-      expect(result.supported).toBe(false);
-    }
-  });
-
-  it("supports legacy exact provider ids when explicitly configured", () => {
-    const legacyHarness = createCodexAppServerAgentHarness({
-      providerIds: ["codex", "openai", "openai-codex"],
-      bindingStore: testCodexAppServerBindingStore,
-    });
-
-    expect(legacyHarness.supports({ provider: "openai-codex", requestedRuntime: "codex" })).toEqual(
-      {
-        supported: true,
-        priority: 100,
-      },
-    );
-  });
-
-  it("does NOT hijack non-Codex providers that merely contain a recognized token (#918 codex P2)", () => {
-    // Regression anchor for the codex finding (harness.ts:54): a single
-    // recognized token among otherwise-unrecognized ones must NOT route an
-    // OpenAI-compatible / proxy provider into the Codex app-server harness at
-    // priority 100, which would break that provider's normal runtime.
-    for (const provider of [
-      "custom-openai-proxy",
-      "azure-openai",
-      "openai-proxy",
-      "codex-clone-router",
-    ]) {
-      const result = harness.supports({ provider, requestedRuntime: "codex" });
-      expect(result.supported).toBe(false);
-    }
-  });
-
   it("exposes the fail-closed exact runtime artifact validator", async () => {
     if (!harness.runtimeArtifact) {
       throw new Error("expected Codex runtime artifact capability");

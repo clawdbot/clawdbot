@@ -599,7 +599,7 @@ describe("runReplyAgent :: continuation.work span", () => {
     // continuationChainCount=1, simulating a fresh chain that has
     // already taken its first step. This step arrives as a continuation
     // WAKE (work-wake) — a mid-chain step, NOT a fresh entry — so the
-    // #987 chain-break reset must NOT fire and the count carries forward.
+    // chain-break reset must NOT fire and the count carries forward.
     // The next accepted WORK should bump count to 2 and REUSE the same
     // chain.id (mint-or-reuse contract). chain.step.remaining =
     // max(0, maxChainLength=2 - 2) = 0.
@@ -644,7 +644,7 @@ describe("runReplyAgent :: continuation.work span", () => {
 
     // Pre-seed at maxChainLength=2 — the next CONTINUE_WORK request
     // hits chain-cap reject and MUST NOT emit `continuation.work`. This is
-    // a continuation WAKE (mid-runaway chain step), so the #987 chain-break
+    // a continuation WAKE (mid-runaway chain step), so the chain-break
     // reset must NOT fire: the runaway leash's whole job is to keep tripping
     // the cap as long as the chain advances without a fresh re-entry.
     const seededChainId = "019dcf57-aaaa-77cc-834b-b803d9262032";

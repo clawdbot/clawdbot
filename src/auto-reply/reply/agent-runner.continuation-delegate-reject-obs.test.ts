@@ -315,7 +315,7 @@ async function runDelegateTurn(
   });
 }
 
-describe("runReplyAgent :: continuation-delegate rejection observability (PR #889 / #871 followup)", () => {
+describe("runReplyAgent :: continuation-delegate rejection observability", () => {
   // Pins the contract that the agent-runner-side `doSpawn` (`agent-runner.ts:~2751-2758`)
   // surfaces `spawnResult.error` into BOTH the rejection log line AND the
   // `[continuation]` system-event text. Sister-site to the two

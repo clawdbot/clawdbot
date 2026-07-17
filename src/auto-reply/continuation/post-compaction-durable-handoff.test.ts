@@ -9,7 +9,7 @@ import {
   stagedPostCompactionDelegateCount,
 } from "../continuation/delegate-store.js";
 
-// #1144/#1158 (r3507184780 / r3517437265): staged post-compaction delegates must
+// Staged post-compaction delegates must
 // stay non-terminal until the durable handoff (session-delivery enqueue /
 // session-store persist) succeeds. consumeStagedPostCompactionDelegates claims
 // the TaskFlow row to `running`; finalizeStagedPostCompactionDelegates finishes
@@ -19,7 +19,7 @@ import {
 
 const sessionKey = "post-compaction-durable-handoff-test";
 
-describe("post-compaction durable handoff (#1144)", () => {
+describe("post-compaction durable handoff", () => {
   beforeEach(() => {
     cancelPendingDelegates(sessionKey);
   });
@@ -103,7 +103,7 @@ describe("post-compaction durable handoff (#1144)", () => {
     // Models the persist-failure path (agent-runner / dispatch): after claiming
     // the row to `running`, a fresh queued row is re-staged BEFORE the claimed
     // row is finalized, so a crash cannot drop the delegate behind a premature
-    // `finished` row (#1144 autoreview follow-up).
+    // `finished` row (autoreview follow-up).
     stage("evacuate context");
     const released = consumeStagedPostCompactionDelegates(sessionKey);
     expect(released).toHaveLength(1);
@@ -125,7 +125,7 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(rereleased.map((d) => d.task)).toContain("evacuate context");
   });
 
-  it("startup recovery boot cutoff skips rows claimed by live traffic after process start (#1144)", () => {
+  it("startup recovery boot cutoff skips rows claimed by live traffic after process start", () => {
     // A row claimed to `running` AFTER the boot cutoff is a live release, not a
     // crash-orphaned row. Startup recovery must not surface it for re-dispatch
     // (which would race the live finalizer and release the delegate twice).

@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 let continuationEnabledForTest = true;
@@ -247,13 +247,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -721,7 +721,7 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("drives a subagent continuation to completion on its own session lane when main is busy (#1057)", async () => {
+  it("drives a subagent continuation to completion on its own session lane when main is busy", async () => {
     const sessionKey = "agent:main:subagent:cross-session-independence-1057";
     mockSessionStore[sessionKey] = { sessionKey };
     mainQueueSize = 1;

@@ -36,7 +36,7 @@ const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
 const DISABLED_CONTINUATION_RECHECK_MS = 15_000;
 const MAIN_COMMAND_LANE = "main";
 const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
-// #986 Guard 2: a matured backlog member is "stale" (superseded-eligible) when it
+// Guard 2: a matured backlog member is "stale" (superseded-eligible) when it
 // is overdue past this multiple of the configured maxDelayMs. Close bursts stay
 // below the grace and are NOT collapsed; only a genuine stale pile is folded.
 const SUPERSEDED_GRACE_MULTIPLIER = 2;
@@ -167,11 +167,11 @@ export function resetContinuationWorkDispatchForTests(): void {
 }
 
 /**
- * #990 rate curve retained for diagnostics/config compatibility.
+ * rate curve retained for diagnostics/config compatibility.
  *
  * A busy-skip (`requests-in-flight`/`draining`) means the turn never started — a
  * legit defer, never a failed attempt. Older runtime re-armed via this exp-backoff
- * curve; #1088 changed the primary retry to idle events and uses the ceiling as
+ * curve; changed the primary retry to idle events and uses the ceiling as
  * the slow hedge. Keep the pure curve for existing config semantics and tests.
  *
  * `busySkipCount` is the PRE-increment prior-skip count so the first computed
@@ -190,10 +190,10 @@ export function computeBusySkipBackoffMs(
 }
 
 /**
- * #990 bucket-1 — orphan-reap verdict for a busy-deferred continuation flow.
+ * bucket-1 — orphan-reap verdict for a busy-deferred continuation flow.
  *
  * Pure decision over the delegate-flow-gate + a read-time parent-liveness join.
- * Asymmetric error cost is load-bearing (#952): wrongly culling a busy seat is
+ * Asymmetric error cost is load-bearing : wrongly culling a busy seat is
  * unrecoverable; parking a zombie is harmless. So ONLY a confident-terminal
  * parent authorizes the cull — `alive`, `uncertain`, and the no-lineage gate all
  * quiesce (rate-cap-forever, the Pillar-0 trickle).
@@ -360,7 +360,7 @@ function armNextWorkTimer(sessionKey: string, dueAt: number): void {
 }
 
 /**
- * #986 Guard 2 — partition a matured drain batch into works to drive vs works
+ * Guard 2 — partition a matured drain batch into works to drive vs works
  * superseded by a stale backlog.
  *
  * `consumePendingWork` only returns matured (`now >= dueAt`) works, so a batch of
@@ -370,7 +370,7 @@ function armNextWorkTimer(sessionKey: string, dueAt: number): void {
  * the live intent. Non-stale members (close bursts) always drive; the
  * newest-elected always drives.
  *
- * #988-P2-1 fold-side write-guard: only `queued` members are supersede-eligible.
+ * -1 fold-side write-guard: only `queued` members are supersede-eligible.
  * A recovered `running` member (the recovery path passes `includeRunning`) is a
  * live turn already being driven and ALWAYS drives — it is never folded, even
  * when stale and not newest, so an in-flight turn is never finished-as-superseded
@@ -389,7 +389,7 @@ export function partitionSupersededWork(
   // by `hop` (durable monotonic enqueue order within a chain) — the higher hop
   // is the newer intent. Without the tie-break, same-ms rows fall to array
   // order and the OLDEST stale wake could be kept while the newest is folded
-  // (Codex #988 review :252).
+  // (review).
   let newestIdx = 0;
   let newest: PendingContinuationWork | undefined;
   for (const [i, work] of works.entries()) {
@@ -405,7 +405,7 @@ export function partitionSupersededWork(
   const drive: PendingContinuationWork[] = [];
   const superseded: PendingContinuationWork[] = [];
   for (const [i, work] of works.entries()) {
-    // #988-P2-1 fold-side write-guard: a recovered `running` member is live
+    // -1 fold-side write-guard: a recovered `running` member is live
     // intent already being driven (it may be observing requests-in-flight). It
     // is NEVER supersede-eligible, regardless of staleness or election order —
     // folding it would finish an in-flight turn as superseded out from under
@@ -464,7 +464,7 @@ export async function dispatchPendingContinuationWork(
   params: DispatchPendingContinuationWorkParams,
 ): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const recoverRunning = params.recoverRunning === true;
-  // #1144: honor a hot-disabled continuation feature on the LIVE callback path.
+  // honor a hot-disabled continuation feature on the LIVE callback path.
   // Startup recovery (recoverPendingContinuationWork) already skips disabled
   // continuation, but an armed work/idle-retry timer that fired before the
   // operator set agents.defaults.continuation.enabled=false would otherwise
@@ -504,7 +504,7 @@ export async function dispatchPendingContinuationWork(
     includeIdleRetry: params.includeIdleRetry === true,
     includeRunningIdleRetry: params.includeRunningIdleRetry === true,
   });
-  // #986 Guard 2: fold a stale backlog. Only matured works reach here, so a
+  // Guard 2: fold a stale backlog. Only matured works reach here, so a
   // batch of >1 means they piled up (the session was busy through the window);
   // on-time staggered elections drain one-per-poll and never co-arrive.
   const supersededGraceMs = runtimeConfig.maxDelayMs * SUPERSEDED_GRACE_MULTIPLIER;
@@ -619,7 +619,7 @@ export async function scheduleContinuationWork(params: {
     return { scheduled: false, capped: true, chainState: params.chainState };
   }
 
-  // #986 Guard 1: per-session concurrent pending-work cap. Orthogonal to the
+  // Guard 1: per-session concurrent pending-work cap. Orthogonal to the
   // chain-depth cap above — this bounds how many undelivered wakes may coexist
   // (the multi-continue_work flood foot-gun). Enforced at enqueue so a flood can
   // never pile up beyond the cap regardless of chain depth. Treated as a cap
@@ -646,7 +646,7 @@ export async function scheduleContinuationWork(params: {
     ...(params.chainState.chainId ? { chainId: params.chainState.chainId } : {}),
   };
 
-  // #1135/#1153: any continue_work captured while the electing turn is still
+  // any continue_work captured while the electing turn is still
   // active anchors to that turn's finalization, not the tool-call timestamp or a
   // later unrelated turn. `reason` remains provenance/rate metadata, never an
   // admission gate.
@@ -726,7 +726,7 @@ export type ContinuationWorkBatchResult = {
  * own flow with its own delay/reason and must deliver its own wake. The chain
  * state is threaded across elections so chain/cost caps apply cumulatively.
  *
- * Partial success is load-bearing (#982): when a later election trips the cap,
+ * Partial success is load-bearing : when a later election trips the cap,
  * the earlier valid elections MUST stay scheduled — silently dropping them is
  * exactly the regression this batches against. A cap rejection ends the batch
  * because the cumulative chain count only grows, so every later election would
@@ -744,11 +744,11 @@ export async function scheduleContinuationWorkBatch(params: {
 }): Promise<ContinuationWorkBatchResult> {
   let chainState = params.chainState;
   let scheduledCount = 0;
-  // #1135 cross-turn coalesce: a new model turn's election(s) supersede any
+  // cross-turn coalesce: a new model turn's election(s) supersede any
   // still-queued end-of-turn-parked wake from a PRIOR turn for this session. The
   // courtesy/hold/ack repeat loop never accumulates rows — the newest election
   // carries the live intent and fires once at finalization. Folded BEFORE the
-  // batch loop so distinct elections WITHIN this turn (#982) are preserved; only
+  // batch loop so distinct elections WITHIN this turn are preserved; only
   // prior-turn parked duplicates are folded.
   const folded = supersedeQueuedTurnEndParkedWork(
     params.sessionKey,

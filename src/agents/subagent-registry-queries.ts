@@ -310,7 +310,7 @@ export function isSubagentSessionRunActiveFromRuns(
 }
 
 /**
- * Three-state liveness of the latest run for a child session (#990 orphan-reap).
+ * Three-state liveness of the latest run for a child session (orphan-reap).
  *
  * READ-TIME JOIN: liveness mutates after a continuation flow is classified
  * (a driver can die or finish between the classify and this read), so the

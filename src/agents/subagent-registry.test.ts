@@ -164,16 +164,6 @@ const mocks = vi.hoisted(() => ({
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
-  resolveSessionStoreEntry: vi.fn(
-    (args: {
-      store: Record<string, import("../config/sessions.js").SessionEntry>;
-      sessionKey: string;
-    }) => ({
-      normalizedKey: args.sessionKey,
-      existing: args.store[args.sessionKey],
-      legacyKeys: [],
-    }),
-  ),
   resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
@@ -223,7 +213,6 @@ vi.mock("../config/config.js", () => {
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveSessionStoreEntry: mocks.resolveSessionStoreEntry,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
 }));

@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 const mockStorePath = "test-store";
 const observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 const continuationEnabledForTest = true;
@@ -249,13 +249,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -565,7 +565,7 @@ const splitLintUse = [
 ];
 void splitLintUse;
 
-describe("#990 Pillar-0 computeBusySkipBackoffMs (exp-backoff)", () => {
+describe("Pillar-0 computeBusySkipBackoffMs (exp-backoff)", () => {
   const params = (ceilingMs: number) => ({ baseMs: 1_000, ceilingMs, factor: 2 });
   it("grows by factor per consecutive busy-skip and caps at the ceiling", () => {
     const p = params(60_000);
@@ -624,7 +624,7 @@ function work(
   };
 }
 
-describe("#986 partitionSupersededWork (drain-superseded)", () => {
+describe("partitionSupersededWork (drain-superseded)", () => {
   const GRACE = 120_000;
   const NOW = 1_000_000;
 
@@ -682,7 +682,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(superseded.map((w) => w.hop)).toEqual([1]);
   });
 
-  it("tie-breaks same-millisecond electedAt by hop — keeps the highest-hop newest intent (#988 :252)", () => {
+  it("tie-breaks same-millisecond electedAt by hop — keeps the highest-hop newest intent", () => {
     // Synchronous batch enqueue can stamp identical electedAt; the newest intent
     // is the highest hop, NOT the first array-order row. consumePendingWork
     // sorts createdAt asc, so the stale older sibling appears first.
@@ -697,7 +697,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(superseded.map((w) => w.hop).toSorted((a, b) => a - b)).toEqual([1, 2]);
   });
 
-  it("never supersedes a recovered running member even when stale and not newest (#988-P2-1)", () => {
+  it("never supersedes a recovered running member even when stale and not newest", () => {
     // A recovered `running` turn is actively executing (it may be observing
     // requests-in-flight). It must drive, never fold, even though it is overdue
     // past grace and a newer queued election exists. RED before the write-guard:
@@ -711,8 +711,8 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(superseded).toHaveLength(0);
   });
 
-  it("still folds a stale queued member into a newer election (#986 Guard 2 intact)", () => {
-    // The only supersede-eligible member is `queued`; the #986 behavior is
+  it("still folds a stale queued member into a newer election (Guard 2 intact)", () => {
+    // The only supersede-eligible member is `queued`; the behavior is
     // unchanged for genuine queued backlog.
     const works = [
       work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000, status: "queued" }), // stale queued backlog
@@ -723,7 +723,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
     expect(superseded.map((w) => w.hop)).toEqual([1]);
   });
 
-  it("mixed batch: stale running drives, stale queued folds, newest queued drives (#988-P2-1)", () => {
+  it("mixed batch: stale running drives, stale queued folds, newest queued drives", () => {
     const works = [
       work({ hop: 1, electedAt: 100, dueAt: NOW - 500_000, status: "running" }), // stale running → drives
       work({ hop: 2, electedAt: 200, dueAt: NOW - 400_000, status: "queued" }), // stale queued → folds
@@ -735,7 +735,7 @@ describe("#986 partitionSupersededWork (drain-superseded)", () => {
   });
 });
 
-describe("#986 maxPendingWork cap (Guard 1)", () => {
+describe("maxPendingWork cap (Guard 1)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ now: 1_000_000 });
     mockFlows.clear();
@@ -785,7 +785,7 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
     expect(result.capped).toBe(true);
   });
 
-  it("batch ends early on pending-cap but preserves earlier scheduled elections (#982 partial-success)", async () => {
+  it("batch ends early on pending-cap but preserves earlier scheduled elections (partial-success)", async () => {
     const capped = {
       ...config,
       maxPendingWork: 3,
@@ -813,7 +813,7 @@ describe("#986 maxPendingWork cap (Guard 1)", () => {
     expect(queued).toHaveLength(3);
   });
 
-  it("does NOT count the active driving (running) wake against the cap — serial maxPendingWork:1 still schedules its successor (#988 :403)", async () => {
+  it("does NOT count the active driving (running) wake against the cap — serial maxPendingWork:1 still schedules its successor", async () => {
     const capOne = {
       ...config,
       maxPendingWork: 1,

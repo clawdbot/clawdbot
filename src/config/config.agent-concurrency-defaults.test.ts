@@ -83,6 +83,6 @@ it("accepts maxChildrenPerAgent at schema ceiling (10000)", () => {
   expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(10000);
 });
 
-it("default constant is 5 (touch-no-defaults per figs canon)", () => {
+it("uses the established maxChildrenPerAgent default", () => {
   expect(DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT).toBe(5);
 });

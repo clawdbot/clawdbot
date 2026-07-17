@@ -16,7 +16,7 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
-// #1144: controllable so a test can force the child chain-cost persist to fail
+// controllable so a test can force the child chain-cost persist to fail
 // and exercise the in-memory fallback fold. Default routes the entry patch
 // through the same in-memory store the drain reads.
 const updateSessionEntryInStore = async (
@@ -77,7 +77,7 @@ type ConsumedToolDelegate = {
 };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
-// #1144: capture durable delayed-bracket delegate enqueues (replaces the old
+// capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
@@ -418,8 +418,8 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.maxChainLength).toBe(10);
   });
 
-  it("threads a silent/wake parent's inherited policy into the early child drain (#1158)", async () => {
-    // Finding r3517437268: this early drain runs BEFORE the later parentWasSilent
+  it("threads a silent/wake parent's inherited policy into the early child drain", async () => {
+    // This early drain runs BEFORE the later parentWasSilent
     // chain-hop guards. It must pass the parent's silent/wake policy so a
     // default-mode delegate the child queued stays internal instead of announcing.
     loadSessionStoreMock.mockImplementation(
@@ -456,7 +456,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.inheritedWake).toBe(true);
   });
 
-  it("does not set inherited silent/wake for a normal (visible) parent (#1158)", async () => {
+  it("does not set inherited silent/wake for a normal (visible) parent", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
@@ -489,8 +489,8 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.inheritedWake).toBeFalsy();
   });
 
-  it("passes loadFresh/persist callbacks so a hedge-fired delayed delegate advances chain state durably (#1158)", async () => {
-    // Finding r3517500714: the drain arms the shared hedge for delayed delegates.
+  it("passes loadFresh/persist callbacks so a hedge-fired delayed delegate advances chain state durably", async () => {
+    // The drain arms the shared hedge for delayed delegates.
     // The hedge-fired dispatch has no enclosing runner frame, so the drain must
     // supply loadFreshChainState + persistChainState — otherwise multiple delayed
     // delegates hedge-fire against the stale pre-spawn count and bypass maxChainLength.
@@ -545,7 +545,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     ).rejects.toThrow("not durably persisted");
   });
 
-  it("preserves post-bracket chain override for hedge-fired delayed tool drains (#1159)", async () => {
+  it("preserves post-bracket chain override for hedge-fired delayed tool drains", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),
@@ -609,7 +609,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("force-dispatches delayed child drains when the post-bracket override cannot be persisted (#1159)", async () => {
+  it("force-dispatches delayed child drains when the post-bracket override cannot be persisted", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),
@@ -655,7 +655,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call.dispatchQueuedRegardlessOfDelay).toBe(true);
   });
 
-  it("clears queued fold markers after a post-bracket override persists (#1159)", async () => {
+  it("clears queued fold markers after a post-bracket override persists", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),

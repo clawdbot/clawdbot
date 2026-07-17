@@ -513,7 +513,7 @@ Session metadata tracks continuation state through:
 - `continuationChainTokens`
 - `continuationChainId`
 
-**Chain-state lifecycle.** These four fields accumulate together within an unbroken self-continuation chain and **reset together** at turn-entry whenever the inbound origin is not a mid-chain continuation-wake (the `!isContinuationWake` gate evaluated at `get-reply-run.ts`). The reset fires before `loadContinuationChainState` reads the SessionEntry, so a fresh turn opens with `chain 0/maxChainLength` and a freshly minted `continuationChainId`; a fresh turn that itself elects a continuation then advances the new chain from 0 (not from the prior carried count). Only genuine mid-chain wakes preserve the accumulating count so a runaway self-loop still trips the cap: `work-wake` (a `continue_work` timer firing) and an in-chain `delegate-return` (a `[continuation:chain-hop:N]` return — part of a chain the session itself elected). An **ordinary** inter-session subagent completion is classified separately as `subagent-return`: it is an external turn-entry, not a self-elected continuation hop, so it does **not** set `isContinuationWake` and therefore resets the chain budget like any other fresh turn. Without that distinction a long-lived session with a stale at-cap chain count would reject every continuation elected from an unrelated subagent return (the #989 doom-lock).
+**Chain-state lifecycle.** These four fields accumulate together within an unbroken self-continuation chain and **reset together** at turn-entry whenever the inbound origin is not a mid-chain continuation-wake (the `!isContinuationWake` gate evaluated at `get-reply-run.ts`). The reset fires before `loadContinuationChainState` reads the SessionEntry, so a fresh turn opens with `chain 0/maxChainLength` and a freshly minted `continuationChainId`; a fresh turn that itself elects a continuation then advances the new chain from 0 (not from the prior carried count). Only genuine mid-chain wakes preserve the accumulating count so a runaway self-loop still trips the cap: `work-wake` (a `continue_work` timer firing) and an in-chain `delegate-return` (a `[continuation:chain-hop:N]` return — part of a chain the session itself elected). An **ordinary** inter-session subagent completion is classified separately as `subagent-return`: it is an external turn-entry, not a self-elected continuation hop, so it does **not** set `isContinuationWake` and therefore resets the chain budget like any other fresh turn. Without that distinction a long-lived session with a stale at-cap chain count would reject every continuation elected from an unrelated subagent return (the doom-lock).
 
 The full session-rotation reset path (`agent-runner-session-reset.ts`, fired by `/reset`, compaction-failure-recovery, role-ordering-conflict, or ACP-explicit-`resetSession`-flag) clears these fields as part of a broader sessionId-mint and continues to apply for those error-recovery paths; the per-turn chain-reset above is the additive shipped behavior that bounds the leash to _unattended_ self-continuation rather than session lifetime.
 
@@ -919,11 +919,11 @@ agents:
       crossSessionTargeting: disabled
       contextPressureThreshold: 0.8 # optional; omit to disable ordinary pre-run pressure events
       earlyWarningBand: 0.3125 # multiplier against contextPressureThreshold; 0 disables early warning
-      busySkipBackoff: # optional; #990 busy-skip re-arm rate-cap (NOT a safety invariant)
+      busySkipBackoff: # optional; busy-skip re-arm rate-cap (NOT a safety invariant)
         baseMs: 1000 # first re-arm delay; default 1000
         ceilingMs: 300000 # give-up rate-cap; default = maxDelayMs (flow never dropped, just slows)
         factor: 2 # exponential growth per consecutive busy-skip; default 2, must be > 1
-      orphanReapStaleCutoffMs: 7200000 # optional; #990 orphan-reap confidence-gate floor; default = subagent stale cutoff (2h)
+      orphanReapStaleCutoffMs: 7200000 # optional; orphan-reap confidence-gate floor; default = subagent stale cutoff (2h)
 ```
 
 Operational notes:
@@ -934,8 +934,8 @@ Operational notes:
 - `crossSessionTargeting: disabled` is the default-deny gate for explicit cross-session delegate return targeting.
 - `contextPressureThreshold` is optional and must be `> 0` and `<= 1` when configured.
 - `earlyWarningBand` is shipped, defaults to `0.3125`, accepts `0` as opt-out, and is schema-validated as a unit-interval value.
-- `busySkipBackoff` (#990) tunes the consecutive busy-skip re-arm: a continuation wake that finds its seat busy (`requests-in-flight`/`draining`) re-arms after `baseMs`, growing by `factor` per consecutive busy-skip up to `ceilingMs`. This is a RATE-cap (give-up = rate-cap-forever): the flow is never dropped, it just polls more slowly and delivers the instant the seat quiets. All three fields are optional positive values (`factor > 1`); defaults are `1000` / `maxDelayMs` / `2`. It is not a safety invariant.
-- `orphanReapStaleCutoffMs` (#990) is the orphan-reap confidence-gate floor: a busy-deferred delegate flow whose parent subagent run is CONFIDENT-terminal (explicit `endedAt`, or unended past this cutoff) is reaped rather than rate-capped forever. Unset uses the subagent-registry stale cutoff (2h); a per-run explicit timeout is always respected, so a run is never reaped before its own timeout plus grace. The safety invariants are fixed and NOT tunable: same-session work never reaps (delegate-flow-gate), uncertain liveness always quiesces, and a wrongful reap never happens.
+- `busySkipBackoff` tunes the consecutive busy-skip re-arm: a continuation wake that finds its seat busy (`requests-in-flight`/`draining`) re-arms after `baseMs`, growing by `factor` per consecutive busy-skip up to `ceilingMs`. This is a RATE-cap (give-up = rate-cap-forever): the flow is never dropped, it just polls more slowly and delivers the instant the seat quiets. All three fields are optional positive values (`factor > 1`); defaults are `1000` / `maxDelayMs` / `2`. It is not a safety invariant.
+- `orphanReapStaleCutoffMs` is the orphan-reap confidence-gate floor: a busy-deferred delegate flow whose parent subagent run is CONFIDENT-terminal (explicit `endedAt`, or unended past this cutoff) is reaped rather than rate-capped forever. Unset uses the subagent-registry stale cutoff (2h); a per-run explicit timeout is always respected, so a run is never reaped before its own timeout plus grace. The safety invariants are fixed and NOT tunable: same-session work never reaps (delegate-flow-gate), uncertain liveness always quiesces, and a wrongful reap never happens.
 - There is no `generationGuardTolerance` setting. Delayed work is not cancelled by unrelated channel noise.
 - tool-path delegate durability is unconditional; there is no delegate-store switch.
 - all shipped continuation runtime values are read at use time; changes take effect at the next enforcement point.
@@ -1852,7 +1852,7 @@ Additional retained notes:
 - `registerSubagentRun()` initially failed to persist `silentAnnounce` and `wakeOnReturn`; the four-line fix was applied during the canary cycle and the retry passed.
 - first-pass tool validation produced a false positive because the agent narrated tool calls it never made; log verification became mandatory.
 - `10-H1` was deferred for operational reasons rather than correctness: provider 429s, timeout and restart churn, and an incorrect response token (`[[CONTINUE_WORK: text]]` instead of bare `CONTINUE_WORK`).
-- a six-path delegate wiring audit found one divergence on post-compaction flag normalization; the defensive fix was accepted in `1a1e88e15e` after independent cross-review.
+- a six-path delegate wiring audit found and corrected one divergence in post-compaction flag normalization, with regression coverage.
 - the qualitative canary report was positive: tools felt natural, silent-wake was effective, and the guardrails held at boundaries.
 
 ### D.4 Current validation cycle: v5.2 substrate verification

@@ -12,7 +12,7 @@ import {
 
 function roomEventWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmWakeInput {
   return {
-    sessionKey: "agent:main:discord:channel:1466192485440164011",
+    sessionKey: "agent:main:discord:channel:000000000000000001",
     inboundEventKind: "room_event",
     ...overrides,
   };
@@ -20,7 +20,7 @@ function roomEventWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmWa
 
 function freshHumanWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmWakeInput {
   return {
-    sessionKey: "agent:main:discord:channel:1466192485440164011",
+    sessionKey: "agent:main:discord:channel:000000000000000001",
     inboundEventKind: "user_request",
     provenance: { kind: "external_user" },
     messageId: "msg-1",
@@ -30,7 +30,7 @@ function freshHumanWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmW
 
 function continuationWake(overrides: Partial<NoOpRearmWakeInput> = {}): NoOpRearmWakeInput {
   return {
-    sessionKey: "agent:main:discord:channel:1466192485440164011",
+    sessionKey: "agent:main:discord:channel:000000000000000001",
     isContinuationWake: true,
     ...overrides,
   };
@@ -44,7 +44,7 @@ function noOpResult(toolNames: string[] = ["continue_work"]): EmbeddedAgentRunRe
 }
 
 function blankWithSubstantiveToolResult(): EmbeddedAgentRunResult {
-  // Textless assistant turn that made a real tool call (#1141 Codex finding).
+  // Textless assistant turn that made a real tool call (continuation-signal edge case).
   return {
     payloads: [],
     meta: { durationMs: 1, toolSummary: { calls: 1, tools: ["exec"] } },
@@ -75,7 +75,7 @@ describe("classifyNoOpRearmWake", () => {
 
   it("treats a direct user_request without provenance as a fresh human edge", () => {
     const wake = classifyNoOpRearmWake({
-      sessionKey: "agent:main:discord:channel:1466192485440164011",
+      sessionKey: "agent:main:discord:channel:000000000000000001",
       inboundEventKind: "user_request",
       messageId: "msg-no-provenance",
     });
@@ -179,7 +179,7 @@ describe("classifyNoOpRearmWake", () => {
 });
 
 describe("turn outcome classification", () => {
-  it("classifies a blank turn with substantive tool calls as substantive (#1141)", () => {
+  it("classifies a blank turn with substantive tool calls as substantive", () => {
     const facts = summarizeEmbeddedRunOutcome(blankWithSubstantiveToolResult());
     expect(facts.hasVisibleReply).toBe(false);
     expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("substantive");

@@ -267,7 +267,7 @@ describe("continuation config schema validation", () => {
   });
 
   /* ---------------------------------------------------------------- */
-  /*  #990 busySkipBackoff + orphanReapStaleCutoffMs                   */
+  /* busySkipBackoff + orphanReapStaleCutoffMs */
   /* ---------------------------------------------------------------- */
 
   it("accepts a fully-specified busySkipBackoff", () => {

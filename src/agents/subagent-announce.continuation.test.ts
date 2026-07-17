@@ -353,7 +353,7 @@ describe("subagent announce continuation chaining", () => {
     expect(mocked.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("routes a delayed chain-hop delegate through the durable pending store, then spawns via the hedge (#1144)", async () => {
+  it("routes a delayed chain-hop delegate through the durable pending store, then spawns via the hedge", async () => {
     await runContinuationAnnounce({
       childSessionKey: "agent:main:subagent:worker-live-tolerance",
       childTaskPrefix: "[continuation:chain-hop:1]",
@@ -365,7 +365,7 @@ describe("subagent announce continuation chaining", () => {
     // The delayed bracket delegate is durably enqueued under the CHILD session
     // and armed via the shared hedge timer — NOT the old volatile per-requester
     // continuation timer handle. A restart before the delay elapses recovers it
-    // from the durable store instead of dropping it (#1144).
+    // from the durable store instead of dropping it.
     expect(mocked.registerContinuationTimerHandleMock).not.toHaveBeenCalled();
     expect(mocked.retainContinuationTimerRefMock).not.toHaveBeenCalledWith("agent:main:main");
 

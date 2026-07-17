@@ -909,7 +909,7 @@ export async function runAgentAttempt(params: {
   // path, so typed continue_work never registers for turn-1 subagent tool calls.
   const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
   // Accumulate every continue_work election fired this turn; capturing only the
-  // last one silently drops the rest (#982).
+  // last one silently drops the rest.
   const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
   const continueWorkOpts = continuationEnabled
     ? {
@@ -1134,7 +1134,7 @@ export async function runAgentAttempt(params: {
   );
 
   // Post-turn: capture both continue_work surfaces. Light-context subagents may
-  // not receive the typed tool, so the #952 nested path must honor the bracket
+  // not receive the typed tool, so the nested path must honor the bracket
   // token parsed from the final payload as well as the tool callback.
   if (continuationEnabled && params.sessionKey) {
     try {
@@ -1271,17 +1271,17 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     config: continuationConfig,
     // Same-session own-turn continue_work has no spawning lineage — this election
     // is the session's OWN next turn, not a delegate child. Leaving parentRunId
-    // unset keeps it on the #990 bucket-1 never-reap path (parentRunId==null →
-    // same-session). Tagging the electing run here would make the #990 orphan-reap
+    // unset keeps it on the bucket-1 never-reap path (parentRunId==null →
+    // same-session). Tagging the electing run here would make the orphan-reap
     // cull the flow on any busy-defer: a subagent's electing run is always
     // confident-terminal by wake time, so a single main-lane-busy skip would
-    // wrongly reap it before hop-2 ever runs (#952). Chain lineage rides
+    // wrongly reap it before hop-2 ever runs. Chain lineage rides
     // chainId/traceparent, not parentRunId.
     ...(params.originRunId !== undefined ? { originRunId: params.originRunId } : {}),
     ...(params.originTurnId !== undefined ? { originTurnId: params.originTurnId } : {}),
     log: (message) => log.info(message),
   });
-  // #986 cap-notice symmetry: surface cap-dropped elections on the subagent-init
+  // cap-notice symmetry: surface cap-dropped elections on the subagent-init
   // lane too, matching the main-reply lane (agent-runner) and followup lane
   // (followup-runner). Without this, a subagent turn's partial cap-drop is
   // silent even though the tool told the model each call was "scheduled".
@@ -1289,8 +1289,7 @@ async function scheduleSpawnInitContinueWorkWake(params: {
   // the pending/chain/cost cap before a multi-continue_work response returns
   // scheduledCount:0 with cappedCount>0, so emitting after the early return
   // would re-open the never-silent gap on this lane only. Multi-election only,
-  // to keep single-work behavior intact (Rune #988 review residual + frond
-  // fold-in, P2-2).
+  // to keep retained single-work behavior intact.
   if (result.cappedCount > 0 && params.requests.length > 1) {
     enqueueSystemEvent(
       `[continuation] ${result.cappedCount} of ${params.requests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,

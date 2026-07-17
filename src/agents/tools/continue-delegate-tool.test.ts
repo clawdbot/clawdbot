@@ -146,7 +146,7 @@ describe("continue_delegate tool", () => {
     });
     // The embedded runner builds the tool list once per run; the SAME instance
     // is reused across every assistant turn. Far-future queued delegates must
-    // not permanently consume the budget across turns (#1144 r3514647794).
+    // not permanently consume the budget across turns.
     const runTool = createContinueDelegateTool({ agentSessionKey: "test-session" });
 
     await expect(
@@ -323,20 +323,20 @@ describe("continue_delegate tool", () => {
     const result = await executeTool(tool, 0, {
       task: "targeted return",
       mode: "silent-wake",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
     });
 
     expect(result).toMatchObject({
       status: "scheduled",
       mode: "silent-wake",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
     });
     expect(result).not.toHaveProperty("fanoutMode");
     expect(consumePendingDelegates("test-session")).toEqual([
       expect.objectContaining({
         task: "targeted return",
         mode: "silent-wake",
-        targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+        targetSessionKey: "agent:main:discord:channel:000000000000000001",
       }),
     ]);
   });

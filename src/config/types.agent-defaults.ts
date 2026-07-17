@@ -509,8 +509,8 @@ export type AgentDefaultsConfig = {
     /** Maximum number of continue_delegate tool calls per agent turn (default: 5). */
     maxDelegatesPerTurn?: number;
     /**
-     * Maximum concurrent undelivered continue_work flows per session (#986;
-     * default: 32). Enforced at enqueue; bounds the multi-continue_work flood
+     * Maximum concurrent undelivered continue_work flows per session
+     * (default: 32). Enforced at enqueue; bounds the multi-continue_work flood
      * independently of maxChainLength (lineage depth).
      */
     maxPendingWork?: number;
@@ -527,7 +527,7 @@ export type AgentDefaultsConfig = {
      */
     earlyWarningBand?: number;
     /**
-     * #990 busy-skip exp-backoff bounds for the continue_work re-arm (rate-cap,
+     * Busy-skip exponential backoff bounds for the continue_work re-arm (rate-cap,
      * not a safety invariant). `baseMs` (default 1000) is the first re-arm delay,
      * multiplied by `factor` (default 2) per consecutive busy-skip up to
      * `ceilingMs` (default: maxDelayMs). The ceiling is the give-up rate-cap —
@@ -542,7 +542,7 @@ export type AgentDefaultsConfig = {
       factor?: number;
     };
     /**
-     * #990 orphan-reap confidence-gate floor in ms. An unended subagent run is
+     * Orphan-reap confidence-gate floor in ms. An unended subagent run is
      * treated as confident-terminal (reap-eligible) only after it ages past this
      * cutoff; unset uses the subagent-registry default (2h). The per-run timeout
      * is always respected. Safety invariants (uncertain→quiesce,

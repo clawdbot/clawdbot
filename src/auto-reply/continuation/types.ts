@@ -82,7 +82,7 @@ export type PendingContinuationDelegate = {
    * the delegate ONLY when the child chain-cost persist to the child session
    * entry failed. Restart recovery adds it to the (stale) child-entry chain cost
    * so the continuation cost cap is enforced against the post-run total even when
-   * the child entry never received the run cost (#1144).
+   * the child entry never received the run cost.
    */
   chainTokensFold?: number;
   /**
@@ -140,7 +140,7 @@ export type ContinuationRuntimeConfig = {
   costCapTokens: number;
   maxDelegatesPerTurn: number;
   /**
-   * Max concurrent undelivered continue_work flows per session (#986).
+   * Max concurrent undelivered continue_work flows per session.
    * Enforced at enqueue; orthogonal to maxChainLength (lineage depth) — this
    * bounds store pressure / the multi-continue_work flood foot-gun.
    */
@@ -149,7 +149,7 @@ export type ContinuationRuntimeConfig = {
   contextPressureThreshold?: number;
   earlyWarningBand?: number;
   /**
-   * #990 busy-skip exp-backoff bounds (rate-cap, NOT a safety invariant).
+   * busy-skip exp-backoff bounds (rate-cap, NOT a safety invariant).
    * `baseMs` = first re-arm delay, multiplied by `factor` per consecutive
    * busy-skip up to `ceilingMs` (the give-up rate-cap — the flow keeps deferring
    * at this rate forever, never dropped). Always populated by
@@ -158,7 +158,7 @@ export type ContinuationRuntimeConfig = {
    */
   busySkipBackoff?: { baseMs: number; ceilingMs: number; factor: number };
   /**
-   * #990 orphan-reap confidence-gate floor (ms). An unended subagent run is
+   * orphan-reap confidence-gate floor (ms). An unended subagent run is
    * treated as confident-terminal (reap-eligible) only after it ages past this
    * cutoff; `undefined` uses the subagent-registry default. The per-run timeout
    * is always respected (a run is never reaped before its own timeout + grace).

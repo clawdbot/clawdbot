@@ -356,9 +356,8 @@ describe("gateway run option collisions", () => {
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
     vi.stubEnv("OPENCLAW_SERVICE_KIND", "");
     // OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 bypasses the future-version
-    // guard before the marker/service-kind gates fire. Some agent-host deployments export
-    // this via their openclaw-gateway systemd unit (caught during cross-host
-    // review of PR #844), so stub it empty for hermeticity too.
+    // guard before the marker/service-kind gates fire. Some deployments export
+    // this through their openclaw-gateway systemd unit, so stub it empty for hermeticity too.
     vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", "");
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");

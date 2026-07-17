@@ -144,11 +144,11 @@ export async function recoverPendingContinuationDelegates(
         includeRunningUpdatedAtOrBefore,
         // Recovery rebuilds chain cost from the persisted child entry, which is
         // stale when the settle-time chain-cost persist failed; apply the
-        // delegate's durable fold so the cost cap holds across the restart (#1144).
+        // delegate's durable fold so the cost cap holds across the restart.
         applyDelegateChainTokensFold: true,
         // A recovered delayed delegate only arms a hedge here; pass the persist +
         // fresh-load callbacks so the eventual hedge fire durably advances the
-        // folded chain state instead of losing it (cost-cap bypass) (#1158).
+        // folded chain state instead of losing it (cost-cap bypass).
         ...(persistRecoveredChainState
           ? {
               persistChainState: persistRecoveredChainState,
@@ -212,7 +212,7 @@ async function loadPendingPostCompactionDeliverySourceKeys(): Promise<Set<string
 
 /**
  * Startup recovery for post-compaction delegates left `running` by a crash
- * between release-claim and durable handoff (#1144/#1158).
+ * between release-claim and durable handoff.
  *
  * The normal consumers of staged post-compaction delegates are the compaction
  * release seams (`dispatchPostCompactionDelegates` / `releasePostCompactionLifecycle`).

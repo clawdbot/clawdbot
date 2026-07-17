@@ -1,5 +1,5 @@
 /**
- * #952: a completing subagent whose final findings carry a bare CONTINUE_WORK
+ * a completing subagent whose final findings carry a bare CONTINUE_WORK
  * token self-elects another turn through the announce/completion flow.
  *
  * The spawn-init/turn-1 path (attempt-execution.ts) is the primary site that
@@ -148,7 +148,7 @@ function continuationWorkFlows() {
   );
 }
 
-describe("#952 subagent self-continuation via announce/completion flow", () => {
+describe("subagent self-continuation via announce/completion flow", () => {
   let state: OpenClawTestState;
 
   beforeEach(async () => {

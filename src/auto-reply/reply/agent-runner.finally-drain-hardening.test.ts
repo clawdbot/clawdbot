@@ -1,4 +1,4 @@
-// #1144 (r3507184829) + I4 regression: the agent-runner `finally` must NOT
+// The agent-runner `finally` must NOT
 // consume/claim queued delegates. `consumePendingDelegates` is a TaskFlow claim
 // (queued -> running), not a delete, so calling it in cleanup and discarding the
 // rows would strand a delegate matured/queued during a failed turn. The finally
@@ -202,7 +202,7 @@ function createRun(sessionKey: string) {
   return { typing, followupRun, sessionCtx, config };
 }
 
-describe("runReplyAgent :: finally does not claim queued delegates (#1144 / I4)", () => {
+describe("runReplyAgent :: finally does not claim queued delegates (I4)", () => {
   it("does not consume/claim queued delegates in the finally, and still marks dispatch idle", async () => {
     const sessionKey = "i4-finally-drain";
     const { typing, followupRun, sessionCtx, config } = createRun(sessionKey);

@@ -1,5 +1,5 @@
 /**
- * #952 proof: a tool-less / light-context subagent that emits the BARE
+ * proof: a tool-less / light-context subagent that emits the BARE
  * `CONTINUE_WORK:N` token (no typed continue_work tool) self-elects another
  * turn end-to-end.
  *
@@ -81,7 +81,7 @@ function tokenRunResult(token: string): EmbeddedAgentRunResult {
   } satisfies EmbeddedAgentRunResult;
 }
 
-describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity)", () => {
+describe("subagent CONTINUE_WORK token self-continuation (token-form parity)", () => {
   let tmpDir: string;
   let storePath: string;
 

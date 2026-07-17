@@ -24,7 +24,7 @@ function resolveStaleCutoffMs(
   defaultFloorMs = STALE_UNENDED_SUBAGENT_RUN_MS,
 ): number {
   // `defaultFloorMs` is the baseline cutoff applied when the run carries no
-  // explicit timeout. The #990 orphan-reap confidence gate passes a tunable
+  // explicit timeout. The orphan-reap confidence gate passes a tunable
   // floor here; the per-run timeout-derived cutoff is always respected so a run
   // with an explicit long timeout is never aged out before that timeout + grace.
   const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
@@ -68,12 +68,12 @@ function isUnendedRunStalePastCutoff(
 }
 
 /**
- * Three-state liveness verdict for the #990 orphan-reap confidence gate.
+ * Three-state liveness verdict for the orphan-reap confidence gate.
  *
  * Collapses a child-session run record into the only distinction the reaper may
  * act on: are we CONFIDENT the parent run is terminal (reap-eligible), is it
  * plausibly still live (quiesce), or do we simply not know (quiesce)? The
- * asymmetric error cost is load-bearing (#952): wrongly culling a busy seat is
+ * asymmetric error cost is load-bearing : wrongly culling a busy seat is
  * unrecoverable, while parking a zombie is harmless — so anything short of
  * `confident-terminal` MUST resolve to a non-reap state.
  *

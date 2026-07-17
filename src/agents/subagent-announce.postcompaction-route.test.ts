@@ -1,18 +1,7 @@
 /**
- * Announce-path post-compaction routing test (#978 / #3 of the quadruplet).
- *
- * Pins the fix in `855fa3782b7` (subagent-announce.ts:995): a light-context
- * leaf emitting `[[CONTINUE_DELEGATE: ... | post-compaction]]` is caught on the
- * announce/completion path and must route to `stagePostCompactionDelegate`
- * (seam-staged) instead of the normal immediate chain-spawn. Mutual exclusion:
- * stages XOR chain-spawns.
- *
- * Without the :995 branch the announce path dropped post-compaction mode and
- * dispatched the leaf-lifeboat as a normal immediate delegate (the
- * lifeboat-drop bug — the deny-tools/leaf condition). This is the announce-path
- * complement to the main-reply staging-wiring test
- * (agent-runner.continuation-postcompaction-staging.test.ts) — different SUT:
- * runSubagentAnnounceFlow vs runReplyAgent.
+ * Ensures a light-context post-compaction delegate marker is staged instead of
+ * immediately chain-spawned. This announce-path coverage complements the main
+ * reply staging test.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -128,7 +117,7 @@ function buildLeafParams(bracket: string): AnnounceFlowParams {
   };
 }
 
-describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat seam-stage)", () => {
+describe("announce-path post-compaction routing", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
   const stageMock = vi.mocked(stagePostCompactionDelegate);
 
@@ -164,7 +153,7 @@ describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat sea
     // announce path catches the bracket on the LEAF's COMPLETION, when the leaf
     // is already terminating, so the lifeboat can only stage under the parent's
     // session (consumed at the PARENT's next compaction, not the leaf's own).
-    // Caught-on-completion != staged-in-turn — #974's doc names this. Asserting
+    // Caught-on-completion != staged-in-turn — doc names this. Asserting
     // the sessionKey here pins the behavior so a future change is visible.
     const stagedSessionKey = stageMock.mock.calls[0]?.[0];
     expect(stagedSessionKey).toBe("agent:main:discord:dm:test-route"); // requesterSessionKey
@@ -209,7 +198,7 @@ describe("announce-path post-compaction routing (#978 :995 — leaf-lifeboat sea
     });
 
     expect(stageMock).toHaveBeenCalledTimes(1);
-    // The staged event is enqueued under the requester session key (see :996/:1011).
+    // The staged event is enqueued under the requester session key.
     const events = drainSystemEventEntries("agent:main:discord:dm:test-route");
     const stagedEvent = events.find((e) =>
       (e.text ?? "").includes("[continuation:delegate-staged-post-compaction]"),

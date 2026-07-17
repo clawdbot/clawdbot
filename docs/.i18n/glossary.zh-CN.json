@@ -4,10 +4,6 @@
     "target": "OpenClaw"
   },
   {
-    "source": "@openclaw/ai package",
-    "target": "@openclaw/ai 包"
-  },
-  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },

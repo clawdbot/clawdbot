@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session entries for recovery persist assertions (#1158).
+// Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -18,7 +18,7 @@ const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
-// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
 const loadSessionStoreForRecoveryMock = vi.fn(
@@ -435,7 +435,7 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
-  it("recovers a force-claimed not-yet-due running delegate instead of stranding it by due time (#1144)", async () => {
+  it("recovers a force-claimed not-yet-due running delegate instead of stranding it by due time", async () => {
     const sessionKey = "agent:main:force-claim-crash";
     // A delayed delegate force-claimed to `running` pre-due (ignoreDelay), then
     // orphaned by a crash before spawn accept — its dueAt is still in the future.
@@ -545,7 +545,7 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
   });
 
-  it("enforces the cost cap against the persisted child chain cost on recovery (#1144)", async () => {
+  it("enforces the cost cap against the persisted child chain cost on recovery", async () => {
     // The finding: a delayed delegate queued under a child session is re-driven
     // on restart by recoverPendingContinuationDelegates, which derives the chain
     // cost from the PERSISTED child entry (no in-memory fold survives a restart).
@@ -585,7 +585,7 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
 
-  it("recovery applies the delegate's durable chainTokensFold over a stale child entry (#1144)", async () => {
+  it("recovery applies the delegate's durable chainTokensFold over a stale child entry", async () => {
     // When the settle-time child chain-cost persist FAILED, the child entry is
     // permanently stale (missing this run's tokens) and the in-memory fold does
     // not survive a restart. The fold is instead recorded durably on the delegate
@@ -718,7 +718,7 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
-  it("persists the folded chain state when a recovered delayed delegate's hedge fires (#1158)", async () => {
+  it("persists the folded chain state when a recovered delayed delegate's hedge fires", async () => {
     // The finding: recovery opts into applyDelegateChainTokensFold but, for a
     // still-unmatured delayed delegate, only ARMS a hedge. Without a
     // persistChainState callback the hedge folds the cost in memory and loses it

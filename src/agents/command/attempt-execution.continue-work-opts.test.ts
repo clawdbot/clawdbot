@@ -1,25 +1,11 @@
 /**
- * Regression-pin trap-test for #746 Layer 2 cure (PR #892 complement).
+ * Regression coverage for spawn-init `continue_work` plumbing.
  *
- * Asserts that `runAgentAttempt` (the spawn-init / turn-1 path that subagent
- * gateway invocations land on via callSubagentGateway → agentCommandInternal →
- * runAgentAttempt → runEmbeddedAgent) forwards a `continueWorkOpts` closure to
- * `runEmbeddedAgent` whenever `cfg.agents.defaults.continuation.enabled === true`.
+ * `runAgentAttempt` must forward `continueWorkOpts` to `runEmbeddedAgent` when
+ * continuation is enabled. Otherwise the tool is absent from the first turn's
+ * catalog and a subagent cannot elect another turn.
  *
- * Without this wiring, openclaw-tools.ts:592 evaluates
- * `options?.continueWorkOpts` as undefined on turn-1, the `continue_work` tool
- * never registers in the subagent's spawn-init tool-list, and subagent sessions
- * cannot self-elect another turn even though PR #892 cured the same gap on the
- * followup-runner (turn-2+) path. Empirical observation:
- * `CONTINUE_WORK STILL NOT AVAILABLE` post-PR-#892-merge.
- *
- * Cure-mechanism-distinction: same observable `turn 2/200` event can be
- * produced by either chain-hop (continue_delegate) or in-session continue_work.
- * This test pins the tool-list-introspection invariant (continueWorkOpts
- * present on turn-1) so the cure path can be verified independently of the
- * delivery mechanism.
- *
- * Trap-test-first methodology (RED on the pre-cure shape, GREEN after).
+ * This pins tool registration independently from the later delivery mechanism.
  */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -139,7 +125,7 @@ function makeAtCapContinuationConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cure)", () => {
+describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
   let tmpDir: string;
   let sessionEntry: SessionEntry;
   let sessionStore: Record<string, SessionEntry>;
@@ -223,7 +209,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       | { continueWorkOpts?: { requestContinuation?: unknown } }
       | undefined;
     expect(callArgs).toBeDefined();
-    // RED: pre-cure this is undefined → continue_work never registers in
+    // Without the plumbing this is undefined, so continue_work never registers in
     //      the subagent's turn-1 tool-list.
     expect(callArgs?.continueWorkOpts).toBeDefined();
     expect(typeof callArgs?.continueWorkOpts?.requestContinuation).toBe("function");
@@ -340,12 +326,12 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(3);
   });
 
-  // P2-2 never-silent symmetry: the spawn-init lane must surface a multi-election
+  // Never-silent symmetry: the spawn-init lane must surface a multi-election
   // cap-drop even when NOTHING scheduled (scheduledCount:0, cappedCount>0). The
   // cap-notice emit lives ABOVE the zero-scheduled early return so this lane
   // matches the main-reply (agent-runner) and followup (followup-runner) lanes,
   // which both emit the cap-notice regardless of scheduledCount.
-  it("emits the cap-notice on spawn-init when a multi continue_work batch schedules nothing at the cap (P2-2)", async () => {
+  it("emits the cap-notice on spawn-init when a multi continue_work batch schedules nothing at the cap", async () => {
     // Seed the session already at the chain cap so the FIRST election is
     // rejected: scheduleContinuationWorkBatch returns scheduledCount:0,
     // cappedCount:2 — the exact case the spawn-init lane used to drop silently.
@@ -386,7 +372,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   // Single-election guard: keep single-work behavior intact. A lone capped
   // election stays silent on the spawn-init lane, matching the `requests > 1`
   // guard shared by the main-reply and followup lanes.
-  it("stays silent for a single capped continue_work election on spawn-init (P2-2 guard)", async () => {
+  it("stays silent for a single capped continue_work election on spawn-init", async () => {
     sessionEntry.continuationChainCount = 1;
     sessionStore[sessionKey] = sessionEntry;
     await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
@@ -413,8 +399,8 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     );
   });
 
-  it("induces the issue #973 chain-depth reject from a bracket token without mutating protected config", async () => {
-    // #973 proof gap: the live gateway tool must keep maxChainLength protected,
+  it("induces the chain-depth rejection from a bracket token without mutating protected config", async () => {
+    // The live gateway tool must keep maxChainLength protected,
     // but the runtime still needs a deterministic way to behaviorally exercise
     // the reject branch. This seeds a test session already at the cap and emits
     // a terminal bracket continue_work token; no config.patch, raw file edit, or
@@ -567,13 +553,13 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
   });
 
-  it("does NOT tag the spawn-init continue_work flow with parentRunId (own-turn has no spawn lineage; #952/#990 reap guard)", async () => {
+  it("does NOT tag the spawn-init continue_work flow with parentRunId (own-turn has no spawn lineage; reap guard)", async () => {
     // A subagent's own-turn continue_work is same-session work, not a delegate
     // child. If the spawn-init lane tags the durable flow with the subagent's own
-    // electing run as parentRunId, #990 bucket-1 treats that confident-terminal run
+    // electing run as parentRunId, bucket-1 treats that confident-terminal run
     // as an orphan parent and reaps the flow on the first busy-defer — so hop-2
-    // never runs (#952). Pin that the scheduled flow carries NO parentRunId, keeping
-    // it on the #990 never-reap (parentRunId==null → same-session) path.
+    // never runs. Pin that the scheduled flow carries NO parentRunId, keeping
+    // it on the never-reap (parentRunId==null → same-session) path.
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done\nCONTINUE_WORK" }],
       meta: {
@@ -610,7 +596,7 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
       ).continueWorkOpts;
       if (!opts) {
         throw new Error(
-          "continueWorkOpts missing — Layer 2 cure regressed; subagent turn-1 cannot continue_work",
+          "continueWorkOpts missing — spawn-init continuation plumbing regressed; subagent turn-1 cannot continue_work",
         );
       }
       opts.requestContinuation({ reason: "trap-test", delaySeconds: 30 });
@@ -627,19 +613,12 @@ describe("runAgentAttempt #746 spawn-init continueWorkOpts plumbing (Layer 2 cur
   });
 });
 
-// Cross-layer drift-catch:
-//   - Layer 1 (turn-2+ followup-runner): pinned by
-//     src/auto-reply/reply/followup-runner.test.ts
-//     "createFollowupRunner continueWorkOpts threading (#746)".
-//   - Layer 2 (turn-1 spawn-init runAgentAttempt): pinned by this file.
-// Together these prevent a regression that fixes one Layer in isolation from
-// silently reopening the gap on the other Layer (the same
-// false-empirical-proof class).
-describe("#746 cross-layer drift-catch sentinel", () => {
-  it("documents both Layer 1 + Layer 2 cure sites for #746 (sentinel only)", () => {
-    // This sentinel exists so a future maintainer searching for "#746" in
-    // test output sees both cure sites referenced from one place. Intentional
-    // no-op assertion; the real coverage lives in the two file-specific tests.
+// Cross-layer drift guard:
+//   - turn-2+ followup-runner plumbing is pinned by followup-runner.test.ts
+//   - turn-1 spawn-init plumbing is pinned by this file
+describe("cross-layer drift-catch sentinel", () => {
+  it("documents both continuation plumbing sites", () => {
+    // The real behavior coverage lives in the two owner-specific test files.
     expect(true).toBe(true);
   });
 });

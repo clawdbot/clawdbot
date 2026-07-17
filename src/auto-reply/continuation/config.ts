@@ -20,7 +20,7 @@ const DEFAULT_CONTINUATION_COST_CAP_TOKENS = 500_000;
 const DEFAULT_CONTINUATION_MAX_DELEGATES_PER_TURN = 5;
 const DEFAULT_CONTINUATION_MAX_PENDING_WORK = 32;
 const DEFAULT_EARLY_WARNING_BAND = 0.3125;
-// #990 busy-skip exp-backoff defaults (preserve pre-config behavior: 1s base,
+// busy-skip exp-backoff defaults (preserve pre-config behavior: 1s base,
 // ×2 per consecutive busy-skip, capped at maxDelayMs).
 const DEFAULT_BUSY_SKIP_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BUSY_SKIP_BACKOFF_FACTOR = 2;
@@ -167,10 +167,10 @@ export function resolveMaxDelegatesPerTurn(cfg: OpenClawConfig = getRuntimeConfi
  */
 export function clampDelayMs(rawMs: number | undefined, config: ContinuationRuntimeConfig): number {
   const requested = rawMs ?? config.defaultDelayMs;
-  // #1075: an explicit zero (or any non-positive) is the IMMEDIATE sentinel —
+  // an explicit zero (or any non-positive) is the IMMEDIATE sentinel —
   // preserve it instead of flooring to minDelayMs, so the model-facing
   // "delaySeconds: 0 = immediate" contract actually holds. Omitted (undefined)
-  // still resolves to defaultDelayMs above (preserving the #918 distinction
+  // still resolves to defaultDelayMs above (preserving the distinction
   // that an explicit 0 is not the 15s default); only positive delays clamp.
   if (requested <= 0) {
     return 0;

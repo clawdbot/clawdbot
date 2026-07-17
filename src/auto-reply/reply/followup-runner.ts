@@ -865,7 +865,7 @@ export function createFollowupRunner(params: {
         });
       }
 
-      // No-op replay guard bookkeeping (#1138/#1142). Followup room/system events
+      // No-op replay guard bookkeeping. Followup room/system events
       // are neutral unless a future caller marks the wake as continuation-owned;
       // this path records substantive outcomes without suppressing room life.
       const noOpRearmWake = {
@@ -1735,7 +1735,7 @@ export function createFollowupRunner(params: {
           ? replySessionKey
           : undefined;
 
-      // Post-turn no-op replay outcome recording (#1138/#1142). Record before any
+      // Post-turn no-op replay outcome recording. Record before any
       // continuation/followup scheduling so a no-op self-rearm turn increments the
       // streak before it can schedule the next same-family wake. Idempotent per runId.
       //
@@ -1938,16 +1938,16 @@ export function createFollowupRunner(params: {
           })),
           config: continuationConfig,
           // Same-session own-turn continue_work has no spawning lineage; leave
-          // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
+          // parentRunId unset so bucket-1 never orphan-reaps it (see the
           // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
           originRunId: runId,
           originTurnId: run.sessionId,
           log: (message) => defaultRuntime.log(message),
         });
-        // #986 cap-notice symmetry: surface cap-dropped elections on the
+        // cap-notice symmetry: surface cap-dropped elections on the
         // followup lane too, matching the main-reply lane (agent-runner).
         // Multi-election only, to keep single-work behavior intact
-        // (Rune #988 review residual + frond fold-in).
+        // (retained continuation behavior).
         if (scheduleResult.cappedCount > 0 && effectiveContinueWorkRequests.length > 1) {
           enqueueSystemEvent(
             `[continuation] ${scheduleResult.cappedCount} of ${effectiveContinueWorkRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session entries for recovery persist assertions (#1158).
+// Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -18,7 +18,7 @@ const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
-// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
 const loadSessionStoreForRecoveryMock = vi.fn(
@@ -428,7 +428,7 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
-  it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {
+  it("clears persisted chain-token folds so later delayed hedges do not reapply them", async () => {
     setRuntimeConfigSnapshot({
       agents: {
         defaults: {
@@ -485,7 +485,7 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(persisted?.continuationChainTokens).toBe(150_000);
   });
 
-  it("recovers delayed default delegates with durable inherited silent/wake policy (#1158)", async () => {
+  it("recovers delayed default delegates with durable inherited silent/wake policy", async () => {
     const sessionKey = "agent:main:subagent:recover-inherited-silent";
     enqueuePendingDelegate(sessionKey, { task: "delayed inherited child", delayMs: 60_000 });
 

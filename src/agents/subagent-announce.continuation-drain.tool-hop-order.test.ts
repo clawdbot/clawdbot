@@ -16,7 +16,7 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
-// #1144: controllable so a test can force the child chain-cost persist to fail
+// controllable so a test can force the child chain-cost persist to fail
 // and exercise the in-memory fallback fold. Default routes the entry patch
 // through the same in-memory store the drain reads.
 const updateSessionEntryInStore = async (
@@ -77,7 +77,7 @@ type ConsumedToolDelegate = {
 };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
-// #1144: capture durable delayed-bracket delegate enqueues (replaces the old
+// capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
@@ -360,7 +360,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails (#1144)", async () => {
+  it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails", async () => {
     const store: Record<string, Record<string, unknown>> = {
       "agent:main:subagent:bracket-fail": {
         sessionId: "session-child",
@@ -401,7 +401,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a bracket delegate when the parent chain-cost persist fails and the folded basis exceeds the cap (#1144)", async () => {
+  it("rejects a bracket delegate when the parent chain-cost persist fails and the folded basis exceeds the cap", async () => {
     const store: Record<string, Record<string, unknown>> = {
       "agent:main:subagent:bracket-guard": {
         sessionId: "session-child",
@@ -448,7 +448,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("treats a no-op parent token persist as failed and folds the run cost (#1158)", async () => {
+  it("treats a no-op parent token persist as failed and folds the run cost", async () => {
     const store: Record<string, Record<string, unknown>> = {
       "agent:main:subagent:bracket-parent-missing": {
         sessionId: "session-child",

@@ -307,7 +307,7 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
   //
   // Captured BEFORE the deferred timer as a boot-time cutoff: post-compaction
   // recovery only resets rows that were already `running` at process start, so a
-  // live release claiming a row during the startup window is not requeued (#1144).
+  // live release claiming a row during the startup window is not requeued.
   const recoveryArmedAt = Date.now();
   const timer = setTimeout(() => {
     void (async () => {
@@ -329,7 +329,7 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
           `replayed sessions=${delegateSummary.sessions} dispatched=${delegateSummary.dispatched} rejected=${delegateSummary.rejected}`,
         );
       }
-      // #1144/#1158: post-compaction delegates left `running` by a crash between
+      // Post-compaction delegates left `running` by a crash between
       // release-claim and durable handoff must be re-dispatched now, not just
       // requeued — for a session that already compacted there is no subsequent
       // compaction seam to consume them, so a requeued row would sit forever.

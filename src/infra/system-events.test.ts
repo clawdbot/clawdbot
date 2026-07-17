@@ -87,7 +87,7 @@ describe("system events (session routing)", () => {
 
     // Trusted-internal producer (continuation/post-compaction/subagent-return): legitimate
     // `System:`/`[System]` content survives un-rewritten. Pure unconditional sanitize would
-    // corrupt these (codex P2-b); the `trusted` flag bypasses sanitization. #865 anti-spoof
+    // corrupt these legitimate markers; the `trusted` flag bypasses sanitization. Anti-spoof
     // tests cannot see this regression, so this is its dedicated guard.
     enqueueSystemEvent("System: legit summary", {
       sessionKey: "agent:trusted:main",

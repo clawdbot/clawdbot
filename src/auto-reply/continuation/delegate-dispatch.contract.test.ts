@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session entries for recovery persist assertions (#1158).
+// Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -18,7 +18,7 @@ const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
-// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
 const loadSessionStoreForRecoveryMock = vi.fn(
@@ -425,7 +425,7 @@ describe("tool delegate dispatch contract", () => {
     );
   });
 
-  it("dispatchQueuedRegardlessOfDelay force-dispatches a not-yet-due delegate (fail-closed persist-failure path) (#1144)", async () => {
+  it("dispatchQueuedRegardlessOfDelay force-dispatches a not-yet-due delegate (fail-closed persist-failure path)", async () => {
     const sessionKey = "session-force-dispatch-delayed";
     enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
 
@@ -525,8 +525,8 @@ describe("tool delegate dispatch contract", () => {
     });
   });
 
-  it("inherits parent silent policy for a default-mode delegate (#1158)", async () => {
-    // Finding r3517437268: a delegate a silent parent chain queued must stay
+  it("inherits parent silent policy for a default-mode delegate", async () => {
+    // A delegate queued by a silent parent chain must stay
     // internal even though its own mode is unset. inheritedSilent (no wake) →
     // silentAnnounce, no wakeOnReturn.
     const sessionKey = "session-inherit-silent";
@@ -548,7 +548,7 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnParams).not.toHaveProperty("wakeOnReturn");
   });
 
-  it("inherits parent silent+wake policy for a default-mode delegate (#1158)", async () => {
+  it("inherits parent silent+wake policy for a default-mode delegate", async () => {
     const sessionKey = "session-inherit-wake";
     enqueuePendingDelegate(sessionKey, { task: "default child" });
 
@@ -569,7 +569,7 @@ describe("tool delegate dispatch contract", () => {
     });
   });
 
-  it("does not upgrade an explicit silent delegate to silent-wake via inheritance (#1158)", async () => {
+  it("does not upgrade an explicit silent delegate to silent-wake via inheritance", async () => {
     const sessionKey = "session-explicit-silent-inherit-wake";
     enqueuePendingDelegate(sessionKey, { task: "explicit silent child", mode: "silent" });
 
@@ -590,7 +590,7 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnParams).not.toHaveProperty("wakeOnReturn");
   });
 
-  it("keeps a default-mode delegate visible without inherited policy (#1158)", async () => {
+  it("keeps a default-mode delegate visible without inherited policy", async () => {
     // Normal (non-silent) parent: the default-mode delegate stays visible.
     const sessionKey = "session-no-inherit";
     enqueuePendingDelegate(sessionKey, { task: "default child" });
@@ -608,7 +608,7 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnParams).not.toHaveProperty("wakeOnReturn");
   });
 
-  it("wake inheritance only applies when the parent was also silent (#1158)", async () => {
+  it("wake inheritance only applies when the parent was also silent", async () => {
     // inheritedWake without inheritedSilent must NOT wake — mirrors the guard
     // semantics (parentWasSilent && wakeOnReturn), so a non-silent parent stays visible.
     const sessionKey = "session-inherit-wake-only";

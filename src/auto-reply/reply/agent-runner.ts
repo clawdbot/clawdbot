@@ -1996,7 +1996,7 @@ export async function runReplyAgent(replyParams: {
       return returnWithQueuedFollowupDrain(undefined);
     }
 
-    // Pre-provider no-op replay guard (#1138/#1142). This is the visible-turn and
+    // Pre-provider no-op replay guard. This is the visible-turn and
     // continuation (getReplyFromConfig) provider path; suppress a self-rearm wake
     // before buying the turn when the per-session no-op streak is tripped. The
     // finally block completes the reply operation and typing on the early return.
@@ -2168,7 +2168,7 @@ export async function runReplyAgent(replyParams: {
       });
     }
 
-    // Post-turn no-op replay outcome recording (#1138/#1142). Record before the
+    // Post-turn no-op replay outcome recording. Record before the
     // continuation/followup scheduling below so a no-op self-rearm turn increments
     // the streak before it can schedule the next same-family wake. This is also the
     // recording site for continuation turns driven through getReplyFromConfig.
@@ -3563,7 +3563,7 @@ export async function runReplyAgent(replyParams: {
             }
           } else {
             // Fan out every continue_work tool election captured this turn
-            // (#982). A single model response can fire N continue_work calls;
+            //. A single model response can fire N continue_work calls;
             // each is its own flow with its own delay/reason. Bracket-sourced
             // work has no per-tool array, so it schedules one election from the
             // merged signal.
@@ -3752,7 +3752,7 @@ export async function runReplyAgent(replyParams: {
                         requests: reservedWorkRequests,
                         config: liveSchedulingConfig,
                         // Same-session own-turn continue_work has no spawning lineage; leave
-                        // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
+                        // parentRunId unset so bucket-1 never orphan-reaps it (see the
                         // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
                         originRunId: runId,
                         originTurnId: followupRun.run.sessionId,
@@ -4116,7 +4116,7 @@ export async function runReplyAgent(replyParams: {
     }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
-    // #1144: do NOT consume/claim queued delegates in cleanup. consume APIs are
+    // do NOT consume/claim queued delegates in cleanup. consume APIs are
     // TaskFlow claims (queued -> running), not deletes; claiming here and
     // discarding the returned rows would strand a delegate matured/queued during
     // a failed turn in `running` until restart recovery. Durable queued delegates

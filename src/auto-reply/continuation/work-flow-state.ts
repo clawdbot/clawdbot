@@ -50,7 +50,7 @@ const PendingWorkStateSchema = z.object({
       armedAt: z.number().int().nonnegative(),
     })
     .optional(),
-  // #990 locus-3: durable delivered-mark written AFTER a wake is confirmed
+  // locus-3: durable delivered-mark written AFTER a wake is confirmed
   // delivered but BEFORE the persist-gap that precedes finishFlow. The
   // consume read-guard skips any flow carrying it so a crash in that window
   // never re-delivers (restart-gap dup cure). Two-axis legible: PRESENT=terminal.
@@ -94,14 +94,14 @@ export type PendingContinuationWork = {
   // retryCount (the transient-error fail-bound). Never penalizes.
   busySkipCount?: number;
   idleRetry?: PendingContinuationIdleRetry;
-  // #990 locus-3: durable delivered-mark (see schema). PRESENT once a wake was
+  // locus-3: durable delivered-mark (see schema). PRESENT once a wake was
   // confirmed delivered; the consume read-guard refuses to re-drive it.
   succeeded?: { point: "optimal"; durability: "durable" };
   flowId?: string;
   expectedRevision?: number;
   // Durable flow status carried onto the runtime object by the store reader
   // ({@link workToRuntime}), sourced from the flow's PRE-claim status. The
-  // fold-side write-guard (#988-P2-1) needs this to tell a recovered `running`
+  // fold-side write-guard needs this to tell a recovered `running`
   // turn (actively executing) from genuine `queued` backlog so a live turn is
   // never finished-as-superseded. Absent on freshly-constructed enqueue inputs;
   // only store reads populate it.
@@ -142,7 +142,7 @@ export function encodeWorkState(work: PendingContinuationWork): PendingWorkState
     ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
     ...(work.originRunId ? { originRunId: work.originRunId } : {}),
     ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
-    // #1135: a continue_work captured during an active turn parks on the
+    // a continue_work captured during an active turn parks on the
     // end-of-turn lifecycle event from the moment it is enqueued, so the marker
     // must survive the durable write (not just live on the runtime object).
     // Anchors persist too so delayed work remains tied to the electing turn's

@@ -1978,7 +1978,7 @@ export async function discoverAllSessions(params?: {
     // Non-replacement path: the existing entry wins its sessionFile, but still
     // keep the newest activity timestamp so a newer twin scanned after the
     // primary (any directory iteration order) never regresses the session's
-    // mtime (#1144).
+    // mtime.
     if (file.mtimeMs > existing.mtime) {
       existing.mtime = file.mtimeMs;
     }

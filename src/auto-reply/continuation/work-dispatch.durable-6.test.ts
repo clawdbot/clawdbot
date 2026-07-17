@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 let continuationEnabledForTest = true;
@@ -247,13 +247,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -637,8 +637,8 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("delivers a distinct wake for every continue_work election scheduled in one turn (#982)", async () => {
-    // Regression for #982: N continue_work() calls in one model turn must each
+  it("delivers a distinct wake for every continue_work election scheduled in one turn", async () => {
+    // Regression for N continue_work() calls in one model turn must each
     // deliver their own wake at their own offset. The single-variable capture
     // dropped all but the last; the batch helper fans out all N, and the
     // wake-timer re-arms for the soonest pending after each fire.
@@ -689,7 +689,7 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
-  it("bounds the observed 3x same-turn continue_work delays as three scheduled terminal wakes (#1147)", async () => {
+  it("bounds the observed 3x same-turn continue_work delays as three scheduled terminal wakes", async () => {
     const sessionKey = "agent:main:three-continue-work";
     mockSessionStore[sessionKey] = { sessionKey };
     const threeWorkConfig = { ...config, maxDelayMs: 65_000 } satisfies ContinuationRuntimeConfig;
@@ -751,7 +751,7 @@ describe("durable continuation_work dispatch", () => {
     ).toEqual([undefined, undefined, undefined]);
   });
 
-  it("parks a 3x same-turn continue_work burst while requests are in flight without a tight wake loop (#1147)", async () => {
+  it("parks a 3x same-turn continue_work burst while requests are in flight without a tight wake loop", async () => {
     const sessionKey = "agent:main:three-continue-work-busy";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);
@@ -942,7 +942,7 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("never supersedes a recovered running wake folded against a newer queued election (#988-P2-1)", async () => {
+  it("never supersedes a recovered running wake folded against a newer queued election", async () => {
     // End-to-end proof that the PRE-claim status is carried through
     // consumePendingWork into partitionSupersededWork: a stale, recovered
     // `running` wake co-drained with a newer `queued` election must DRIVE, not

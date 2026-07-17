@@ -14,7 +14,6 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { DiagnosticRunFireReason } from "../../../infra/diagnostic-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
@@ -87,10 +86,6 @@ export type RunEmbeddedAgentParams = {
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
-  /** Low-cardinality firing reason for loop diagnostics. */
-  fireReason?: DiagnosticRunFireReason;
-  /** Run id that caused this run to be scheduled, when applicable. */
-  parentRunId?: string;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */

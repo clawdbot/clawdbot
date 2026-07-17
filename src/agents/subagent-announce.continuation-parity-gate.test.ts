@@ -1,5 +1,5 @@
 /**
- * #974-gate: Continuation delegate dispatch parity harness.
+ * Continuation delegate dispatch parity harness.
  *
  * THE EXACTLY-ONCE INVARIANT:
  * runSubagentAnnounceFlow is the SOLE dispatch route for bracket
@@ -16,7 +16,7 @@
  *   3. [[CONTINUE_DELEGATE: task | silent-wake]]        (silent-wake)
  *   4. [[CONTINUE_DELEGATE: task +30s]]                 (delay)
  *   5. [[CONTINUE_DELEGATE: task | target=session:key]] (target)
- *   6. [[CONTINUE_DELEGATE: task | post-compaction]]    (post-compaction — #975)
+ * 6. [[CONTINUE_DELEGATE: task | post-compaction]] (post-compaction —)
  *   7. No bracket in findings                           (negative control)
  *   8. continuationEnabled=false + bracket              (feature-gate control)
  */
@@ -157,10 +157,10 @@ function buildParityParams(bracket: string): AnnounceFlowParams {
 }
 
 // --------------------------------------------------------------------------
-// #974 exactly-once gate: delegate sub-mode parity matrix
+// exactly-once gate: delegate sub-mode parity matrix
 // --------------------------------------------------------------------------
 
-describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () => {
+describe("announce-path bracket delegate exactly-once dispatch", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
@@ -242,7 +242,7 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
       setTimeout(resolve, 50);
     });
 
-    // #1144: a delayed bracket delegate is routed through the durable pending
+    // a delayed bracket delegate is routed through the durable pending
     // delegate store (survives restart) exactly once, not fired via a volatile
     // in-process setTimeout.
     expect(enqueuePendingDelegate).toHaveBeenCalledTimes(1);
@@ -251,7 +251,7 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
       { task: string; delayMs?: number },
     ];
     // Enqueued under the CHILD session so the later drain uses the child's chain
-    // state (hop/cost), not reset to the requester's (#1144).
+    // state (hop/cost), not reset to the requester's.
     expect(enqueueSession).toBe(childSessionKey);
     expect(enqueued.task).toBe("continue after delay");
     // +30s is consumed by the parser, not included in the task body
@@ -283,10 +283,10 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
     expect(spawnArgs.continuationTargetSessionKey).toBe("agent:main:other");
   });
 
-  // -- 6. Post-compaction modifier (#975 gap) --
+  // -- 6. Post-compaction modifier (gap) --
 
-  it("stages exactly once (NOT immediate-spawn) for [[CONTINUE_DELEGATE: task | post-compaction]] (#978 lifeboat-drop fix)", async () => {
-    // Post-#978 (merged): parseDelegateDirective recognizes "post-compaction"
+  it("stages exactly once (NOT immediate-spawn) for [[CONTINUE_DELEGATE: task | post-compaction]] (lifeboat-drop fix)", async () => {
+    // Post- (merged): parseDelegateDirective recognizes "post-compaction"
     // and the announce/completion path routes it to stagePostCompactionDelegate
     // (staged at the compaction seam) INSTEAD of an immediate chain-spawn — the
     // lifeboat-drop fix (subagent-announce.ts:995-996). So spawnSubagentDirect
@@ -356,10 +356,10 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
 });
 
 // --------------------------------------------------------------------------
-// #974 double-fire regression guard
+// double-fire regression guard
 // --------------------------------------------------------------------------
 
-describe("#974: announce path is the sole dispatch route (no-double-fire guard)", () => {
+describe("announce path is the sole dispatch route (no-double-fire guard)", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {

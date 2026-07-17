@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 let continuationEnabledForTest = true;
@@ -247,13 +247,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -618,7 +618,7 @@ describe("durable continuation_work dispatch", () => {
     vi.useRealTimers();
   });
 
-  describe("#990 bucket-1 parent-lineage reap (design-pass §5)", () => {
+  describe("bucket-1 parent-lineage reap (design-pass §5)", () => {
     const REALISTIC_NOW = Date.parse("2026-04-25T12:00:00Z");
 
     function enqueueDelegateBusyFlow(
@@ -776,7 +776,7 @@ describe("durable continuation_work dispatch", () => {
       expect(systemEvents).toEqual([]);
     });
 
-    it("confidence-gate at bound: persistently-uncertain → quiesce UNBOUNDED, never reap-on-bound (#952 back-door closed)", async () => {
+    it("confidence-gate at bound: persistently-uncertain → quiesce UNBOUNDED, never reap-on-bound (back-door closed)", async () => {
       const sessionKey = "agent:main:uncertain-forever";
       enqueueDelegateBusyFlow(sessionKey, { parentRunId: "run-parent" });
       // No run record ever → uncertain on every read.
@@ -836,14 +836,14 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
-  describe("#952 own-turn subagent continue_work survives a busy-defer (never orphan-reaped)", () => {
+  describe("own-turn subagent continue_work survives a busy-defer (never orphan-reaped)", () => {
     it("does NOT reap a no-parentRunId own-turn flow whose own subagent run is confident-terminal, then drives hop-2 once its own session quiets", async () => {
-      // The #952 regression: a tool-less subagent elects continue_work for itself.
+      // The regression: a tool-less subagent elects continue_work for itself.
       // Its electing run completes (endedAt set → confident-terminal) and the wake
       // arms. While the subagent's OWN session is still mid-turn, driveContinuationTurn
       // busy-skips on the own-session readiness gate (a subagent's direct grant runs on
-      // its own session lane, not the cross-session main lane — #1057). Pre-fix the
-      // producer tagged parentRunId with the subagent's own electing run, so #990
+      // its own session lane, not the cross-session main lane —). Pre-fix the
+      // producer tagged parentRunId with the subagent's own electing run, so
       // bucket-1 read that run as a confident-terminal "orphan" and reaped the flow —
       // hop-2 never ran. The fix omits parentRunId for own-turn work, so the flow stays
       // on the never-reap rate-cap path and delivers when its own session quiets. This
@@ -862,7 +862,7 @@ describe("durable continuation_work dispatch", () => {
         dueAt: Date.now(),
         maxChainLength: 8,
         reason: "own-turn continuation",
-        // NO parentRunId — own-turn continue_work carries no spawning lineage (#952 fix).
+        // NO parentRunId — own-turn continue_work carries no spawning lineage (fix).
       });
 
       const skip = await dispatchPendingContinuationWork({ sessionKey });
@@ -889,7 +889,7 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
-  describe("#990 locus-3 durable delivered-mark restart-gap (PART B)", () => {
+  describe("locus-3 durable delivered-mark restart-gap (PART B)", () => {
     function enqueueMatured(sessionKey: string, reason: string): void {
       mockSessionStore[sessionKey] = { sessionKey };
       enqueuePendingWork({

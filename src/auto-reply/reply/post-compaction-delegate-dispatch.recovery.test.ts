@@ -465,7 +465,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     );
   });
 
-  it("re-stages preserved delegates and finalizes claimed rows when the durable persist fails (#1144)", async () => {
+  it("re-stages preserved delegates and finalizes claimed rows when the durable persist fails", async () => {
     // Two staged rows are claimed; the first delegate's delivery enqueue fails
     // so it lands in the preserve list, and the session-store re-stage then
     // throws. The dispatch must re-stage the preserved delegate as a fresh

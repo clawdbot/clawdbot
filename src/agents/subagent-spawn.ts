@@ -1544,7 +1544,7 @@ export async function spawnSubagentDirect(
       return names.length > 0 ? names : undefined;
     })(),
     // Without this, `buildSubagentSystemPrompt` falls through the continuation
-    // chaining gate (#715) and subagents never see the guidance even when
+    // chaining gate and subagents never see the guidance even when
     // `agents.defaults.continuation.enabled === true`.
     continuationEnabled: cfg.agents?.defaults?.continuation?.enabled === true,
   });

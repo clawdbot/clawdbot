@@ -455,10 +455,10 @@ describe("runAgentLoop deferred tool hydration", () => {
 
   it("terminates before another model call after repeated identical tool errors", async () => {
     const invalidArgs = {
-      task: "R-CONTINUATION-MIXED-SURFACE-FANOUT depth-2 targeted return arrived",
+      task: "depth-2 targeted return arrived",
       delaySeconds: 22,
       mode: "silent-wake",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
       targetSessionKeys: [],
       fanoutMode: "tree",
       model: "default",
@@ -528,25 +528,25 @@ describe("runAgentLoop deferred tool hydration", () => {
       },
     });
     expect(JSON.stringify(terminal.diagnostics)).not.toContain(
-      "agent:main:discord:channel:1466192485440164011",
+      "agent:main:discord:channel:000000000000000001",
     );
   });
 
   it("treats normalized-away continue_delegate args as the same repeated failure", async () => {
     const firstInvalidArgs = {
-      task: "  R-CONTINUATION-MIXED-SURFACE-FANOUT depth-2 targeted return arrived  ",
+      task: "  depth-2 targeted return arrived  ",
       delay_seconds: "22",
       mode: "normal",
-      target_session_key: " agent:main:discord:channel:1466192485440164011 ",
+      target_session_key: " agent:main:discord:channel:000000000000000001 ",
       target_session_keys: [],
       fanout_mode: "TREE",
       model: "default",
       traceparent: "not-a-traceparent",
     };
     const secondInvalidArgs = {
-      task: "R-CONTINUATION-MIXED-SURFACE-FANOUT depth-2 targeted return arrived",
+      task: "depth-2 targeted return arrived",
       delaySeconds: 22,
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
       fanoutMode: "tree",
     };
     const execute = vi.fn(async () => {
@@ -671,7 +671,7 @@ describe("runAgentLoop deferred tool hydration", () => {
   it("keeps raw tool error text out of repeated-error diagnostics and content", async () => {
     const execute = vi.fn(async () => {
       throw new Error(
-        'failed command "ls /very/sensitive/path" for agent:main:discord:channel:1466192485440164011 with prompt "private user text" Authorization: Bearer credential_value_to_redact token=abc123',
+        'failed command "ls /very/sensitive/path" for agent:main:discord:channel:000000000000000001 with prompt "private user text" Authorization: Bearer credential_value_to_redact token=abc123',
       );
     });
     let streamCalls = 0;
@@ -731,7 +731,7 @@ describe("runAgentLoop deferred tool hydration", () => {
       errorCode: "repeated_tool_error",
     });
     expect(terminalJson).not.toContain("/very/sensitive/path");
-    expect(terminalJson).not.toContain("agent:main:discord:channel:1466192485440164011");
+    expect(terminalJson).not.toContain("agent:main:discord:channel:000000000000000001");
     expect(terminalJson).not.toContain("private user text");
     expect(terminalJson).not.toContain("abc123");
     expect(terminalJson).not.toContain("credential_value_to_redact");
@@ -897,12 +897,12 @@ describe("runAgentLoop deferred tool hydration", () => {
   it("allows a corrected retry with changed arguments after an initial tool error", async () => {
     const invalidArgs = {
       task: "return to main",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
       fanoutMode: "tree",
     };
     const correctedArgs = {
       task: "return to main",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
     };
     const execute = vi
       .fn<AgentTool["execute"]>()
@@ -972,7 +972,7 @@ describe("runAgentLoop deferred tool hydration", () => {
   it("terminates when a repeated error batch also contains a successful sibling tool call", async () => {
     const invalidArgs = {
       task: "return to main",
-      targetSessionKey: "agent:main:discord:channel:1466192485440164011",
+      targetSessionKey: "agent:main:discord:channel:000000000000000001",
       fanoutMode: "tree",
     };
     const executeInvalid = vi.fn(async () => {

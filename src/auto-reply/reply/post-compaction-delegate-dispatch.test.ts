@@ -495,7 +495,7 @@ describe("post-compaction delegate dispatch extraction", () => {
   });
 
   it("marks post-compaction AGENTS.md context trusted so literal System markers survive un-rewritten", async () => {
-    // Regression guard for the P2 trusted-internal gap: `readPostCompactionContext`
+    // Regression guard for the trusted-internal gap: `readPostCompactionContext`
     // returns workspace AGENTS.md content, which can legitimately contain literal
     // `System:` lines and `[System]`/`[Assistant]` markers (rule examples, prompt
     // scaffolding). Without `trusted: true` these hit the unconditional inbound

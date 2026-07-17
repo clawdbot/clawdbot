@@ -121,7 +121,7 @@ describe("subagent run liveness", () => {
   });
 });
 
-describe("classifySubagentRunLiveness (#990 orphan-reap confidence gate)", () => {
+describe("classifySubagentRunLiveness orphan-reap confidence gate", () => {
   const now = Date.parse("2026-04-25T12:00:00Z");
 
   it("treats a missing run record as uncertain (never reap)", () => {

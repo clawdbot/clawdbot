@@ -100,7 +100,7 @@ export async function releasePostCompactionLifecycle(
   //    claimStagedPostCompactionTaskFlowDelegates claims rows to `running`; dispatch
   //    fails deterministic policy/cap rejections, and this finalizes only rows
   //    whose spawn was accepted so transient spawn failures stay recoverable on
-  //    the next restart (#1144/#1158).
+  // the next restart.
   const stagedDelegates = claimStagedPostCompactionTaskFlowDelegates(sessionKey);
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {

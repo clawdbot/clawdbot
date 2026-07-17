@@ -1,5 +1,5 @@
 /**
- * #817 regression: computeRequestCompactionContextUsage must
+ * regression: computeRequestCompactionContextUsage must
  *   (a) honor the totalTokensFresh freshness contract, returning null when
  *       the prior turn could not compute a fresh totalTokens snapshot, and
  *   (b) resolve the context-window denominator via the canonical pipeline
@@ -55,7 +55,7 @@ beforeEach(() => {
   state.resolveContextTokensForModelMock.mockReset();
 });
 
-describe("computeRequestCompactionContextUsage: freshness contract (#817 axis a)", () => {
+describe("computeRequestCompactionContextUsage: freshness contract (axis a)", () => {
   it("returns null when totalTokensFresh is explicitly false (known-stale)", async () => {
     const compute = await getComputeRequestCompactionContextUsage();
     state.resolveContextTokensForModelMock.mockReturnValue(200_000);
@@ -126,7 +126,7 @@ describe("computeRequestCompactionContextUsage: freshness contract (#817 axis a)
   });
 });
 
-describe("computeRequestCompactionContextUsage: context-window resolution (#817 axis b)", () => {
+describe("computeRequestCompactionContextUsage: context-window resolution (axis b)", () => {
   it("prefers entry.contextTokens over the model-resolution fallback when populated", async () => {
     const compute = await getComputeRequestCompactionContextUsage();
     // If resolveContextTokensForModel were called erroneously, the test would
@@ -203,7 +203,7 @@ describe("computeRequestCompactionContextUsage: context-window resolution (#817 
   });
 });
 
-describe("computeRequestCompactionContextUsage: model-size matrix (#817 anti-hardcode-200K)", () => {
+describe("computeRequestCompactionContextUsage: model-size matrix (anti-hardcode-200K)", () => {
   // Same totalTokens, different real model context-windows — the OLD code's
   // `?? 200_000` hardcode would have reported 0.7 for every row (since
   // entry.contextTokens absent forced the fallback). Threading the real

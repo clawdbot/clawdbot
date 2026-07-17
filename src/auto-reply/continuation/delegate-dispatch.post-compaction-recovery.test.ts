@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session entries for recovery persist assertions (#1158).
+// Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -18,7 +18,7 @@ const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
-// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
 const loadSessionStoreForRecoveryMock = vi.fn(
@@ -355,7 +355,7 @@ const splitLintUse = [
 ];
 void splitLintUse;
 
-describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
+describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
   beforeEach(() => {
     setRuntimeConfigSnapshot({
       agents: {

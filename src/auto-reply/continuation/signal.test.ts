@@ -114,7 +114,7 @@ describe("extractContinuationSignal", () => {
   // a later non-marker text payload (e.g. a warning/error block) followed the
   // model's continuation-signaling text. The fix scans all payloads for the
   // marker, walking backward so the latest marker wins.
-  it("finds marker on earlier payload even when a later payload has plain non-marker text (regression #622)", () => {
+  it("finds marker on earlier payload even when a later payload has plain non-marker text (regression)", () => {
     const payloads = [
       { text: "Investigating a thing.\nCONTINUE_WORK:45" },
       { text: "warning: tool call failed, will retry" }, // later payload, no marker
@@ -133,7 +133,7 @@ describe("extractContinuationSignal", () => {
     );
   });
 
-  it("when two payloads carry markers, the latest one wins (regression #622)", () => {
+  it("when two payloads carry markers, the latest one wins (regression)", () => {
     const payloads = [
       { text: "earlier intent\n[[CONTINUE_DELEGATE: stale-task]]" },
       { text: "actual final intent\n[[CONTINUE_DELEGATE: real-task]]" },

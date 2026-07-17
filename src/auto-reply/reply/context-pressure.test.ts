@@ -408,9 +408,9 @@ describe("checkContextPressure", () => {
     });
     const events = peekSystemEvents(SESSION_KEY);
     expect(events.length).toBeGreaterThan(0);
-    // Per PR #887 (commit 36265d02093) urgency-text upgrade: sub-95% bands name
+    // The urgency text below 95% names
     // continue_delegate(mode='post-compaction') for staging working-state survival,
-    // rather than the legacy "evacuat" wording. Test pins post-cure wording.
+    // rather than the legacy "evacuat" wording. This test pins the current wording.
     expect(events[0]).toMatch(/post-compaction/);
     expect(events[0]).toMatch(/working-state survival/);
     expect(events[0]).not.toMatch(/imminent/i);

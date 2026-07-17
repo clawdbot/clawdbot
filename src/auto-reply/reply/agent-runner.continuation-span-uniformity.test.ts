@@ -322,7 +322,7 @@ async function runDelegateTurn(
     shouldInjectGroupIntro: false,
     typingMode: "instant",
     // These scenarios seed a mid-chain entry (continuationChainCount ≥ 1) and
-    // continue it, so the turn is a continuation WAKE: the #987 chain-break
+    // continue it, so the turn is a continuation WAKE: the chain-break
     // reset must NOT fire and the parent chain.id / step math carry forward.
     isContinuationWake: true,
   });

@@ -1,4 +1,4 @@
-// Pre-provider no-op replay guard (#1138/#1142).
+// Pre-provider no-op replay guard.
 //
 // The incident family: continuation machinery presents work to a session, the
 // session buys a provider turn, the turn has no substantive outcome, another
@@ -132,8 +132,8 @@ export function classifyNoOpRearmWake(input: NoOpRearmWakeInput): NoOpRearmWakeC
       : { kind: "neutral", reason: "room-event" };
   }
 
-  // A plain heartbeat timer wake is an explicit periodic backend wake (#1142
-  // exception). It is admitted and never accrues or trips the self-rearm streak.
+  // A plain heartbeat timer wake is an explicit periodic backend-wake exception.
+  // It is admitted and never accrues or trips the self-rearm streak.
   if (input.isHeartbeat === true) {
     return { kind: "exempt_backend_wake", source: "heartbeat" };
   }
@@ -232,7 +232,7 @@ export function summarizeEmbeddedRunOutcome(
 }
 
 /**
- * Classify a completed turn. Critically (the #1141 Codex finding), a blank-text
+ * Classify a completed turn. Critically (the continuation-signal edge case), a blank-text
  * turn that made substantive tool calls is substantive, NOT a no-op. No-op is a
  * blank/silent turn whose only tools are known low-value primitives.
  */

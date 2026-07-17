@@ -198,7 +198,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       signalKind: "tool-delegate",
       delegateDelivery: "timer",
       delegateMode: "silent-wake",
-      reason: "poll PR #999 status",
+      reason: "poll change status",
     });
     expect(expectDefined(spans.at(0), "disabled span").options?.attributes).toMatchObject({
       "disabled.reason": "cap.delegates_per_turn",
@@ -215,7 +215,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
     });
     expectNoAttributeValueContains(
       expectDefined(spans.at(0), "disabled span").options?.attributes,
-      "poll PR #999 status",
+      "poll change status",
     );
   });
 

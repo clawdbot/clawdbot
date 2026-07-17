@@ -88,7 +88,7 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect(config.maxDelegatesPerTurn).toBe(5);
   });
 
-  it("clamps maxPendingWork to default when non-positive (#986)", () => {
+  it("clamps maxPendingWork to default when non-positive", () => {
     const zero = resolveContinuationRuntimeConfig({
       agents: { defaults: { continuation: { maxPendingWork: 0 } } },
     } as never);
@@ -134,7 +134,7 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect("generationGuardTolerance" in config).toBe(false);
   });
 
-  it("defaults busySkipBackoff to 1s base ×2 capped at maxDelayMs (#990)", () => {
+  it("defaults busySkipBackoff to 1s base ×2 capped at maxDelayMs", () => {
     const config = resolveContinuationRuntimeConfig({} as never);
     expect(config.busySkipBackoff).toEqual({ baseMs: 1_000, ceilingMs: 300_000, factor: 2 });
     // ceiling tracks a configured maxDelayMs.
@@ -144,7 +144,7 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect(tight.busySkipBackoff?.ceilingMs).toBe(60_000);
   });
 
-  it("resolves configured busySkipBackoff and clamps invalid values (#990)", () => {
+  it("resolves configured busySkipBackoff and clamps invalid values", () => {
     const config = resolveContinuationRuntimeConfig({
       agents: {
         defaults: {
@@ -162,7 +162,7 @@ describe("resolveContinuationRuntimeConfig", () => {
     expect(clamped.busySkipBackoff).toEqual({ baseMs: 1_000, ceilingMs: 300_000, factor: 2 });
   });
 
-  it("leaves orphanReapStaleCutoffMs unset by default and resolves a positive override (#990)", () => {
+  it("leaves orphanReapStaleCutoffMs unset by default and resolves a positive override", () => {
     expect(resolveContinuationRuntimeConfig({} as never).orphanReapStaleCutoffMs).toBeUndefined();
     const configured = resolveContinuationRuntimeConfig({
       agents: { defaults: { continuation: { orphanReapStaleCutoffMs: 1_800_000 } } },
@@ -226,13 +226,13 @@ describe("clampDelayMs", () => {
     expect(clampDelayMs(undefined, config)).toBe(15_000);
   });
 
-  it("treats an explicit zero as the immediate sentinel → 0, NOT defaultDelayMs (#918 + #1075)", () => {
-    // #918 anchor: an explicit `delaySeconds=0` must NOT fall back to the 15s
+  it("treats an explicit zero as the immediate sentinel → 0, NOT defaultDelayMs", () => {
+    // anchor: an explicit `delaySeconds=0` must NOT fall back to the 15s
     // default via a `|| defaultDelayMs` falsy check (0 is not "absent").
-    // #1075 refinement: a real 0 is the IMMEDIATE sentinel and passes through
+    // refinement: a real 0 is the IMMEDIATE sentinel and passes through
     // as 0 rather than clamping up to minDelayMs — matching the model-facing
     // "0 = immediate" schema. Omitted (undefined) still → defaultDelayMs (below),
-    // so the 0-is-not-default distinction #918 guards is preserved.
+    // so the 0-is-not-default distinction guards is preserved.
     expect(clampDelayMs(0, config)).toBe(0);
   });
 

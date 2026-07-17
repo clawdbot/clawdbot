@@ -589,9 +589,9 @@ describe("task-registry", () => {
       resetTaskRegistryMemoryForTest();
 
       const runId = "continuation-delegate-4df63444dc0f9b7dc64d762152b88cf9";
-      const parentSessionKey = "agent:main:discord:channel:1466192485440164011";
+      const parentSessionKey = "agent:main:discord:channel:000000000000000001";
       const childSessionKey = "agent:main:subagent:continuation-4df63444dc0f9b7dc64d762152b88cf9";
-      const task = "R-CONTINUATION-MIXED-SURFACE-FANOUT depth-2 child branch";
+      const task = "continuation depth-2 child branch";
       const cliTask = createTaskRecord({
         runtime: "cli",
         runId,

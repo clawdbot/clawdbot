@@ -612,13 +612,6 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
-  // The default session-store path is shared process-wide (pid+pool keyed) and
-  // is read back by the REAL getSessionEntry in handlers that do not set
-  // session.store. Tests that persist a model override to the default path via
-  // the real writer (e.g. the model-select retry test) would otherwise leak a
-  // stale modelOverride into later files in the sequential shard. Delete the
-  // real file too, not just the message sidecar.
-  rmSync(sessionStorePath, { force: true });
   rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
   clearTelegramDispatchDedupeFilesForTest();
   loadSessionStoreMock.mockReset();

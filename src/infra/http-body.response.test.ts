@@ -219,22 +219,6 @@ describe("readResponseWithLimit", () => {
     }
   });
 
-  it("rejects non-streamed text/json fallback bodies", async () => {
-    const text = vi.fn(async () => "unbounded");
-    const response = {
-      body: undefined,
-      headers: new Headers({ "content-length": "5" }),
-      text,
-    } as unknown as Response;
-
-    await expectReadResponseWithLimitFailureCase({
-      response,
-      maxBytes: 16,
-      expectedError: "Response body is not readable under the byte limit",
-    });
-    expect(text).not.toHaveBeenCalled();
-  });
-
   it("passes the idle-timeout error to stream cancellation", async () => {
     vi.useFakeTimers();
     try {

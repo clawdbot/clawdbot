@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session entries for recovery persist assertions (#1158).
+// Observable persisted session entries for recovery persist assertions.
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -18,7 +18,7 @@ const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
 let finishFlowShouldPersistFail = false;
-// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
 const loadSessionStoreForRecoveryMock = vi.fn(
@@ -672,8 +672,8 @@ describe("hedge timer ref/handle cleanup", () => {
     );
   });
 
-  it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {
-    // Finding r3517500714: multiple delayed delegates must advance the chain
+  it("advances + persists chain state across sequential hedge fires for multiple delayed delegates", async () => {
+    // Multiple delayed delegates must advance the chain
     // count durably across hedge fires. With the loadFresh/persist callbacks the
     // second hedge reads the PERSISTED count (1) advanced by the first, so it
     // spawns at hop 2 — not re-using the stale pre-spawn count (0) and bypassing
@@ -715,7 +715,7 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(persisted.currentChainCount).toBe(2);
   });
 
-  it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate (#1144)", async () => {
+  it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate", async () => {
     const sessionKey = "session-hedge-fold";
     // A delayed delegate annotated with a durable fold after a child chain-cost
     // persist failure, recovered as not-yet-due so it arms the hedge.
@@ -726,7 +726,7 @@ describe("hedge timer ref/handle cleanup", () => {
     });
 
     // Recovery supplies persistChainState (see recoverPendingContinuationDelegates),
-    // so the fold is safe to defer to a hedge rather than force-dispatched (#1158).
+    // so the fold is safe to defer to a hedge rather than force-dispatched.
     const persistChainState = vi.fn();
     const armed = await dispatchToolDelegates({
       sessionKey,
@@ -760,7 +760,7 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("force-dispatches a folded delayed delegate instead of arming a lossy hedge when no persist path exists (#1158)", async () => {
+  it("force-dispatches a folded delayed delegate instead of arming a lossy hedge when no persist path exists", async () => {
     // Fail-closed: applyDelegateChainTokensFold WITHOUT a persistChainState
     // callback means an armed hedge would fold the cost only in memory and lose
     // it (later hops rebuild from the stale entry and bypass the cost cap).

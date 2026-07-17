@@ -33,7 +33,7 @@ vi.mock("../../auto-reply/continuation/config.js", () => ({
     maxDelegatesPerTurn: 5,
   }),
   // Mirror the real clampDelayMs semantics: default-fill, preserve an explicit
-  // zero as the immediate sentinel (#1075), then clamp positive delays.
+  // zero as the immediate sentinel, then clamp positive delays.
   clampDelayMs: (
     rawMs: number | undefined,
     config: { defaultDelayMs: number; minDelayMs: number; maxDelayMs: number },
@@ -180,7 +180,7 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   });
 
   // ───────────────────────────────────────────────────────────────────────
-  // IMMEDIATE-SENTINEL branch: delaySeconds === 0 (#1075).
+  // IMMEDIATE-SENTINEL branch: delaySeconds === 0.
   //
   // CANON GUARDED: zero is the IMMEDIATE sentinel — it passes through as a
   // literal 0s schedule, NOT lifted to minDelayMs. This matches the
@@ -192,7 +192,7 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
   // contract has regressed; reviewer should check clampDelayMs preserves
   // the `requested <= 0 → 0` short-circuit.
   // ───────────────────────────────────────────────────────────────────────
-  it("preserves delaySeconds = 0 as immediate (#1075)", async () => {
+  it("preserves delaySeconds = 0 as immediate", async () => {
     const requestContinuation = vi.fn();
     const tool = makeTool({ requestContinuation });
 
@@ -209,7 +209,7 @@ describe("continue_work tool — delaySeconds boundary validation", () => {
     });
     // Compute: 0s → 0ms → clampDelayMs short-circuits `requested <= 0 → 0` = 0s.
     // Because resolvedDelaySeconds === the requested 0, NO clamp note is emitted —
-    // the immediate schedule passes through unchanged (the #1075 contract).
+    // the immediate schedule passes through unchanged (the contract).
     expect(result).toEqual({
       status: "scheduled",
       delaySeconds: 0,

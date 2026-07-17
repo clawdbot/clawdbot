@@ -16,7 +16,7 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
-// #1144: controllable so a test can force the child chain-cost persist to fail
+// controllable so a test can force the child chain-cost persist to fail
 // and exercise the in-memory fallback fold. Default routes the entry patch
 // through the same in-memory store the drain reads.
 const updateSessionEntryInStore = async (
@@ -77,7 +77,7 @@ type ConsumedToolDelegate = {
 };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
-// #1144: capture durable delayed-bracket delegate enqueues (replaces the old
+// capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
@@ -594,7 +594,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
-  // #989-P2: the trigger minted on the direct-announce path must distinguish an
+  // the trigger minted on the direct-announce path must distinguish an
   // ordinary inter-session subagent completion from an actual continuation-chain
   // hop. Ordinary completions are external turn-entries and must reset the
   // chain budget downstream; only `[continuation:chain-hop:N]` returns are
@@ -673,7 +673,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
-  it("persists the settled child's run tokens into the child's durable chain cost before dispatch (#1144)", async () => {
+  it("persists the settled child's run tokens into the child's durable chain cost before dispatch", async () => {
     // A chain-hop child that spent tokens this turn must have those tokens
     // folded into its OWN durable `continuationChainTokens` BEFORE queued child
     // delegates spawn — persisted to the child entry, not just held in memory.
@@ -734,7 +734,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.chainState?.accumulatedChainTokens).toBeGreaterThan(500_000);
   });
 
-  it("folds the child run cost into the live drain basis when the durable persist fails (#1144)", async () => {
+  it("folds the child run cost into the live drain basis when the durable persist fails", async () => {
     // If the durable child chain-cost persist throws, the drain must NOT fall
     // through to the stale persisted basis. The run cost is folded into the
     // drain's in-memory cost basis instead so the cost cap still enforces
@@ -793,7 +793,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.dispatchQueuedRegardlessOfDelay).toBe(true);
   });
 
-  it("treats a no-op child token persist as failed and folds the run cost (#1158)", async () => {
+  it("treats a no-op child token persist as failed and folds the run cost", async () => {
     const childEntry = {
       sessionId: "session-child",
       updatedAt: Date.now(),
@@ -840,7 +840,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.dispatchQueuedRegardlessOfDelay).toBe(true);
   });
 
-  it("routes a delayed bracket delegate through the durable pending store, not a volatile timer (#1144)", async () => {
+  it("routes a delayed bracket delegate through the durable pending store, not a volatile timer", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
@@ -905,7 +905,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("persists only the internal traceparent on durable delayed bracket delegates (#1159)", async () => {
+  it("persists only the internal traceparent on durable delayed bracket delegates", async () => {
     const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
     loadSessionStoreMock.mockImplementation(
       () =>
@@ -951,7 +951,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it("persists inherited silent/wake policy on durable delayed bracket delegates (#1159)", async () => {
+  it("persists inherited silent/wake policy on durable delayed bracket delegates", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>
         ({

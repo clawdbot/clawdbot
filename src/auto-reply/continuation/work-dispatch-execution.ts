@@ -29,7 +29,7 @@ const MAX_TRANSIENT_ERROR_RETRY_COUNT = 8;
 const CONTINUATION_TURN_BUSY_REASON = "requests-in-flight";
 const CONTINUATION_TURN_COMMAND_QUEUE_BUSY_REASON = "command-queue-busy";
 const CONTINUATION_TURN_DRAINING_REASON = "draining";
-// Non-retryable: the no-op replay guard tripped (#1138/#1142). The row is
+// Non-retryable: the no-op replay guard tripped. The row is
 // terminal-parked (superseded) so the self-rearm loop stops; never requeued.
 const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
 const GATEWAY_RESTARTING_REPLY_TEXT =

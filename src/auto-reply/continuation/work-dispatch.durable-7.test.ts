@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 let continuationEnabledForTest = true;
@@ -247,13 +247,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -655,7 +655,7 @@ describe("durable continuation_work dispatch", () => {
     expect(systemEvents).toEqual([]); // never failed
   });
 
-  it("never increments retryCount or drops the flow across many busy-skips (rate-cap-forever, #952 never-penalize)", async () => {
+  it("never increments retryCount or drops the flow across many busy-skips (rate-cap-forever, never-penalize)", async () => {
     const sessionKey = "agent:main:busy-forever";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);
@@ -686,7 +686,7 @@ describe("durable continuation_work dispatch", () => {
     expect(systemEvents).toEqual([]); // no failure warning ever enqueued
   });
 
-  it("resets busySkipCount to 0 and delivers once a busy-deferred flow finally drives (#990 Pillar-0 + #952-preserve)", async () => {
+  it("resets busySkipCount to 0 and delivers once a busy-deferred flow finally drives (Pillar-0 +)", async () => {
     const sessionKey = "agent:main:busy-then-drive";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);
@@ -708,7 +708,7 @@ describe("durable continuation_work dispatch", () => {
     const deferredState = [...mockFlows.values()][0]?.stateJson as { busySkipCount?: number };
     expect(deferredState.busySkipCount).toBe(3);
 
-    // Seat quiets: the legit-deferred flow delivers (never dropped, #952), and the
+    // Once the seat quiets, the deferred flow delivers without being dropped, and the
     // granted record clears the backoff counter (rate-cap, never permanent).
     activeSessions.clear();
     const result = await dispatchPendingContinuationWork({ sessionKey });
@@ -726,7 +726,7 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
-  it("does not re-consume a cancel-requested continuation work flow (:259 dedup harden, #990 Pillar-0)", async () => {
+  it("does not re-consume a cancel-requested continuation work flow (dedup harden, Pillar-0)", async () => {
     const sessionKey = "agent:main:cancel-requested";
     mockSessionStore[sessionKey] = { sessionKey };
     enqueuePendingWork({
@@ -757,7 +757,7 @@ describe("durable continuation_work dispatch", () => {
     expect([...mockFlows.values()][0]?.status).toBe("queued");
   });
 
-  it("does not re-consume a terminal (succeeded) continuation work flow (:259 structural dedup)", async () => {
+  it("does not re-consume a terminal (succeeded) continuation work flow", async () => {
     const sessionKey = "agent:main:already-succeeded";
     mockSessionStore[sessionKey] = { sessionKey };
     enqueuePendingWork({
@@ -793,10 +793,10 @@ describe("durable continuation_work dispatch", () => {
     expect(flow.updatedAt).toBe(updatedAtBefore);
   });
 
-  it("does not count a delivered-marked-but-still-running flow as live work (#990 P2 / #996 — cleanup-guard matches the consume-guard)", () => {
+  it("does not count a delivered-marked-but-still-running flow as live work (cleanup-guard matches the consume-guard)", () => {
     // Crash in the markPendingWorkDelivered -> finishFlow gap leaves the flow
-    // `status:running` with `stateJson.succeeded` set. The consume-guards (:221,
-    // :485) already exclude it from re-delivery; hasLiveOrRecentlyDispatchedContinuationWork
+    // `status:running` with `stateJson.succeeded` set. The consume guards already
+    // exclude it from re-delivery; hasLiveOrRecentlyDispatchedContinuationWork
     // must match, or deleteSubagentSessionForCleanup / the registry sweep treat
     // the delivered row as live and strand its child session forever.
     const sessionKey = "agent:main:delivered-but-running";

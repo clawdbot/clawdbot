@@ -23,7 +23,7 @@ const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
 let observeSubordinateAdmission = false;
 const observedSubordinateAdmissionClosed: boolean[] = [];
-// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
 let continuationEnabledForTest = true;
@@ -247,13 +247,13 @@ vi.mock("../reply/get-reply.js", () => ({
       observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
     }
     // Capture the active diagnostic traceparent so tests can assert the
-    // continuation turn re-enters the persisted work.traceparent (#1144).
+    // continuation turn re-enters the persisted work.traceparent.
     const { formatActiveDiagnosticTraceparent } =
       await import("../../infra/diagnostic-trace-context.js");
     capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
     // Simulate a revision/cancel race landing between claim and delivered-mark:
     // bump every continuation-work flow revision so markPendingWorkDelivered
-    // fails its expected-revision check after the turn already ran (#1144).
+    // fails its expected-revision check after the turn already ran.
     if (bumpWorkRevisionOnReply) {
       for (const flow of mockFlows.values()) {
         if (flow.controllerId === "core/continuation-work") {
@@ -557,7 +557,7 @@ const splitLintUse = [
 ];
 void splitLintUse;
 
-describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesce", () => {
+describe("continue_work end-of-turn finalization park + cross-turn coalesce", () => {
   const immediateConfig = {
     ...config,
     defaultDelayMs: 0,
@@ -805,8 +805,8 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     });
   });
 
-  it("schedules durable wait-shaped continuation work instead of refusing it by reason (#1135 cure, not #1136 quiesce)", async () => {
-    // #1136 made scheduleContinuationWork refuse any wait-shaped reason and made
+  it("schedules durable wait-shaped continuation work instead of refusing it by reason (repair, not quiesce)", async () => {
+    // made scheduleContinuationWork refuse any wait-shaped reason and made
     // the tool's `scheduled` result untrue. The contract is the opposite: reason
     // is diagnostic only, the durable work is created, and it actually fires.
     const sessionKey = "agent:main:wait-shaped-schedules";
@@ -831,7 +831,7 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     expect(turnGrants).toHaveLength(1);
   });
 
-  it("does not coalesce distinct elections fanned out within a single turn (#982 preserved)", async () => {
+  it("does not coalesce distinct elections fanned out within a single turn (preserved)", async () => {
     const sessionKey = "agent:main:coalesce-respects-982";
     mockSessionStore[sessionKey] = { sessionKey };
     activeSessions.add(sessionKey);

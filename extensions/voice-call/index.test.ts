@@ -5,7 +5,6 @@ import path from "node:path";
 import { Command } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useHermeticOpenclawEnv } from "../../test/vitest/hermetic-openclaw-env.js";
 import type { OpenClawPluginApi } from "./api.js";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
 import type { CallRecord } from "./src/types.js";
@@ -239,13 +238,7 @@ async function registerVoiceCallCli(
 }
 
 describe("voice-call plugin", () => {
-  useHermeticOpenclawEnv();
   beforeEach(() => {
-    // Hermetic env: tests assume a non-CLI-only process so service.start() runs the
-    // runtime path. Host envs that export OPENCLAW_CLI=1 (e.g. running under the
-    // openclaw-gateway systemd unit) otherwise short-circuit isCliOnlyProcess()
-    // and falsely fail mock-call assertions. Cleared in afterEach via vi.unstubAllEnvs.
-    vi.stubEnv("OPENCLAW_CLI", "");
     noopLogger.info.mockClear();
     noopLogger.warn.mockClear();
     noopLogger.error.mockClear();

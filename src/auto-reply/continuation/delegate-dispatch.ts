@@ -179,7 +179,7 @@ function armHedgeTimer(
         // Carry the recovery fold flag across the hedge: a recovered delayed
         // delegate annotated with `chainTokensFold` after a child chain-cost
         // persist failure must still be checked against the folded (not stale)
-        // basis when its delay elapses and the hedge re-dispatches it (#1144).
+        // basis when its delay elapses and the hedge re-dispatches it.
         ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
         persistChainState: params.persistChainState,
         ...(params.persistBeforeTerminalCommit || params.persistChainState
@@ -194,7 +194,7 @@ function armHedgeTimer(
           : {}),
         // Inherited silent/wake policy must survive the hedge: a delayed delegate
         // armed by a silent/wake parent chain must still spawn internal when the
-        // hedge finally dispatches it, not announce to the channel (#1158).
+        // hedge finally dispatches it, not announce to the channel.
         ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
         ...(params.inheritedWake ? { inheritedWake: true } : {}),
       });
@@ -301,7 +301,7 @@ export async function dispatchToolDelegates(params: {
    * elapsed. Fail-closed lever for the child chain-cost persist-failure path:
    * a delayed delegate left durably queued would recover from the stale child
    * entry and under-enforce the cost cap, so dispatch it now on the correct
-   * in-memory folded basis instead (#1144).
+   * in-memory folded basis instead.
    */
   dispatchQueuedRegardlessOfDelay?: boolean;
   /**
@@ -309,7 +309,7 @@ export async function dispatchToolDelegates(params: {
    * chain cost basis. Set by restart recovery: recovery rebuilds chain cost from
    * the child session entry, which is stale (missing this run's tokens) when the
    * settle-time persist failed; the delegate carries the fold so the cost cap is
-   * still enforced against the post-run total (#1144). Live dispatch leaves this
+   * still enforced against the post-run total. Live dispatch leaves this
    * unset because the live drain already folds the cost into `chainState`.
    */
   applyDelegateChainTokensFold?: boolean;
@@ -331,7 +331,7 @@ export async function dispatchToolDelegates(params: {
    * spawns internal (silent) — and wakes on return when `inheritedWake` is also
    * set — instead of announcing to the channel. Mirrors the `parentWasSilent`
    * handling the subagent-announce chain-hop guards apply, so descendants of a
-   * silent/wake chain drained early stay internal (#1158).
+   * silent/wake chain drained early stay internal.
    */
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
@@ -349,7 +349,7 @@ export async function dispatchToolDelegates(params: {
   // chain state when it fires. Without `persistChainState` the hedge would fold
   // the cost only in memory and lose it (later hops rebuild from the stale entry
   // and bypass the cost cap), so force immediate dispatch here instead of arming
-  // a lossy hedge (#1158).
+  // a lossy hedge.
   const foldWithoutPersist =
     params.applyDelegateChainTokensFold === true && !params.persistChainState;
   const ignoreDelay = params.dispatchQueuedRegardlessOfDelay === true || foldWithoutPersist;
@@ -417,7 +417,7 @@ export async function dispatchToolDelegates(params: {
   // enforced against the post-run total. Applied once (the fold is a per-child
   // shared cost carried identically on each of the child's delegates), and only
   // when the caller opts in — live dispatch already folds it into `chainState`
-  // (#1144).
+  //.
   const appliedChainTokensFold = params.applyDelegateChainTokensFold
     ? Math.max(0, ...toolDelegates.map((delegate) => delegate.chainTokensFold ?? 0))
     : 0;
@@ -599,7 +599,7 @@ export async function dispatchToolDelegates(params: {
 
     // Own mode wins; otherwise inherit the parent chain's silent/wake policy so a
     // default-mode delegate spawned under a silent/wake chain stays internal
-    // instead of announcing (mirrors the subagent-announce chain-hop guards) (#1158).
+    // instead of announcing (mirrors the subagent-announce chain-hop guards).
     const ownSilent = delegate.mode === "silent" || delegate.mode === "silent-wake";
     const ownWake = delegate.mode === "silent-wake";
     const canInheritMode = delegate.mode === undefined || delegate.mode === "normal";

@@ -221,7 +221,7 @@ export async function dispatchPostCompactionDelegates(
   // Capture the claim handles immediately: consumeStagedPostCompactionDelegates
   // now claims TaskFlow rows to `running` (not `finished`), and we finalize ONLY
   // these specific rows after the durable handoff below — never other running
-  // rows for the session (e.g. crash-orphaned ones awaiting recovery) (#1144).
+  // rows for the session (e.g. crash-orphaned ones awaiting recovery).
   const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
   let persistedCompactionDelegates: SessionPostCompactionDelegate[] = [];
   try {
@@ -379,7 +379,7 @@ export async function dispatchPostCompactionDelegates(
       // durably recoverable WITHOUT leaving the original claimed rows `running`.
       // Leaving them running would let startup recovery
       // (listRecoverableStagedPostCompactionDelegates) re-dispatch delegates
-      // that were already delivered or re-staged (#1144). Mirrors the
+      // that were already delivered or re-staged. Mirrors the
       // agent-runner post-compaction finalize path.
       const restagedCount = delegatesToPersist.length;
       for (const delegate of delegatesToPersist) {
@@ -403,7 +403,7 @@ export async function dispatchPostCompactionDelegates(
   // the rows THIS dispatch claimed, never other running rows for the session
   // (e.g. crash-orphaned ones awaiting recovery). A crash before this point
   // leaves the claimed rows recoverable via listRecoverableStagedPostCompactionDelegates
-  // instead of silently losing them behind a premature finish (#1144).
+  // instead of silently losing them behind a premature finish.
   const flowIdsToFinalize = claimedFlowIds.filter(
     (flowId) => !flowId || !requeuedClaimedFlowIds.has(flowId),
   );

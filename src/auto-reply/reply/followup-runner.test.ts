@@ -1044,7 +1044,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });
 
-  it("runs timestamp-less room-event followups even when a continuation no-op streak is tripped (#1148)", async () => {
+  it("runs timestamp-less room-event followups even when a continuation no-op streak is tripped", async () => {
     const sessionKey = "main";
     // Seed the per-session no-op streak with continuation-owned no-op outcomes.
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
@@ -1077,7 +1077,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("admits fresh room-event followups without treating normal room activity as backlog (#1148)", async () => {
+  it("admits fresh room-event followups without treating normal room activity as backlog", async () => {
     const sessionKey = "main";
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
@@ -1110,7 +1110,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("does not let message-tool-only room acknowledgements build suppression when no delivery happened (#1148)", async () => {
+  it("does not let message-tool-only room acknowledgements build suppression when no delivery happened", async () => {
     const sessionKey = "main";
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
@@ -1160,7 +1160,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
   });
 
-  it("runs restart-recovery followups because generic system recovery is not continuation-owned (#1151)", async () => {
+  it("runs restart-recovery followups because generic system recovery is not continuation-owned", async () => {
     const sessionKey = "main";
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
@@ -1192,7 +1192,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("admits and runs a queued room-event followup when a fresh human edge reset the streak (#1138/#1142)", async () => {
+  it("admits and runs a queued room-event followup when a fresh human edge reset the streak", async () => {
     const sessionKey = "main";
     for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
       noOpRearmGuardForTest.recordNoOpRearmOutcome({
@@ -7378,7 +7378,7 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });
-describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
+describe("createFollowupRunner continueWorkOpts threading", () => {
   it("passes continueWorkOpts to runEmbeddedAgent when continuation.enabled=true", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],

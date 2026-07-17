@@ -1,4 +1,4 @@
-// P2 (web-Codex r3502790187) regression: idempotent continuation-return delivery
+// Regression: idempotent continuation-return delivery
 // retries can return the same durable delivery id that already backs the
 // surviving queued system event. If the in-memory queue de-dupes the retry, do
 // NOT ack that id here or restart recovery loses the surviving queued event.

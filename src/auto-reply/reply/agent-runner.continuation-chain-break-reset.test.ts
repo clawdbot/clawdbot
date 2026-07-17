@@ -366,7 +366,7 @@ async function runWorkTurn(
 const splitLintUse = [listTaskFlowsForOwnerKey, enqueuePendingDelegate, enqueuePendingWork];
 void splitLintUse;
 
-describe("runReplyAgent :: continuation chain-break reset (#987)", () => {
+describe("runReplyAgent :: continuation chain-break reset", () => {
   const UNRELEASED_CHAIN_CONFIG = {
     agents: {
       defaults: {
@@ -530,13 +530,13 @@ describe("runReplyAgent :: continuation chain-break reset (#987)", () => {
     expect(run.sessionEntry.continuationChainId).toBeUndefined();
   });
 
-  it("resets a stale at-cap chain budget on an ordinary subagent-return so a fresh continuation passes the cap (#989 doom-lock)", async () => {
+  it("resets a stale at-cap chain budget on an ordinary subagent-return so a fresh continuation passes the cap (doom-lock)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-10T12:00:00Z"));
     const { tracer, spans } = createRecordingTracer();
     setContinuationTracer(tracer);
 
-    // The #987/#989 "195-forever" doom-lock: a long-lived session carries a
+    // The "195-forever" doom-lock: a long-lived session carries a
     // stale chain count pinned at the cap. An ordinary inter-session subagent
     // completes and returns — that arrives as `continuationTrigger:
     // "subagent-return"`, which get-reply-run maps to isContinuationWake=false

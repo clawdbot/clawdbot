@@ -82,7 +82,7 @@ describe("discoverAllSessions — checkpoint dedup", () => {
     expect(discovered[0]?.sessionFile.endsWith(`${PARENT_UUID}.jsonl`)).toBe(true);
   });
 
-  it("(b2) newer checkpoint mtime is preserved when primary replaces the placeholder (#1144)", async () => {
+  it("(b2) newer checkpoint mtime is preserved when primary replaces the placeholder", async () => {
     // Directory iteration order is non-deterministic (readdir + concurrent
     // stat), so whether the checkpoint or the primary is scanned first varies.
     // A freshly-written checkpoint can carry a newer mtime than its parent

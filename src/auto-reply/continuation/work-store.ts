@@ -106,7 +106,7 @@ export function consumePendingWork(
   for (const flow of listTaskFlowsForOwnerKey(sessionKey)
     .filter(isContinuationWorkFlow)
     .toSorted((a, b) => a.createdAt - b.createdAt)) {
-    // #990 Pillar-0 (:259 dedup harden): a cancel-requested flow is terminating
+    // Pillar-0 (dedup harden): a cancel-requested flow is terminating
     // — never consume/drive it. cancelFlowById finalizes managed continuation
     // work to `cancelled` synchronously, but a transient revision conflict can
     // leave it cancelRequestedAt-marked yet not-yet-terminal until the
@@ -132,7 +132,7 @@ export function consumePendingWork(
       });
       continue;
     }
-    // #990 locus-3 read-guard: a durably delivered-marked flow was confirmed
+    // locus-3 read-guard: a durably delivered-marked flow was confirmed
     // delivered before the persist-gap. Even if its status is still `running`
     // (the process died after the durable mark but before finishFlow finalized
     // it), never re-consume it — that would be a restart-gap double-delivery.
@@ -183,7 +183,7 @@ export function consumePendingWork(
     // Carry the PRE-claim durable status: the claim above flips every consumed
     // flow to `running`, so claimed.flow.status can no longer distinguish a
     // recovered active turn from freshly-released queued backlog. The fold-side
-    // write-guard (#988-P2-1) keys off this original status.
+    // write-guard keys off this original status.
     const originalStatus: "queued" | "running" = flow.status === "running" ? "running" : "queued";
     work.push(workToRuntime(claimed.flow, { ...state, releasedAt }, originalStatus));
   }
@@ -255,7 +255,7 @@ export function finalizeAnchorPendingWork(
 /**
  * Finish a continuation-work flow cleanly (terminal, no failure/retry).
  *
- * Shared by the turn-granted, superseded (#986), and orphan-reaped (#990) paths:
+ * Shared by the turn-granted, superseded, and orphan-reaped paths:
  * each is an INTENTIONAL terminal — the wake will not re-arm — distinct from
  * {@link markPendingWorkFailed} (error path). `stateExtra` carries the
  * path-specific durable state; `turnGrantedAt` is always stamped so the flow
@@ -366,7 +366,7 @@ export function markPendingWorkFoldDelivered(
 }
 
 /**
- * Durably mark a continuation wake delivered, BEFORE the persist-gap (#990 locus-3).
+ * Durably mark a continuation wake delivered, BEFORE the persist-gap (locus-3).
  *
  * Written the instant a wake is confirmed delivered (the agent turn ran),
  * before the dispatch loop's follow-on {@link markPendingWorkTurnGranted}
@@ -422,8 +422,8 @@ export function markPendingWorkDelivered(
 
 /**
  * Reconcile a continuation work row whose durable delivered-mark lost the
- * expected-revision race AFTER the provider turn already executed (#1144:
- * revision/cancel race). The turn is spent, so restart-gap replay must be
+ * expected-revision race after the provider turn already executed. The turn is
+ * spent, so restart-gap replay must be
  * prevented AND the row must not linger `running`: dispatchPendingContinuationWork
  * skips markPendingWorkTurnGranted on this path (work.expectedRevision is stale),
  * so nothing else finalizes it. Terminalize the CURRENT-revision row here — a
@@ -558,7 +558,7 @@ export function markPendingWorkFailed(work: PendingContinuationWork, summary: st
 }
 
 /**
- * Mark a matured continuation-work flow superseded (#986 drain-superseded).
+ * Mark a matured continuation-work flow superseded (drain-superseded).
  *
  * Used when a stale backlog member is collapsed in favour of a newer election in
  * the same drain batch — the wake is NOT driven; the flow is finished cleanly so
@@ -573,7 +573,7 @@ export function markPendingWorkSuperseded(work: PendingContinuationWork, summary
 }
 
 /**
- * #1135 cross-turn coalesce — fold any still-queued end-of-turn-parked wakes for
+ * cross-turn coalesce — fold any still-queued end-of-turn-parked wakes for
  * a session into the newest election about to be scheduled.
  *
  * A continue_work captured during an active turn parks behind that session's
@@ -606,7 +606,7 @@ export function supersedeQueuedTurnEndParkedWork(sessionKey: string, summary: st
 }
 
 /**
- * Reap an orphan continuation-work flow (#990 bucket-1 cull).
+ * Reap an orphan continuation-work flow (bucket-1 cull).
  *
  * Used when the flow's parent run is CONFIDENT-terminal and can never rehydrate
  * it (read-time liveness join). Finished cleanly like a supersede — no
@@ -662,7 +662,7 @@ export function peekSoonestRunningWorkRecoveryDueAt(
     if (!state) {
       continue;
     }
-    // #990 locus-3: a delivered-marked flow stuck `running` (crash before
+    // locus-3: a delivered-marked flow stuck `running` (crash before
     // finishFlow) must not arm a recovery wake — consume would skip it via the
     // read-guard, so re-arming here would spin a tight no-op recovery loop.
     if (state.succeeded) {
@@ -710,7 +710,7 @@ export function pendingWorkCount(sessionKey: string): number {
 /**
  * Count only QUEUED (future, undelivered) continuation-work flows.
  *
- * The #986 maxPendingWork cap uses this rather than {@link pendingWorkCount}
+ * The maxPendingWork cap uses this rather than {@link pendingWorkCount}
  * (which also counts `running`). At enqueue time the currently-driving wake is
  * still `running` (it is only marked succeeded after `getReplyFromConfig`
  * returns), so counting `running` would make the active wake reject its own
@@ -732,11 +732,11 @@ export function hasLiveOrRecentlyDispatchedContinuationWork(sessionKey: string):
     if (flow.status !== "queued" && flow.status !== "running") {
       return false;
     }
-    // #990 P2 (#996): a durably delivered-marked flow is DONE, not live. The
+    // a durably delivered-marked flow is DONE, not live. The
     // locus-3 mark deliberately leaves it `status:running` until finishFlow
     // finalizes it; if the process crashed in the mark->finishFlow gap, the row
-    // stays `running` but is already delivered. The consume-guards (:221, :485)
-    // already exclude `state.succeeded` rows from re-delivery; the cleanup
+    // stays `running` but is already delivered. The consume guards already exclude
+    // `state.succeeded` rows from re-delivery; the cleanup
     // live-check must match, or `deleteSubagentSessionForCleanup` /
     // the registry sweep treat the delivered row as live and strand its child
     // session forever. Exclude delivered-marked rows here too.

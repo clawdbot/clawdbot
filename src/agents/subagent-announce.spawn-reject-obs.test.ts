@@ -1,6 +1,6 @@
 /**
- * Regression-pin tests for `surface spawnResult.error in subagent-announce
- * sister rejection paths` cure (PR #889 / Closes #871 followup).
+ * Regression tests for surfacing `spawnResult.error` across the
+ * subagent-announce rejection paths.
  *
  * Pins observability contracts at two rejection sites in
  * `src/agents/subagent-announce.ts`:
@@ -159,7 +159,7 @@ function buildToolDelegateParams(): AnnounceFlowParams {
 const mockedConsumePendingDelegates = vi.mocked(consumePendingDelegates);
 const mockedMarkPendingDelegateFailed = vi.mocked(markPendingDelegateFailed);
 
-describe("subagent-announce chain-delegate rejection observability (PR #889 / #871 followup)", () => {
+describe("subagent-announce chain-delegate rejection observability", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
@@ -213,7 +213,7 @@ describe("subagent-announce chain-delegate rejection observability (PR #889 / #8
   });
 });
 
-describe("subagent-announce tool-delegate rejection observability (PR #889 / #871 followup)", () => {
+describe("subagent-announce tool-delegate rejection observability", () => {
   let spawnSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
