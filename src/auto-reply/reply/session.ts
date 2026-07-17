@@ -113,10 +113,8 @@ import {
   type ReplySessionEntryHandle,
 } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
-import {
-  ReplySessionInitConflictError,
-  runWithSessionInitConflictRetry,
-} from "./session-init-conflict-retry.js";
+import { ReplySessionInitConflictError } from "./session-init-conflict-error.js";
+import { runWithSessionInitConflictRetry } from "./session-init-conflict-retry.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 import { resolveSessionResetCommand } from "./session-reset-command.js";

@@ -203,4 +203,19 @@ describe("processDiscordMessage reply session init conflict retry", () => {
 
     expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("treats a wrapped cause chain conflict error as a session conflict", async () => {
+    // The shared classifier walks `cause` / `.error` chains, so a wrapped
+    // conflict is recognized and handed to `completeDiscordSessionConflict`
+    // (terminal notice) instead of propagating as an unrelated error.
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      const wrapped = new Error("upstream dispatch error");
+      wrapped.cause = conflictError();
+      throw wrapped;
+    });
+    const ctx = await createBaseContext();
+    await expect(runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
+
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+  });
 });

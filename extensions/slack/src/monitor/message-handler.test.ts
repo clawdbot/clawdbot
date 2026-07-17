@@ -676,4 +676,71 @@ describe("createSlackMessageHandler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("treats an Error with the exact legacy conflict message as a session conflict", async () => {
+    // Plain Error whose message strictly matches the legacy regex must still be
+    // classified as a session conflict after the SDK migration.
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("reply session initialization conflicted for agent:main:slack:channel:C222"),
+    );
+    const { handler } = createHandlerWithTracker();
+    await handler(
+      {
+        type: "message",
+        channel: "C222",
+        user: "U222",
+        ts: "1709000000.001100",
+        text: "raw legacy conflict message",
+      } as never,
+      { source: "message" },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      await expect(runOnFlush([entry])).rejects.toThrow(
+        "reply session initialization conflicted for agent:main:slack:channel:C222",
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(enqueueMock).toHaveBeenCalledTimes(2);
+      expect(enqueueMock.mock.calls[1]?.[0]).toMatchObject({
+        opts: { retryAttempt: 1 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry an unrelated ordinary error as a session conflict", async () => {
+    // Ordinary network/dispatch failures must not trigger the session-conflict
+    // retry path. With the SDK classifier, false positives are no longer
+    // possible from partial-message matches.
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
+      new Error("upstream slack api returned 500"),
+    );
+    const { handler } = createHandlerWithTracker();
+    await handler(
+      {
+        type: "message",
+        channel: "C333",
+        user: "U333",
+        ts: "1709000000.001200",
+        text: "ordinary failure message",
+      } as never,
+      { source: "message" },
+    );
+
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    vi.useFakeTimers();
+    try {
+      await expect(runOnFlush([entry])).rejects.toThrow("upstream slack api returned 500");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // No retry enqueue should happen for an unrelated error.
+      expect(enqueueMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

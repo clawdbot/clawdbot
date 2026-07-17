@@ -16,6 +16,7 @@ export class RequestScopedSubagentRuntimeError extends Error {
   }
 }
 
+export { isReplySessionInitConflictError } from "../auto-reply/reply/session-init-conflict-error.js";
 export {
   collectErrorGraphCandidates,
   extractErrorCode,

@@ -3,7 +3,10 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  formatErrorMessage,
+  isReplySessionInitConflictError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackSendIdentity } from "../send.js";
@@ -72,13 +75,6 @@ function createSlackDispatchCompletion(): SlackDispatchCompletion {
 
 const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-
-function isRetryableSlackInboundError(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-}
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
   const text = message.text ?? "";
@@ -124,7 +120,7 @@ export function createSlackMessageHandler(params: {
         dispatch: async (admissionLifecycle) => {
           const retryEntries = (sourceError: unknown): boolean => {
             if (
-              !isRetryableSlackInboundError(sourceError) ||
+              !isReplySessionInitConflictError(sourceError) ||
               entries.some((entry) => entry.opts.eventScope)
             ) {
               return false;
