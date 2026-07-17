@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import pLimit from "p-limit";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -14,6 +15,7 @@ import type {
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
+import type { OfficialExternalPluginCatalogShardRoot } from "./official-external-plugin-catalog-shards.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -284,8 +286,10 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalP
   };
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
+const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
 const DSSE_ENVELOPE_MEDIA_TYPE = "application/vnd.dsse+json";
+const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY = 4;
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 const ISO_CALENDAR_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/u;
 
@@ -727,18 +731,37 @@ async function parseHostedCatalogFeedBody(params: {
   now: Date;
   allowExpired?: boolean;
   allowMissingExpiry?: boolean;
+  loadShardBodies?: (root: OfficialExternalPluginCatalogShardRoot) => Promise<readonly string[]>;
 }): Promise<{
   feed: OfficialExternalPluginCatalogFeed;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
   expired?: boolean;
+  snapshotBody?: string;
+  wireBody?: string;
 }> {
-  const raw = JSON.parse(params.body) as unknown;
+  const document = JSON.parse(params.body) as unknown;
   if (params.verification?.mode === "signed") {
-    const { verifyOfficialExternalPluginCatalogSignedEnvelope } =
-      await import("./official-external-plugin-catalog-envelope.js");
+    const {
+      OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+      OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+      verifyOfficialExternalPluginCatalogEnvelopePayload,
+    } = await import("./official-external-plugin-catalog-envelope.js");
+    const {
+      parseOfficialExternalPluginCatalogShardedSnapshot,
+      parseOfficialExternalPluginCatalogShardRoot,
+      serializeOfficialExternalPluginCatalogShardedSnapshot,
+      validateOfficialExternalPluginCatalogShardSet,
+    } = await import("./official-external-plugin-catalog-shards.js");
+    const snapshot = parseOfficialExternalPluginCatalogShardedSnapshot(document);
+    const wireBody = snapshot?.rootBody ?? params.body;
+    const raw = snapshot ? (JSON.parse(snapshot.rootBody) as unknown) : document;
     const threshold = params.verification.threshold ?? 1;
-    const verification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
+    const verification = verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
       trustedKeys: params.verification.keys,
+      acceptedPayloadTypes: new Set([
+        OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
+        OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+      ]),
       threshold,
       ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
     });
@@ -754,15 +777,44 @@ async function parseHostedCatalogFeedBody(params: {
       }
       throw new Error(verification.message);
     }
-    if (params.expectedFeedId && verification.feed.id !== params.expectedFeedId) {
+    let feed: OfficialExternalPluginCatalogFeed;
+    let snapshotBody: string | undefined;
+    if (verification.payloadType === OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE) {
+      if (!isOfficialExternalPluginCatalogFeed(verification.payload)) {
+        const invalidTimestampSequence = readOfficialExternalPluginCatalogInvalidTimestampSequence(
+          verification.payload,
+        );
+        if (invalidTimestampSequence !== undefined) {
+          throw new HostedCatalogFeedTimestampError(
+            "hosted catalog signed envelope payload is invalid",
+            invalidTimestampSequence,
+          );
+        }
+        throw new Error("hosted catalog signed envelope payload is invalid");
+      }
+      feed = verification.payload;
+    } else {
+      const root = parseOfficialExternalPluginCatalogShardRoot(verification.payload);
+      const shardBodies = snapshot?.shardBodies ?? (await params.loadShardBodies?.(root));
+      if (!shardBodies) {
+        throw new Error("hosted catalog shard set is unavailable");
+      }
+      feed = validateOfficialExternalPluginCatalogShardSet(root, shardBodies);
+      snapshotBody =
+        snapshot === null
+          ? serializeOfficialExternalPluginCatalogShardedSnapshot({
+              rootBody: params.body,
+              shardBodies,
+            })
+          : params.body;
+    }
+    if (params.expectedFeedId && feed.id !== params.expectedFeedId) {
       throw new Error(
-        `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
+        `hosted catalog feed id "${feed.id}" did not match expected "${params.expectedFeedId}"`,
       );
     }
-    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(
-      verification.feed.generatedAt,
-    );
-    const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
+    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(feed.generatedAt);
+    const expiresAt = normalizeOptionalString(feed.expiresAt);
     if (generatedAtMs === undefined) {
       throw new Error("hosted catalog signed feed requires a valid generatedAt value");
     }
@@ -790,7 +842,7 @@ async function parseHostedCatalogFeedBody(params: {
       );
     }
     return {
-      feed: enforceHostedCatalogFeedInstallAuthority(verification.feed),
+      feed: enforceHostedCatalogFeedInstallAuthority(feed),
       trust: {
         mode: "signed",
         signedBy: verification.signedBy,
@@ -799,17 +851,19 @@ async function parseHostedCatalogFeedBody(params: {
         verifiedAt: params.verifiedAt,
       },
       ...(expired ? { expired: true } : {}),
+      ...(snapshotBody ? { snapshotBody } : {}),
+      ...(snapshot ? { wireBody } : {}),
     };
   }
-  if (!isOfficialExternalPluginCatalogFeed(raw)) {
+  if (!isOfficialExternalPluginCatalogFeed(document)) {
     throw new Error("hosted catalog feed did not match a supported schema version");
   }
-  if (params.expectedFeedId && raw.id !== params.expectedFeedId) {
+  if (params.expectedFeedId && document.id !== params.expectedFeedId) {
     throw new Error(
-      `hosted catalog feed id "${raw.id}" did not match expected "${params.expectedFeedId}"`,
+      `hosted catalog feed id "${document.id}" did not match expected "${params.expectedFeedId}"`,
     );
   }
-  return { feed: enforceHostedCatalogFeedInstallAuthority(raw) };
+  return { feed: enforceHostedCatalogFeedInstallAuthority(document) };
 }
 
 function enforceHostedCatalogFeedInstallAuthority(
@@ -879,9 +933,6 @@ async function loadHostedCatalogSnapshotResult(params: {
   if (checksum !== params.snapshot.metadata.checksum) {
     throw new Error("hosted catalog snapshot checksum mismatch");
   }
-  if (params.expectedSha256 && params.expectedSha256 !== checksum) {
-    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
-  }
   const parsed = await parseHostedCatalogFeedBody({
     body: params.snapshot.body,
     expectedFeedId: params.expectedFeedId,
@@ -892,6 +943,10 @@ async function loadHostedCatalogSnapshotResult(params: {
     allowExpired: true,
     allowMissingExpiry: true,
   });
+  const wireChecksum = sha256Hex(parsed.wireBody ?? params.snapshot.body);
+  if (params.expectedSha256 && params.expectedSha256 !== wireChecksum) {
+    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+  }
   const entries = dedupeOfficialExternalPluginCatalogEntries(
     filterOfficialExternalPluginCatalogEntriesBySourceRefs(
       parseOfficialExternalPluginCatalogEntries(parsed.feed),
@@ -908,7 +963,7 @@ async function loadHostedCatalogSnapshotResult(params: {
     source: "hosted-snapshot",
     entries: visibleEntries,
     feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
-    metadata: params.snapshot.metadata,
+    metadata: { ...params.snapshot.metadata, checksum: wireChecksum },
     snapshot: params.snapshot,
     ...(parsed.trust ? { trust: parsed.trust } : {}),
     error: parsed.expired
@@ -1031,6 +1086,62 @@ async function resolveHostedCatalogSnapshotStore(params: {
   });
 }
 
+async function loadHostedCatalogShardBodies(params: {
+  root: OfficialExternalPluginCatalogShardRoot;
+  rootUrl: string;
+  hostnameAllowlist: readonly string[];
+  fetchImpl?: FetchLike;
+  timeoutMs: number;
+  chunkTimeoutMs: number;
+}): Promise<readonly string[]> {
+  const rootOrigin = new URL(params.rootUrl).origin;
+  for (const descriptor of params.root.shards) {
+    if (new URL(descriptor.url).origin !== rootOrigin) {
+      throw new Error("hosted catalog shard URL must use the signed root origin");
+    }
+  }
+  const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
+  const limit = pLimit(DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_CONCURRENCY);
+  return await Promise.all(
+    params.root.shards.map((descriptor) =>
+      limit(async () => {
+        let response: Response | undefined;
+        let release: (() => Promise<void>) | undefined;
+        try {
+          const guarded = await fetchWithSsrFGuard({
+            url: descriptor.url,
+            fetchImpl: params.fetchImpl,
+            init: { method: "GET" },
+            requireHttps: true,
+            maxRedirects: 2,
+            timeoutMs: params.timeoutMs,
+            policy: { hostnameAllowlist: [...params.hostnameAllowlist] },
+            auditContext: "official-external-plugin-catalog-shard",
+          });
+          response = guarded.response;
+          release = guarded.release;
+          if (new URL(guarded.finalUrl).origin !== rootOrigin) {
+            throw new Error("hosted catalog shard redirect changed the signed root origin");
+          }
+          if (!response.ok) {
+            throw new Error(`hosted catalog shard returned HTTP ${response.status}`);
+          }
+          return await readHostedCatalogResponseText({
+            response,
+            maxBytes: descriptor.byteLength,
+            chunkTimeoutMs: params.chunkTimeoutMs,
+          });
+        } finally {
+          if (response?.bodyUsed !== true) {
+            await response?.body?.cancel().catch(() => undefined);
+          }
+          await release?.().catch(() => undefined);
+        }
+      }),
+    ),
+  );
+}
+
 async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   feedProfile?: string;
@@ -1133,6 +1244,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     });
     response = guarded.response;
     release = guarded.release;
+    const rootFinalUrl = guarded.finalUrl;
     const base = metadataBase(response);
     if (response.status === 304) {
       return await snapshotOrBundledFallbackResult({
@@ -1187,7 +1299,11 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     }
     const body = await readHostedCatalogResponseText({
       response,
-      maxBytes: params?.maxBytes ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES,
+      maxBytes:
+        params?.maxBytes ??
+        (source.verification?.mode === "signed"
+          ? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES
+          : DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES),
       chunkTimeoutMs:
         params?.chunkTimeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
     });
@@ -1217,6 +1333,18 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       verification: source.verification,
       verifiedAt,
       now,
+      loadShardBodies: async (root) =>
+        await loadHostedCatalogShardBodies({
+          root,
+          rootUrl: rootFinalUrl,
+          hostnameAllowlist: source.hostnameAllowlist,
+          fetchImpl: params?.fetchImpl,
+          timeoutMs:
+            params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+          chunkTimeoutMs:
+            params?.chunkTimeoutMs ??
+            DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
+        }),
     }).catch(async (err: unknown) => {
       return await snapshotOrBundledFallbackResult({
         error: err,
@@ -1280,10 +1408,15 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         requireManifestInstallSourceRef,
       },
     );
+    const snapshotBody = parsed.snapshotBody ?? body;
+    const snapshotMetadata = {
+      ...metadata,
+      checksum: sha256Hex(snapshotBody),
+    };
     await snapshotStore
       ?.write({
-        body,
-        metadata,
+        body: snapshotBody,
+        metadata: snapshotMetadata,
         savedAt: verifiedAt,
         ...(parsed.trust ? { trust: parsed.trust } : {}),
         ...(parsed.trust?.mode === "signed"

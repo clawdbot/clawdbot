@@ -33,6 +33,8 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 const HOSTED_CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
+const HOSTED_CATALOG_SHARD_ROOT_PAYLOAD_TYPE =
+  "openclaw.official-external-plugin-catalog-shard-root.v1";
 
 type HostedCatalogConfig = NonNullable<
   NonNullable<
@@ -176,6 +178,127 @@ function toLegacyBetaSignedEnvelope(body: string): string {
       signature: signature.sig,
     })),
   });
+}
+
+function signedHostedCatalogDocument(params: {
+  document: unknown;
+  payloadType: string;
+  privateKeyPem?: string;
+}): { body: string; privateKeyPem: string; publicKeyPem: string } {
+  const keys = params.privateKeyPem
+    ? {
+        privateKeyPem: params.privateKeyPem,
+        publicKeyPem: crypto
+          .createPublicKey(params.privateKeyPem)
+          .export({ type: "spki", format: "pem" }),
+      }
+    : (() => {
+        const generated = crypto.generateKeyPairSync("ed25519", {
+          publicKeyEncoding: { type: "spki", format: "pem" },
+          privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        });
+        return { privateKeyPem: generated.privateKey, publicKeyPem: generated.publicKey };
+      })();
+  const payloadBytes = Buffer.from(JSON.stringify(params.document), "utf8");
+  const payloadTypeBytes = Buffer.from(params.payloadType, "utf8");
+  const signingInput = Buffer.concat([
+    Buffer.from(
+      `DSSEv1 ${payloadTypeBytes.length} ${params.payloadType} ${payloadBytes.length} `,
+      "utf8",
+    ),
+    payloadBytes,
+  ]);
+  return {
+    body: JSON.stringify({
+      payloadType: params.payloadType,
+      payload: payloadBytes.toString("base64url"),
+      signatures: [
+        {
+          keyid: "acme-root",
+          sig: crypto
+            .sign(null, signingInput, crypto.createPrivateKey(keys.privateKeyPem))
+            .toString("base64url"),
+        },
+      ],
+    }),
+    ...keys,
+  };
+}
+
+function shardedHostedCatalogFixture() {
+  const shardBodies = [
+    JSON.stringify({
+      schemaVersion: 1,
+      feedId: "openclaw-official-external-plugins",
+      sequence: 12,
+      index: 0,
+      entries: [
+        {
+          type: "plugin",
+          id: "@acme/alpha",
+          title: "Alpha",
+          version: "1.0.0",
+          state: "available",
+          publisher: { id: "acme", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "acme-npm",
+                package: "@acme/alpha",
+                version: "1.0.0",
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    JSON.stringify({
+      schemaVersion: 1,
+      feedId: "openclaw-official-external-plugins",
+      sequence: 12,
+      index: 1,
+      entries: [
+        {
+          type: "plugin",
+          id: "@acme/beta",
+          title: "Beta",
+          version: "2.0.0",
+          state: "available",
+          publisher: { id: "acme", trust: "official" },
+          install: {
+            candidates: [
+              {
+                sourceRef: "acme-npm",
+                package: "@acme/beta",
+                version: "2.0.0",
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  ];
+  const shards = shardBodies.map((body, index) => ({
+    index,
+    url: `https://packages.acme.example/openclaw/shards/${index}.json`,
+    sha256: crypto.createHash("sha256").update(body).digest("hex"),
+    byteLength: Buffer.byteLength(body, "utf8"),
+    entryCount: 1,
+  }));
+  const signedRoot = signedHostedCatalogDocument({
+    payloadType: HOSTED_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+    document: {
+      schemaVersion: 1,
+      feedId: "openclaw-official-external-plugins",
+      sequence: 12,
+      generatedAt: "2026-06-22T00:00:12.000Z",
+      expiresAt: "2026-06-29T00:00:12.000Z",
+      metadata: { description: "Acme plugins" },
+      entryCount: 2,
+      shards,
+    },
+  });
+  return { shardBodies, shards, signedRoot };
 }
 
 function signedCatalogConfig(publicKeyPem: string, keyId = "acme-root"): HostedCatalogConfig {
@@ -773,6 +896,144 @@ describe("official external plugin catalog", () => {
     } finally {
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads signed catalog shards and re-verifies their durable offline snapshot", async () => {
+    const fixture = shardedHostedCatalogFixture();
+    const snapshotStore = createInMemoryHostedCatalogSnapshotStore();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url === "https://packages.acme.example/openclaw/feed") {
+        return new Response(fixture.signedRoot.body, {
+          status: 200,
+          headers: { etag: '"root-12"' },
+        });
+      }
+      const shard = fixture.shards.find((candidate) => candidate.url === url);
+      if (!shard) {
+        return new Response(null, { status: 404 });
+      }
+      return new Response(fixture.shardBodies[shard.index], { status: 200 });
+    });
+
+    const live = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      fetchImpl,
+      snapshotStore,
+      now: () => new Date("2026-06-22T00:00:13.000Z"),
+    });
+
+    expect(live.source).toBe("hosted");
+    expect(live.entries.map((entry) => entry.id)).toEqual(["@acme/alpha", "@acme/beta"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const snapshot = await snapshotStore.read("https://packages.acme.example/openclaw/feed");
+    expect(JSON.parse(snapshot?.body ?? "null")).toMatchObject({
+      kind: "official-external-plugin-catalog-shards-v1",
+      rootBody: fixture.signedRoot.body,
+      shardBodies: fixture.shardBodies,
+    });
+
+    const offline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      offline: true,
+      snapshotStore,
+      now: () => new Date("2026-06-23T00:00:00.000Z"),
+    });
+    expect(offline.source).toBe("hosted-snapshot");
+    expect(offline.entries.map((entry) => entry.id)).toEqual(["@acme/alpha", "@acme/beta"]);
+
+    const expiredOffline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      offline: true,
+      snapshotStore,
+      now: () => new Date("2026-06-30T00:00:00.000Z"),
+    });
+    expect(expiredOffline.source).toBe("bundled-fallback");
+    expect(expiredOffline.entries).toEqual([]);
+  });
+
+  it("fails closed when catalog shard bytes do not match the signed root", async () => {
+    const fixture = shardedHostedCatalogFixture();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url === "https://packages.acme.example/openclaw/feed") {
+        return new Response(fixture.signedRoot.body, { status: 200 });
+      }
+      const shard = fixture.shards.find((candidate) => candidate.url === url);
+      return new Response(
+        shard?.index === 0
+          ? fixture.shardBodies[0]?.replace('"Alpha"', '"Alphx"')
+          : fixture.shardBodies[1],
+        { status: 200 },
+      );
+    });
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      fetchImpl,
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+      now: () => new Date("2026-06-22T00:00:13.000Z"),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("shard bytes do not match their signed descriptor");
+    }
+  });
+
+  it("rejects signed catalog shard URLs outside the root origin before fetching them", async () => {
+    const fixture = shardedHostedCatalogFixture();
+    const root = JSON.parse(
+      Buffer.from(JSON.parse(fixture.signedRoot.body).payload as string, "base64url").toString(
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const shards = root.shards as Array<Record<string, unknown>>;
+    shards[0] = { ...shards[0], url: "https://cdn.example.net/catalog/0.json" };
+    const signedRoot = signedHostedCatalogDocument({
+      document: root,
+      payloadType: HOSTED_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
+      privateKeyPem: fixture.signedRoot.privateKeyPem,
+    });
+    const fetchImpl = vi.fn(async () => new Response(signedRoot.body, { status: 200 }));
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(signedRoot.publicKeyPem),
+      fetchImpl,
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+      now: () => new Date("2026-06-22T00:00:13.000Z"),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("shard URL must use the signed root origin");
+    }
+  });
+
+  it("rejects expired signed shard roots before fetching any shard", async () => {
+    const fixture = shardedHostedCatalogFixture();
+    const fetchImpl = vi.fn(async () => new Response(fixture.signedRoot.body, { status: 200 }));
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(fixture.signedRoot.publicKeyPem),
+      fetchImpl,
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+      now: () => new Date("2026-06-30T00:00:00.000Z"),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("shard root has expired");
     }
   });
 
