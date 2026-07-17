@@ -25,6 +25,22 @@ async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProvide
   };
 }
 
+const resolveProviderTransportSsrFPolicySpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../agents/provider-transport-ssrf-policy.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/provider-transport-ssrf-policy.js")>();
+  return {
+    ...actual,
+    resolveProviderTransportSsrFPolicy: (
+      ...args: Parameters<typeof actual.resolveProviderTransportSsrFPolicy>
+    ) => {
+      resolveProviderTransportSsrFPolicySpy(...args);
+      return actual.resolveProviderTransportSsrFPolicy(...args);
+    },
+  };
+});
+
 type CapturedRequest = {
   method: string | undefined;
   url: string | undefined;
@@ -373,7 +389,7 @@ describe("openai-compatible generic embedding provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("does not lease a configured local service for a remote endpoint override", async () => {
+  it("does not transfer configured-provider trust to a remote endpoint override", async () => {
     const server = await startEmbeddingServer();
     const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
     const options = createOptions({
@@ -398,7 +414,38 @@ describe("openai-compatible generic embedding provider", () => {
     options.acquireLocalService = acquireLocalService;
 
     const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    await expect(provider.embed("hello")).rejects.toThrow(
+      /private\/internal\/special-use IP address/u,
+    );
+    expect(server.requests).toHaveLength(0);
+    expect(acquireLocalService).not.toHaveBeenCalled();
+  });
+
+  it("does not lease a configured local service when private-network access is explicitly denied", async () => {
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              localService: { command: process.execPath },
+              request: { allowPrivateNetwork: false },
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/nomic-embed-text",
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    await expect(provider.embed("hello")).rejects.toThrow("Blocked");
     expect(acquireLocalService).not.toHaveBeenCalled();
   });
 
@@ -615,6 +662,108 @@ describe("openai-compatible generic embedding provider", () => {
       ),
     ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
     expect(server.requests).toHaveLength(0);
+  });
+
+  it("keeps fake-IP DNS policy when exact-origin private-network trust is denied", async () => {
+    resolveProviderTransportSsrFPolicySpy.mockClear();
+    await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-private-dns",
+        config: {
+          models: {
+            providers: {
+              "configured-private-dns": {
+                api: "openai-completions",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: false },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+      }),
+    );
+
+    expect(resolveProviderTransportSsrFPolicySpy).toHaveBeenCalledWith({
+      baseUrl: "https://llm.internal/v1",
+      url: "https://llm.internal/v1",
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: false,
+    });
+  });
+
+  it("preserves fake-IP DNS policy for remote endpoint overrides", async () => {
+    resolveProviderTransportSsrFPolicySpy.mockClear();
+    await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-private-dns",
+        config: {
+          models: {
+            providers: {
+              "configured-private-dns": {
+                api: "openai-completions",
+                baseUrl: "https://llm.internal/v1",
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: "https://embeddings.internal/v1" },
+      }),
+    );
+
+    expect(resolveProviderTransportSsrFPolicySpy).toHaveBeenCalledWith({
+      baseUrl: "https://embeddings.internal/v1",
+      url: "https://embeddings.internal/v1",
+      trustConfiguredBaseUrlOrigin: false,
+    });
+  });
+
+  it("does not implicitly trust known public provider origins", async () => {
+    resolveProviderTransportSsrFPolicySpy.mockClear();
+    await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "openai",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+      }),
+    );
+
+    expect(resolveProviderTransportSsrFPolicySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ trustConfiguredBaseUrlOrigin: false }),
+    );
+  });
+
+  it("allows off-origin private endpoints when request.allowPrivateNetwork opts in", async () => {
+    const server = await startEmbeddingServer();
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        provider: "configured-private",
+        config: {
+          models: {
+            providers: {
+              "configured-private": {
+                api: "openai-completions",
+                baseUrl: "https://llm.internal/v1",
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        } as unknown as EmbeddingProviderCreateOptions["config"],
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(server.requests).toHaveLength(1);
   });
 
   it("reads connection settings from configured explicit OpenAI-compatible providers", async () => {

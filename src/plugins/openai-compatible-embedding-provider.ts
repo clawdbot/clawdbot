@@ -8,11 +8,13 @@ import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service.js";
-import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-transport-ssrf-policy.js";
+import type { ModelApi, ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { mergeSsrFPolicies, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   EmbeddingInput,
   EmbeddingProvider,
@@ -45,11 +47,14 @@ type OpenAICompatibleEmbeddingClient = {
 };
 
 type ConfiguredEmbeddingProvider = {
-  api?: string;
+  api?: ModelApi;
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
   localService?: ModelProviderLocalServiceConfig;
+  request?: {
+    allowPrivateNetwork?: boolean;
+  };
 };
 
 type ResolvedConfiguredEmbeddingProvider = {
@@ -340,6 +345,35 @@ async function createOpenAICompatibleEmbeddingClient(
     await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
+  const requestPolicy = resolveProviderRequestPolicyConfig({
+    provider: providerId,
+    api: configuredProvider?.api,
+    baseUrl,
+    capability: "other",
+    transport: "http",
+    request:
+      configuredProvider?.request?.allowPrivateNetwork === undefined
+        ? undefined
+        : { allowPrivateNetwork: configuredProvider.request.allowPrivateNetwork },
+  });
+  const trustConfiguredBaseUrlOrigin =
+    !requestPolicy.privateNetworkExplicitlyDenied &&
+    (requestPolicy.policy.endpointClass === "custom" ||
+      requestPolicy.policy.endpointClass === "local");
+  const configuredEndpointSsrFPolicy = resolveProviderTransportSsrFPolicy({
+    baseUrl: configuredProvider?.baseUrl ?? baseUrl,
+    url: baseUrl,
+    allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin,
+  });
+  const remoteOverrideFakeIpPolicy =
+    remoteBaseUrl && configuredProvider?.baseUrl
+      ? resolveProviderTransportSsrFPolicy({
+          baseUrl,
+          url: baseUrl,
+          trustConfiguredBaseUrlOrigin: false,
+        })
+      : undefined;
   const model = normalizeModel(options.model, options.provider);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
@@ -364,9 +398,11 @@ async function createOpenAICompatibleEmbeddingClient(
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: mergeSsrFPolicies(configuredEndpointSsrFPolicy, remoteOverrideFakeIpPolicy),
     model,
-    ...(configuredProvider?.localService && !remoteBaseUrl
+    ...(configuredProvider?.localService &&
+    !requestPolicy.privateNetworkExplicitlyDenied &&
+    !remoteBaseUrl
       ? {
           localServiceTarget: {
             providerId,
