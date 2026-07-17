@@ -959,8 +959,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
-              } catch {
-                // abort or startup failure — next crash will retry
+              } catch (error) {
+                // The restart sleep rejected (abort raced the backoff) or
+                // startChannelInternal threw.  Either way the restart chain
+                // has exited and no further attempt will happen from this
+                // branch — the next channel crash starts a fresh chain.
+                // Reconcile restartPending so runtime state does not
+                // advertise a restart that will never arrive.
+                log.error?.(`[${id}] auto-restart aborted: ${formatErrorMessage(error)}`);
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: false,
+                  reconnectAttempts: restart.attempts,
+                });
               } finally {
                 pendingAutoRestarts.delete(rKey);
               }

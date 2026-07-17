@@ -880,6 +880,30 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles restartPending when the restart backoff rejects without a manual stop", async () => {
+    // When the abort signal races the backoff sleep, sleepWithAbort rejects.
+    // The empty catch used to swallow this silently, leaving restartPending
+    // true forever with no restart in flight. The fix reconciles the state.
+    // See issue #109659.
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    // Make the first backoff sleep reject (simulates abort racing the sleep).
+    hoisted.sleepWithAbort.mockRejectedValueOnce(new Error("aborted"));
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    // The backoff sleep was called and rejected.
+    expect(hoisted.sleepWithAbort).toHaveBeenCalled();
+    // startAccount was called only once — the channel never restarted.
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    // restartPending must be reconciled to false — no restart is in flight.
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.restartPending).toBe(false);
+  });
+
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
     const startAccount = vi.fn(
       async ({
