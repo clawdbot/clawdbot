@@ -217,6 +217,9 @@ export async function uploadToConsentUrl(params: {
     body: new Uint8Array(params.buffer),
   });
 
+  // Consent uploads never consume the response payload. Cancel it on every
+  // status so the fetch implementation can release the underlying connection.
+  await res.body?.cancel().catch(() => undefined);
   if (!res.ok) {
     throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
   }
