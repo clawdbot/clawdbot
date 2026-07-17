@@ -50,10 +50,7 @@ describe("sequential tools across catalog surfaces", () => {
       TOOL_CALL_RAW_TOOL_NAME,
       "ask_user",
     ]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "batcher",
-      "lookup",
-    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["batcher", "lookup"]);
   });
 
   it("keeps only yield-capable sequential tools visible in Code Mode", () => {
@@ -86,10 +83,7 @@ describe("sequential tools across catalog surfaces", () => {
       controls[1]?.name,
       "ask_user",
     ]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "batcher",
-      "lookup",
-    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["batcher", "lookup"]);
   });
 
   it("omits only yield-capable sequential tools from headless catalogs", () => {
@@ -103,9 +97,6 @@ describe("sequential tools across catalog surfaces", () => {
       ],
     });
 
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "batcher",
-      "lookup",
-    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["batcher", "lookup"]);
   });
 });
