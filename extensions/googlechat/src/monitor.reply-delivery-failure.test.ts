@@ -90,7 +90,7 @@ function createStubHandler(params: { failCreateIndexes: Set<number>; patchStatus
         return;
       }
       const messageMatch = url.pathname.match(/^\/v1\/(spaces\/[^/]+\/messages\/[^/]+)$/);
-      if (req.method === "PATCH" && messageMatch) {
+      if (req.method === "PATCH" && messageMatch?.[1]) {
         patchAttempts.push(messageMatch[1]);
         json(params.patchStatus ?? 200, {
           error: { code: 404, message: "stub: message not found", status: "NOT_FOUND" },
