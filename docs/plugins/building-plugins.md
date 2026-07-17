@@ -319,16 +319,31 @@ event to resume the session. Use this for flows such as native channel approval
 cards where continuing the model loop before the callback would create stale or
 duplicate work. OpenClaw applies the control only after host result-finalization
 hooks have finished, so a hook-added or hook-replaced control is the value the
-runtime uses. Runtimes that do not support the control return an explicit tool
-error instead of silently continuing the turn.
+runtime uses.
+
+A tool that can return a yield control must declare
+`executionMode: "sequential"`. The scheduler reads that declaration before the
+batch starts, so a successful yield aborts the turn before later sibling tools
+run. OpenClaw rejects yield controls from tools without that declaration.
+Runtimes that do not support the control also return an explicit tool error
+instead of silently continuing the turn.
 
 ```typescript
 import { yieldToolResult } from "openclaw/plugin-sdk/tool-results";
+import { Type } from "typebox";
 
-return yieldToolResult({
-  text: "Question sent.",
-  details: { status: "pending", questionId },
-  message: `Waiting for answer to ${questionId}`,
+api.registerTool({
+  name: "ask_user",
+  description: "Ask the user a question and wait for the answer",
+  parameters: Type.Object({ questionId: Type.String() }),
+  executionMode: "sequential",
+  async execute(_id, { questionId }) {
+    return yieldToolResult({
+      text: "Question sent.",
+      details: { status: "pending", questionId },
+      message: `Waiting for answer to ${questionId}`,
+    });
+  },
 });
 ```
 
