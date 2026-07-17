@@ -190,8 +190,9 @@ async function readJsonBody(
 function consumeRateLimit(ip: string): boolean {
   const now = Date.now();
   // Sweep expired windows before capping: expired keys were previously only overwritten on a
-  // same-IP revisit, so one-shot IPs accumulated without bound. Insertion order then doubles as
-  // last-seen order, so pruneMapToMaxSize evicts the stalest live entry first.
+  // same-IP revisit, so one-shot IPs accumulated without bound. Entries are reinserted on
+  // every hit, so insertion order doubles as last-seen order and pruneMapToMaxSize evicts
+  // the stalest live entry first.
   for (const [key, entry] of rateLimit) {
     if (entry.resetAtMs <= now) {
       rateLimit.delete(key);
@@ -204,6 +205,11 @@ function consumeRateLimit(ip: string): boolean {
     return true;
   }
   current.count += 1;
+  // Reinsert to move the entry to the tail; mutating in place would keep an actively
+  // attacking IP at the front of the map where the cap could evict it mid-window,
+  // silently resetting its counter (fail-open).
+  rateLimit.delete(ip);
+  rateLimit.set(ip, current);
   return current.count <= RATE_LIMIT_MAX;
 }
 

@@ -129,4 +129,30 @@ describe("miniapp auth rate-limit map bounds", () => {
     }
     expect((await postAuth(route, sticky)).statusCode).toBe(429);
   });
+
+  it("keeps an actively consuming IP beyond the cap instead of resetting its window", async () => {
+    const route = await createRoute();
+    const active = "203.0.113.43";
+
+    // The attacker consumes five of its ten allowed requests.
+    for (let i = 0; i < 5; i += 1) {
+      expect((await postAuth(route, active)).statusCode).toBe(401);
+    }
+
+    // More distinct IPs than the cap flood the map; the attacker keeps consuming through the
+    // flood, which must refresh its recency instead of leaving it at the eviction front.
+    for (let i = 0; i < 1025; i += 1) {
+      await postAuth(route, testIp(i));
+      if (i === 512 || i === 1024) {
+        expect((await postAuth(route, active)).statusCode).toBe(401);
+      }
+    }
+
+    // Recency refresh kept the attacker's entry: the remaining budget applies and the eleventh
+    // request is rejected instead of the entry being evicted into a fresh window.
+    for (let i = 0; i < 3; i += 1) {
+      expect((await postAuth(route, active)).statusCode).toBe(401);
+    }
+    expect((await postAuth(route, active)).statusCode).toBe(429);
+  });
 });
