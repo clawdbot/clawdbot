@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
@@ -23,6 +24,7 @@ const MAX_BODY_BYTES = 4096;
 const REPLAY_CACHE_LIMIT = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
+const RATE_LIMIT_MAX_KEYS = 1024;
 const replayCache = new Map<string, number>();
 const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
 
@@ -187,9 +189,18 @@ async function readJsonBody(
 
 function consumeRateLimit(ip: string): boolean {
   const now = Date.now();
+  // Sweep expired windows before capping: expired keys were previously only overwritten on a
+  // same-IP revisit, so one-shot IPs accumulated without bound. Insertion order then doubles as
+  // last-seen order, so pruneMapToMaxSize evicts the stalest live entry first.
+  for (const [key, entry] of rateLimit) {
+    if (entry.resetAtMs <= now) {
+      rateLimit.delete(key);
+    }
+  }
   const current = rateLimit.get(ip);
-  if (!current || current.resetAtMs <= now) {
+  if (!current) {
     rateLimit.set(ip, { count: 1, resetAtMs: now + RATE_LIMIT_WINDOW_MS });
+    pruneMapToMaxSize(rateLimit, RATE_LIMIT_MAX_KEYS);
     return true;
   }
   current.count += 1;
