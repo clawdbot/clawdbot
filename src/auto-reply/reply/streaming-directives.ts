@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { stripContinuationSignal } from "../continuation/signal.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -29,6 +30,39 @@ type ConsumeOptions = {
 type SplitTrailingDirectiveOptions = {
   final?: boolean;
 };
+
+const TRAILING_CONTINUATION_SIGNAL_PATTERNS = [
+  /\[\[\s*CONTINUE_DELEGATE:\s*(?:(?!\]\])[\s\S])+?\s*\]\]\s*$/,
+  /\[\[\s*CONTINUE_WORK(?::\d+)?\s*\]\]\s*$/,
+  /\bCONTINUE_WORK(?::\d+)?\s*$/,
+] as const;
+const TRAILING_CONTINUATION_TOKEN_RE = /([A-Z_][A-Z_0-9:]*)(\s*)$/;
+const CONTINUE_WORK_BARE_TOKEN = "CONTINUE_WORK";
+
+function resolveTrailingContinuationSignalStart(text: string): number | undefined {
+  for (const pattern of TRAILING_CONTINUATION_SIGNAL_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) {
+      return text.length - match[0].length;
+    }
+  }
+  return undefined;
+}
+
+function resolveTrailingContinuationPrefixStart(text: string): number | undefined {
+  const match = text.match(TRAILING_CONTINUATION_TOKEN_RE);
+  if (!match) {
+    return undefined;
+  }
+  const token = expectDefined(match[1], "continuation token capture");
+  if (!token.startsWith("CONT")) {
+    return undefined;
+  }
+  if (!CONTINUE_WORK_BARE_TOKEN.startsWith(token) && !/^CONTINUE_WORK:\d*$/.test(token)) {
+    return undefined;
+  }
+  return text.length - match[0].length;
+}
 
 // Holds back incomplete inline directive tails so parseChunk only ever sees
 // complete reply/audio tags.
@@ -83,6 +117,16 @@ export const splitTrailingDirective = (
     }
   }
 
+  const continuationSignalStart = resolveTrailingContinuationSignalStart(text);
+  if (continuationSignalStart !== undefined && continuationSignalStart < bufferStart) {
+    bufferStart = continuationSignalStart;
+  } else {
+    const continuationPrefixStart = resolveTrailingContinuationPrefixStart(text);
+    if (continuationPrefixStart !== undefined && continuationPrefixStart < bufferStart) {
+      bufferStart = continuationPrefixStart;
+    }
+  }
+
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
@@ -112,6 +156,12 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
     text = "";
   } else if (startsWithSilentToken(text, silentToken)) {
     text = stripLeadingSilentToken(text, silentToken);
+  }
+  if (text) {
+    const continuation = stripContinuationSignal(text);
+    if (continuation.signal) {
+      text = continuation.text;
+    }
   }
 
   return {

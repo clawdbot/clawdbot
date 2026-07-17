@@ -1170,7 +1170,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("routes to subagent session when reason=continuation (continue_work wake)", async () => {
+  it("falls back to main session for untrusted continuation reason with subagent key", async () => {
     const replySpy = vi.fn();
     try {
       const tmpDir = await createCaseDir("hb-subagent-continuation");
@@ -1199,13 +1199,13 @@ describe("runHeartbeatOnce", () => {
             sessionId: "sid-main",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "120363401234567890@g.us",
+            lastTo: "fixture-main-heartbeat-destination",
           },
           [subagentKey]: {
             sessionId: "sid-subagent-cont",
             updatedAt: Date.now() + 10_000,
             lastChannel: "whatsapp",
-            lastTo: "99999@g.us",
+            lastTo: "fixture-subagent-heartbeat-destination",
           },
         }),
       );
@@ -1229,8 +1229,8 @@ describe("runHeartbeatOnce", () => {
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
 
-      // The heartbeat must use the subagent session (not fall back to main).
-      expectReplyCall(replySpy, 0, { SessionKey: subagentKey });
+      // Untrusted continuation reasons are classification hints, not routing provenance.
+      expectReplyCall(replySpy, 0, { SessionKey: mainSessionKey });
     } finally {
       replySpy.mockReset();
     }

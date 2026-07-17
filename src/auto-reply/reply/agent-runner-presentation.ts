@@ -1,7 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { logVerbose } from "../../globals.js";
-import { stripContinuationSignal } from "../continuation/signal.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -63,15 +62,6 @@ export function createAgentTurnPresentation(params: {
     }
     if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
       text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
-    }
-    if (
-      text &&
-      params.turn.followupRun.run.config?.agents?.defaults?.continuation?.enabled === true
-    ) {
-      const continuation = stripContinuationSignal(text);
-      if (continuation.signal) {
-        text = continuation.text;
-      }
     }
     if (!text) {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };

@@ -29,6 +29,7 @@ vi.mock("./tools/agent-step.js", () => ({
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
+  markTrustedContinuationHeartbeatWake: <T>(request: T) => request,
   requestHeartbeatNow: (...args: unknown[]) => mocked.requestHeartbeatNowMock(...args),
 }));
 

@@ -58,6 +58,35 @@ export type HeartbeatWakeRequest = {
 
 export type HeartbeatWakeHandler = (opts: HeartbeatWakeRequest) => Promise<HeartbeatRunResult>;
 
+const TRUSTED_CONTINUATION_ROUTING_MARKER = Symbol("trustedContinuationRouting");
+
+type TrustedContinuationRoutingCarrier = {
+  [TRUSTED_CONTINUATION_ROUTING_MARKER]?: true;
+};
+
+function markTrustedContinuationRoutingCarrier<T extends object>(request: T): T {
+  Object.defineProperty(request, TRUSTED_CONTINUATION_ROUTING_MARKER, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return request;
+}
+
+export function markTrustedContinuationHeartbeatWake<T extends object>(request: T): T {
+  return markTrustedContinuationRoutingCarrier(request);
+}
+
+export function hasTrustedContinuationHeartbeatWake(
+  request: unknown,
+): request is TrustedContinuationRoutingCarrier {
+  return Boolean(
+    request &&
+    typeof request === "object" &&
+    (request as TrustedContinuationRoutingCarrier)[TRUSTED_CONTINUATION_ROUTING_MARKER] === true,
+  );
+}
+
 let heartbeatsEnabled = true;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
@@ -69,6 +98,7 @@ export function areHeartbeatsEnabled(): boolean {
 }
 
 type WakeTimerKind = "normal" | "retry";
+type WakeTrustDomain = "default" | "trusted-continuation";
 type PendingWakeReason = {
   source: HeartbeatWakeSource;
   intent: HeartbeatWakeIntent;
@@ -79,6 +109,7 @@ type PendingWakeReason = {
   sessionKey?: string;
   parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
+  trustedContinuationRouting: boolean;
 };
 
 let handler: HeartbeatWakeHandler | null = null;
@@ -135,6 +166,18 @@ function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
   return `${agentId ?? ""}::${sessionKey ?? ""}`;
 }
 
+function resolveWakeTrustDomain(trustedContinuationRouting: boolean): WakeTrustDomain {
+  return trustedContinuationRouting ? "trusted-continuation" : "default";
+}
+
+function getWakeCoalesceKey(params: {
+  agentId?: string;
+  sessionKey?: string;
+  trustDomain: WakeTrustDomain;
+}) {
+  return `${getWakeTargetKey(params)}::${params.trustDomain}`;
+}
+
 function queuePendingWakeReason(params: {
   source: HeartbeatWakeSource;
   intent: HeartbeatWakeIntent;
@@ -144,15 +187,18 @@ function queuePendingWakeReason(params: {
   sessionKey?: string;
   parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
+  trustedContinuationRouting?: boolean;
 }) {
   const requestedAt = params.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params.reason);
   const normalizedAgentId = normalizeWakeTarget(params.agentId);
   const normalizedSessionKey = normalizeWakeTarget(params.sessionKey);
   const normalizedParentRunId = normalizeWakeTarget(params.parentRunId);
-  const wakeTargetKey = getWakeTargetKey({
+  const trustedContinuationRouting = params.trustedContinuationRouting === true;
+  const wakeTargetKey = getWakeCoalesceKey({
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    trustDomain: resolveWakeTrustDomain(trustedContinuationRouting),
   });
   const next: PendingWakeReason = {
     source: params.source,
@@ -168,6 +214,7 @@ function queuePendingWakeReason(params: {
     sessionKey: normalizedSessionKey,
     parentRunId: normalizedParentRunId,
     heartbeat: params.heartbeat,
+    trustedContinuationRouting,
   };
   const previous = pendingWakes.get(wakeTargetKey);
   if (!previous) {
@@ -242,6 +289,9 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             ...(pendingWake.parentRunId ? { parentRunId: pendingWake.parentRunId } : {}),
             ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
           };
+          if (pendingWake.trustedContinuationRouting) {
+            markTrustedContinuationRoutingCarrier(wakeOpts);
+          }
           // Each wake is detached process work: admit the whole handler before
           // it can mutate sessions or commitments, and keep it visible until done.
           const res = await runWithGatewayIndependentRootWorkAdmission(async () =>
@@ -257,6 +307,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
               sessionKey: pendingWake.sessionKey,
               parentRunId: pendingWake.parentRunId,
               heartbeat: pendingWake.heartbeat,
+              trustedContinuationRouting: pendingWake.trustedContinuationRouting,
             });
             schedule(DEFAULT_RETRY_MS, "retry");
           }
@@ -272,6 +323,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             sessionKey: pendingWake.sessionKey,
             parentRunId: pendingWake.parentRunId,
             heartbeat: pendingWake.heartbeat,
+            trustedContinuationRouting: pendingWake.trustedContinuationRouting,
           });
         }
         schedule(DEFAULT_RETRY_MS, "retry");
@@ -338,6 +390,7 @@ export function requestHeartbeat(opts: {
   parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
 }) {
+  const trustedContinuationRouting = hasTrustedContinuationHeartbeatWake(opts);
   queuePendingWakeReason({
     source: opts.source,
     intent: opts.intent,
@@ -346,6 +399,7 @@ export function requestHeartbeat(opts: {
     sessionKey: opts.sessionKey,
     parentRunId: opts.parentRunId,
     heartbeat: opts.heartbeat,
+    trustedContinuationRouting,
   });
   schedule(opts.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }
@@ -360,7 +414,7 @@ export function requestHeartbeatNow(opts?: {
   parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
 }) {
-  requestHeartbeat({
+  const request = {
     source: opts?.source ?? "other",
     intent: opts?.intent ?? "immediate",
     reason: opts?.reason,
@@ -369,7 +423,11 @@ export function requestHeartbeatNow(opts?: {
     sessionKey: opts?.sessionKey,
     parentRunId: opts?.parentRunId,
     heartbeat: opts?.heartbeat,
-  });
+  };
+  if (opts && hasTrustedContinuationHeartbeatWake(opts)) {
+    markTrustedContinuationRoutingCarrier(request);
+  }
+  requestHeartbeat(request);
 }
 
 export function hasHeartbeatWakeHandler() {

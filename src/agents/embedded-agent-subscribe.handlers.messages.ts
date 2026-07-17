@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -614,7 +615,9 @@ function mergeReplyDirectiveResults(
 }
 
 function parseFullStreamingReplyText(text: string): string {
-  return parseReplyDirectives(splitTrailingDirective(text).text).text;
+  const parsed = parseReplyDirectives(splitTrailingDirective(text).text).text;
+  const stripped = stripContinuationSignal(parsed);
+  return stripped.signal ? stripped.text : parsed;
 }
 
 function containsCompleteMediaDirectiveLine(text: string): boolean {
@@ -1330,9 +1333,17 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText
-    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
-    : null;
+  const parsedText = (() => {
+    if (!trimmedText) {
+      return null;
+    }
+    const parsed = parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text);
+    if (!parsed.text) {
+      return parsed;
+    }
+    const stripped = stripContinuationSignal(parsed.text);
+    return stripped.signal ? { ...parsed, text: stripped.text } : parsed;
+  })();
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 

@@ -1,5 +1,8 @@
 import { emitContinuationFanoutSpan } from "../../infra/continuation-tracer.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import {
+  markTrustedContinuationHeartbeatWake,
+  requestHeartbeatNow,
+} from "../../infra/heartbeat-wake.js";
 import {
   ackSessionDelivery,
   enqueueSessionDelivery,
@@ -125,11 +128,13 @@ export async function enqueueContinuationReturnDeliveries(
       // prompt-drain path consumes it. The surviving event carries the ack id.
     }
     if (params.wakeRecipients) {
-      deps.requestHeartbeatNow({
-        sessionKey,
-        reason: "delegate-return",
-        parentRunId: params.childRunId,
-      });
+      deps.requestHeartbeatNow(
+        markTrustedContinuationHeartbeatWake({
+          sessionKey,
+          reason: "delegate-return",
+          parentRunId: params.childRunId,
+        }),
+      );
     }
     // For a queued event, do NOT ack the durable file here. The in-memory event
     // carries the ack id and the prompt-drain path acknowledges it only after

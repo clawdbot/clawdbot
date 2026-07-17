@@ -37,6 +37,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
+  markTrustedContinuationHeartbeatWake: <T>(request: T) => request,
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
 }));
 

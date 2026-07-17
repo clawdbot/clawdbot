@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
@@ -94,6 +95,153 @@ describe("runHeartbeatOnce", () => {
       expect(replyParams?.OriginatingChannel).toBeUndefined();
       expect(replyParams?.OriginatingTo).toBeUndefined();
       expect(replyConfig).toBe(cfg);
+    });
+  });
+
+  it("routes trusted continuation wakes to same-agent subagent sessions", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+        },
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const subagentSessionKey = "agent:main:subagent:demo";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-main-heartbeat-target",
+          },
+          [subagentSessionKey]: {
+            sessionId: "sid-subagent",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-subagent-heartbeat-target",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue({ text: "Final alert" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: subagentSessionKey,
+        reason: "delegate-return",
+        trustedContinuationRouting: true,
+        deps: {
+          getReplyFromConfig: replySpy,
+          whatsapp: sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;
+      expect(replyParams?.SessionKey).toBe(subagentSessionKey);
+    });
+  });
+
+  it("keeps trusted continuation routing constrained to the resolved agent", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+            },
+          },
+          list: [{ id: "main" }, { id: "ops" }],
+        },
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+        },
+        session: { store: storePath },
+      };
+
+      const opsMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [resolveMainSessionKey(cfg)]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-main-heartbeat-target",
+          },
+          [opsMainSessionKey]: {
+            sessionId: "sid-ops",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-ops-heartbeat-target",
+          },
+          "agent:main:subagent:demo": {
+            sessionId: "sid-main-subagent",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "fixture-main-subagent-target",
+          },
+        }),
+      );
+      enqueueSystemEvent("main-only queue event", {
+        sessionKey: "agent:main:subagent:demo",
+        trusted: true,
+      });
+      enqueueSystemEvent("ops queue event", {
+        sessionKey: opsMainSessionKey,
+        trusted: true,
+      });
+      replySpy.mockResolvedValue({ text: "NO_REPLY" });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        sessionKey: "agent:main:subagent:demo",
+        reason: "delegate-return",
+        trustedContinuationRouting: true,
+        deps: {
+          getReplyFromConfig: replySpy,
+          whatsapp: vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" }),
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const [replyParams] = requireFirstMockCall(replySpy, "reply") as Parameters<typeof replySpy>;
+      expect(replyParams?.SessionKey).toBe(opsMainSessionKey);
+      expect(peekSystemEventEntries("agent:main:subagent:demo")).toHaveLength(1);
+      expect(peekSystemEventEntries(opsMainSessionKey)).toStrictEqual([]);
     });
   });
 

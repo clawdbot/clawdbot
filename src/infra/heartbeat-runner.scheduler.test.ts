@@ -570,7 +570,7 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("preserves parent run lineage across untargeted wake fan-out", async () => {
+  it("does not fan out parent run lineage across untargeted wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
@@ -592,10 +592,10 @@ describe("startHeartbeatRunner", () => {
 
     expect(runSpy).toHaveBeenCalledTimes(2);
     for (let callIndex = 0; callIndex < 2; callIndex++) {
-      expectRunCallFields(runSpy, callIndex, {
+      const options = expectRunCallFields(runSpy, callIndex, {
         reason: "delegate-return",
-        parentRunId: "run-untargeted-parent",
       });
+      expect(options.parentRunId).toBeUndefined();
     }
 
     runner.stop();

@@ -170,6 +170,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
+  markTrustedContinuationHeartbeatWake: <T>(request: T) => request,
   requestHeartbeatNow: (options: unknown) => requestHeartbeatNowMock(options),
 }));
 

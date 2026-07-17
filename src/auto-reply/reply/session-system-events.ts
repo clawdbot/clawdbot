@@ -13,6 +13,7 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import { ackSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -121,6 +122,27 @@ export async function drainFormattedSystemEvents(params: {
       suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
     }),
   );
+  const sessionDeliveryAcks = new Map<string, { id: string; stateDir?: string }>();
+  for (const event of queued) {
+    const id = normalizeOptionalString(event.sessionDeliveryAckId);
+    if (!id) {
+      continue;
+    }
+    const stateDir = normalizeOptionalString(event.sessionDeliveryAckStateDir);
+    const dedupeKey = `${id}\u0000${stateDir ?? ""}`;
+    sessionDeliveryAcks.set(dedupeKey, stateDir ? { id, stateDir } : { id });
+  }
+  for (const ack of sessionDeliveryAcks.values()) {
+    try {
+      await ackSessionDelivery(ack.id, ack.stateDir);
+    } catch (error) {
+      defaultRuntime.log(
+        `[session-system-events] failed to ack consumed session delivery ${ack.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
   const sessionStateTargets = queued
     .map((event) =>
       event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,

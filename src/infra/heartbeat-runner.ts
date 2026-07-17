@@ -160,6 +160,7 @@ import {
   type HeartbeatWakeIntent,
   type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
+  hasTrustedContinuationHeartbeatWake,
   isRetryableHeartbeatBusySkipReason,
   requestHeartbeat,
   setHeartbeatsEnabled,
@@ -577,7 +578,7 @@ function resolveHeartbeatSession(
   agentId?: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
-  opts?: { reason?: string },
+  opts?: { reason?: string; allowTrustedContinuationRouting?: boolean },
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -603,7 +604,12 @@ function resolveHeartbeatSession(
   // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
-    if (isContinuationHeartbeatWakeReason(opts?.reason)) {
+    const forcedAgentId = resolveAgentIdFromSessionKey(forced);
+    const canRouteTrustedContinuationWake =
+      opts?.allowTrustedContinuationRouting === true &&
+      isContinuationHeartbeatWakeReason(opts?.reason) &&
+      forcedAgentId === normalizeAgentId(resolvedAgentId);
+    if (canRouteTrustedContinuationWake) {
       return {
         sessionKey: forced,
         storePath,
@@ -925,6 +931,7 @@ async function resolveHeartbeatPreflight(params: {
   reason?: string;
   source?: HeartbeatWakeSource;
   nowMs?: number;
+  trustedContinuationRouting?: boolean;
 }): Promise<HeartbeatPreflight> {
   const wakeFlags = resolveHeartbeatWakePayloadFlags({
     source: params.source,
@@ -935,7 +942,10 @@ async function resolveHeartbeatPreflight(params: {
     params.agentId,
     params.heartbeat,
     params.forcedSessionKey,
-    { reason: params.reason },
+    {
+      reason: params.reason,
+      allowTrustedContinuationRouting: params.trustedContinuationRouting === true,
+    },
   );
   const pendingEventEntries =
     params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
@@ -1308,10 +1318,13 @@ export async function runHeartbeatOnce(opts: {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   parentRunId?: string;
+  trustedContinuationRouting?: boolean;
   runScope?: HeartbeatRunScope;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
+  const trustedContinuationRouting =
+    opts.trustedContinuationRouting === true || hasTrustedContinuationHeartbeatWake(opts);
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
   const forcedSessionAgentId =
     explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
@@ -1396,7 +1409,10 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     opts.sessionKey,
-    { reason: opts.reason },
+    {
+      reason: opts.reason,
+      allowTrustedContinuationRouting: trustedContinuationRouting,
+    },
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
@@ -1425,6 +1441,7 @@ export async function runHeartbeatOnce(opts: {
     source: opts.source,
     reason: opts.reason,
     nowMs: startedAt,
+    trustedContinuationRouting,
   });
   if (preflight.skipReason) {
     emitHeartbeatEvent({
@@ -2627,6 +2644,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params.reason;
     const intent = params.intent;
+    const trustedContinuationRouting = hasTrustedContinuationHeartbeatWake(params);
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const requestedHeartbeat = params.heartbeat;
@@ -2692,6 +2710,7 @@ export function startHeartbeatRunner(opts: {
             runScope: "global",
             sessionKey: requestedSessionKey,
             parentRunId: params.parentRunId,
+            trustedContinuationRouting,
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
@@ -2753,7 +2772,6 @@ export function startHeartbeatRunner(opts: {
             intent,
             reason,
             runScope: "global",
-            parentRunId: params.parentRunId,
             deps: { runtime: state.runtime },
           });
         } catch (err) {

@@ -5,7 +5,10 @@ import {
 } from "../auto-reply/continuation/targeting.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import {
+  markTrustedContinuationHeartbeatWake,
+  requestHeartbeatNow,
+} from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
@@ -144,11 +147,13 @@ export async function routeSubagentContinuationReturn(params: {
       `[continuation:enrichment-return] Delivered to ${params.targetRequesterSessionKey} from ${params.childSessionKey}`,
     );
     if (params.wakeOnReturn) {
-      requestHeartbeatNow({
-        sessionKey: params.targetRequesterSessionKey,
-        reason: "silent-wake-enrichment",
-        parentRunId: params.childRunId,
-      });
+      requestHeartbeatNow(
+        markTrustedContinuationHeartbeatWake({
+          sessionKey: params.targetRequesterSessionKey,
+          reason: "silent-wake-enrichment",
+          parentRunId: params.childRunId,
+        }),
+      );
     }
     return { handled: true };
   }

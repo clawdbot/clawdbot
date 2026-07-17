@@ -9,6 +9,8 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  hasTrustedContinuationHeartbeatWake,
+  markTrustedContinuationHeartbeatWake,
   requestHeartbeat,
   requestHeartbeatNow,
   resetHeartbeatWakeStateForTests,
@@ -51,6 +53,10 @@ describe("heartbeat-wake", () => {
       opts.intent ??
       (reason === "interval" ? "scheduled" : reason === "manual" ? "manual" : "event");
     return { source, intent, reason, ...opts };
+  }
+
+  function trustedWake(reason: string, opts: Partial<WakeRequest> = {}): WakeRequest {
+    return markTrustedContinuationHeartbeatWake(wake(reason, opts));
   }
 
   function setRetryOnceHeartbeatHandler() {
@@ -190,6 +196,157 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
+  });
+
+  it("keeps trusted and untrusted same-priority wakes distinct when trusted arrives first", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(
+      trustedWake("delegate-return", {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+    requestHeartbeat(
+      wake("exec-event", {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    const handled = handler.mock.calls
+      .map(([request]) => ({
+        reason: request.reason,
+        trustedContinuationRouting: hasTrustedContinuationHeartbeatWake(request),
+      }))
+      .toSorted((left, right) => `${left.reason}`.localeCompare(`${right.reason}`));
+    expect(handled).toEqual([
+      { reason: "delegate-return", trustedContinuationRouting: true },
+      { reason: "exec-event", trustedContinuationRouting: false },
+    ]);
+  });
+
+  it("keeps trusted and untrusted same-priority wakes distinct when untrusted arrives first", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(
+      wake("exec-event", {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+    requestHeartbeat(
+      trustedWake("delegate-return", {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    const handled = handler.mock.calls
+      .map(([request]) => ({
+        reason: request.reason,
+        trustedContinuationRouting: hasTrustedContinuationHeartbeatWake(request),
+      }))
+      .toSorted((left, right) => `${left.reason}`.localeCompare(`${right.reason}`));
+    expect(handled).toEqual([
+      { reason: "delegate-return", trustedContinuationRouting: true },
+      { reason: "exec-event", trustedContinuationRouting: false },
+    ]);
+  });
+
+  it("does not let later higher-priority untrusted wakes erase trusted continuation wakes", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(
+      trustedWake("delegate-return", {
+        source: "other",
+        intent: "event",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+    requestHeartbeat(
+      wake("manual", {
+        source: "manual",
+        intent: "manual",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(
+      handler.mock.calls.some(
+        ([request]) =>
+          request.reason === "delegate-return" && hasTrustedContinuationHeartbeatWake(request),
+      ),
+    ).toBe(true);
+    expect(
+      handler.mock.calls.some(
+        ([request]) => request.reason === "manual" && !hasTrustedContinuationHeartbeatWake(request),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not let later higher-priority trusted wakes absorb untrusted wake reasons", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeat(
+      wake("exec-event", {
+        source: "exec-event",
+        intent: "event",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+    requestHeartbeat(
+      trustedWake("delegate-return", {
+        source: "manual",
+        intent: "immediate",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:queue",
+        coalesceMs: 100,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(
+      handler.mock.calls.some(
+        ([request]) =>
+          request.reason === "exec-event" && !hasTrustedContinuationHeartbeatWake(request),
+      ),
+    ).toBe(true);
+    expect(
+      handler.mock.calls.some(
+        ([request]) =>
+          request.reason === "delegate-return" && hasTrustedContinuationHeartbeatWake(request),
+      ),
+    ).toBe(true);
   });
 
   it("preserves parent run id on wake delivery", async () => {
