@@ -859,6 +859,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  toolExecutionMode?: AgentTool["executionMode"];
   errorKind?: "argument-validation";
   hideFromChannelProgress?: boolean;
   resultContentSource?: ToolResultContentSource;
@@ -1156,6 +1157,7 @@ async function finalizeExecutedToolCall(
       result,
       isError,
       executionStarted: executed.executionStarted,
+      toolExecutionMode: prepared.tool.executionMode,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
       ...(prepared.tool.resultContentSource
         ? { resultContentSource: prepared.tool.resultContentSource }
@@ -1230,6 +1232,15 @@ async function finalizeToolCallOutcome(
       ...outcome,
       result: createErrorToolResult(
         `Tool requested ${control.type}, but ${control.type} is not supported in this runtime`,
+      ),
+      isError: true,
+    };
+  }
+  if (outcome.toolExecutionMode !== "sequential") {
+    return {
+      ...outcome,
+      result: createErrorToolResult(
+        `Tool ${outcome.toolCall.name} requested ${control.type}, but yielding tools must declare executionMode: "sequential"`,
       ),
       isError: true,
     };
