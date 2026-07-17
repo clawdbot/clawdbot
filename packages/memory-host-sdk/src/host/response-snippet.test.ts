@@ -108,6 +108,7 @@ describe("readMemoryHostResponseTextSnippet", () => {
       readResponseJsonWithLimit(new Response(body), { errorPrefix: "remote memory" }),
     ).rejects.toThrow(/not valid for encoding/);
   });
+
   it("accepts repeated identical JSON content-length values before reading", async () => {
     let readStarted = false;
     let done = false;
