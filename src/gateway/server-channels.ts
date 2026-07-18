@@ -1150,12 +1150,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     // after every sibling account has finished its independent lifecycle cleanup.
     const stopOutcomes = await Promise.all(
       Array.from(knownIds.values()).map(async (id): Promise<ChannelAccountStopOutcome> => {
+        const initialAbort = store.aborts.get(id);
+        const initialTask = store.tasks.get(id);
+        const hadLiveState = Boolean(
+          initialAbort || initialTask || store.starting.has(id) || store.runtimes.get(id)?.running,
+        );
+        if (!hadLiveState && !plugin?.gateway?.stopAccount) {
+          return { status: "fulfilled" };
+        }
         const rKey = restartKey(channelId, id);
+        const accountRestartPending = markRestartPending && hadLiveState;
         if (manual) {
           manuallyStopped.add(rKey);
           restartDeferredToCaller.delete(rKey);
-        } else {
+        } else if (hadLiveState) {
           restartDeferredToCaller.add(rKey);
+        } else {
+          restartDeferredToCaller.delete(rKey);
         }
 
         const runStopAttempt = async (
@@ -1163,7 +1174,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         ): Promise<ChannelAccountStopOutcome> => {
           const abort = store.aborts.get(id);
           const task = store.tasks.get(id);
-          if (!abort && !task && !plugin?.gateway?.stopAccount) {
+          if (!hadLiveState && !abort && !task && !plugin?.gateway?.stopAccount) {
             return previousOutcome;
           }
           abort?.abort();
@@ -1254,7 +1265,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           }
           if (!stoppedCleanly) {
             const stoppedPatch = {
-              restartPending: markRestartPending,
+              restartPending: accountRestartPending,
               lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
             };
             if (manual) {
@@ -1267,7 +1278,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               clearPluginCommandCatalogOwner(store, id, abort);
               setStoppedRuntime(channelId, id, stoppedPatch);
             }
-            if (!manual && markRestartPending) {
+            if (!manual && accountRestartPending) {
               restartDeferredToCaller.delete(rKey);
               recoveryStopTimedOut.add(rKey);
             }
@@ -1283,7 +1294,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.tasks.delete(id);
           }
           setStoppedRuntime(channelId, id, {
-            restartPending: markRestartPending,
+            restartPending: accountRestartPending,
             lastStopAt: Date.now(),
           });
           return outcome;

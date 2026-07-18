@@ -2925,6 +2925,55 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("does not mark inactive listed accounts as restart candidates during hot reload", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-a", "account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+
+    let snapshot = manager.getRuntimeSnapshot();
+    expect(stopAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual([
+      "account-a",
+      "account-b",
+    ]);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.restartPending).toBe(false);
+
+    accountIds = ["account-a"];
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-a"]);
+    snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]).toBeUndefined();
+
+    await manager.stopChannel("discord");
+  });
+
   it("does not keep no-restart caller handoffs in the known-account safety net", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
