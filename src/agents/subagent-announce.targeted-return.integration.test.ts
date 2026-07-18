@@ -256,6 +256,43 @@ describe("subagent announce targeted continuation return integration", () => {
     });
   });
 
+  it("does not reopen a cleaned explicit return target", async () => {
+    await withTempDir(
+      { prefix: "openclaw-targeted-return-explicit-cleaned-" },
+      async (stateDir) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const requesterSessionKey = "agent:main:subagent:explicit-cleaned";
+        registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
+        registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
+          (sessionKey: string) => sessionKey === requesterSessionKey,
+        );
+
+        const didAnnounce = await runSubagentAnnounceFlow({
+          childSessionKey: "agent:main:subagent:explicit-cleaned-child",
+          childRunId: "run-explicit-cleaned-return",
+          requesterSessionKey,
+          requesterDisplayKey: "explicit-cleaned",
+          task: "[continuation:chain-hop:1] explicit cleaned target",
+          timeoutMs: 100,
+          cleanup: "keep",
+          waitForCompletion: false,
+          startedAt: 10,
+          endedAt: 20,
+          outcome: { status: "ok" },
+          roundOneReply: "delegate completed",
+          silentAnnounce: true,
+          wakeOnReturn: true,
+          continuationTargetSessionKey: requesterSessionKey,
+        });
+
+        expect(didAnnounce).toBe(true);
+        expect(await readQueuedSystemEventDeliveries(stateDir)).toHaveLength(0);
+        expect(peekSystemEventEntries(requesterSessionKey)).toHaveLength(0);
+        expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("does not fall back to a cleaned requester when every tree recipient is filtered", async () => {
     await withTempDir({ prefix: "openclaw-targeted-return-empty-tree-" }, async (stateDir) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
