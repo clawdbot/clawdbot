@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/duckduckgo-plugin",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.3",
   "private": true,
   "description": "OpenClaw DuckDuckGo plugin",
   "type": "module",
