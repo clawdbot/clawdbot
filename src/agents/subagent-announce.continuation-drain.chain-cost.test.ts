@@ -276,6 +276,10 @@ vi.mock("../config/sessions/store-load.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  listSessionEntries: ({ storePath }: { storePath?: string }) =>
+    Object.entries(loadSessionStoreMock(storePath ?? "/tmp/sessions.json")).map(
+      ([sessionKey, entry]) => ({ sessionKey, entry }),
+    ),
   updateSessionEntry: (
     scope: { sessionKey: string; storePath?: string },
     update: (entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null,
@@ -503,6 +507,7 @@ describe("subagent-announce continuation drain (F7)", () => {
             sessionKey,
             {
               sessionId: `session-${sessionKey}`,
+              agentId: "main",
               updatedAt: Date.now(),
             },
           ]),
