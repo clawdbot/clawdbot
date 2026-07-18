@@ -1453,7 +1453,7 @@ export async function attachWebInboxToSocket(
     await debouncer.enqueue(inboundMessage);
   };
 
-  const dispatchInboundMessage = async (
+  const processInboundMessage = async (
     msg: WAMessage,
     context: Pick<
       WhatsAppDurableInboundPayload,
@@ -1589,7 +1589,7 @@ export async function attachWebInboxToSocket(
       const remoteJid = msg.key?.remoteJid;
       const id = msg.key?.id;
       return {
-        kind: await dispatchInboundMessage(msg, {
+        kind: await processInboundMessage(msg, {
           ...payload,
           ...(remoteJid && id
             ? { eventId: createWhatsAppDurableInboundMessageId({ remoteJid, id }) }

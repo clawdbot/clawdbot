@@ -11,6 +11,15 @@ export function parseMode(argv?: string[]): string;
  */
 export function resolveBoundaryRootShimsTimeoutMs(env?: NodeJS.ProcessEnv): number;
 /**
+ * Builds a declaration command with the selected compiler and no incremental state.
+ */
+export function createBoundaryDeclarationArgs(params: {
+  project: string;
+  outDir?: string;
+  rootDir?: string;
+  compiler?: "native" | "js";
+}): string[];
+/**
  * Compares input and output mtimes to skip fresh generated artifacts.
  */
 export function isArtifactSetFresh(params: unknown): boolean;
