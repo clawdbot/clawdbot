@@ -2,14 +2,16 @@
 // boundary imports resolve through public package surfaces.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
+const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
-const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
+const tscBin = require.resolve("typescript/bin/tsc");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
@@ -342,14 +344,14 @@ export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
 }
 
 /**
- * Builds a declaration command without TypeScript-Go incremental state.
+ * Builds a declaration command with the stable JS compiler and no incremental state.
  */
 export function createBoundaryDeclarationArgs({ project, outDir, rootDir }) {
   if ((outDir && !rootDir) || (!outDir && rootDir)) {
     throw new Error("Boundary declaration outDir and rootDir must be provided together");
   }
 
-  const args = [runTsgoScript, "-p", project, "--declaration", "true"];
+  const args = [tscBin, "-p", project, "--declaration", "true"];
   if (outDir && rootDir) {
     args.push(
       "--emitDeclarationOnly",
