@@ -10,6 +10,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 const runtimeLogMock = vi.hoisted(() => vi.fn());
 const runtimeErrorMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const allSessionKeysMock = vi.hoisted(() => vi.fn(() => [] as string[]));
 
 const registryRuntimeMock = vi.hoisted(() => ({
   shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
@@ -39,6 +40,15 @@ vi.mock("../runtime.js", () => ({
 vi.mock("../infra/heartbeat-wake.js", () => ({
   markTrustedContinuationHeartbeatWake: <T>(request: T) => request,
   requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+}));
+
+vi.mock("../config/sessions/targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: () => [{ storePath: "/tmp/targeted-return-all.json" }],
+}));
+
+vi.mock("../config/sessions/store-load.js", () => ({
+  loadSessionStore: () =>
+    Object.fromEntries(allSessionKeysMock().map((sessionKey: string) => [sessionKey, {}])),
 }));
 
 vi.mock("./subagent-announce.runtime.js", () => ({
@@ -107,6 +117,7 @@ describe("subagent announce targeted continuation return integration", () => {
       session: { mainKey: "main", scope: "per-sender" },
     };
     mockCrossSessionTargeting = "disabled";
+    allSessionKeysMock.mockReset().mockReturnValue([]);
     registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession
       .mockReset()
       .mockReturnValue(false);
@@ -291,6 +302,79 @@ describe("subagent announce targeted continuation return integration", () => {
         expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it("does not reopen cleaned recipients from an all-fanout return", async () => {
+    await withTempDir({ prefix: "openclaw-targeted-return-all-cleaned-" }, async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const requesterSessionKey = "agent:main:subagent:all-cleaned";
+      const liveSessionKey = "agent:main:root:all-live";
+      allSessionKeysMock.mockReturnValue([requesterSessionKey, liveSessionKey]);
+      registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
+        (sessionKey: string) => sessionKey === requesterSessionKey,
+      );
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:all-cleaned-child",
+        childRunId: "run-all-cleaned-return",
+        requesterSessionKey,
+        requesterDisplayKey: "all-cleaned",
+        task: "[continuation:chain-hop:1] all cleaned target",
+        timeoutMs: 100,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+        roundOneReply: "delegate completed",
+        silentAnnounce: true,
+        wakeOnReturn: true,
+        continuationFanoutMode: "all",
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(
+        (await readQueuedSystemEventDeliveries(stateDir)).map((entry) => entry.sessionKey),
+      ).toEqual([liveSessionKey]);
+      expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
+      expect(peekSystemEventEntries(liveSessionKey)).toHaveLength(1);
+      expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+      expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: liveSessionKey }),
+      );
+    });
+  });
+
+  it("does not reopen a cleaned requester on the default silent-return path", async () => {
+    await withTempDir({ prefix: "openclaw-targeted-return-default-cleaned-" }, async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const requesterSessionKey = "agent:main:subagent:default-cleaned";
+      registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
+        (sessionKey: string) => sessionKey === requesterSessionKey,
+      );
+
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:default-cleaned-child",
+        childRunId: "run-default-cleaned-return",
+        requesterSessionKey,
+        requesterDisplayKey: "default-cleaned",
+        task: "ordinary silent return",
+        timeoutMs: 100,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+        roundOneReply: "delegate completed",
+        silentAnnounce: true,
+        wakeOnReturn: true,
+      });
+
+      expect(didAnnounce).toBe(true);
+      expect(await readQueuedSystemEventDeliveries(stateDir)).toEqual([]);
+      expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
+      expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not fall back to a cleaned requester when every tree recipient is filtered", async () => {
