@@ -297,6 +297,7 @@ const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalP
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
+const DSSE_ENVELOPE_MEDIA_TYPE = "application/vnd.dsse+json";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST = ["clawhub.ai"];
 const ISO_CALENDAR_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/u;
 
@@ -414,7 +415,9 @@ function resolveDefaultClawHubFeedVerificationFromEnv(
   const publicKey = normalizeOptionalString(
     env?.[DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV],
   );
-  if (!keyId && !publicKey) return undefined;
+  if (!keyId && !publicKey) {
+    return undefined;
+  }
   if (!keyId || !publicKey) {
     throw new HostedCatalogTrustConfigurationError(
       "default ClawHub feed trust requires both key id and public key env vars",
@@ -810,7 +813,7 @@ async function parseHostedCatalogFeedBody(params: {
     if (!Number.isFinite(generatedAtMs)) {
       throw new Error("hosted catalog signed feed requires a valid generatedAt value");
     }
-    let expired = false;
+    let expired: boolean;
     if (!expiresAt) {
       if (params.allowMissingExpiry !== true) {
         throw new Error("hosted catalog signed feed requires a valid expiresAt value");
@@ -1123,12 +1126,18 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   }
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
-  const ifModifiedSince = normalizeOptionalString(params?.ifModifiedSince);
+  const signedOperation = source.verification?.mode === "signed";
+  const ifModifiedSince = signedOperation
+    ? undefined
+    : normalizeOptionalString(params?.ifModifiedSince);
   if (ifNoneMatch) {
     headers.set("if-none-match", ifNoneMatch);
   }
   if (ifModifiedSince) {
     headers.set("if-modified-since", ifModifiedSince);
+  }
+  if (signedOperation) {
+    headers.set("accept", DSSE_ENVELOPE_MEDIA_TYPE);
   }
   const metadataBase = (response: Response) => {
     const etag = normalizeHostedCatalogHeader(response.headers.get("etag"));
@@ -1182,6 +1191,25 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         expectedSha256,
         ifNoneMatch,
         ifModifiedSince,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef,
+        expectedFeedId: source.expectedFeedId,
+        verification: source.verification,
+        now: currentTime(),
+      });
+    }
+    if (
+      signedOperation &&
+      response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+        DSSE_ENVELOPE_MEDIA_TYPE
+    ) {
+      return await snapshotOrBundledFallbackResult({
+        error: `signed hosted catalog feed must use ${DSSE_ENVELOPE_MEDIA_TYPE}`,
+        snapshotStore,
+        url: url.href,
+        metadata: base,
+        expectedSha256,
+        ifNoneMatch,
         catalogConfig: params?.catalogConfig,
         requireManifestInstallSourceRef,
         expectedFeedId: source.expectedFeedId,

@@ -209,6 +209,12 @@ function signedHostedCatalogSnapshot(params: {
   };
 }
 
+function dsseResponse(body: BodyInit | null, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/vnd.dsse+json");
+  return new Response(body, { ...init, headers });
+}
+
 describe("official external plugin catalog", () => {
   it("keeps hosted fetch guard loading lazy for bundled catalog import paths", () => {
     const source = readFileSync(
@@ -356,7 +362,12 @@ describe("official external plugin catalog", () => {
       id: "clawhub-official",
     };
     const signed = signedHostedCatalogFeed({ feed });
-    const fetchImpl = vi.fn(async () => new Response(signed.body, { status: 200 }));
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("accept")).toBe("application/vnd.dsse+json");
+      expect(headers.has("if-modified-since")).toBe(false);
+      return dsseResponse(signed.body, { status: 200 });
+    });
 
     const result = await loadHostedCatalog({
       env: {
@@ -364,6 +375,7 @@ describe("official external plugin catalog", () => {
         [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
           signed.publicKeyPem,
       },
+      ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
       fetchImpl,
       snapshotStore: null,
     });
@@ -394,7 +406,7 @@ describe("official external plugin catalog", () => {
         [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
           signed.publicKeyPem,
       },
-      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
     });
 
@@ -439,7 +451,7 @@ describe("official external plugin catalog", () => {
         [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
           signed.publicKeyPem,
       },
-      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
     });
 
@@ -831,7 +843,7 @@ describe("official external plugin catalog", () => {
     const accepted = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(newer.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(newer.body, { status: 200 })),
       now: () => new Date("2026-06-22T00:00:10.000Z"),
       snapshotStore,
     });
@@ -851,7 +863,7 @@ describe("official external plugin catalog", () => {
     const rolledBack = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(older.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(older.body, { status: 200 })),
       now: () => new Date("2026-06-22T00:00:11.000Z"),
       snapshotStore,
     });
@@ -921,7 +933,7 @@ describe("official external plugin catalog", () => {
     const result = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig: signedCatalogConfig(malformed.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(malformed.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(malformed.body, { status: 200 })),
       snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
     });
 
@@ -954,7 +966,7 @@ describe("official external plugin catalog", () => {
     const rejected = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig: signedCatalogConfig(lower.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(lower.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(lower.body, { status: 200 })),
       snapshotStore,
     });
 
@@ -964,7 +976,7 @@ describe("official external plugin catalog", () => {
     const result = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig: signedCatalogConfig(valid.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(valid.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(valid.body, { status: 200 })),
       snapshotStore,
     });
 
@@ -989,7 +1001,7 @@ describe("official external plugin catalog", () => {
     const result = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig: signedCatalogConfig(candidate.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(candidate.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(candidate.body, { status: 200 })),
       snapshotStore,
     });
 
@@ -1136,7 +1148,7 @@ describe("official external plugin catalog", () => {
     const unsigned = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(unsignedBody, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(unsignedBody, { status: 200 })),
       snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
     });
 
@@ -1218,6 +1230,28 @@ describe("official external plugin catalog", () => {
     expect(offline.entries.map((entry) => entry.name)).toEqual(["@openclaw/legacy-snapshot"]);
   });
 
+  it("fails closed when a signed feed response does not use the DSSE media type", async () => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/wrong-media-type" }),
+    });
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(signed.publicKeyPem),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(signed.body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    expect(result.error).toContain("must use application/vnd.dsse+json");
+  });
+
   it("rejects expired signed feeds and keeps expired snapshots visible but not installable", async () => {
     const feed = {
       ...hostedCatalogFeed({
@@ -1246,8 +1280,8 @@ describe("official external plugin catalog", () => {
     const seeded = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(
-        async () => new Response(signed.body, { status: 200, headers: { etag: '"expiring"' } }),
+      fetchImpl: vi.fn(async () =>
+        dsseResponse(signed.body, { status: 200, headers: { etag: '"expiring"' } }),
       ),
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
@@ -1260,7 +1294,7 @@ describe("official external plugin catalog", () => {
     const expiredFresh = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       now: () => new Date("2026-06-22T00:01:01.000Z"),
       snapshotStore: null,
     });
@@ -1325,7 +1359,7 @@ describe("official external plugin catalog", () => {
     const result = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig: signedCatalogConfig(signed.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(signed.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore: null,
     });
@@ -1378,7 +1412,7 @@ describe("official external plugin catalog", () => {
     const updated = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(newer.body, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(newer.body, { status: 200 })),
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
     });
@@ -1429,7 +1463,7 @@ describe("official external plugin catalog", () => {
       feedProfile: "acme",
       feedUrl: "https://clawhub.ai/v1/feeds/plugins",
       catalogConfig: signedCatalogConfig(signed.publicKeyPem),
-      fetchImpl: vi.fn(async () => new Response(unsignedBody, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(unsignedBody, { status: 200 })),
       snapshotStore: null,
     });
 
