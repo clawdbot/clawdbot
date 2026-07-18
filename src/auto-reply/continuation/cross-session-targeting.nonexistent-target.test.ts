@@ -66,6 +66,7 @@ describe("nonexistent-target-session: normalization pre-guards (targeting-pure)"
 
   describe("hasCrossSessionDelegateTargeting", () => {
     const dispatchingSessionKey = "agent:main:dispatcher";
+    const emptyDispatchingSessionKey = "";
 
     it.each([
       { label: "undefined targetSessionKey", targeting: { targetSessionKey: undefined } },
@@ -80,6 +81,23 @@ describe("nonexistent-target-session: normalization pre-guards (targeting-pure)"
         hasCrossSessionDelegateTargeting(
           { targetSessionKey: "agent:main:never-existed" },
           dispatchingSessionKey,
+        ),
+      ).toBe(true);
+    });
+
+    it.each([
+      { label: "empty targetSessionKey", targeting: { targetSessionKey: "" } },
+      { label: "whitespace targetSessionKey", targeting: { targetSessionKey: "   " } },
+      { label: "empty targetSessionKeys", targeting: { targetSessionKeys: [] } },
+    ])("returns false through the empty-dispatcher facade for $label", ({ targeting }) => {
+      expect(hasCrossSessionDelegateTargeting(targeting, emptyDispatchingSessionKey)).toBe(false);
+    });
+
+    it("returns true through the empty-dispatcher facade for a valid nonexistent target", () => {
+      expect(
+        hasCrossSessionDelegateTargeting(
+          { targetSessionKey: "agent:main:never-existed" },
+          emptyDispatchingSessionKey,
         ),
       ).toBe(true);
     });
