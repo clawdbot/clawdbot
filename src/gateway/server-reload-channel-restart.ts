@@ -138,9 +138,10 @@ export async function restartGatewayChannels(options: {
             params.logChannels.info(
               `stopping ${channel} account ${accountId} before suppressed hot reload`,
             );
-            if (!wasStoppedBeforePluginReload(channel, accountId)) {
-              await params.stopChannel(channel, accountId, { manual: false });
-            }
+            await params.stopChannel(channel, accountId, {
+              manual: false,
+              restartPending: false,
+            });
           } catch (err) {
             accountStopFailures.push(`${channel}[${accountId}]`);
             params.logChannels.error(
