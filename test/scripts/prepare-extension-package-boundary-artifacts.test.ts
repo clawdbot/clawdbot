@@ -599,9 +599,10 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
   });
 
-  it("uses nonincremental JS TypeScript for every boundary declaration command", () => {
+  it("uses stable compiler backends without incremental state", () => {
     const rootArgs = createBoundaryDeclarationArgs({
       project: "tsconfig.plugin-sdk.dts.json",
+      compiler: "js",
     });
     expect(rootArgs[0]).toMatch(/node_modules[/\\]typescript[/\\]bin[/\\]tsc$/u);
     expect(rootArgs.slice(1)).toEqual([
@@ -619,7 +620,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       rootDir: "extensions/discord",
     });
     expect(extensionArgs).toEqual([
-      expect.stringMatching(/node_modules[/\\]typescript[/\\]bin[/\\]tsc$/u),
+      expect.stringMatching(/scripts[/\\]run-tsgo\.mjs$/u),
       "-p",
       "extensions/discord/tsconfig.json",
       "--declaration",

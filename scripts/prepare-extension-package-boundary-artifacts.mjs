@@ -11,6 +11,7 @@ import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
+const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const tscBin = require.resolve("typescript/bin/tsc");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
@@ -344,14 +345,15 @@ export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
 }
 
 /**
- * Builds a declaration command with the stable JS compiler and no incremental state.
+ * Builds a declaration command with the selected compiler and no incremental state.
  */
-export function createBoundaryDeclarationArgs({ project, outDir, rootDir }) {
+export function createBoundaryDeclarationArgs({ project, outDir, rootDir, compiler = "native" }) {
   if ((outDir && !rootDir) || (!outDir && rootDir)) {
     throw new Error("Boundary declaration outDir and rootDir must be provided together");
   }
 
-  const args = [tscBin, "-p", project, "--declaration", "true"];
+  const compilerPath = compiler === "js" ? tscBin : runTsgoScript;
+  const args = [compilerPath, "-p", project, "--declaration", "true"];
   if (outDir && rootDir) {
     args.push(
       "--emitDeclarationOnly",
@@ -802,7 +804,10 @@ async function main(argv = process.argv.slice(2)) {
       if (!rootDtsFresh) {
         prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
-          args: createBoundaryDeclarationArgs({ project: "tsconfig.plugin-sdk.dts.json" }),
+          args: createBoundaryDeclarationArgs({
+            project: "tsconfig.plugin-sdk.dts.json",
+            compiler: "js",
+          }),
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stampPath: ROOT_DTS_STAMP,
@@ -814,7 +819,10 @@ async function main(argv = process.argv.slice(2)) {
     if (!packageDtsFresh) {
       prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
-        args: createBoundaryDeclarationArgs({ project: "packages/plugin-sdk/tsconfig.json" }),
+        args: createBoundaryDeclarationArgs({
+          project: "packages/plugin-sdk/tsconfig.json",
+          compiler: "js",
+        }),
         env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         timeoutMs: 300_000,
         stampPath: PACKAGE_DTS_STAMP,
