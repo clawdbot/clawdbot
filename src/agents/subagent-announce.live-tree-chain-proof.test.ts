@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +73,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadSessionEntryByKey } from "./subagent-announce-delivery.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-announce-read.js";
@@ -168,7 +169,12 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     resetSubagentRegistryForTests();
     resetAgentEventsForTest();
     vi.unstubAllEnvs();
+    // Session access caches an agent SQLite handle. Close it before deleting
+    // this test's state directory so no handle/cache crosses test boundaries.
+    closeOpenClawAgentDatabasesForTest();
     rmSync(stateDir, { recursive: true, force: true });
+    expect(existsSync(stateDir)).toBe(false);
+    stateDir = "";
   });
 
   it("spawns hop-2 via tool delegate (fanout=tree) and delivers hop-2 completion by lifecycle targeted-return", async () => {
