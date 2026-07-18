@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-release-metadata-only.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const scriptPath = path.resolve(
+  import.meta.dirname,
+  "../../scripts/check-release-metadata-only.mjs",
+);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("check-release-metadata-only", () => {
   it("parses refs and explicit paths", () => {
@@ -39,5 +49,38 @@ describe("check-release-metadata-only", () => {
       head: "HEAD",
       paths: ["--head"],
     });
+  });
+
+  it("fails with an actionable timeout when git diff hangs", () => {
+    const tempDir = tempDirs.make("openclaw-release-metadata-git-");
+    const gitPath = path.join(tempDir, "git");
+    writeFileSync(
+      gitPath,
+      `#!/usr/bin/env node
+if (process.argv.includes("diff")) {
+  setInterval(() => {}, 1000);
+} else {
+  process.exit(0);
+}
+`,
+      "utf8",
+    );
+    chmodSync(gitPath, 0o755);
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: path.resolve(import.meta.dirname, "../.."),
+      env: {
+        ...process.env,
+        OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS: "500",
+        PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
+    );
   });
 });

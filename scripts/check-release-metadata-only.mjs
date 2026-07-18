@@ -5,6 +5,10 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { RELEASE_METADATA_PATHS } from "./changed-lanes.mjs";
 
+const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+const MAX_GIT_TIMEOUT_MS = 10 * 60_000;
+const GIT_TIMEOUT_ENV = "OPENCLAW_RELEASE_METADATA_GIT_TIMEOUT_MS";
+
 const VERSION_ONLY_TEXT_PATHS = new Set([
   "apps/android/Config/Version.properties",
   "apps/android/version.json",
@@ -24,6 +28,18 @@ function readRefOptionValue(argv, index, optionName) {
     throw new Error(`Expected ${optionName} <ref>.`);
   }
   return value;
+}
+
+function resolveGitTimeoutMs(env = process.env) {
+  const raw = env[GIT_TIMEOUT_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_GIT_TIMEOUT_MS;
+  }
+  return Math.min(Math.trunc(parsed), MAX_GIT_TIMEOUT_MS);
 }
 
 export function parseArgs(argv) {
@@ -52,12 +68,28 @@ export function parseArgs(argv) {
   return args;
 }
 
+function formatGitArgs(args) {
+  return args.join(" ");
+}
+
 function git(args) {
-  return execFileSync("git", args, {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  const timeout = resolveGitTimeoutMs();
+  try {
+    return execFileSync("git", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      timeout,
+    });
+  } catch (error) {
+    if (error?.signal === "SIGTERM" || error?.code === "ETIMEDOUT") {
+      throw new Error(
+        `release metadata guard: git ${formatGitArgs(args)} timed out after ${timeout}ms.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
 }
 
 function listChangedPaths(args) {
