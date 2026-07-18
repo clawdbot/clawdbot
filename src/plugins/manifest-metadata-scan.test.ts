@@ -82,4 +82,45 @@ describe("listOpenClawPluginManifestMetadata", () => {
       { endpointClass: "openai-public", hosts: ["api.openai.com"] },
     ]);
   });
+
+  it("skips oversized plugin manifests to prevent OOM during metadata scan", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const goodPluginDir = path.join(home, ".openclaw", "extensions", "good-plugin");
+    writeJson(path.join(goodPluginDir, "openclaw.plugin.json"), { id: "good-plugin" });
+
+    const oversizedDir = path.join(home, ".openclaw", "extensions", "big-plugin");
+    const oversizedPath = path.join(oversizedDir, "openclaw.plugin.json");
+    fs.mkdirSync(oversizedDir, { recursive: true });
+    fs.writeFileSync(
+      oversizedPath,
+      JSON.stringify({ id: "big-plugin", pad: "x".repeat(256 * 1024) }),
+      "utf8",
+    );
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
+    });
+    expect(records.find((record) => record.manifest.id === "good-plugin")).toBeTruthy();
+    expect(records.find((record) => record.manifest.id === "big-plugin")).toBeUndefined();
+  });
+
+  it("accepts plugin manifests at the exact byte limit", () => {
+    const root = createTempRoot();
+    const home = path.join(root, "home");
+    const exactDir = path.join(home, ".openclaw", "extensions", "exact-plugin");
+    fs.mkdirSync(exactDir, { recursive: true });
+    const exactPath = path.join(exactDir, "openclaw.plugin.json");
+    const manifest = { id: "exact-plugin", pad: "" };
+    const padding = 256 * 1024 - Buffer.byteLength(JSON.stringify(manifest), "utf8");
+    manifest.pad = "x".repeat(padding);
+    fs.writeFileSync(exactPath, JSON.stringify(manifest), "utf8");
+
+    const records = listOpenClawPluginManifestMetadata({
+      OPENCLAW_HOME: home,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "empty-bundled"),
+    });
+    expect(records.find((record) => record.manifest.id === "exact-plugin")).toBeTruthy();
+  });
 });
