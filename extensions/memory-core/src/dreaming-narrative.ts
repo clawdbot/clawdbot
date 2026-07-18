@@ -794,7 +794,28 @@ async function normalizeSessionEntryPathForComparison(params: {
   });
 }
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+// Single-flight guard for the dreaming cleanup. The scrub runs in the `finally`
+// of every narrative invocation, so overlapping phases/workspaces used to fire
+// two passes concurrently — proven by the "dreaming cleanup scrubbed ..." line
+// logging twice with near-identical timestamps. Two passes racing over the same
+// session store and transcript files can archive a file out from under a live
+// run. Coalesce concurrent callers onto a single in-flight pass.
+let inFlightDreamingScrub: Promise<void> | null = null;
+
+export async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+  if (inFlightDreamingScrub) {
+    return inFlightDreamingScrub;
+  }
+  const pass = scrubDreamingNarrativeArtifactsPass(logger);
+  inFlightDreamingScrub = pass;
+  try {
+    await pass;
+  } finally {
+    inFlightDreamingScrub = null;
+  }
+}
+
+async function scrubDreamingNarrativeArtifactsPass(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[] = [];
@@ -873,6 +894,8 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       continue;
     }
 
+    const orphanCandidates: Array<{ transcriptPath: string; normalizedTranscriptPath: string }> =
+      [];
     for (const fileEntry of sessionFiles) {
       if (!fileEntry.isFile() || !fileEntry.name.endsWith(".jsonl")) {
         continue;
@@ -904,13 +927,50 @@ async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
       if (!content.includes(DREAMING_TRANSCRIPT_RUN_MARKER)) {
         continue;
       }
-      const archivedPath = `${transcriptPath}.deleted.${Date.now()}`;
-      try {
-        await fs.rename(transcriptPath, archivedPath);
-        archivedOrphans += 1;
-      } catch {
-        // best-effort scrubber
-      }
+      orphanCandidates.push({ transcriptPath, normalizedTranscriptPath });
+    }
+
+    if (orphanCandidates.length > 0) {
+      // Re-verify each candidate is still unreferenced under the session-store
+      // write lock immediately before renaming it. A dreaming run that
+      // (re)registers its session between the scan above and the rename would
+      // otherwise have its LIVE transcript archived out from under it — which
+      // surfaces to that run as an EmbeddedAttemptSessionTakeoverError
+      // ("session file changed") on lane session:agent:main:dreaming-narrative-*.
+      // Holding the store write lock blocks any concurrent registration, and
+      // re-reading the freshly locked store lets us skip candidates that just
+      // became referenced. skipSaveWhenResult avoids rewriting the store because
+      // this pass only reads it.
+      archivedOrphans += await updateSessionStore(
+        storePath,
+        async (lockedStore) => {
+          const liveReferencedFiles = new Set<string>();
+          for (const entry of Object.values(lockedStore)) {
+            const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
+              sessionsDir,
+              entry,
+            });
+            if (normalizedSessionFile) {
+              liveReferencedFiles.add(normalizedSessionFile);
+            }
+          }
+          let archivedForAgent = 0;
+          for (const candidate of orphanCandidates) {
+            if (liveReferencedFiles.has(candidate.normalizedTranscriptPath)) {
+              continue;
+            }
+            const archivedPath = `${candidate.transcriptPath}.deleted.${Date.now()}`;
+            try {
+              await fs.rename(candidate.transcriptPath, archivedPath);
+              archivedForAgent += 1;
+            } catch {
+              // best-effort scrubber
+            }
+          }
+          return archivedForAgent;
+        },
+        { skipSaveWhenResult: () => true },
+      );
     }
   }
 

@@ -22,6 +22,7 @@ import {
   generateAndAppendDreamNarrative,
   removeBackfillDiaryEntries,
   runDetachedDreamNarrative,
+  scrubDreamingNarrativeArtifacts,
   type NarrativePhaseData,
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
@@ -1036,6 +1037,83 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
+  });
+
+  it("single-flights concurrent dreaming cleanup passes", async () => {
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await fs.writeFile(storePath, `${JSON.stringify({})}\n`, "utf-8");
+
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(
+      (() => storePath) as typeof sessionStoreRuntimeModule.resolveStorePath,
+    );
+    const resolveStateDirSpy = vi
+      .spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir")
+      .mockReturnValue(stateDir);
+
+    const logger = createMockLogger();
+
+    // Two overlapping callers must coalesce onto a single pass; each pass reads
+    // the state dir exactly once, so a single call proves the pass ran once.
+    await Promise.all([
+      scrubDreamingNarrativeArtifacts(logger),
+      scrubDreamingNarrativeArtifacts(logger),
+    ]);
+
+    expect(resolveStateDirSpy).toHaveBeenCalledTimes(1);
+
+    // A later, non-overlapping call starts a fresh pass.
+    await scrubDreamingNarrativeArtifacts(logger);
+    expect(resolveStateDirSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not archive a transcript that a racing store update just referenced", async () => {
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const racingPath = path.join(sessionsDir, "racing.jsonl");
+
+    // The real store on disk references racing.jsonl (a live dreaming session
+    // that just registered). The under-lock re-verification reads this store.
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify({
+        "agent:main:dreaming-narrative-light-racing": { sessionId: "racing" },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(racingPath, '{"runId":"dreaming-narrative-light-racing"}\n', "utf-8");
+    const oldDate = new Date(Date.now() - 600_000);
+    await fs.utimes(racingPath, oldDate, oldDate);
+
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(
+      (() => storePath) as typeof sessionStoreRuntimeModule.resolveStorePath,
+    );
+    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    // Simulate the race: the initial (unlocked) scan sees a STALE store that has
+    // not yet registered racing.jsonl, so it becomes an archive candidate. Only
+    // the initial scan uses loadSessionStore; the authoritative re-verification
+    // uses updateSessionStore, which reads the fresh on-disk store above.
+    vi.spyOn(sessionStoreRuntimeModule, "loadSessionStore").mockReturnValue(
+      {} as ReturnType<typeof sessionStoreRuntimeModule.loadSessionStore>,
+    );
+
+    const logger = createMockLogger();
+    await scrubDreamingNarrativeArtifacts(logger);
+
+    // The live transcript must survive: no rename to *.deleted.* happened.
+    const sessionFiles = await fs.readdir(sessionsDir);
+    expect(sessionFiles).toContain("racing.jsonl");
+    expect(sessionFiles.filter((file) => file.startsWith("racing.jsonl.deleted."))).toEqual([]);
   });
 
   it("isolates narrative sessions across workspaces even at the same timestamp", async () => {
