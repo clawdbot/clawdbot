@@ -11,6 +11,7 @@ const runtimeLogMock = vi.hoisted(() => vi.fn());
 const runtimeErrorMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const allSessionKeysMock = vi.hoisted(() => vi.fn(() => [] as string[]));
+const requesterDepthMock = vi.hoisted(() => vi.fn(() => 0));
 
 const registryRuntimeMock = vi.hoisted(() => ({
   shouldIgnorePostCompletionAnnounceForSession: vi.fn(() => false),
@@ -100,6 +101,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 
 vi.mock("./subagent-announce.registry.runtime.js", () => registryRuntimeMock);
 
+vi.mock("./subagent-depth.js", () => ({
+  getSubagentDepthFromSessionStore: (...args: unknown[]) => requesterDepthMock(...args),
+}));
+
 const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
 
 async function readQueuedSystemEventDeliveries(stateDir: string): Promise<QueuedSessionDelivery[]> {
@@ -111,6 +116,7 @@ describe("subagent announce targeted continuation return integration", () => {
     runtimeLogMock.mockReset();
     runtimeErrorMock.mockReset();
     requestHeartbeatNowMock.mockReset();
+    requesterDepthMock.mockReset().mockReturnValue(0);
     resetSystemEventsForTest();
     mockConfig = {
       agents: { defaults: { continuation: { enabled: true } } },
@@ -192,6 +198,49 @@ describe("subagent announce targeted continuation return integration", () => {
         }),
       );
     });
+  });
+
+  it("routes an explicit return past an inactive cleaned internal requester", async () => {
+    await withTempDir(
+      { prefix: "openclaw-targeted-return-inactive-explicit-" },
+      async (stateDir) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const nonce = "TARGETED-INACTIVE-EXPLICIT-NONCE-581";
+        // A cron key is unambiguously internal without relying on depth-store
+        // fixture state, so this executes the inactive-requester guard.
+        const requesterSessionKey = "agent:main:cron:cleaned-explicit-requester";
+        const targetSessionKey = "agent:main:recipient-explicit-after-cleanup";
+        registryRuntimeMock.isSubagentSessionRunActive.mockReturnValueOnce(false);
+        registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockImplementation(
+          (sessionKey: string) => sessionKey === requesterSessionKey,
+        );
+
+        const didAnnounce = await runSubagentAnnounceFlow({
+          childSessionKey: "agent:main:subagent:explicit-after-cleanup",
+          childRunId: "run-targeted-inactive-explicit",
+          requesterSessionKey,
+          requesterDisplayKey: "cleaned-explicit-requester",
+          task: `[continuation:chain-hop:1] explicit return ${nonce}`,
+          timeoutMs: 100,
+          cleanup: "keep",
+          waitForCompletion: false,
+          startedAt: 10,
+          endedAt: 20,
+          outcome: { status: "ok" },
+          roundOneReply: `delegate completed with ${nonce}`,
+          silentAnnounce: true,
+          wakeOnReturn: true,
+          continuationTargetSessionKey: targetSessionKey,
+        });
+
+        expect(didAnnounce).toBe(true);
+        const queued = await loadPendingSessionDeliveries(stateDir);
+        expect(queued).toHaveLength(1);
+        expect(queued.at(0)).toEqual(expect.objectContaining({ sessionKey: targetSessionKey }));
+        expect(peekSystemEventEntries(requesterSessionKey)).toHaveLength(0);
+        expect(peekSystemEventEntries(targetSessionKey)).toHaveLength(1);
+      },
+    );
   });
 
   it("delivers fanoutMode=tree returns after its inactive intermediate requester was cleaned up", async () => {
