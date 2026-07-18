@@ -1,18 +1,18 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.3",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/line",
-      "version": "2026.7.2",
+      "version": "2026.7.2-beta.3",
       "dependencies": {
         "@line/bot-sdk": "11.2.0",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.7.2"
+        "openclaw": ">=2026.7.2-beta.3"
       },
       "peerDependenciesMeta": {
         "openclaw": {

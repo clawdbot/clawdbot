@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/tencent-provider",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.3",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/tencent-provider",
-      "version": "2026.7.2"
+      "version": "2026.7.2-beta.3"
     }
   }
 }
