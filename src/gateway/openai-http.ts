@@ -34,6 +34,10 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  retainGatewayRootWorkAdmissionContinuation,
+} from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -898,6 +902,18 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return true;
   }
+  if (isGatewayWorkAdmissionClosed()) {
+    // Same 503 envelope shape as the mapped GatewayDrainingError and the
+    // boundary reject, so a client sees one consistent drain response.
+    sendJson(res, 503, {
+      error: {
+        message: "Gateway is draining; new tasks are not accepted",
+        type: "service_unavailable",
+        code: "gateway_unavailable",
+      },
+    });
+    return true;
+  }
   const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelOverrideAuth.allowed) {
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
@@ -1289,6 +1305,10 @@ export async function handleOpenAiHttpRequest(
   wroteRole = true;
   writeAssistantRoleChunk(res, { runId, model });
 
+  // The agent run outlives this handler; the HTTP boundary releases its root
+  // admission as soon as we return, so hand the run its own reference or
+  // beginSessionWorkAdmission sees a released root and rejects as draining.
+  const releaseRootWorkContinuation = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
@@ -1423,6 +1443,7 @@ export async function handleOpenAiHttpRequest(
       });
       requestFinalize();
     } finally {
+      releaseRootWorkContinuation?.();
       if (!closed) {
         emitAgentEvent({
           runId,

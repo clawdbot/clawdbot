@@ -32,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -1110,6 +1111,10 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  // The agent run outlives this handler; the HTTP boundary releases its root
+  // admission as soon as we return, so hand the run its own reference or
+  // beginSessionWorkAdmission sees a released root and rejects as draining.
+  const releaseRootWorkContinuation = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1356,6 +1361,7 @@ export async function handleOpenResponsesHttpRequest(
         data: { phase: "error" },
       });
     } finally {
+      releaseRootWorkContinuation?.();
       if (!closed) {
         // Emit lifecycle end to trigger completion
         emitAgentEvent({
