@@ -14,7 +14,6 @@ import {
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
 import {
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
@@ -62,23 +61,6 @@ describe("nonexistent-target-session: normalization pre-guards (targeting-pure)"
 
     it("returns empty array for undefined input", () => {
       expect(normalizeContinuationTargetKeys(undefined)).toEqual([]);
-    });
-  });
-
-  describe("hasContinuationDelegateTargeting", () => {
-    it.each([
-      { label: "undefined targetSessionKey", targeting: { targetSessionKey: undefined } },
-      { label: "empty targetSessionKey", targeting: { targetSessionKey: "" } },
-      { label: "whitespace targetSessionKey", targeting: { targetSessionKey: "   " } },
-      { label: "empty object", targeting: {} },
-    ])("returns false for $label (no targeting)", ({ targeting }) => {
-      expect(hasContinuationDelegateTargeting(targeting)).toBe(false);
-    });
-
-    it("returns true for a valid-but-nonexistent targetSessionKey", () => {
-      expect(
-        hasContinuationDelegateTargeting({ targetSessionKey: "agent:main:never-existed" }),
-      ).toBe(true);
     });
   });
 

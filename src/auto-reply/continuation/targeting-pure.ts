@@ -30,9 +30,7 @@ export function normalizeContinuationTargetKeys(values?: readonly string[]): str
   return keys;
 }
 
-export function hasContinuationDelegateTargeting(
-  targeting: ContinuationDelegateTargeting,
-): boolean {
+function hasContinuationDelegateTargeting(targeting: ContinuationDelegateTargeting): boolean {
   return Boolean(
     normalizeContinuationTargetKey(targeting.targetSessionKey) ||
     normalizeContinuationTargetKeys(targeting.targetSessionKeys).length > 0 ||
