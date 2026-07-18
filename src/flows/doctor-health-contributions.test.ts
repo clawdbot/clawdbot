@@ -1877,8 +1877,8 @@ describe("doctor health contributions", () => {
     const check = contributionChecks.find(
       (entry) => entry.id === "core/doctor/inactive-compaction-byte-guard",
     );
-    expect(check).toMatchObject({ defaultEnabled: false });
     expect(check).toBeDefined();
+    expect(check).not.toHaveProperty("defaultEnabled", false);
 
     const ctx = {
       cfg: {
@@ -1895,17 +1895,8 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
 
-    // defaultEnabled=false → skipped unless explicitly included
+    // Default doctor lint runs the check without needing --only.
     await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
-    });
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [check!],
-        onlyIds: ["core/doctor/inactive-compaction-byte-guard"],
-      }),
-    ).resolves.toMatchObject({
       checksRun: 1,
       checksSkipped: 0,
       findings: [
