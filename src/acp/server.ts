@@ -27,6 +27,7 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
+import { AcpSessionNewOrdering } from "./session-new-ordering.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode } from "./types.js";
 
@@ -245,13 +246,21 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   startupInput.dispose();
   const output = Writable.toWeb(process.stdout);
   const stream = ndJsonStream(output, bufferedInput);
+  const sessionNewOrdering = new AcpSessionNewOrdering();
   const readable = stream.readable.pipeThrough(
     new TransformStream<AnyMessage, AnyMessage>({
       transform(message, controller) {
+        sessionNewOrdering.observeInbound(message);
         controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
       },
     }),
   );
+  const orderedOutbound = new TransformStream<AnyMessage, AnyMessage>({
+    transform(message, controller) {
+      sessionNewOrdering.transformOutbound(message, controller);
+    },
+  });
+  void orderedOutbound.readable.pipeTo(stream.writable);
   const eventLedger = createSqliteAcpEventLedger();
 
   const connection = new AgentSideConnection(
@@ -260,7 +269,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
       agent.start();
       return agent;
     },
-    { ...stream, readable },
+    { writable: orderedOutbound.writable, readable },
   );
   // The SDK closes the connection when stdin reaches EOF. Reuse the normal
   // shutdown path so the Gateway and shared database cannot keep the bridge alive.
