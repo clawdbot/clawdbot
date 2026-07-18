@@ -2227,7 +2227,13 @@ describe("matrix monitor handler pairing account scope", () => {
         body: "hello",
         originServerTs: 999,
       }),
-      { onAdopted: vi.fn(async () => {}) },
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      },
     );
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
