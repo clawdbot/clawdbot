@@ -1233,21 +1233,23 @@ function sortChatItemsByVisibleTime(
       timestampsByKey.set(item.key, timestamp);
     }
   }
-  return items
-    .map((item, index) => {
-      const timestamp = chatItemTimestamp(item);
-      const predecessorKey = toolStreamPredecessors.get(item.key);
-      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
-      return {
-        item,
-        index,
-        predecessorKey,
-        timestamp:
-          timestamp != null && predecessorTimestamp != null
-            ? Math.max(timestamp, predecessorTimestamp)
-            : timestamp,
-      };
-    })
+  const prepared = items.map((item, index) => {
+    const timestamp = chatItemTimestamp(item);
+    const predecessorKey = toolStreamPredecessors.get(item.key);
+    const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+    return {
+      item,
+      index,
+      predecessorKey,
+      timestamp:
+        timestamp != null && predecessorTimestamp != null
+          ? Math.max(timestamp, predecessorTimestamp)
+          : timestamp,
+    };
+  });
+  // Untimestamped compaction markers keep their transcript slot instead of inheriting reload time.
+  const sorted = prepared
+    .filter(({ item, timestamp }) => item.kind !== "divider" || timestamp !== null)
     .toSorted((a, b) => {
       if (a.timestamp == null && b.timestamp == null) {
         return a.index - b.index;
@@ -1268,8 +1270,16 @@ function sortChatItemsByVisibleTime(
         return -1;
       }
       return a.index - b.index;
-    })
-    .map(({ item }) => item);
+    });
+  let nextSortedItem = 0;
+  return prepared.map(({ item, timestamp }) => {
+    if (item.kind === "divider" && timestamp === null) {
+      return item;
+    }
+    const sortedItem = sorted[nextSortedItem]?.item;
+    nextSortedItem += 1;
+    return sortedItem ?? item;
+  });
 }
 
 function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
@@ -1312,7 +1322,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     const raw = asRecord(msg) ?? {};
     const marker = raw["__openclaw"] as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
-      items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+      items.push(buildCompactionDividerItem(marker, rawMessageTimestamp(msg), i));
       continue;
     }
 

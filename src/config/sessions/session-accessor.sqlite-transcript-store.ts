@@ -1,3 +1,4 @@
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
@@ -491,8 +492,7 @@ function readEventTimestamp(event: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictTimestampStringMs(value);
 }
 
 export function redactTranscriptMessageForStorage<TMessage>(

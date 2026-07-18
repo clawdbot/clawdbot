@@ -6,6 +6,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -280,6 +281,36 @@ describe("session transcript reader facade", () => {
       readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 1 }),
     ).resolves.toMatchObject([{ content: "sqlite follow-up", __openclaw: { seq: 3 } }]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
+  });
+
+  test("omits loose SQLite record timestamps from Gateway metadata", async () => {
+    const sessionId = "reader-sqlite-loose-timestamp";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "loose-message",
+        parentId: null,
+        timestamp: "01/02/03",
+        message: { role: "user", content: "loose timestamp" },
+      },
+    ]);
+
+    const [message] = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "strict timestamp reader test",
+    });
+    expect(message).toMatchObject({ content: "loose timestamp" });
+    expect((message as Record<string, unknown>)["__openclaw"]).not.toHaveProperty(
+      "recordTimestampMs",
+    );
   });
 
   test("promotes SQLite message idempotency into transcript metadata", async () => {

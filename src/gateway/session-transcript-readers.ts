@@ -1,3 +1,4 @@
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
@@ -116,8 +117,12 @@ export function toTranscriptReadScope(
 function readTranscriptRecordTimestampMs(event: Record<string, unknown>): number | undefined {
   const raw = event.timestamp;
   const timestampMs =
-    typeof raw === "string" ? Date.parse(raw) : typeof raw === "number" ? raw : Number.NaN;
-  return Number.isFinite(timestampMs) ? timestampMs : undefined;
+    typeof raw === "string"
+      ? parseStrictTimestampStringMs(raw)
+      : typeof raw === "number"
+        ? raw
+        : Number.NaN;
+  return timestampMs !== undefined && Number.isFinite(timestampMs) ? timestampMs : undefined;
 }
 
 function extractMessageRecord(

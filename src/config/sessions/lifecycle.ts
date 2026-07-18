@@ -1,7 +1,7 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
 import { readFileWindowFullySync } from "../../infra/file-read.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs, parseStrictTimestampStringMs } from "../../shared/number-coercion.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import {
   resolveSessionFilePath,
@@ -103,8 +103,7 @@ function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  const parsed = Date.parse(value);
-  return resolveTimestamp(parsed);
+  return parseStrictTimestampStringMs(value);
 }
 
 function readFirstLine(filePath: string): string | undefined {

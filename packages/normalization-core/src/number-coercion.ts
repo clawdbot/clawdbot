@@ -106,8 +106,67 @@ export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
 /** Largest timestamp accepted by JavaScript Date. */
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+const STRICT_TIMESTAMP_STRING_RE =
+  /^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
 /** Fallback ISO value for invalid timestamp inputs. */
 export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    return isLeapYear(year) ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+function hasValidTimestampFields(parts: RegExpExecArray): boolean {
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const hour = Number(parts[4]);
+  const minute = Number(parts[5]);
+  const second = Number(parts[6]);
+  const zone = parts[7]?.toUpperCase();
+  if (!zone) {
+    return false;
+  }
+  const zoneHour = zone === "Z" ? 0 : Number(zone.slice(1, 3));
+  const zoneMinute = zone === "Z" ? 0 : Number(zone.slice(4, 6));
+
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth(year, month) &&
+    hour >= 0 &&
+    hour <= 23 &&
+    minute >= 0 &&
+    minute <= 59 &&
+    second >= 0 &&
+    second <= 59 &&
+    zoneHour >= 0 &&
+    zoneHour <= 23 &&
+    zoneMinute >= 0 &&
+    zoneMinute <= 59
+  );
+}
+
+/** Parses a strict ISO/RFC3339 timestamp string to a Date-valid millisecond timestamp. */
+export function parseStrictTimestampStringMs(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  const match = STRICT_TIMESTAMP_STRING_RE.exec(normalized);
+  if (!match || !hasValidTimestampFields(match)) {
+    return undefined;
+  }
+  const parseable = normalized.replace(/[Tt]/, "T").replace(/[Zz]$/, "Z");
+  return asDateTimestampMs(Date.parse(parseable));
+}
 
 /** Returns a Date-valid millisecond timestamp. */
 export function asDateTimestampMs(value: unknown): number | undefined {

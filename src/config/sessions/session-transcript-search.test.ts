@@ -176,6 +176,25 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
+  it("treats a loose persisted timestamp as missing during SQLite indexing", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
+        {
+          type: "message",
+          id: "m-loose",
+          parentId: null,
+          message: { role: "user", content: [{ type: "text", text: "loose timestamp" }] },
+          timestamp: "01/02/03",
+        } as unknown as TranscriptEvent,
+      ]);
+
+      expect(search("loose").hits[0]?.timestamp).toBe(1_700_000_000_000);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     await replaceSqliteTranscriptEvents(scope, [

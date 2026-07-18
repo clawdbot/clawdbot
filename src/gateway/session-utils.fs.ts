@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  parseStrictTimestampStringMs,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
@@ -781,7 +782,7 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   if (entry.message) {
     const recordTimestampMs =
       typeof entry.timestamp === "string"
-        ? Date.parse(entry.timestamp)
+        ? parseStrictTimestampStringMs(entry.timestamp)
         : typeof entry.timestamp === "number"
           ? entry.timestamp
           : Number.NaN;
@@ -797,12 +798,11 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   // Compaction entries are not "message" records, but they're useful context for debugging.
   // Emit a lightweight synthetic message that the Web UI can render as a divider.
   if (entry.type === "compaction") {
-    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(ts) ? ts : Date.now();
+    const timestamp = parseStrictTimestampStringMs(entry.timestamp);
     return {
       role: "system",
       content: [{ type: "text", text: "Compaction" }],
-      timestamp,
+      ...(timestamp !== undefined ? { timestamp } : {}),
       __openclaw: {
         kind: "compaction",
         id: typeof entry.id === "string" ? entry.id : undefined,

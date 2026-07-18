@@ -1,3 +1,4 @@
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
@@ -26,6 +27,28 @@ import type {
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
+
+function sortSessionTreeNodesByTimestamp(nodes: SessionTreeNode[]): void {
+  // Malformed persisted metadata keeps its append slot; only valid siblings reorder.
+  const sortedValidNodes = nodes
+    .flatMap((node, index) => {
+      const timestamp = parseStrictTimestampStringMs(node.entry.timestamp);
+      return timestamp === undefined ? [] : [{ node, index, timestamp }];
+    })
+    .toSorted((left, right) => left.timestamp - right.timestamp || left.index - right.index);
+  let nextValidNode = 0;
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (!node || parseStrictTimestampStringMs(node.entry.timestamp) === undefined) {
+      continue;
+    }
+    const sortedNode = sortedValidNodes[nextValidNode]?.node;
+    if (sortedNode) {
+      nodes[index] = sortedNode;
+      nextValidNode += 1;
+    }
+  }
+}
 
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
@@ -295,10 +318,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     const stack = [...roots];
     while (stack.length > 0) {
       const node = stack.pop()!;
-      node.children.sort(
-        (left, right) =>
-          new Date(left.entry.timestamp).getTime() - new Date(right.entry.timestamp).getTime(),
-      );
+      sortSessionTreeNodesByTimestamp(node.children);
       stack.push(...node.children);
     }
     return roots;

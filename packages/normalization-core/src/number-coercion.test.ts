@@ -28,6 +28,7 @@ import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  parseStrictTimestampStringMs,
   resolveTimerTimeoutMs,
   resolveTimestampMsToIsoString,
   timestampMsToIsoFileStamp,
@@ -137,6 +138,25 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test.each([
+    ["2026-01-02T03:04:05.006Z", "2026-01-02T03:04:05.006Z"],
+    ["2026-01-02t03:04:05.006z", "2026-01-02T03:04:05.006Z"],
+    ["2026-01-02T03:04:05+08:00", "2026-01-02T03:04:05+08:00"],
+  ])("parses strict persisted timestamp %s", (value, expected) => {
+    expect(parseStrictTimestampStringMs(value)).toBe(Date.parse(expected));
+  });
+
+  test.each([
+    "01/02/03",
+    "9999-12-31",
+    "2026-02-29T00:00:00.000Z",
+    "2026-02-31T00:00:00.000Z",
+    "2026-01-01T24:00:00.000Z",
+    "+275760-09-13T00:00:00.001Z",
+  ])("rejects loose or Date-invalid persisted timestamp %s", (value) => {
+    expect(parseStrictTimestampStringMs(value)).toBeUndefined();
   });
 
   test("future timestamp helper rejects invalid Date timestamps", () => {

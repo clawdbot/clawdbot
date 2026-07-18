@@ -1089,4 +1089,18 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
   });
+
+  it("drops loose and Date-invalid string message timestamps", async () => {
+    const jsonlLines = ["01/02/03", "+275760-09-13T00:00:00.001Z"].map((timestamp) =>
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: timestamp, timestamp },
+      }),
+    );
+    const filePath = path.join(tmpDir, "invalid-string-timestamp-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.messageTimestampsMs).toStrictEqual([0, 0]);
+  });
 });

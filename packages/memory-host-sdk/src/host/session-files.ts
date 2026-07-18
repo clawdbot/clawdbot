@@ -1,6 +1,7 @@
 // Memory Host SDK module implements session files behavior.
 import fsSync from "node:fs";
 import path from "node:path";
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeAgentId } from "./config-utils.js";
 import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
@@ -633,8 +634,8 @@ function parseSessionTimestampMs(
       }
     }
     if (typeof value === "string") {
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed) && parsed > 0) {
+      const parsed = parseStrictTimestampStringMs(value);
+      if (parsed !== undefined && parsed > 0) {
         return parsed;
       }
     }

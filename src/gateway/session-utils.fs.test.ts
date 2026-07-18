@@ -438,6 +438,46 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("omits loose and Date-invalid outer JSONL record timestamps", async () => {
+    const sessionId = "test-session-invalid-record-timestamp";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { timestamp: "01/02/03", message: { role: "user", content: "loose turn" } },
+      {
+        timestamp: "+275760-09-13T00:00:00.001Z",
+        message: { role: "assistant", content: "range turn" },
+      },
+    ]);
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+
+    expect(result).toHaveLength(2);
+    for (const message of result) {
+      expect(
+        requireRecord(requireRecord(message, "message")["__openclaw"], "metadata"),
+      ).not.toHaveProperty("recordTimestampMs");
+    }
+  });
+
+  test("omits synthetic time for a compaction with an invalid persisted timestamp", () => {
+    const sessionId = "test-session-invalid-compaction-timestamp";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "01/02/03",
+        summary: "Compacted history",
+        firstKeptEntryId: "x",
+        tokensBefore: 123,
+      },
+    ]);
+
+    expect(readSessionMessages(sessionId, storePath)[0]).not.toHaveProperty("timestamp");
+  });
+
   test("surfaces persisted user idempotency keys in __openclaw metadata (#79844)", async () => {
     const sessionId = "test-session-idempotency-key";
     writeTranscript(tmpDir, sessionId, [

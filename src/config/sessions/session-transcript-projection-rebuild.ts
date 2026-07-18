@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import type { Generated } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -115,15 +116,17 @@ export function extractTranscriptIndexEntry(
   }
   const timestamp =
     typeof record.timestamp === "number"
-      ? record.timestamp
+      ? Number.isFinite(record.timestamp)
+        ? record.timestamp
+        : undefined
       : typeof record.timestamp === "string"
-        ? Date.parse(record.timestamp)
-        : Number.NaN;
+        ? parseStrictTimestampStringMs(record.timestamp)
+        : undefined;
   return {
     messageId: record.id.trim(),
     role,
     text,
-    timestamp: Number.isFinite(timestamp) ? timestamp : fallbackTimestamp,
+    timestamp: timestamp ?? fallbackTimestamp,
   };
 }
 
