@@ -2202,6 +2202,36 @@ describe("matrix monitor handler pairing account scope", () => {
 
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
   });
+
+  it("processes journaled pre-startup replays that carry an ingress lifecycle", async () => {
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "ops",
+      channel: "matrix",
+      accountId: "ops",
+      sessionKey: "agent:ops:main",
+      mainSessionKey: "agent:ops:main",
+      matchedBy: "binding.account" as const,
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      resolveAgentRoute,
+      isDirectMessage: true,
+      startupMs: 1_000,
+      startupGraceMs: 0,
+      dropPreStartupMessages: true,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$old-journaled",
+        body: "hello",
+        originServerTs: 999,
+      }),
+      { onAdopted: vi.fn(async () => {}) },
+    );
+
+    expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("matrix monitor handler live allowlist reload", () => {
