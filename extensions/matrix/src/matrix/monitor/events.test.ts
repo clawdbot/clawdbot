@@ -128,7 +128,7 @@ function createHarness(params?: {
       await Promise.all(Array.from(pendingTasks));
     }
   };
-  const onRoomMessage = vi.fn(async () => {});
+  const onRoomMessage = vi.fn(async (_roomId: string, _event: MatrixRawEvent) => {});
   const listVerifications = vi.fn(async () => params?.verifications ?? []);
   const ensureVerificationDmTracked = vi.fn(
     params?.ensureVerificationDmTracked ?? (async () => null),
@@ -217,7 +217,11 @@ function createHarness(params?: {
       params?.getHealthySyncSinceMs ??
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),
     formatNativeDependencyHint,
-    onRoomMessage,
+    ingress: {
+      accept: async (roomId: string, event: MatrixRawEvent) => {
+        await onRoomMessage(roomId, event);
+      },
+    },
     runDetachedTask,
     sasNoticeRetryDelayMs: params?.sasNoticeRetryDelayMs ?? 0,
   });

@@ -48,6 +48,7 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixIngressMonitor } from "./ingress.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -213,6 +214,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let disposeMonitorEvents = () => {};
   let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
   let monitorSetupClosed = false;
+  let ingress: ReturnType<typeof createMatrixIngressMonitor> | null = null;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
     if (cleanupPromise) {
       return cleanupPromise;
@@ -303,7 +305,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client?.off("sync.state", onSyncState);
       syncLifecycle?.dispose();
     },
-    waitForTasks: monitorTaskRunner.waitForIdle,
+    waitForTasks: async () => {
+      // Stop ingress only after listeners detach (no new admissions) and after
+      // the lease drained pending decryptions: those emissions still need the
+      // journal. stop() awaits in-flight drain dispatches the same way
+      // waitForIdle awaited the old detached handler tasks.
+      await ingress?.stop();
+      await monitorTaskRunner.waitForIdle();
+    },
     cleanup: () => threadBindingManager?.stop(),
   };
 
@@ -453,6 +462,29 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       `matrix: thread bindings ready account=${threadBindingManager.accountId} idleMs=${threadBindingIdleTimeoutMs} maxAgeMs=${threadBindingMaxAgeMs}`,
     );
 
+    // Durable ingress: journal every dispatchable inbound event into the shared
+    // channel ingress queue before detached dispatch, so a crash after the
+    // sync token persisted no longer loses messages; the drain replays
+    // journaled rows here on startup. Events without an id cannot be journaled
+    // and keep the previous live-dispatch path.
+    ingress = createMatrixIngressMonitor({
+      accountId: effectiveAccountId,
+      runtime,
+      abortSignal: monitorLifecycleSignal,
+      dispatch: async (roomId, event, lifecycle) => {
+        await handleRoomMessage(roomId, event, lifecycle);
+      },
+      onUnjournaledEvent: (roomId, event) => {
+        void monitorTaskRunner.runDetachedTask(
+          `room message handler room=${roomId} id=unknown`,
+          async () => {
+            await handleRoomMessage(roomId, event);
+          },
+        );
+      },
+    });
+    ingress.start();
+
     disposeMonitorEvents = registerMatrixMonitorEvents({
       cfg,
       client,
@@ -477,7 +509,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       startupGraceMs,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
+      ingress,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
 

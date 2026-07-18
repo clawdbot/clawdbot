@@ -6,6 +6,7 @@ import type { MatrixAuth } from "../client.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
+import type { MatrixIngressMonitor } from "./ingress.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -188,7 +189,7 @@ export function registerMatrixMonitorEvents(params: {
   startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
-  onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
+  ingress: Pick<MatrixIngressMonitor, "accept">;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
   sasNoticeRetryDelayMs?: number;
 }): () => void {
@@ -209,7 +210,7 @@ export function registerMatrixMonitorEvents(params: {
     startupGraceMs,
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
-    onRoomMessage,
+    ingress,
     runDetachedTask,
     sasNoticeRetryDelayMs,
   } = params;
@@ -243,12 +244,10 @@ export function registerMatrixMonitorEvents(params: {
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
-    void runMonitorTask(
-      `room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    // Durable-before-dispatch: the journal append commits synchronously inside
+    // this listener, before the debounced sync-token persist can tell the
+    // homeserver the batch is consumed.
+    void ingress.accept(roomId, event);
   };
 
   const onEncryptedEvent = (roomId: string, event: MatrixRawEvent) => {
@@ -267,12 +266,7 @@ export function registerMatrixMonitorEvents(params: {
     if (eventType !== EventType.RoomMessage) {
       return;
     }
-    void runMonitorTask(
-      `decrypted room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-      async () => {
-        await onRoomMessage(roomId, event);
-      },
-    );
+    void ingress.accept(roomId, event);
   };
 
   const onFailedDecryption = (roomId: string, event: MatrixRawEvent, error: Error) => {
@@ -397,12 +391,7 @@ export function registerMatrixMonitorEvents(params: {
       );
     }
     if (eventType === EventType.Reaction) {
-      void runMonitorTask(
-        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
-        async () => {
-          await onRoomMessage(roomId, event);
-        },
-      );
+      void ingress.accept(roomId, event);
       return;
     }
 

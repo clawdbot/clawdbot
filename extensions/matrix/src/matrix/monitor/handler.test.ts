@@ -649,6 +649,36 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("threads the durable ingress lifecycle into the inbound turn run", async () => {
+    const { handler, run } = createMatrixHandlerTestHarness({
+      isDirectMessage: true,
+      getMemberDisplayName: async () => "sender",
+    });
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$event-lifecycle",
+        body: "hello",
+        mentions: { room: true },
+      }),
+      lifecycle,
+    );
+
+    const runParams = requireRecord(mockCalls(run, "run")[0]?.[0], "inbound run params");
+    const adoption = requireRecord(runParams.turnAdoptionLifecycle, "turn adoption lifecycle");
+    expect(adoption.admission).toBe("exclusive");
+    expect(adoption.onAdopted).toBe(lifecycle.onAdopted);
+    expect(adoption.onAbandoned).toBe(lifecycle.onAbandoned);
+  });
+
   it("drops room messages from configured Matrix bot accounts when allowBots is off", async () => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,

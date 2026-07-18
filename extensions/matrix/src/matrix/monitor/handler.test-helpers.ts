@@ -107,6 +107,7 @@ type MatrixHandlerTestHarness = {
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
   resolveAgentRoute: () => typeof DEFAULT_ROUTE;
+  run: MatrixInboundRunMock;
   runPrepared: MatrixRunPreparedMock;
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
@@ -114,6 +115,11 @@ type MatrixHandlerTestHarness = {
 type MatrixRunPreparedInput = PreparedInboundReply<unknown>;
 type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
 type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
+type MatrixInboundRunMock = Mock<
+  (
+    params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
+  ) => Promise<unknown>
+>;
 
 export function createMatrixHandlerTestHarness(
   options: MatrixHandlerTestHarnessOptions = {},
@@ -380,6 +386,7 @@ export function createMatrixHandlerTestHarness(
     readAllowFromStore,
     recordInboundSession,
     resolveAgentRoute,
+    run,
     runPrepared,
     upsertPairingRequest,
   };

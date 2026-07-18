@@ -12,6 +12,7 @@ type MatrixIngressPrefixConfig = {
   client: { getUserId: () => Promise<string> };
   senderId: string;
   dropPreStartupMessages: boolean;
+  isJournaledReplay?: boolean;
   eventTs?: number;
   eventAge?: number;
   startupMs: number;
@@ -37,6 +38,7 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     client,
     senderId,
     dropPreStartupMessages,
+    isJournaledReplay,
     eventTs,
     eventAge,
     startupMs,
@@ -54,7 +56,10 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
   if (senderId === selfUserId) {
     return undefined;
   }
-  if (dropPreStartupMessages) {
+  if (dropPreStartupMessages && !isJournaledReplay) {
+    // The pre-startup drop targets stale sync-cache replays. A journaled
+    // replay carries never-adopted work, so dropping it here would lose an
+    // accepted event after a crash.
     if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
       return undefined;
     }

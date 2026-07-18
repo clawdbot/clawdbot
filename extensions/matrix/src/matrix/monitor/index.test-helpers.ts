@@ -73,6 +73,7 @@ const hoisted = vi.hoisted(() => {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
     drainPendingDecryptions: vi.fn(async () => undefined),
+    setSyncAdmissionGate: vi.fn(),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn(
@@ -167,7 +168,7 @@ const hoisted = vi.hoisted(() => {
   const registerMatrixMonitorEvents = vi.fn(
     (_params: {
       getHealthySyncSinceMs?: () => number | undefined;
-      onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
+      ingress: { accept: (roomId: string, event: unknown) => Promise<void> };
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       callOrder.push("register-events");
@@ -202,6 +203,9 @@ const hoisted = vi.hoisted(() => {
     logger,
     registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
+    ingressDispatch: null as
+      | null
+      | ((roomId: string, event: unknown, lifecycle: unknown) => Promise<void>),
     registerChannelRuntimeContext,
     registerMatrixAutoJoin,
     registerMatrixMonitorEvents,
@@ -397,18 +401,66 @@ vi.mock("./events.js", () => ({
   registerMatrixMonitorEvents: hoisted.registerMatrixMonitorEvents.mockImplementation(
     (params: {
       getHealthySyncSinceMs?: () => number | undefined;
-      onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
+      ingress: { accept: (roomId: string, event: unknown) => Promise<void> };
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       hoisted.callOrder.push("register-events");
       hoisted.registeredHealthySyncGetter = params.getHealthySyncSinceMs;
       hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
-        params.runDetachedTask
-          ? params.runDetachedTask("test room message", async () => {
-              await params.onRoomMessage(roomId, event);
-            })
-          : params.onRoomMessage(roomId, event);
+        params.ingress.accept(roomId, event);
       return hoisted.disposeMonitorEvents;
+    },
+  ),
+}));
+
+vi.mock("./ingress.js", () => ({
+  createMatrixIngressMonitor: vi.fn(
+    (params: {
+      dispatch: (roomId: string, event: unknown, lifecycle: unknown) => Promise<void>;
+      onUnjournaledEvent: (roomId: string, event: unknown) => void;
+    }) => {
+      hoisted.callOrder.push("create-ingress");
+      hoisted.ingressDispatch = (roomId, event, lifecycle) =>
+        params.dispatch(roomId, event, lifecycle);
+      let stopped = false;
+      const inFlight = new Set<Promise<void>>();
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      return {
+        // Faithful stand-in: accept dispatches through the same dispatch
+        // callback the real drain would use, and stop() awaits in-flight
+        // dispatches like the real drain shutdown. A stopped monitor only
+        // journals (replayed on next startup), so accept never dispatches
+        // after stop.
+        accept: vi.fn(async (roomId: string, event: unknown) => {
+          if (stopped) {
+            return;
+          }
+          const task = Promise.resolve().then(() => params.dispatch(roomId, event, lifecycle));
+          inFlight.add(task);
+          try {
+            await task;
+          } finally {
+            inFlight.delete(task);
+          }
+        }),
+        start: vi.fn(() => {
+          hoisted.callOrder.push("ingress-start");
+        }),
+        stop: vi.fn(async () => {
+          stopped = true;
+          hoisted.callOrder.push("ingress-stop");
+          await Promise.all([...inFlight]);
+        }),
+        waitForIdle: vi.fn(async () => {}),
+        waitForAdmissions: vi.fn(async () => {}),
+        getAdmissionFailure: vi.fn(() => null),
+      };
     },
   ),
 }));
