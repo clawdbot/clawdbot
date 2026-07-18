@@ -51,7 +51,6 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
-import "../pages/approval/approval-page-registration.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
@@ -63,6 +62,7 @@ import {
 } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
+  APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   ensureOptionalElementForHost,
@@ -243,6 +243,9 @@ class OpenClawApp extends OpenClawLightDomElement {
     this.runtime = bootstrapApplication();
     if (this.terminalOnly) {
       preloadOptionalElement(this, TERMINAL_PANEL_ELEMENT);
+    }
+    if (this.runtime.documentMode?.kind === "approval") {
+      preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
     this.initialAuthPresent = hasStoredGatewayAuth(context.gateway.connection);

@@ -381,6 +381,14 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
     }
 
+    @Test func `chat keeps layered canvas behind soft native scroll edges`() throws {
+        let source = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
+
+        #expect(source.contains("drawsBackground: true"))
+        #expect(source.contains("content.scrollEdgeEffectStyle(.soft, for: .vertical)"))
+        #expect(!source.contains(".background(Color(uiColor: .systemBackground))"))
+    }
+
     @Test func `phone hub keeps docs as destination only`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 

@@ -2,6 +2,18 @@ import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
 
+private struct ChatScrollEdgeTreatment: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            // The shared canvas supplies color for the native blur. Automatic
+            // edge effects harden to black when the host inserts an opaque fill.
+            content.scrollEdgeEffectStyle(.soft, for: .vertical)
+        } else {
+            content
+        }
+    }
+}
+
 struct ChatProTab: View {
     private struct TranscriptShareItem: Identifiable {
         let id = UUID()
@@ -108,7 +120,7 @@ struct ChatProTab: View {
 
     private var content: some View {
         self.chatSurface
-            .background(Color(uiColor: .systemBackground))
+            .modifier(ChatScrollEdgeTreatment())
             .navigationTitle(self.headerDisplayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -162,7 +174,7 @@ struct ChatProTab: View {
         if let viewModel {
             OpenClawChatView(
                 viewModel: viewModel,
-                drawsBackground: false,
+                drawsBackground: true,
                 showsSessionSwitcher: false,
                 userAccent: self.chatUserAccent,
                 showsAssistantTrace: self.showsAssistantTrace,

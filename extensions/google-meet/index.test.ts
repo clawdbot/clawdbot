@@ -845,10 +845,23 @@ type TestBridgeProcess = {
   stdout?: PassThrough | null;
   stderr: PassThrough;
   killed: boolean;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   kill: ReturnType<typeof vi.fn>;
   on: EventEmitter["on"];
   emit: EventEmitter["emit"];
 };
+
+function installTestBridgeKill(proc: TestBridgeProcess): void {
+  proc.killed = false;
+  proc.exitCode = null;
+  proc.signalCode = null;
+  proc.kill = vi.fn((signal?: NodeJS.Signals) => {
+    proc.killed = true;
+    proc.signalCode = signal ?? "SIGTERM";
+    return true;
+  });
+}
 
 describe("google-meet plugin", () => {
   beforeEach(() => {
@@ -7274,11 +7287,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7521,11 +7530,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = stdio.stderr;
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7650,11 +7655,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputStdin = new Writable({
@@ -7872,11 +7873,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputProcess = makeProcess({
@@ -7953,11 +7950,7 @@ describe("google-meet plugin", () => {
         proc.stdin = stdio.stdin;
         proc.stdout = stdio.stdout;
         proc.stderr = new PassThrough();
-        proc.killed = false;
-        proc.kill = vi.fn(() => {
-          proc.killed = true;
-          return true;
-        });
+        installTestBridgeKill(proc);
         return proc;
       };
       const outputProcess = makeProcess({
@@ -8169,11 +8162,7 @@ describe("google-meet plugin", () => {
       proc.stdin = stdio.stdin;
       proc.stdout = stdio.stdout;
       proc.stderr = new PassThrough();
-      proc.killed = false;
-      proc.kill = vi.fn(() => {
-        proc.killed = true;
-        return true;
-      });
+      installTestBridgeKill(proc);
       return proc;
     };
     const outputProcess = makeProcess({ stdin: outputStdin, stdout: null });

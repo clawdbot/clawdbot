@@ -1,6 +1,9 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
+
+const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
 
 type NodeBridgeSession = {
   id: string;
@@ -20,6 +23,8 @@ type NodeBridgeSession = {
   lastOutputBytes: number;
   closedAt?: string;
   clearCount: number;
+  stopPromise?: Promise<void>;
+  retiredOutputStops: Set<Promise<void>>;
 };
 
 export type MeetingNodeHostOptions = {
@@ -91,32 +96,6 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
   return { command, args };
 }
 
-function terminateChild(child?: ChildProcess) {
-  if (!child) {
-    return;
-  }
-  let exited = child.exitCode !== null || child.signalCode !== null;
-  child.once?.("exit", () => {
-    exited = true;
-  });
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // Best-effort cleanup for node-host child processes.
-  }
-  const timer = setTimeout(() => {
-    if (exited) {
-      return;
-    }
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      // Process may have exited after the grace check.
-    }
-  }, 2_000);
-  timer.unref?.();
-}
-
 export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   handleCommand(paramsJSON?: string | null): Promise<string>;
 } {
@@ -126,23 +105,41 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     session.waiters.wake();
   };
 
-  const stopSession = (session: NodeBridgeSession) => {
+  const retireOutputProcess = (session: NodeBridgeSession, outputProcess?: ChildProcess) => {
+    const stopPromise = terminateMeetingBridgeProcess(outputProcess, {
+      graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+    });
+    session.retiredOutputStops.add(stopPromise);
+    void stopPromise.finally(() => {
+      session.retiredOutputStops.delete(stopPromise);
+    });
+  };
+
+  const stopSession = (session: NodeBridgeSession): Promise<void> => {
     // Process and stream errors can arrive together during teardown. Close once
-    // so the same children do not get duplicate termination timers.
-    if (session.closed) {
-      return;
+    // so every caller shares one bounded process-termination promise.
+    if (session.stopPromise) {
+      return session.stopPromise;
     }
     session.closed = true;
     session.closedAt = new Date().toISOString();
-    terminateChild(session.input);
-    terminateChild(session.output);
     wake(session);
+    session.stopPromise = Promise.all([
+      terminateMeetingBridgeProcess(session.input, {
+        graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+      }),
+      terminateMeetingBridgeProcess(session.output, {
+        graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+      }),
+      ...session.retiredOutputStops,
+    ]).then(() => undefined);
+    return session.stopPromise;
   };
 
   const attachOutputProcessHandlers = (session: NodeBridgeSession, outputProcess: ChildProcess) => {
     const stopIfCurrent = () => {
       if (session.output === outputProcess) {
-        stopSession(session);
+        void stopSession(session);
       }
     };
     outputProcess.on("exit", stopIfCurrent);
@@ -174,6 +171,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       lastInputBytes: 0,
       lastOutputBytes: 0,
       clearCount: 0,
+      retiredOutputStops: new Set(),
     };
     const outputProcess = startOutputProcess(output);
     const inputProcess = spawn(input.command, input.args, {
@@ -191,7 +189,9 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       }
       wake(session);
     });
-    const stop = () => stopSession(session);
+    const stop = () => {
+      void stopSession(session);
+    };
     inputProcess.on("exit", stop);
     inputProcess.on("error", stop);
     inputProcess.stdout?.on("error", stop);
@@ -238,7 +238,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     try {
       session.output?.stdin?.write(audio);
     } catch {
-      stopSession(session);
+      void stopSession(session);
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
     return { bridgeId, ok: true };
@@ -259,7 +259,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     attachOutputProcessHandlers(session, outputProcess);
     session.clearCount += 1;
     session.lastClearAt = new Date().toISOString();
-    terminateChild(previousOutput);
+    retireOutputProcess(session, previousOutput);
     return { bridgeId, ok: true, clearCount: session.clearCount };
   };
 
@@ -321,7 +321,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         if (bridgeId) {
           const session = sessions.get(bridgeId);
           if (session) {
-            stopSession(session);
+            void stopSession(session);
           }
         }
         throw new Error(
@@ -391,7 +391,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     return { bridges };
   };
 
-  const stopSessionsByUrl = (params: Record<string, unknown>) => {
+  const stopSessionsByUrl = async (params: Record<string, unknown>) => {
     const urlKey = options.normalizeMeetingKey(readString(params.url));
     if (!urlKey) {
       throw new Error("url required");
@@ -399,6 +399,11 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     const mode = readString(params.mode);
     const exceptBridgeId = readString(params.exceptBridgeId);
     let stopped = 0;
+    const stopping: Array<{
+      bridgeId: string;
+      session: NodeBridgeSession;
+      stopPromise: Promise<void>;
+    }> = [];
     for (const [bridgeId, session] of sessions) {
       if (exceptBridgeId && bridgeId === exceptBridgeId) {
         continue;
@@ -410,16 +415,21 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         continue;
       }
       const wasClosed = session.closed;
-      stopSession(session);
-      sessions.delete(bridgeId);
+      stopping.push({ bridgeId, session, stopPromise: stopSession(session) });
       if (!wasClosed) {
         stopped += 1;
+      }
+    }
+    await Promise.all(stopping.map(({ stopPromise }) => stopPromise));
+    for (const { bridgeId, session } of stopping) {
+      if (sessions.get(bridgeId) === session) {
+        sessions.delete(bridgeId);
       }
     }
     return { ok: true, stopped };
   };
 
-  const stopBrowser = (params: Record<string, unknown>) => {
+  const stopBrowser = async (params: Record<string, unknown>) => {
     const bridgeId = readString(params.bridgeId);
     if (!bridgeId) {
       return { ok: true, stopped: false };
@@ -428,8 +438,10 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session) {
       return { ok: true, stopped: false };
     }
-    stopSession(session);
-    sessions.delete(bridgeId);
+    await stopSession(session);
+    if (sessions.get(bridgeId) === session) {
+      sessions.delete(bridgeId);
+    }
     return { ok: true, stopped: true };
   };
 
@@ -461,7 +473,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           result = listSessions(params);
           break;
         case "stopByUrl":
-          result = stopSessionsByUrl(params);
+          result = await stopSessionsByUrl(params);
           break;
         case "pullAudio":
           result = await pullAudio(params);
@@ -473,7 +485,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           result = clearAudio(params);
           break;
         case "stop":
-          result = stopBrowser(params);
+          result = await stopBrowser(params);
           break;
         default:
           throw new Error(`unsupported ${options.commandName} action`);

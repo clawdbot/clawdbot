@@ -428,7 +428,7 @@ final class NodeAppModel {
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
     // Bumped on every non-nil assignment, including re-reports of an equal problem;
-    // value equality alone cannot tell the UI to re-surface or shake the toast.
+    // value equality alone cannot tell the UI to re-surface a dismissed toast.
     private(set) var gatewayProblemReportCount = 0
     private(set) var lastGatewayProblem: GatewayConnectionProblem? {
         didSet { if self.lastGatewayProblem != nil { self.gatewayProblemReportCount &+= 1 } }

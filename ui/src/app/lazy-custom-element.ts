@@ -56,6 +56,14 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+// Loaded only for approval document URLs: the approval page pulls the protocol
+// validators (typebox runtime) and must stay out of the normal startup graph.
+export const APPROVAL_PAGE_ELEMENT = {
+  tagName: "openclaw-approval-page",
+  label: "approval page",
+  loadModule: () => import("../pages/approval/approval-page-registration.ts"),
+} satisfies OptionalCustomElement;
+
 const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {

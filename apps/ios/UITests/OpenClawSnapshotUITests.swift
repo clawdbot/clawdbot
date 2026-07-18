@@ -372,6 +372,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-light")
     }
 
+    func testChatKeepsLayeredCanvasInDarkAppearance() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-dark-layered-canvas"))
+
+        XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
+        self.assertChatCanvasIsNotSolidBlack()
+        self.attachScreenshot(named: "chat-dark-layered-canvas")
+
+        self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
+        self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
+    }
+
     func testEmptyChatStarterPromptSendsMessage() throws {
         self.launchApp(
             for: ScreenshotTarget(
@@ -995,6 +1010,81 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "Dark appearance must keep the settings labels visibly light",
             file: file,
             line: line)
+    }
+
+    private func assertChatCanvasIsNotSolidBlack(
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        guard let app, let image = app.screenshot().image.cgImage else {
+            XCTFail("App screenshot has no CGImage", file: file, line: line)
+            return
+        }
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else {
+                return false
+            }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else {
+            XCTFail("Could not render the chat screenshot", file: file, line: line)
+            return
+        }
+
+        // The fixture leaves this canvas region empty. A pure-black host makes
+        // both system scroll-edge effects collapse into hard black clipping.
+        let sampleX = (width / 8)..<(width * 7 / 8)
+        let sampleY = (height * 2 / 5)..<(height * 7 / 10)
+        var layeredPixels = 0
+        for y in sampleY {
+            for x in sampleX {
+                let offset = (y * width + x) * 4
+                if pixels[offset] > 3 || pixels[offset + 1] > 3 || pixels[offset + 2] > 3 {
+                    layeredPixels += 1
+                }
+            }
+        }
+        let sampledPixels = max(1, sampleX.count * sampleY.count)
+        XCTAssertGreaterThan(
+            Double(layeredPixels) / Double(sampledPixels),
+            0.95,
+            "Dark Chat must retain a layered canvas behind its translucent edge chrome",
+            file: file,
+            line: line)
+    }
+
+    private func sendFixtureChatMessage(_ text: String) {
+        guard let app else {
+            XCTFail("Fixture app is unavailable")
+            return
+        }
+        let input = app.textFields["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText(text)
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        send.tap()
+
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 5))
     }
 
     private func attachScreenshot(named name: String) {
