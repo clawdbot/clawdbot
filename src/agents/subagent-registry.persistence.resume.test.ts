@@ -8,10 +8,14 @@ import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
+  removeSubagentSessionEntry,
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
@@ -116,6 +120,50 @@ describe("subagent registry persistence resume", () => {
         childSessionKey: run.childSessionKey,
         requesterOrigin: { channel: "whatsapp", accountId: "acct-main" },
       });
+    });
+  });
+
+  it("prunes orphan runs before resuming an announce retry", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const runId = "run-orphan-resume-guard";
+      const childSessionKey = "agent:main:subagent:ghost-resume";
+      const now = Date.now();
+
+      await writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+        sessionId: "sess-resume-guard",
+        updatedAt: now,
+        defaultSessionId: "sess-resume-guard",
+      });
+      mod.addSubagentRunForTests({
+        runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "resume orphan guard",
+        cleanup: "keep",
+        createdAt: now - 50,
+        startedAt: now - 25,
+        endedAt: now,
+        suppressAnnounceReason: "steer-restart",
+        cleanupHandled: false,
+      });
+      await removeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: childSessionKey,
+      });
+
+      expect(mod.clearSubagentRunSteerRestart(runId)).toBe(true);
+      await Promise.all([Promise.resolve(), Promise.resolve()]);
+
+      expect(announceSpy).not.toHaveBeenCalled();
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+      expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
     });
   });
 });

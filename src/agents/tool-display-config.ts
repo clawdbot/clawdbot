@@ -5,6 +5,7 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
+import { CONTINUATION_TOOL_DISPLAY_CONFIG } from "./tool-display-continuation-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
@@ -700,20 +701,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "TTS",
       detailKeys: ["text", "channel"],
     },
-    continue_delegate: {
-      emoji: "🔄",
-      title: "Continue Delegate",
-      detailKeys: ["task", "mode", "delaySeconds"],
-    },
-    continue_work: {
-      emoji: "⏩",
-      title: "Continue Work",
-      detailKeys: ["reason", "delaySeconds"],
-    },
-    request_compaction: {
-      emoji: "📦",
-      title: "Request Compaction",
-      detailKeys: ["reason"],
-    },
+    ...CONTINUATION_TOOL_DISPLAY_CONFIG,
   },
 };

@@ -19,7 +19,6 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
-  removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import {
@@ -28,8 +27,6 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import {
   testing,
-  addSubagentRunForTests,
-  clearSubagentRunSteerRestart,
   getLatestSubagentRunByChildSessionKey,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
@@ -87,18 +84,6 @@ describe("subagent registry persistence", () => {
       updatedAt: params.updatedAt,
       abortedLastRun: params.abortedLastRun,
       defaultSessionId: `sess-${agentId}-${Date.now()}`,
-    });
-  };
-
-  const removeChildSessionEntry = async (sessionKey: string) => {
-    if (!tempStateDir) {
-      throw new Error("tempStateDir not initialized");
-    }
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    return await removeSubagentSessionEntry({
-      stateDir: tempStateDir,
-      agentId,
-      sessionKey,
     });
   };
 
@@ -1084,42 +1069,5 @@ describe("subagent registry persistence", () => {
       childSessionKey,
     });
     expect(resolved?.endedAt).toBe(220);
-  });
-
-  it("resume guard prunes orphan runs before announce retry", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-    const runId = "run-orphan-resume-guard";
-    const childSessionKey = "agent:main:subagent:ghost-resume";
-    const now = Date.now();
-
-    await writeChildSessionEntry({
-      sessionKey: childSessionKey,
-      sessionId: "sess-resume-guard",
-      updatedAt: now,
-    });
-    addSubagentRunForTests({
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "resume orphan guard",
-      cleanup: "keep",
-      createdAt: now - 50,
-      startedAt: now - 25,
-      endedAt: now,
-      suppressAnnounceReason: "steer-restart",
-      cleanupHandled: false,
-    });
-    await removeChildSessionEntry(childSessionKey);
-
-    const changed = clearSubagentRunSteerRestart(runId);
-    expect(changed).toBe(true);
-    await flushQueuedRegistryWork();
-
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
-    const persisted = loadSubagentRegistryFromSqlite();
-    expect(persisted.has(runId)).toBe(false);
   });
 });

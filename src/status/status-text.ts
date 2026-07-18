@@ -65,9 +65,12 @@ import {
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatStatusTextContinuationLine } from "./status-continuation-line.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
+
+export { formatStatusTextContinuationLine };
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
 // final formatting to status-message.runtime through lazy imports.
@@ -108,30 +111,6 @@ function resolveStatusChannelFeatureLine(params: {
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
-}
-
-export function formatStatusTextContinuationLine(params: {
-  maxChainLength: number;
-  chainCount: number;
-  pending: number;
-  staged: number;
-  volitional: number;
-}): string | undefined {
-  const { maxChainLength, chainCount, pending, staged, volitional } = params;
-  if (chainCount === 0 && pending === 0 && staged === 0 && volitional === 0) {
-    return undefined;
-  }
-  const parts = [`chain ${chainCount}/${maxChainLength}`];
-  if (pending > 0) {
-    parts.push(`${pending} delegates pending`);
-  }
-  if (staged > 0) {
-    parts.push(`${staged} post-compaction staged`);
-  }
-  if (volitional > 0) {
-    parts.push(`volitional: ${volitional}`);
-  }
-  return `🔄 Continuation: ${parts.join(" | ")}`;
 }
 
 const loadStatusMessageRuntime = createLazyPromise(

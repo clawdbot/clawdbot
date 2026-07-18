@@ -240,7 +240,7 @@ vi.mock("../../process/command-queue.js", () => ({
       if (commandLaneIdleError) {
         throw commandLaneIdleError instanceof Error
           ? commandLaneIdleError
-          : new Error(String(commandLaneIdleError));
+          : new Error(commandLaneIdleError);
       }
       return await waitForMockIdle(laneIdleWaiters, lane, () => mainQueueSize <= 0, opts?.signal);
     })(),
@@ -272,7 +272,7 @@ vi.mock("../reply/get-reply.js", () => ({
     }
     const replyError = getReplyError();
     if (replyError) {
-      throw replyError instanceof Error ? replyError : new Error(String(replyError));
+      throw replyError instanceof Error ? replyError : new Error(replyError);
     }
     if (replyPayloadOverride !== undefined) {
       if (drainAfterReply) {
