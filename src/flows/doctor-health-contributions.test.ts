@@ -1803,6 +1803,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/systemd-linger");
+    expect(contributionIds).toContain("core/doctor/inactive-compaction-byte-guard");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 
@@ -1869,6 +1870,119 @@ describe("doctor health contributions", () => {
       });
     });
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+  });
+
+  it("warns when maxActiveTranscriptBytes is set but truncateAfterCompaction is not enabled", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/inactive-compaction-byte-guard",
+    );
+    expect(check).toMatchObject({ defaultEnabled: false });
+    expect(check).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "100MB",
+              truncateAfterCompaction: false,
+            },
+          },
+        },
+      },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    // defaultEnabled=false → skipped unless explicitly included
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/inactive-compaction-byte-guard"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/inactive-compaction-byte-guard",
+          severity: "warning",
+          path: "agents.defaults.compaction",
+        }),
+      ],
+    });
+  });
+
+  it("stays silent when truncateAfterCompaction is enabled", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/inactive-compaction-byte-guard",
+    );
+    expect(check).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              maxActiveTranscriptBytes: "100MB",
+              truncateAfterCompaction: true,
+            },
+          },
+        },
+      },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/inactive-compaction-byte-guard"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+  });
+
+  it("stays silent when maxActiveTranscriptBytes is not configured", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/inactive-compaction-byte-guard",
+    );
+    expect(check).toBeDefined();
+
+    const ctx = {
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: false,
+            },
+          },
+        },
+      },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/inactive-compaction-byte-guard"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
   });
 
   it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {

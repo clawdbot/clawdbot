@@ -3,8 +3,10 @@ import {
   runCommandOwnerHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
+  collectCompactionByteGuardFindings,
   runChannelIngressDeadLettersHealth,
   runCodexSessionRouteHealth,
+  runCompactionByteGuardHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
   runDiskSpaceHealth,
@@ -343,6 +345,18 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy cron",
       healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:compaction-byte-guard",
+      label: "Compaction byte guard",
+      healthChecks: {
+        id: "core/doctor/inactive-compaction-byte-guard",
+        description:
+          "Warn when maxActiveTranscriptBytes is configured but truncateAfterCompaction is not enabled, leaving the byte guard inactive.",
+        defaultEnabled: false,
+        detect: async (ctx) => collectCompactionByteGuardFindings(ctx.cfg),
+      },
+      run: runCompactionByteGuardHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:sandbox",

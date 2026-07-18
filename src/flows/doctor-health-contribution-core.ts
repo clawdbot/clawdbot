@@ -81,7 +81,7 @@ export async function runCoreContributionHealth(
   }
 }
 
-function formatHealthFindings(findings: readonly HealthFinding[]): string {
+export function formatHealthFindings(findings: readonly HealthFinding[]): string {
   return findings
     .map((finding) => {
       const lines = [`- ${finding.message}`];

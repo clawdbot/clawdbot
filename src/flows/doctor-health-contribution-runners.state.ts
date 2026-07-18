@@ -1,6 +1,9 @@
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { formatHealthFindings } from "./doctor-health-contribution-core.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
@@ -150,4 +153,49 @@ export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<vo
   await maybeRepairSandboxRegistryFiles(ctx.prompter);
   ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
+}
+
+export async function collectCompactionByteGuardFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const compaction = cfg.agents?.defaults?.compaction;
+  if (!compaction) {
+    return [];
+  }
+
+  const configured = compaction.maxActiveTranscriptBytes;
+  if (configured === undefined || configured === null) {
+    return [];
+  }
+
+  const str = String(configured).trim();
+  if (str === "" || str === "0") {
+    return [];
+  }
+
+  const truncateEnabled = compaction.truncateAfterCompaction === true;
+  if (truncateEnabled) {
+    return [];
+  }
+
+  return [
+    {
+      checkId: "core/doctor/inactive-compaction-byte-guard",
+      severity: "warning",
+      message: `agents.defaults.compaction.maxActiveTranscriptBytes is set to "${str}" but truncateAfterCompaction is not enabled, so the byte guard has no effect.`,
+      path: "agents.defaults.compaction",
+      requirement: "truncateAfterCompaction enabled when maxActiveTranscriptBytes is configured",
+      fixHint:
+        "Set agents.defaults.compaction.truncateAfterCompaction to true or remove maxActiveTranscriptBytes.",
+    },
+  ];
+}
+
+export async function runCompactionByteGuardHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const findings = await collectCompactionByteGuardFindings(ctx.cfg);
+  if (findings.length === 0) {
+    return;
+  }
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  note(formatHealthFindings(findings), "Compaction byte guard");
 }
