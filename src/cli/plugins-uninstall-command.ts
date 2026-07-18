@@ -185,6 +185,7 @@ export async function runPluginUninstallCommand(
         ...(keepFiles ? { retainRemovedNpmInstallRecord: pluginId } : {}),
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
         writeOptions: {
+          allowConfigSizeDrop: true,
           afterWrite: { mode: "restart", reason: "plugin source changed" },
         },
       }),
