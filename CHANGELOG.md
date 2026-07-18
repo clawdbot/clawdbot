@@ -59,7 +59,7 @@ Docs: https://docs.openclaw.ai
 - **Task previews:** show the latest tasks from the running-tasks status row. (#107297)
 - **Session changes:** show the active branch and local changed-file state in Control UI sessions. (#106835)
 - **Channel progress:** reserve progress drafts for long-running work and use the model's own preamble as the status headline. (#106026)
-- **Codex CLI:** bump the bundled plugin to Codex CLI 0.144.4.
+- **Codex CLI:** bump the bundled plugin to Codex CLI 0.144.6 and align GPT-5.6 Codex context metadata with the upstream 272k limit.
 
 ### Fixes
 
