@@ -74,6 +74,7 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadSessionEntryByKey } from "./subagent-announce-delivery.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { listSubagentRunsForRequester } from "./subagent-registry-announce-read.js";
@@ -169,9 +170,11 @@ describe("continuation chain production composition proof (tree hop-1 + hop-2)",
     resetSubagentRegistryForTests();
     resetAgentEventsForTest();
     vi.unstubAllEnvs();
-    // Session access caches an agent SQLite handle. Close it before deleting
-    // this test's state directory so no handle/cache crosses test boundaries.
+    // Both session access and shared state cache SQLite handles. Close them
+    // before deleting this test's state directory so no handle/cache crosses
+    // test boundaries (notably on Windows).
     closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     rmSync(stateDir, { recursive: true, force: true });
     expect(existsSync(stateDir)).toBe(false);
     stateDir = "";
