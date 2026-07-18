@@ -25,7 +25,7 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./se
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
   restartGatewayChannels,
-  startGatewayChannelFromActiveRegistry,
+  shouldIncludeKnownAccountsForPluginReload,
 } from "./server-reload-channel-restart.js";
 import {
   GatewayHotReloadCancelledError,
@@ -363,9 +363,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() =>
-              params.startChannel(channel, undefined, { includeKnownAccounts: true }),
-            );
+            if (shouldIncludeKnownAccountsForPluginReload(plan.changedPaths, channel)) {
+              await runOutsideGatewayRootWorkAdmission(() =>
+                params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+              );
+            } else {
+              await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            }
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
