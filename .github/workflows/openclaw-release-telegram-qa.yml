@@ -492,6 +492,9 @@ jobs:
           tracked_status="$(git -C .candidate status --porcelain --untracked-files=no)"
           if [[ "$candidate_sha" != "$EXPECTED_SHA" || -n "$tracked_status" ]]; then
             echo "Candidate build did not preserve the exact clean target." >&2
+            if [[ -n "$tracked_status" ]]; then
+              printf '%s\n' "$tracked_status" >&2
+            fi
             exit 1
           fi
           rm -rf "$candidate_root"
