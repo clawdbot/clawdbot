@@ -16,6 +16,11 @@ type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}) as Record<string, unknown>);
+const listSessionEntriesMock = vi.fn(({ storePath }: { agentId?: string; storePath?: string }) =>
+  Object.entries(loadSessionStoreMock(storePath ?? "/tmp/sessions.json")).map(
+    ([sessionKey, entry]) => ({ sessionKey, entry }),
+  ),
+);
 // controllable so a test can force the child chain-cost persist to fail
 // and exercise the in-memory fallback fold. Default routes the entry patch
 // through the same in-memory store the drain reads.
@@ -267,7 +272,9 @@ vi.mock("../auto-reply/continuation/config.js", () => ({
 vi.mock("../auto-reply/continuation/targeting.js", () => continuationTargetingMock);
 
 vi.mock("../config/sessions/targets.js", () => ({
-  resolveAllAgentSessionStoreTargetsSync: () => [{ storePath: "/tmp/sessions.json" }],
+  resolveAllAgentSessionStoreTargetsSync: () => [
+    { agentId: "main", storePath: "/tmp/sessions.json" },
+  ],
 }));
 
 vi.mock("../config/sessions/store-load.js", () => ({
@@ -276,10 +283,8 @@ vi.mock("../config/sessions/store-load.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
-  listSessionEntries: ({ storePath }: { storePath?: string }) =>
-    Object.entries(loadSessionStoreMock(storePath ?? "/tmp/sessions.json")).map(
-      ([sessionKey, entry]) => ({ sessionKey, entry }),
-    ),
+  listSessionEntries: (scope: { agentId?: string; storePath?: string }) =>
+    listSessionEntriesMock(scope),
   updateSessionEntry: (
     scope: { sessionKey: string; storePath?: string },
     update: (entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null,
@@ -308,6 +313,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       contextPressureThreshold: undefined,
     }));
     loadSessionStoreMock.mockReset().mockImplementation(() => ({}));
+    listSessionEntriesMock.mockClear();
     updateSessionEntryMock.mockReset().mockImplementation(updateSessionEntryInStore);
     resolveAgentIdFromSessionKeyMock.mockReset().mockImplementation(() => "main");
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
@@ -507,7 +513,6 @@ describe("subagent-announce continuation drain (F7)", () => {
             sessionKey,
             {
               sessionId: `session-${sessionKey}`,
-              agentId: "main",
               updatedAt: Date.now(),
             },
           ]),
@@ -544,6 +549,10 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(call?.fanoutMode).toBe("all");
     expect(call?.chainStepRemaining).toBe(9);
     expect(call?.traceparent).toBe(validTraceparent);
+    expect(listSessionEntriesMock).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+    });
   });
 
   it("drops return traceparent once the completion exhausts chain-step budget", async () => {
