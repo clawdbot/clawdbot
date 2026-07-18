@@ -144,6 +144,39 @@ describe("continuation cross-session targeting", () => {
     expect(ackSessionDelivery).not.toHaveBeenCalled();
   });
 
+  it("keeps a recipient idempotency key stable when earlier tree recipients disappear", async () => {
+    const keys: string[] = [];
+    const enqueueSessionDelivery = vi.fn(async (payload: QueuedSessionDeliveryPayload) => {
+      keys.push(expectDefined(payload.idempotencyKey, "delivery idempotency key"));
+      return `delivery-${keys.length}`;
+    });
+    const deps = {
+      enqueueSessionDelivery,
+      ackSessionDelivery: vi.fn(async () => undefined),
+      enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
+      requestHeartbeatNow: vi.fn(),
+    };
+    const shared = {
+      text: "[continuation:enrichment-return] stable recipient key",
+      idempotencyKeyBase: "continuation-return:cleanup-transition",
+    };
+
+    await enqueueContinuationReturnDeliveries(
+      { ...shared, targetSessionKeys: ["agent:main:cleaned", "agent:main:root"] },
+      deps,
+    );
+    await enqueueContinuationReturnDeliveries(
+      { ...shared, targetSessionKeys: ["agent:main:root"] },
+      deps,
+    );
+
+    expect(keys).toEqual([
+      "continuation-return:cleanup-transition:agent:main:cleaned",
+      "continuation-return:cleanup-transition:agent:main:root",
+      "continuation-return:cleanup-transition:agent:main:root",
+    ]);
+  });
+
   it.each([
     {
       label: "targetSessionKeys",
@@ -422,7 +455,7 @@ describe("continuation cross-session targeting", () => {
       const persisted = expectDefined(persistedEntries.at(0), "persisted delivery");
       expect(persisted.kind).toBe("systemEvent");
       expect(persisted.sessionKey).toBe("agent:main:other");
-      expect(persisted.idempotencyKey).toBe("continuation-return:durable-test:0:agent:main:other");
+      expect(persisted.idempotencyKey).toBe("continuation-return:durable-test:agent:main:other");
     });
   });
 

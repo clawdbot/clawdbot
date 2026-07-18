@@ -345,6 +345,14 @@ export async function runSubagentAnnounceFlow(params: {
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
+    // Keep this aligned with the targeted-return router. Any explicit target,
+    // plural target set, or fanout mode must reach that router even if the
+    // immediate requester has already been cleaned up.
+    const hasTargeting = Boolean(
+      params.continuationTargetSessionKey ||
+      (params.continuationTargetSessionKeys && params.continuationTargetSessionKeys.length > 0) ||
+      params.continuationFanoutMode,
+    );
 
     let childCompletionFindings: string | undefined;
     let subagentRegistryRuntime:
@@ -354,7 +362,13 @@ export async function runSubagentAnnounceFlow(params: {
       subagentRegistryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
       if (requesterIsInternalSession()) {
         if (!subagentRegistryRuntime.isSubagentSessionRunActive(targetRequesterSessionKey)) {
+          // A cleaned-up intermediate child normally must not receive a late
+          // ordinary completion announcement. A tree continuation return is
+          // different: its ancestor set is resolved from that intermediate
+          // child, so dropping here strands a completed grandchild before the
+          // targeted-return router can deliver to the root.
           if (
+            !hasTargeting &&
             subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
               targetRequesterSessionKey,
             )

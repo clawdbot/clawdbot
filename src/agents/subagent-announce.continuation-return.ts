@@ -1,9 +1,10 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   enqueueContinuationReturnDeliveries,
   resolveContinuationReturnTargetSessionKeys,
 } from "../auto-reply/continuation/targeting.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   markTrustedContinuationHeartbeatWake,
@@ -18,19 +19,18 @@ const continuationLog = createSubsystemLogger("continuation/announce");
 
 type RegistryReturnRuntime = {
   listAncestorSessionKeys: (sessionKey: string) => string[];
+  shouldIgnorePostCompletionAnnounceForSession: (sessionKey: string) => boolean;
 };
 
 async function listKnownSessionKeysOnHost(cfg: OpenClawConfig): Promise<string[]> {
-  const [{ resolveAllAgentSessionStoreTargetsSync }, { loadSessionStore }] = await Promise.all([
-    import("../config/sessions/targets.js"),
-    import("../config/sessions/store-load.js"),
-  ]);
   const keys = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    for (const key of Object.keys(loadSessionStore(target.storePath))) {
-      const normalized = normalizeOptionalString(key);
-      if (normalized) {
-        keys.add(normalized);
+    for (const { sessionKey } of listSessionEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    })) {
+      if (sessionKey) {
+        keys.add(sessionKey);
       }
     }
   }
@@ -91,6 +91,10 @@ export async function routeSubagentContinuationReturn(params: {
     params.continuationFanoutMode,
   );
   if (hasTargeting) {
+    // Resolve the complete targeting set before applying the late-announcement
+    // guard.  Filtering tree ancestors before resolution makes an all-cleaned
+    // tree look empty and causes targeting.ts to fall back to the cleaned
+    // requester.  The same guard must apply to explicit and `all` targets.
     const treeSessionKeys =
       params.continuationFanoutMode === "tree"
         ? params.registryRuntime?.listAncestorSessionKeys(params.targetRequesterSessionKey)
@@ -99,7 +103,7 @@ export async function routeSubagentContinuationReturn(params: {
       params.continuationFanoutMode === "all"
         ? await listKnownSessionKeysOnHost(params.cfg)
         : undefined;
-    const targetSessionKeys = resolveContinuationReturnTargetSessionKeys({
+    const resolvedTargetSessionKeys = resolveContinuationReturnTargetSessionKeys({
       defaultSessionKey: params.targetRequesterSessionKey,
       targetSessionKey: params.continuationTargetSessionKey,
       targetSessionKeys: params.continuationTargetSessionKeys,
@@ -108,6 +112,10 @@ export async function routeSubagentContinuationReturn(params: {
       allSessionKeys,
       childSessionKey: params.childSessionKey,
     });
+    const targetSessionKeys = resolvedTargetSessionKeys.filter(
+      (sessionKey) =>
+        !params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(sessionKey),
+    );
     await enqueueContinuationReturnDeliveries({
       targetSessionKeys,
       text:
@@ -129,6 +137,20 @@ export async function routeSubagentContinuationReturn(params: {
   }
 
   if (params.silentAnnounce) {
+    // The untargeted silent-announcement path is a one-recipient return to the
+    // requester. It must honor the same post-completion guard as tree, all,
+    // and explicit returns; otherwise a cleaned run-mode requester can be
+    // reopened merely because the delegate did not specify fanout metadata.
+    if (
+      params.registryRuntime?.shouldIgnorePostCompletionAnnounceForSession(
+        params.targetRequesterSessionKey,
+      )
+    ) {
+      continuationLog.info(
+        `[continuation/silent-wake] suppressed cleaned requester=${params.targetRequesterSessionKey}`,
+      );
+      return { handled: true };
+    }
     if (params.wakeOnReturn) {
       continuationLog.info(
         `[continuation/silent-wake] wakeOnReturn=true target=${params.targetRequesterSessionKey} silentAnnounce=true`,

@@ -238,6 +238,7 @@ describe("Google Meet OAuth", () => {
         manual: false,
         timeoutMs: 1,
         authUrl: "https://accounts.google.com/o/oauth2/v2/auth?x=1",
+        callbackPort: 0,
         promptInput,
         writeLine: () => {},
       }),

@@ -356,14 +356,14 @@ describe("continuation RFC contract scenarios", () => {
           sessionKey: ROOT_SESSION,
           text: envelope,
           traceparent: TRACEPARENT,
-          idempotencyKey: `contract-return:0:${ROOT_SESSION}`,
+          idempotencyKey: `contract-return:${ROOT_SESSION}`,
         }),
         expect.objectContaining({
           kind: "systemEvent",
           sessionKey: SIBLING_SESSION,
           text: envelope,
           traceparent: TRACEPARENT,
-          idempotencyKey: `contract-return:1:${SIBLING_SESSION}`,
+          idempotencyKey: `contract-return:${SIBLING_SESSION}`,
         }),
       ]);
 

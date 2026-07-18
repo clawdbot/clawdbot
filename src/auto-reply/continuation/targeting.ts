@@ -11,7 +11,6 @@ import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
@@ -24,7 +23,6 @@ import type {
 
 export {
   CONTINUATION_DELEGATE_FANOUT_MODES,
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
@@ -99,7 +97,7 @@ export async function enqueueContinuationReturnDeliveries(
   const deliveryIds: string[] = [];
   let delivered = 0;
 
-  for (const [index, sessionKey] of targetSessionKeys.entries()) {
+  for (const sessionKey of targetSessionKeys) {
     const deliveryId = await deps.enqueueSessionDelivery(
       {
         kind: "systemEvent",
@@ -107,7 +105,10 @@ export async function enqueueContinuationReturnDeliveries(
         text: params.text,
         ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
         ...(params.traceparent ? { traceparent: params.traceparent } : {}),
-        idempotencyKey: `${params.idempotencyKeyBase}:${index}:${sessionKey}`,
+        // Recipient position is not stable when a cleaned intermediate is
+        // removed from a tree/all fanout.  Keep retries keyed to the durable
+        // recipient identity instead.
+        idempotencyKey: `${params.idempotencyKeyBase}:${sessionKey}`,
       },
       params.stateDir,
     );

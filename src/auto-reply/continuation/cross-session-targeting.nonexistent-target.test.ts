@@ -14,7 +14,6 @@ import {
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../reply/session-system-events.js";
 import {
-  hasContinuationDelegateTargeting,
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
@@ -65,25 +64,9 @@ describe("nonexistent-target-session: normalization pre-guards (targeting-pure)"
     });
   });
 
-  describe("hasContinuationDelegateTargeting", () => {
-    it.each([
-      { label: "undefined targetSessionKey", targeting: { targetSessionKey: undefined } },
-      { label: "empty targetSessionKey", targeting: { targetSessionKey: "" } },
-      { label: "whitespace targetSessionKey", targeting: { targetSessionKey: "   " } },
-      { label: "empty object", targeting: {} },
-    ])("returns false for $label (no targeting)", ({ targeting }) => {
-      expect(hasContinuationDelegateTargeting(targeting)).toBe(false);
-    });
-
-    it("returns true for a valid-but-nonexistent targetSessionKey", () => {
-      expect(
-        hasContinuationDelegateTargeting({ targetSessionKey: "agent:main:never-existed" }),
-      ).toBe(true);
-    });
-  });
-
   describe("hasCrossSessionDelegateTargeting", () => {
     const dispatchingSessionKey = "agent:main:dispatcher";
+    const emptyDispatchingSessionKey = "";
 
     it.each([
       { label: "undefined targetSessionKey", targeting: { targetSessionKey: undefined } },
@@ -98,6 +81,23 @@ describe("nonexistent-target-session: normalization pre-guards (targeting-pure)"
         hasCrossSessionDelegateTargeting(
           { targetSessionKey: "agent:main:never-existed" },
           dispatchingSessionKey,
+        ),
+      ).toBe(true);
+    });
+
+    it.each([
+      { label: "empty targetSessionKey", targeting: { targetSessionKey: "" } },
+      { label: "whitespace targetSessionKey", targeting: { targetSessionKey: "   " } },
+      { label: "empty targetSessionKeys", targeting: { targetSessionKeys: [] } },
+    ])("returns false through the empty-dispatcher facade for $label", ({ targeting }) => {
+      expect(hasCrossSessionDelegateTargeting(targeting, emptyDispatchingSessionKey)).toBe(false);
+    });
+
+    it("returns true through the empty-dispatcher facade for a valid nonexistent target", () => {
+      expect(
+        hasCrossSessionDelegateTargeting(
+          { targetSessionKey: "agent:main:never-existed" },
+          emptyDispatchingSessionKey,
         ),
       ).toBe(true);
     });
