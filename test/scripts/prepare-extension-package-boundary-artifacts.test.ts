@@ -11,6 +11,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
+  createBoundaryDeclarationArgs,
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
@@ -596,6 +597,51 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
     expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
+  });
+
+  it("disables incremental state for every boundary declaration command", () => {
+    const rootArgs = createBoundaryDeclarationArgs({
+      project: "tsconfig.plugin-sdk.dts.json",
+    });
+    expect(rootArgs[0]).toMatch(/scripts[/\\]run-tsgo\.mjs$/u);
+    expect(rootArgs.slice(1)).toEqual([
+      "-p",
+      "tsconfig.plugin-sdk.dts.json",
+      "--declaration",
+      "true",
+      "--incremental",
+      "false",
+    ]);
+
+    const extensionArgs = createBoundaryDeclarationArgs({
+      project: "extensions/discord/tsconfig.json",
+      outDir: "dist/plugin-sdk/extensions/discord",
+      rootDir: "extensions/discord",
+    });
+    expect(extensionArgs).toEqual([
+      expect.stringMatching(/scripts[/\\]run-tsgo\.mjs$/u),
+      "-p",
+      "extensions/discord/tsconfig.json",
+      "--declaration",
+      "true",
+      "--emitDeclarationOnly",
+      "true",
+      "--noEmit",
+      "false",
+      "--outDir",
+      "dist/plugin-sdk/extensions/discord",
+      "--rootDir",
+      "extensions/discord",
+      "--incremental",
+      "false",
+    ]);
+    expect(extensionArgs).not.toContain("--tsBuildInfoFile");
+    expect(() =>
+      createBoundaryDeclarationArgs({
+        project: "extensions/discord/tsconfig.json",
+        outDir: "dist/plugin-sdk/extensions/discord",
+      }),
+    ).toThrow("Boundary declaration outDir and rootDir must be provided together");
   });
 
   it("gives cold root shim generation macOS runner headroom", () => {
