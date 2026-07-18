@@ -1,3 +1,5 @@
+import type { SubagentProgressOrigin } from "./subagent-registry.types.js";
+
 type RegisterSubagentRunParams = {
   runId: string;
   childSessionKey: string;
@@ -12,6 +14,7 @@ type RegisterSubagentRunParams = {
     groupChannel?: string | null;
     groupSpace?: string | null;
   };
+  progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
   task: string;
   taskName?: string;

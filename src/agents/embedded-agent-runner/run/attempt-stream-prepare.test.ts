@@ -54,8 +54,11 @@ function prepareCatalogExecutor(projections: ToolSearchTargetTranscriptProjectio
     onBlockReply: vi.fn(),
     onBlockReplyFlush: vi.fn(),
     sandboxSessionKey: "agent:main:main",
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
+    subscriptionToolTrust: {
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      trustedLocalMediaToolNames: new Set(),
+    },
   });
 }
 

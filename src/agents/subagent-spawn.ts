@@ -235,7 +235,7 @@ export type SpawnSubagentContext = {
   inheritedToolDenylist?: string[];
 };
 
-type SpawnSubagentResult = {
+export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;

@@ -12,11 +12,17 @@ const replyIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
 const laneIdleWaiters = new Map<string, Array<(idle: boolean) => void>>();
 let mainQueueSize = 0;
 let gatewayDraining = false;
-const replyError: Error | undefined = undefined;
-const commandLaneIdleError: Error | undefined = undefined;
 const drainAfterReply = false;
 const replyPayloadOverride: unknown = undefined;
 const activeQueueMode: "delivered" | "queued-without-proof" | "rejected" = "delivered";
+
+function getReplyError(): Error | string | undefined {
+  return undefined;
+}
+
+function getCommandLaneIdleError(): Error | string | undefined {
+  return undefined;
+}
 const activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
 const loadSessionEntryMock = vi.fn();
@@ -230,6 +236,7 @@ vi.mock("../../process/command-queue.js", () => ({
     opts?: { signal?: AbortSignal },
   ) => ({
     idle: await (async () => {
+      const commandLaneIdleError = getCommandLaneIdleError();
       if (commandLaneIdleError) {
         throw commandLaneIdleError instanceof Error
           ? commandLaneIdleError
@@ -263,6 +270,7 @@ vi.mock("../reply/get-reply.js", () => ({
         }
       }
     }
+    const replyError = getReplyError();
     if (replyError) {
       throw replyError instanceof Error ? replyError : new Error(String(replyError));
     }

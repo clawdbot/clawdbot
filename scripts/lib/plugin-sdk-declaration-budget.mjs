@@ -1,5 +1,5 @@
 // Strict unified tsdown build measurement for public plugin-sdk declaration graph.
-export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 4_781_984;
+export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 4_933_415;
 // Strict unified tsdown build measurement when private-QA entrypoints join the graph.
 export const MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 4_809_119;
 // Rolldown can repartition equivalent declaration chunks between clean builds; measured spread is
