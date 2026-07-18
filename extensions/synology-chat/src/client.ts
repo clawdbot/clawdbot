@@ -19,6 +19,8 @@ import { z } from "zod";
 const MIN_SEND_INTERVAL_MS = 500;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+/** Wall-clock budget for user_list fetch including response body. */
+const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
 
@@ -161,14 +163,21 @@ async function fetchChatUsers(
   if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
     return cached.users;
   }
-
   return new Promise((resolve) => {
     let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearDeadline = () => {
+      if (deadlineTimer !== undefined) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+      }
+    };
     const finish = (users: ChatUser[]) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearDeadline();
       resolve(users);
     };
     let parsedUrl: URL;
@@ -227,14 +236,21 @@ async function fetchChatUsers(
         })();
       })
       .on("error", (err) => {
+        if (settled) {
+          return;
+        }
         log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
         finish(cached?.users ?? []);
       });
-    req.setTimeout?.(15_000, () => {
+    // Use a wall-clock deadline, not ClientRequest.setTimeout. Node's socket
+    // idle timer resets on every data chunk, so a slow drip can hang user_list
+    // past the intended budget while body reads have no separate idle bound.
+    deadlineTimer = setTimeout(() => {
       log?.warn("fetchChatUsers: request timed out, using cached data");
       req.destroy?.();
       finish(cached?.users ?? []);
-    });
+    }, USER_LIST_REQUEST_TIMEOUT_MS);
+    deadlineTimer.unref?.();
   });
 }
 
