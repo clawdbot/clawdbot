@@ -157,7 +157,9 @@ describe("Signal durable ingress", () => {
         stopPromise = started.monitor.stop().then(() => {
           stopped = true;
         });
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
         expect(stopped).toBe(false);
       } finally {
         finishDispatch?.();
