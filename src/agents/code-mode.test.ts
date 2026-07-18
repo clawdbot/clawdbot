@@ -507,6 +507,72 @@ describe("Code Mode", () => {
     expect(index).toContain("-> { ok: boolean }");
   });
 
+  it("skips a single oversized entry instead of blanking the whole index", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    // One declared tool whose line alone blows the 8000-char budget; it sorts
+    // first among declared tools, so a prefix cut would zero the entire index.
+    const oversized = pluginTool(`a_${"z".repeat(9_000)}`, "Deferred");
+    (oversized as { outputSchema?: unknown }).outputSchema = Type.Object(
+      { ok: Type.Boolean() },
+      { additionalProperties: false },
+    );
+    const shortContracted = Array.from({ length: 4 }, (_, index) => {
+      const tool = pluginTool(`b_short_${index}`, "Deferred");
+      (tool as { outputSchema?: unknown }).outputSchema = Type.Object(
+        { ok: Type.Boolean() },
+        { additionalProperties: false },
+      );
+      return tool;
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, oversized, ...shortContracted],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    // The oversized line is skipped, but every short declared contract survives.
+    expect(index).not.toContain("z".repeat(9_000));
+    for (let i = 0; i < 4; i += 1) {
+      expect(index).toContain(`b_short_${i}`);
+    }
+  });
+
+  it("renders a deterministic truncated index across rebuilds", () => {
+    const build = () => {
+      const { config, catalogRef, tools } = createCodeModeHarness();
+      const catalogTools = Array.from({ length: 100 }, (_, index) =>
+        pluginTool(
+          `fake_${index.toString().padStart(3, "0")}`,
+          "Deferred",
+          `fake-${"x".repeat(120)}`,
+        ),
+      );
+      const compacted = applyCodeModeCatalog({
+        tools: [...tools, ...catalogTools],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+      const description = compacted.tools[0]?.description ?? "";
+      const start = description.indexOf("OpenClaw/plugin tool quick index");
+      return start >= 0 ? description.slice(start) : "";
+    };
+    const first = build();
+    for (let i = 0; i < 5; i += 1) {
+      expect(build()).toBe(first);
+    }
+    expect(first).toContain("additional OpenClaw/plugin tools omitted");
+  });
+
   it("bounds the model-visible native tool index", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;

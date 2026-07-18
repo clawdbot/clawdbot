@@ -58,6 +58,7 @@ class SessionMenu extends OpenClawLightDomElement {
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
   @property({ attribute: false }) selectionCount = 1;
+  @property({ attribute: false }) lastActive = "";
   @property({ attribute: false }) anchor: { x: number; y: number } = { x: 0, y: 0 };
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) disabled = false;
@@ -273,6 +274,11 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
+        ${!batch && this.lastActive
+          ? html`<div class="session-menu__info">
+              ${t("sessionsView.lastActive", { time: this.lastActive })}
+            </div>`
+          : nothing}
         ${!batch && this.canOpenChat
           ? html`
               <wa-dropdown-item

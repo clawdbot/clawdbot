@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
@@ -612,6 +613,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let waitForRunCompletionHook:
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
+    private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
     private let healthResponses: [Bool]
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
@@ -643,6 +645,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sendMessageStatus: String = "ok",
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
+        listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
         healthResponses: [Bool] = [true])
     {
         self.historyResponses = historyResponses
@@ -668,6 +671,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.sendMessageStatus = sendMessageStatus
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.acquireSessionSettingsRouteLeaseHook = acquireSessionSettingsRouteLeaseHook
+        self.listQuestionsHook = listQuestionsHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
         self.stream = AsyncStream { c in
@@ -955,6 +959,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         return self.healthResponses.last ?? true
     }
 
+    func listQuestions() async throws -> [QuestionRecord] {
+        try await self.listQuestionsHook?() ?? []
+    }
+
     func waitForRunCompletion(
         runId: String,
         timeoutMs: Int) async -> OpenClawChatRunObservation
@@ -1196,8 +1204,210 @@ extension TestChatTransportState {
     }
 }
 
+private actor QuestionListGate {
+    private var continuation: CheckedContinuation<[QuestionRecord], Never>?
+
+    var isWaiting: Bool {
+        self.continuation != nil
+    }
+
+    func wait() async -> [QuestionRecord] {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func resume(with records: [QuestionRecord]) {
+        self.continuation?.resume(returning: records)
+        self.continuation = nil
+    }
+}
+
+private actor QuestionListEventRace {
+    private var firstContinuation: CheckedContinuation<[QuestionRecord], Never>?
+    private var callCount = 0
+    private let currentRecords: [QuestionRecord]
+
+    init(currentRecords: [QuestionRecord]) {
+        self.currentRecords = currentRecords
+    }
+
+    var firstIsWaiting: Bool {
+        self.firstContinuation != nil
+    }
+
+    var calls: Int {
+        self.callCount
+    }
+
+    func request() async -> [QuestionRecord] {
+        self.callCount += 1
+        if self.callCount == 1 {
+            return await withCheckedContinuation { continuation in
+                self.firstContinuation = continuation
+            }
+        }
+        return self.currentRecords
+    }
+
+    func resumeFirst(with records: [QuestionRecord]) {
+        self.firstContinuation?.resume(returning: records)
+        self.firstContinuation = nil
+    }
+}
+
+private func chatQuestionRecord(
+    id: String,
+    status: QuestionStatus = .pending,
+    expiresAtMs: Int = 4_000_000_000_000) -> QuestionRecord
+{
+    QuestionRecord(
+        id: id,
+        questions: [
+            Question(
+                id: "choice",
+                header: "Choice",
+                question: "Choose",
+                options: [QuestionOption(label: "One"), QuestionOption(label: "Two")]),
+        ],
+        agentid: "main",
+        sessionkey: "main",
+        createdatms: 1,
+        expiresatms: expiresAtMs,
+        status: status)
+}
+
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test @MainActor func `locally expired question is evicted after terminal grace`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        let expiresAt = Date(timeIntervalSince1970: 1500)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_local", expiresAtMs: 1_500_000))
+        let model = viewModel.questionCards[0]
+
+        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: expiresAt)
+        #expect(viewModel.questionCards.map(\.id) == ["ask_local"])
+
+        viewModel.evictQuestionIfTerminalGraceElapsed(
+            model,
+            at: expiresAt.addingTimeInterval(15))
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
+    @Test @MainActor func `stale question list cannot overwrite a newer event`() async throws {
+        let gate = QuestionListGate()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { await gate.wait() })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let refresh = Task { await viewModel.refreshQuestions() }
+        try await waitUntil("question list request") { await gate.isWaiting }
+
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_new"))
+        await gate.resume(with: [chatQuestionRecord(id: "ask_old")])
+        await refresh.value
+
+        #expect(viewModel.questionCards.map(\.id) == ["ask_new"])
+    }
+
+    @Test @MainActor func `definitive question list rejection clears stale cards`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "INVALID_REQUEST",
+                    message: "unknown method: question.list",
+                    details: nil)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_stale"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
+    @Test @MainActor func `transient question list rejection preserves event cards`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: {
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "UNAVAILABLE",
+                    message: "try again",
+                    details: nil)
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_live"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards.map(\.id) == ["ask_live"])
+    }
+
+    @Test @MainActor func `question recovery does not block bootstrap history`() async throws {
+        let questionGate = QuestionListGate()
+        let historyCalls = AsyncCounter()
+        let transport = TestChatTransport(
+            historyResponses: [historyPayload()],
+            requestHistoryHook: { _ in _ = await historyCalls.increment() },
+            listQuestionsHook: { await questionGate.wait() })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        viewModel.load()
+        try await waitUntil("question recovery request") { await questionGate.isWaiting }
+        try await waitUntil("history during question recovery") { await historyCalls.current() == 1 }
+        await questionGate.resume(with: [])
+    }
+
+    @Test @MainActor func `resolved event reconciles after discarding older question list`() async throws {
+        let race = QuestionListEventRace(currentRecords: [chatQuestionRecord(id: "ask_other")])
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { await race.request() })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        let initialRefresh = Task { await viewModel.refreshQuestions() }
+        try await waitUntil("first question list request") { await race.firstIsWaiting }
+
+        viewModel.handleTransportEvent(.questionResolved(.init(id: "ask_done", status: .answered)))
+        try await waitUntil("question event reconciliation") { await race.calls == 2 }
+        await race.resumeFirst(with: [chatQuestionRecord(id: "ask_done")])
+        await initialRefresh.value
+        for _ in 0..<100 where viewModel.questionCards.map(\.id) != ["ask_other"] {
+            await Task.yield()
+        }
+        #expect(viewModel.questionCards.map(\.id) == ["ask_other"])
+    }
+
+    @Test @MainActor func `question list retains recently resolved card`() async {
+        let transport = TestChatTransport(
+            historyResponses: [],
+            listQuestionsHook: { [] })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_done"))
+        viewModel.resolveQuestionEvent(.init(id: "ask_done", status: .answered))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.questionCards.map(\.id) == ["ask_done"])
+        #expect(viewModel.questionCards.first?.status() == .answeredElsewhere)
+    }
+
+    @Test @MainActor func `question card is evicted after terminal grace`() {
+        let transport = TestChatTransport(historyResponses: [])
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_done"))
+        viewModel.resolveQuestionEvent(.init(id: "ask_done", status: .answered))
+        let model = viewModel.questionCards[0]
+
+        viewModel.evictQuestionIfTerminalGraceElapsed(model, at: Date().addingTimeInterval(16))
+
+        #expect(viewModel.questionCards.isEmpty)
+    }
+
     @Test func `context usage fraction validates freshness and token bounds`() {
         func fraction(total: Int?, fresh: Bool? = true, context: Int?) -> Double? {
             OpenClawChatViewModel.chatContextUsageFraction(

@@ -385,6 +385,145 @@ describe("SystemAgentChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("hatches into the agent after a fresh setup applies", async () => {
+    useTempStateDir();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+    }));
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      bootstrapPending: true,
+      lines: ["Workspace: /tmp/hatch-work"],
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
+
+    const reply = await engine.handle("yes");
+
+    expect(applySetup).toHaveBeenCalledOnce();
+    expect(reply.action).toBe("open-tui");
+    expect(reply.agentDraft).toBe("hatch");
+    expect(reply.handoff).toMatchObject({
+      kind: "open-tui",
+      workspace: "/tmp/hatch-work",
+      agentDraft: "hatch",
+    });
+    expect(reply.text).toContain("Your agent is hatching");
+    expect(reply.text).toContain("Settings → Ask OpenClaw");
+  });
+
+  it("stays in setup when an established workspace has no bootstrap pending", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      configHashBefore: "before",
+      configHashAfter: "after",
+      bootstrapPending: false,
+      lines: ["Workspace: /tmp/established-work"],
+    }));
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig: vi.fn(async () => ({
+          ok: true as const,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 100,
+        })),
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/established-work" });
+
+    const reply = await engine.handle("yes");
+
+    expect(reply.action).toBe("none");
+    expect(reply.agentDraft).toBeUndefined();
+    expect(reply.handoff).toBeUndefined();
+    expect(reply.text).not.toContain("Your agent is hatching");
+  });
+
+  it("stays in setup when post-write verification flags the config", async () => {
+    useTempStateDir();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 100,
+    }));
+    let applied = false;
+    const applySetup = vi.fn(async () => {
+      applied = true;
+      return {
+        configPath: "/tmp/openclaw.json",
+        configHashBefore: "before",
+        configHashAfter: "after",
+        bootstrapPending: true,
+        lines: ["Workspace: /tmp/hatch-work"],
+      };
+    });
+    // The written config turns out invalid: post-write verification must hold
+    // the user in setup instead of hatching into an agent that cannot answer.
+    // Reads stay valid through preflight/apply and flip only after the write.
+    const validSnapshot = mocks.readConfigFileSnapshot.getMockImplementation()!;
+    mocks.readConfigFileSnapshot.mockImplementation(async () => {
+      const snapshot = await validSnapshot();
+      return applied
+        ? ({
+            ...snapshot,
+            valid: false,
+            issues: [{ path: "agents", message: "broken" }],
+          } as never)
+        : snapshot;
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => ({ text: "repair suggestion" }),
+      planWithAssistant: async () => null,
+      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+      deps: {
+        applySetup,
+        verifyInferenceConfig,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
+
+    const reply = await engine.handle("yes");
+
+    expect(applySetup).toHaveBeenCalledOnce();
+    expect(reply.action).toBe("none");
+    expect(reply.agentDraft).toBeUndefined();
+    expect(reply.handoff).toBeUndefined();
+    expect(reply.text).not.toContain("Your agent is hatching");
+  });
+
+  it("does not hand off when a non-setup persistent operation applies", async () => {
+    useTempStateDir();
+    const runConfigSet = vi.fn(async () => {});
+    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19002" });
+
+    const reply = await engine.handle("yes");
+
+    expect(reply.action).toBe("none");
+    expect(reply.agentDraft).toBeUndefined();
+    expect(reply.handoff).toBeUndefined();
+  });
+
   it("rejects a seeded approval when its binding changes during classification", async () => {
     const baseConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -428,6 +567,7 @@ describe("SystemAgentChatEngine", () => {
       configPath: "/tmp/openclaw.json",
       configHashBefore: null,
       configHashAfter: "after",
+      bootstrapPending: false,
       lines: ["Workspace: /tmp/work"],
     }));
     expect(
@@ -1322,6 +1462,7 @@ describe("SystemAgentChatEngine", () => {
       configPath: "/tmp/openclaw.json",
       configHashBefore: "before",
       configHashAfter: "after",
+      bootstrapPending: false,
       lines: ["Workspace: /tmp/new-work"],
     }));
     let pendingOperation = "";

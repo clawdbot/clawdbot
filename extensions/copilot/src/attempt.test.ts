@@ -22,6 +22,51 @@ import { runCopilotAttempt } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
+const gatewayQuestionMock = vi.hoisted(() => ({
+  waiters: new Map<string, (value: unknown) => void>(),
+  cancelError: undefined as Error | undefined,
+  warn: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    embeddedAgentLog: { ...actual.embeddedAgentLog, warn: gatewayQuestionMock.warn },
+    cancelPendingAgentQuestionForSession: async (
+      ...args: Parameters<typeof actual.cancelPendingAgentQuestionForSession>
+    ) => {
+      const error = gatewayQuestionMock.cancelError;
+      gatewayQuestionMock.cancelError = undefined;
+      if (error) {
+        throw error;
+      }
+      return await actual.cancelPendingAgentQuestionForSession(...args);
+    },
+    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
+      const [method, , rawParams] = args;
+      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
+      if (method === "question.request") {
+        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          gatewayQuestionMock.waiters.set(params?.id ?? "", resolve);
+        });
+      }
+      if (method === "question.resolve") {
+        const result = params?.cancel
+          ? { status: "cancelled" as const }
+          : { status: "answered" as const, answers: params?.answers };
+        gatewayQuestionMock.waiters.get(params?.id ?? "")?.(result);
+        gatewayQuestionMock.waiters.delete(params?.id ?? "");
+        return result;
+      }
+      return await actual.callGatewayTool(...args);
+    },
+  };
+});
+
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
 
 const TINY_PNG_BASE64 =
@@ -1332,12 +1377,19 @@ describe("runCopilotAttempt", () => {
     const session = await sessionCreated.promise;
     await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledTimes(1));
 
+    gatewayQuestionMock.cancelError = new Error("gateway unavailable");
     expect(abortAgentHarnessRun("session-1")).toBe(true);
     const result = await runPromise;
 
     expect(session.abort).toHaveBeenCalledTimes(1);
     expect(result.aborted).toBe(true);
     expect(result.externalAbort).toBe(true);
+    await vi.waitFor(() =>
+      expect(gatewayQuestionMock.warn).toHaveBeenCalledWith(
+        "failed to cancel copilot gateway question during shutdown",
+        expect.objectContaining({ error: expect.any(Error) }),
+      ),
+    );
   });
 
   it("abort path (signal already aborted)", async () => {
@@ -1642,7 +1694,9 @@ describe("runCopilotAttempt", () => {
     const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
-    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
+    await waitForEventLoopTurn();
+    expect(queueAgentHarnessMessage("session-1", "2", { isInboundUserMessage: true })).toBe(true);
     const result = await attempt;
 
     const cfg = requireCreateSessionConfig(sdk);

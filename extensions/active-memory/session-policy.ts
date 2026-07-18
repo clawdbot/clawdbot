@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  normalizePluginsConfig,
+  resolvePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -110,6 +113,37 @@ function isActiveMemoryGloballyEnabled(cfg: OpenClawConfig): boolean {
   }
   const pluginConfig = resolvePluginConfigObject(cfg, "active-memory");
   return pluginConfig?.enabled !== false;
+}
+
+function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled || plugins.deny.includes("active-memory")) {
+    return false;
+  }
+  if (plugins.allow.length > 0 && !plugins.allow.includes("active-memory")) {
+    return false;
+  }
+  return plugins.entries["active-memory"]?.enabled !== false;
+}
+
+function hasRememberAcrossConversationsAgent(cfg: OpenClawConfig): boolean {
+  return (
+    cfg.agents?.defaults?.memorySearch?.rememberAcrossConversations === true ||
+    cfg.agents?.list?.some((agent) => agent.memorySearch?.rememberAcrossConversations === true) ===
+      true
+  );
+}
+
+function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
+  const normalizedAgentId = agentId.trim().toLowerCase();
+  const agent = cfg.agents?.list?.find(
+    (candidate) => candidate.id?.trim().toLowerCase() === normalizedAgentId,
+  );
+  return (
+    agent?.memorySearch?.rememberAcrossConversations ??
+    cfg.agents?.defaults?.memorySearch?.rememberAcrossConversations ??
+    false
+  );
 }
 
 function updateActiveMemoryGlobalEnabledInConfig(
@@ -289,6 +323,16 @@ function isAllowedChatType(
   return config.allowedChatTypes.includes(chatType);
 }
 
+function isPrivateRecallDestination(ctx: {
+  sessionKey?: string;
+  messageProvider?: string;
+  channelId?: string;
+  mainKey?: string;
+}): boolean {
+  const chatType = resolveChatType(ctx);
+  return chatType === "direct" || chatType === "explicit";
+}
+
 /**
  * Best-effort extraction of the conversation id (peer id) embedded in an
  * agent-scoped session key, using shared session-key utilities so we
@@ -366,6 +410,7 @@ function isAllowedChatId(
   ctx: {
     sessionKey?: string;
     messageProvider?: string;
+    channelId?: string;
   },
 ): boolean {
   const hasAllowlist = config.allowedChatIds.length > 0;
@@ -373,7 +418,10 @@ function isAllowedChatId(
   if (!hasAllowlist && !hasDenylist) {
     return true;
   }
-  const conversationId = resolveConversationId(ctx);
+  // dmScope=main direct sessions omit the peer id from the key. Fall back to
+  // the trusted hook chat id so allow/deny lists still apply.
+  const conversationId =
+    (resolveConversationId(ctx) ?? ctx.channelId?.trim())?.toLowerCase() || undefined;
   if (hasAllowlist) {
     if (!conversationId) {
       return false;
@@ -392,14 +440,18 @@ export {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
   isActiveMemoryGloballyEnabled,
+  isActiveMemoryPluginEnabled,
   isAllowedChatId,
   isAllowedChatType,
   isEligibleInteractiveSession,
   isEnabledForAgent,
+  isPrivateRecallDestination,
   isSessionActiveMemoryDisabled,
+  hasRememberAcrossConversationsAgent,
   lacksAdminToMutateActiveMemoryGlobal,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
+  shouldRememberAcrossConversations,
   updateActiveMemoryGlobalEnabledInConfig,
 };

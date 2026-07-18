@@ -58,7 +58,7 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
-import { renderChatQuestionCard } from "./chat-question-card.ts";
+import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -639,8 +639,6 @@ type StreamGroupOptions = {
   planStatus?: PlanStatus | null;
   planActive?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
-  onQuestionChange?: () => void;
-  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
 
 function renderQuestionStreamPart(
@@ -648,13 +646,7 @@ function renderQuestionStreamPart(
   opts: StreamGroupOptions,
 ) {
   const prompt = opts.questionPrompts?.get(part.questionId);
-  return prompt
-    ? renderChatQuestionCard(prompt, {
-        nowMs: Date.now(),
-        onChange: opts.onQuestionChange ?? (() => {}),
-        onSubmit: (answers) => opts.onQuestionSubmit?.(prompt.id, answers),
-      })
-    : nothing;
+  return prompt ? renderChatQuestionSummary(prompt) : nothing;
 }
 
 // One assistant group per contiguous run of streaming items: a reply that

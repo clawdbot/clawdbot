@@ -88,6 +88,7 @@ import {
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
+  startSystemdService,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -2170,6 +2171,33 @@ describe("systemd service control", () => {
 
   beforeEach(() => {
     execFileMock.mockReset();
+  });
+
+  it("starts the resolved user unit and ignores audit observer failures", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "start", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    const write = vi.fn();
+    const onMutation = vi.fn(() => {
+      throw new Error("audit failed");
+    });
+
+    await expect(
+      startSystemdService({
+        stdout: { write } as unknown as NodeJS.WritableStream,
+        env: {},
+        onMutation,
+      }),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    expect(onMutation).toHaveBeenCalledWith({ mode: "systemctl-start" });
+    expect(
+      expectDefined(onMutation.mock.invocationCallOrder[0], "start audit call order"),
+    ).toBeLessThan(expectDefined(write.mock.invocationCallOrder[0], "start output call order"));
+    expect(requireFirstWrite(write)).toContain("Started systemd service");
   });
 
   it("stops the resolved user unit", async () => {

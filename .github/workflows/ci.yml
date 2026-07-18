@@ -745,6 +745,51 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
+      # Canonical main cannot be cancelled by a newer push. Publish the sole
+      # dependency snapshot here before fanout. Blacksmith may expose a fresh
+      # commit only to a later run; readers retain the marker-checked fallback.
+      - name: Refresh sticky dependency snapshot
+        if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.manifest.outputs.run_node == 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          save-sticky-disk: "true"
+          sticky-disk: "true"
+          use-actions-cache: "false"
+
+      - name: Maintain sticky dependency store budget
+        if: github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.manifest.outputs.run_node == 'true'
+        shell: bash
+        env:
+          OPENCLAW_PNPM_STORE_MAX_KIB: "8388608"
+        run: |
+          set -euo pipefail
+          store_dir="${PNPM_CONFIG_STORE_DIR:?}"
+          before_kib="$(du -sk "$store_dir" | cut -f1)"
+          after_kib="$before_kib"
+          pruned=false
+
+          if [ "$before_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
+            echo "pnpm store is ${before_kib} KiB; pruning above ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
+            PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune
+            after_kib="$(du -sk "$store_dir" | cut -f1)"
+            pruned=true
+          else
+            echo "pnpm store is ${before_kib} KiB; below ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
+          fi
+
+          {
+            echo "### Dependency store maintenance"
+            echo
+            echo "- Before: ${before_kib} KiB"
+            echo "- After: ${after_kib} KiB"
+            echo "- Pruned: ${pruned}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
+            echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
+          fi
+
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
@@ -909,13 +954,13 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Warm the lockfile- and pnpm-pinned store without blocking Linux Node shards.
-  # On a cold key this job owns the save for later workflow runs.
+  # Warm the lockfile- and pnpm-pinned Actions cache for PR and manual runs.
+  # Canonical main publishes its sticky snapshot in preflight before fanout.
   pnpm-store-warmup:
     permissions:
       contents: read
     needs: [preflight]
-    if: needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true'
+    if: ${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
@@ -1007,7 +1052,6 @@ jobs:
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
@@ -1805,16 +1849,12 @@ jobs:
           # Fork PRs must keep actions/cache: sticky snapshots are writable,
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          runtime-cache-sticky-disk: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # One matrix job is the designated warm-seed writer; the action only
-          # honors it outside pull_request events, so PR shards always read the
-          # protected snapshot without committing competing writes.
-          save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
-          save-node-compile-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
+          # CI shards only read the protected immutable seed. The scheduled or
+          # explicitly dispatched warmer is the sole test-cache writer.
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -1962,7 +2002,7 @@ jobs:
       # protected boundary lane may publish this repository-global snapshot.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -2205,7 +2245,7 @@ jobs:
       # repository-global snapshots, so they keep the GitHub cache path.
       - name: Mount extension boundary sticky disk
         if: matrix.group == 'extension-package-boundary' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -3131,7 +3171,7 @@ jobs:
       # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
       - name: Mount Gradle sticky disk
         if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
           # keys minted a new backing disk for every PR and dependency bump

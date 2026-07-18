@@ -409,6 +409,8 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg, contextWindowTokens: contextWindowTokens)
         }
 
+        OpenClawQuestionCards(viewModel: self.viewModel)
+
         if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
@@ -688,7 +690,8 @@ public struct OpenClawChatView: View {
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
-            self.hasVisibleStreamingAssistantText
+            self.hasVisibleStreamingAssistantText ||
+            !self.viewModel.visibleQuestionCards.isEmpty
     }
 
     @ViewBuilder

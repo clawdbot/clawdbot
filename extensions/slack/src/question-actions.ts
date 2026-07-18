@@ -1,8 +1,5 @@
 // Slack-private ask_user button envelope and resolution feedback.
-import {
-  resolveQuestionOverGateway,
-  type ResolveQuestionOverGatewayParams,
-} from "openclaw/plugin-sdk/question-gateway-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { SLACK_BUTTON_VALUE_MAX } from "./presentation.js";
 
 const SLACK_QUESTION_VALUE_PREFIX = "slq1:";
@@ -34,13 +31,14 @@ export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction |
   return match?.[1] && match[2] ? { questionId: match[1], optionIndex: Number(match[2]) } : null;
 }
 
+type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
 type QuestionResolver = (
-  params: ResolveQuestionOverGatewayParams,
-) => ReturnType<typeof resolveQuestionOverGateway>;
+  params: ResolveQuestionParams,
+) => ReturnType<typeof questionGatewayRuntime.resolveOption>;
 
 export async function resolveSlackQuestionAction(params: {
   action: SlackQuestionAction;
-  cfg: ResolveQuestionOverGatewayParams["cfg"];
+  cfg: ResolveQuestionParams["cfg"];
   accountId: string;
   userId: string;
   respond: (text: string) => Promise<void>;
@@ -48,7 +46,7 @@ export async function resolveSlackQuestionAction(params: {
 }): Promise<void> {
   let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await (params.resolveQuestion ?? resolveQuestionOverGateway)({
+    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.action.questionId,
       optionIndex: params.action.optionIndex,

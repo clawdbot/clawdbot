@@ -21,6 +21,7 @@ export type DeviceBootstrapProfileInput = {
 /** Operator scopes allowed to cross the short-lived bootstrap handoff boundary. */
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",

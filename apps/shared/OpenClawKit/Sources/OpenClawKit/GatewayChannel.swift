@@ -801,6 +801,7 @@ extension GatewayChannelActor {
             let allowedOperatorScopes: Set = [
                 "operator.admin",
                 "operator.approvals",
+                "operator.questions",
                 "operator.read",
                 "operator.talk.secrets",
                 "operator.write",

@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
 
@@ -37,6 +38,32 @@ function renderComposer(overrides: Partial<ComposerProps> = {}) {
   const composerProps = props(overrides);
   render(renderChatComposer(composerProps), container);
   return { container, props: composerProps };
+}
+
+function questionPrompt(id: string, question: string): QuestionPrompt {
+  return {
+    id,
+    questions: [
+      {
+        id: "choice",
+        header: "Choice",
+        question,
+        options: [{ label: "Yes" }, { label: "No" }],
+        isOther: false,
+      },
+    ],
+    sessionKey: "queue-test",
+    createdAtMs: 1_000,
+    expiresAtMs: Date.now() + 60_000,
+    status: "pending",
+    answeredElsewhere: false,
+    localResolutionConfirmed: false,
+    locallyExpired: false,
+    submitting: false,
+    error: null,
+    drafts: new Map(),
+    revision: 1,
+  };
 }
 
 function button(container: Element, label: string): HTMLButtonElement {
@@ -223,6 +250,49 @@ describe("renderChatComposer controls", () => {
 });
 
 describe("renderChatComposer status", () => {
+  it("keeps every concurrent gateway question reachable", async () => {
+    const container = document.createElement("div");
+    const onRequestUpdate = vi.fn();
+    const composerProps = props({
+      sessionKey: "queue-test",
+      gatewayQuestionPrompts: [
+        questionPrompt("question-1", "First prompt"),
+        questionPrompt("question-2", "Second prompt"),
+      ],
+      onRequestUpdate,
+    });
+
+    render(renderChatComposer(composerProps), container);
+    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
+      props: {
+        model: { questions: Array<{ question: string }>; requestPosition?: unknown };
+        onNextRequest?: () => void;
+      };
+    };
+    expect(panel.props.model.questions[0]?.question).toBe("First prompt");
+    expect(panel.props.model.requestPosition).toEqual({ current: 1, total: 2 });
+
+    panel.props.onNextRequest?.();
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+    render(renderChatComposer(composerProps), container);
+    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
+    expect(panel.props.model.questions[0]?.question).toBe("Second prompt");
+    expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
+  });
+
+  it("keeps unscoped and other-session gateway questions out of the composer", () => {
+    const unscopedPrompt = questionPrompt("question-1", "Unscoped prompt");
+    unscopedPrompt.sessionKey = undefined;
+    const otherSessionPrompt = questionPrompt("question-2", "Other prompt");
+    otherSessionPrompt.sessionKey = "agent:other:main";
+
+    const view = renderComposer({
+      sessionKey: "queue-test",
+      gatewayQuestionPrompts: [unscopedPrompt, otherSessionPrompt],
+    });
+
+    expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
+  });
   it("renders only a fresh interrupted run as visible status chrome", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({

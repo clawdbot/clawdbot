@@ -38,7 +38,10 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // (6 large + 15 small) while the measured ~60s median job setup keeps the slowest
 // bin near the 5-minute PR wall-clock budget. 220 with honest hints adds a job to
 // each pool for no ceiling win.
-const COMPACT_NODE_TEST_JOB_SECONDS = 235;
+// 190s cap: forbids pairings like core-runtime-media-ui (124) +
+// core-unit-src-security (95) that produced a 195s real-wall straggler bin
+// while the pack sat at ~160s; ~3 extra bins buy ~30-40s of run wall.
+const COMPACT_NODE_TEST_JOB_SECONDS = 190;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;

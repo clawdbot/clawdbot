@@ -10,6 +10,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveSendableOutboundReplyParts,
@@ -316,6 +317,37 @@ export function createTelegramOutboundAdapter(
     },
     renderPresentation: ({ payload, presentation }) =>
       canonicalizeTelegramPresentationPayload({ ...payload, presentation }),
+    afterDeliverPayload: ({ cfg, target, payload, results }) => {
+      const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+      const telegramResults = results.filter(
+        (candidate) => candidate.channel === "telegram" && candidate.messageId,
+      );
+      const result =
+        telegramResults.find((candidate) => candidate.meta?.telegramHasInlineKeyboard === true) ??
+        telegramResults.at(-1);
+      const text = (
+        typeof result?.meta?.telegramDeliveredText === "string"
+          ? result.meta.telegramDeliveredText
+          : payload.text
+      )?.trim();
+      if (!questionId || !result || !text) {
+        return;
+      }
+      const chatId = result.chatId ?? normalizeTelegramOutboundTarget(target.to);
+      questionGatewayRuntime.registerChannelDelivery({
+        questionId,
+        deliveryId: `telegram:${target.accountId ?? "default"}:${chatId}:${result.messageId}`,
+        finalize: async (statusLine) => {
+          const { editMessageTelegram } = await loadSendModule();
+          await editMessageTelegram(chatId, result.messageId, `${text}\n\n${statusLine}`, {
+            cfg,
+            accountId: target.accountId ?? undefined,
+            buttons: [],
+            verbose: false,
+          });
+        },
+      });
+    },
     pinDeliveredMessage: async ({ cfg, target, messageId, pin, gatewayClientScopes }) => {
       const { pinMessageTelegram } = await loadSendModule();
       const outboundTo = normalizeTelegramOutboundTarget(target.to);

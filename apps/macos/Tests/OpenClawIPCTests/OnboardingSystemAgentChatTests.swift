@@ -98,8 +98,13 @@ private func respondToSystemAgentHealth(
     return true
 }
 
-private func systemAgentResponse(id: String, action: String = "none") -> Data {
-    Data(
+private func systemAgentResponse(
+    id: String,
+    action: String = "none",
+    agentDraft: String? = nil) -> Data
+{
+    let agentDraftField = agentDraft.map { ",\n            \"agentDraft\": \"\($0)\"" } ?? ""
+    return Data(
         """
         {
           "type": "res",
@@ -109,7 +114,7 @@ private func systemAgentResponse(id: String, action: String = "none") -> Data {
             "sessionId": "test-session",
             "reply": "ready",
             "action": "\(action)",
-            "sensitive": false
+            "sensitive": false\(agentDraftField)
           }
         }
         """.utf8)
@@ -477,6 +482,32 @@ struct OnboardingSystemAgentChatTests {
         #expect(session.latestTask()?.snapshotSendCount() == 2)
     }
 
+    @Test func `agent handoff carries the hatch draft intent`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    action: "open-agent",
+                    agentDraft: "hatch")))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+        var receivedDraft: SystemAgentDraft?
+        chat.onAgentHandoff = { receivedDraft = $0 }
+
+        await chat.startIfNeeded()
+
+        #expect(receivedDraft == .hatch)
+        #expect(receivedDraft?.composerValue == "Wake up, my friend!")
+    }
+
     @Test func `settings callback refreshes inference after assistant reply`() async throws {
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -514,7 +545,7 @@ struct OnboardingSystemAgentChatTests {
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
         chat.input = "route-bound secret"
         state.isPresented = true
 
@@ -612,7 +643,7 @@ struct OnboardingSystemAgentChatTests {
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
 
         let startTask = Task { await chat.startIfNeeded() }
         var requestStarted = false

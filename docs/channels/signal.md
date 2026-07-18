@@ -339,6 +339,10 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
+## Question reactions
+
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).

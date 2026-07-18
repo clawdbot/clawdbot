@@ -139,6 +139,7 @@ import {
   extractToolSearchTarget,
   buildQaToolSearchArgs,
   isActiveMemorySubagentPrompt,
+  isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
@@ -967,15 +968,12 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (
-    isActiveMemorySubagentPrompt(allInputText) &&
-    /silent snack recall check/i.test(allInputText)
-  ) {
+  if (isActiveMemorySubagentPrompt(allInputText) && isSnackRecallPrompt(allInputText)) {
     if (!toolOutput) {
       if (!hasDeclaredTool(body, "memory_recall")) {
         return buildToolCallEventsWithArgs("memory_search", {
           query: "QA movie night snack lemon pepper wings blue cheese",
-          maxResults: 3,
+          maxResults: /remember across conversations qa check/i.test(allInputText) ? 10 : 3,
         });
       }
       return buildToolCallEventsWithArgs("memory_recall", {
@@ -1007,7 +1005,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (typeof first?.path === "string") {
+    if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)

@@ -43,7 +43,9 @@ const questionGatewayHoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
-  resolveQuestionOverGateway: questionGatewayHoisted.resolveQuestionOverGatewaySpy,
+  questionGatewayRuntime: {
+    resolveOption: questionGatewayHoisted.resolveQuestionOverGatewaySpy,
+  },
 }));
 
 const {

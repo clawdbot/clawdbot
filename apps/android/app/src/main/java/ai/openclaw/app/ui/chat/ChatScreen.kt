@@ -13,6 +13,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -21,6 +22,7 @@ import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
+import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
@@ -185,6 +187,7 @@ fun ChatScreen(
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val questions by viewModel.chatQuestions.collectAsState()
   val planSteps by viewModel.chatPlanSteps.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
@@ -523,6 +526,7 @@ fun ChatScreen(
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
+      questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
@@ -540,6 +544,7 @@ fun ChatScreen(
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+      onResolveQuestion = viewModel::resolveChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
       speechState = messageSpeechState,
@@ -963,6 +968,7 @@ private fun ChatMessageList(
   historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
+  questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
@@ -970,6 +976,7 @@ private fun ChatMessageList(
   recoveryOutboxItems: List<ChatOutboxItem>,
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
+  onResolveQuestion: (String, Map<String, List<String>>) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
@@ -978,7 +985,7 @@ private fun ChatMessageList(
   modifier: Modifier = Modifier,
 ) {
   val timeline =
-    remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems, recoveryOutboxItems) {
+    remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
         pendingRunCount = pendingRunCount,
@@ -986,6 +993,7 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
         outboxItems = outboxItems,
         recoveryOutboxItems = recoveryOutboxItems,
+        questions = questions,
       )
     }
   val readerScroll =
@@ -1041,6 +1049,8 @@ private fun ChatMessageList(
                 ),
             )
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
+          is ChatTimelineItem.QuestionPrompt ->
+            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,

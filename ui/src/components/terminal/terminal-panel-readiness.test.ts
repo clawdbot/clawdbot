@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
@@ -110,7 +111,7 @@ describe("terminal panel readiness", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.attach",
         params: { sessionId: "agent-terminal-1" },
@@ -139,7 +140,7 @@ describe("terminal panel readiness", () => {
     document.body.append(panel);
     panel.toggle();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
         "Connecting to session",
       );
@@ -149,7 +150,7 @@ describe("terminal panel readiness", () => {
     });
 
     open.resolve(terminalOpenResult("session-1"));
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
       expect(panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-live")).toBe(
         true,
@@ -186,7 +187,7 @@ describe("terminal panel readiness", () => {
 
     panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.open",
         params: { agentId: undefined, cols: 100, rows: 30, catalog },
@@ -203,7 +204,7 @@ describe("terminal panel readiness", () => {
       event: "terminal.data",
       payload: { sessionId: "catalog-terminal-1", seq: 5, data: "ready" },
     });
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("ready");
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["catalog-terminal-1"]),
@@ -248,14 +249,16 @@ describe("terminal panel readiness", () => {
         detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
       }),
     );
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).not.toBeNull());
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".tp-connecting")).not.toBeNull(),
+    );
 
     listener?.({
       event: "terminal.data",
       payload: { sessionId: "catalog-terminal-1", seq: 12, data: "gap" },
     });
 
-    await vi.waitFor(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
     expect(requests).toContainEqual({
       method: "terminal.attach",
       params: { sessionId: "catalog-terminal-1" },
@@ -290,7 +293,7 @@ describe("terminal panel readiness", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
         "Session did not connect within 30 seconds",
       );

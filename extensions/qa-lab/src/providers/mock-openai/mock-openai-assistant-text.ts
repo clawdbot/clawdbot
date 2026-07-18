@@ -44,6 +44,7 @@ import {
   extractActiveMemorySummary,
   extractToolSearchTarget,
   extractSnackPreference,
+  isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
 export function buildAssistantText(
   input: ResponsesInputItem[],
@@ -168,10 +169,10 @@ export function buildAssistantText(
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
   }
-  if (/silent snack recall check/i.test(prompt) && snackPreference) {
+  if (isSnackRecallPrompt(prompt) && snackPreference) {
     return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
   }
-  if (/silent snack recall check/i.test(prompt)) {
+  if (isSnackRecallPrompt(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {

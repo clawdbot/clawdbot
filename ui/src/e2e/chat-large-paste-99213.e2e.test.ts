@@ -179,7 +179,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
     await server?.close();
   });
 
-  it("pastes and sends a roughly 2 MB PNG through the chat composer", async () => {
+  it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
     const pngBytes = createLargePngBytes(1_901_669);
@@ -194,7 +194,20 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       const gateway = await installMockGateway(recorded.page, {
         historyMessages: [
           {
-            content: [{ text: "Ready for #99213 large screenshot paste proof.", type: "text" }],
+            content: [
+              {
+                text: [
+                  "The existing assistant reply is taller than the virtualizer estimate.",
+                  "",
+                  "- First line of the existing answer.",
+                  "- Second line of the existing answer.",
+                  "- Third line of the existing answer.",
+                  "- Fourth line of the existing answer.",
+                  "- Fifth line of the existing answer.",
+                ].join("\n"),
+                type: "text",
+              },
+            ],
             role: "assistant",
             timestamp: Date.now(),
           },
@@ -203,7 +216,7 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
 
       await recorded.page.goto(`${server.baseUrl}chat`);
       await recorded.page
-        .getByText("Ready for #99213 large screenshot paste proof.")
+        .getByText("The existing assistant reply is taller than the virtualizer estimate.")
         .waitFor({ timeout: 10_000 });
 
       const composer = recorded.page.locator(".agent-chat__composer-combobox textarea");
@@ -230,6 +243,25 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
       expect(attachment.mimeType).toBe("image/png");
       expect(attachment.fileName).toBe("pasted-image.png");
       expect(requireString(attachment.content, "attachment content")).toBe(imageBase64);
+
+      const assistantRow = recorded.page
+        .getByText("The existing assistant reply is taller than the virtualizer estimate.")
+        .locator("xpath=ancestor::div[contains(@class, 'chat-virtual-row')]");
+      const userRow = recorded.page
+        .getByText(prompt)
+        .locator("xpath=ancestor::div[contains(@class, 'chat-virtual-row')]");
+      await expect
+        .poll(async () => {
+          const [assistantBounds, userBounds] = await Promise.all([
+            assistantRow.boundingBox(),
+            userRow.boundingBox(),
+          ]);
+          if (!assistantBounds || !userBounds) {
+            return Number.NEGATIVE_INFINITY;
+          }
+          return Math.round(userBounds.y - (assistantBounds.y + assistantBounds.height));
+        })
+        .toBeGreaterThanOrEqual(0);
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
       await gateway.emitChatFinal({ runId, text: "Large screenshot paste proof received." });

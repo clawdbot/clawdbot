@@ -19,7 +19,10 @@ runs do not receive it.
 
 You can answer from any supported conversation surface:
 
-- The web Control UI shows one unified question card.
+- The web Control UI docks a question panel directly above the composer. For
+  multi-question prompts, the panel shows one question at a time and advances
+  through a short stepper. After resolution, the panel closes and the chat
+  keeps only a compact answer summary.
 - Telegram, Discord, and Slack render native buttons for a single-choice,
   single-question prompt.
 - A plain-text reply works on any channel. Reply with a number, an option label,
@@ -29,8 +32,8 @@ OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
 Prompts that cannot use native buttons, including multi-question and
-multi-select prompts, degrade to readable text. The Control UI keeps the full
-structured card.
+multi-select prompts, degrade to readable text on channels. The Control UI
+keeps the full structured stepper.
 
 ## Timeout and no answer
 

@@ -108,6 +108,19 @@ Implementation:
 
 ---
 
+## Global rule: tool result pairing
+
+Tool results are paired to tool-call occurrences within each assistant turn before
+provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
+turns, so a result adjacent to a repeated call stays with that occurrence. A displaced
+result is moved only when exactly one unresolved occurrence can own it; ambiguous
+extras are dropped and missing occurrences receive synthetic error results.
+
+Implementation: `sanitizeToolUseResultPairing` in
+`src/agents/session-transcript-repair.ts`
+
+---
+
 ## Global rule: incomplete reasoning-only turns
 
 Assistant turns that hit the provider output limit with only thinking or

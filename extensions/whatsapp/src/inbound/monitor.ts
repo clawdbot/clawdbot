@@ -28,6 +28,7 @@ import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../au
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -1478,6 +1479,18 @@ export async function attachWebInboxToSocket(
     }
     const inbound = prepared ?? (await normalizeInboundMessage(msg));
     if (!inbound) {
+      return "completed";
+    }
+    if (
+      await maybeResolveWhatsAppQuestionReaction({
+        cfg: options.loadConfig?.() ?? options.cfg,
+        accountId: options.accountId,
+        msg,
+        senderId: inbound.senderE164 ?? inbound.from,
+        resolveReactionTargetJids,
+        logDebug: (message) => logWhatsAppVerbose(options.verbose, message),
+      })
+    ) {
       return "completed";
     }
     const readReceipt = buildReadReceiptTarget(inbound);

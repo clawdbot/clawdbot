@@ -853,7 +853,26 @@ describe("openclaw.chat", () => {
     });
 
     expect(call.payload).toMatchObject({ action: "open-agent" });
+    expect(call.payload).not.toHaveProperty("agentDraft");
     expect((call.payload as { reply: string }).reply).toContain("continue with your agent");
+  });
+
+  it("forwards the hatch draft intent with an agent handoff", async () => {
+    const engine = makeVerifiedEngine();
+    vi.spyOn(engine, "handle").mockResolvedValue({
+      text: "Your agent is hatching.",
+      action: "open-tui",
+      agentDraft: "hatch",
+      handoff: { kind: "open-tui" },
+    });
+    const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
+
+    const call = await callChat(makeContext(sessions), {
+      sessionId: "s1",
+      message: "yes",
+    });
+
+    expect(call.payload).toMatchObject({ action: "open-agent", agentDraft: "hatch" });
   });
 
   it("resets a session on request", async () => {

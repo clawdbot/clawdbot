@@ -1,6 +1,8 @@
 // Control UI tests cover operator question parsing and lifecycle state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
+  cancelQuestionPrompt,
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -339,6 +341,23 @@ describe("question RPC helpers", () => {
       },
     });
   });
+
+  it("cancels a pending question when the docked panel is skipped", async () => {
+    const request = vi.fn<RequestFn>(async () => ({}));
+    const state = createState();
+    setQuestionPromptClient(state, { request });
+    handleQuestionPromptEvent(state, {
+      event: "question.requested",
+      payload: requestedPayload(),
+    });
+
+    await cancelQuestionPrompt(state, "question-1");
+
+    expect(request).toHaveBeenCalledWith("question.resolve", {
+      id: "question-1",
+      cancel: true,
+    });
+  });
 });
 
 describe("refreshPendingQuestions", () => {
@@ -349,7 +368,7 @@ describe("refreshPendingQuestions", () => {
     setQuestionPromptClient(state, client);
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("pending"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("pending"));
 
     expect(request).toHaveBeenCalledWith("question.list", {});
     expect(state.prompts.get("question-1")?.status).toBe("pending");
@@ -405,7 +424,7 @@ describe("refreshPendingQuestions", () => {
       },
     });
     finishList({ questions: [requestedPayload()] });
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")?.status).toBe("answered");
   });
@@ -438,7 +457,7 @@ describe("refreshPendingQuestions", () => {
       },
     });
     finishList({ questions: [] });
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -470,7 +489,7 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -506,11 +525,11 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(state.prompts.get("question-1")?.status).toBe("pending");
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
@@ -534,7 +553,7 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -572,7 +591,7 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -603,7 +622,7 @@ describe("refreshPendingQuestions", () => {
     });
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" }),
     );
     await vi.advanceTimersByTimeAsync(1_000);
@@ -615,7 +634,7 @@ describe("refreshPendingQuestions", () => {
       }),
     });
 
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       locallyExpired: false,
@@ -652,7 +671,7 @@ describe("refreshPendingQuestions", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     finishList({ questions: [] });
 
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -684,7 +703,7 @@ describe("refreshPendingQuestions", () => {
     onChange.mockClear();
 
     refreshPendingQuestionsWithRetry(state, client);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" }),
     );
 
@@ -692,6 +711,6 @@ describe("refreshPendingQuestions", () => {
     expect(onChange).toHaveBeenCalled();
 
     finishGet({ question: requestedPayload({ status: "cancelled" }) });
-    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("cancelled"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("cancelled"));
   });
 });

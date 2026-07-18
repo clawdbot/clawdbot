@@ -4,6 +4,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
@@ -34,6 +35,10 @@ internal sealed class ChatTimelineItem {
     val toolCalls: List<ChatPendingToolCall>,
   ) : ChatTimelineItem()
 
+  data class QuestionPrompt(
+    val prompt: ChatQuestionPrompt,
+  ) : ChatTimelineItem()
+
   object Thinking : ChatTimelineItem()
 }
 
@@ -53,11 +58,13 @@ internal fun buildChatTimeline(
   streamingAssistantText: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
   recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
+  questions: List<ChatQuestionPrompt> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
+      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
@@ -99,7 +106,14 @@ internal fun buildChatTimeline(
     latestUserMessageId = latestUserMessage?.id,
     latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
     latestContentVersion =
-      latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream, outboxItems + recoveryOutboxItems),
+      latestContentVersion(
+        messages,
+        pendingRunCount,
+        pendingToolCalls,
+        stream,
+        outboxItems + recoveryOutboxItems,
+        questions,
+      ),
   )
 }
 
@@ -188,6 +202,7 @@ private fun latestContentVersion(
   pendingToolCalls: List<ChatPendingToolCall>,
   stream: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
+  questions: List<ChatQuestionPrompt> = emptyList(),
 ): String {
   val latest = messages.lastOrNull()
   return buildString {
@@ -232,6 +247,15 @@ private fun latestContentVersion(
       append(item.status)
       append(';')
     }
+    append(":questions=")
+    questions.forEach { prompt ->
+      append(prompt.record.id)
+      append(',')
+      append(prompt.record.status)
+      append(',')
+      append(prompt.submitting)
+      append(';')
+    }
   }
 }
 
@@ -242,6 +266,7 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
     is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
+    is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }

@@ -48,6 +48,11 @@ const schemaNames = new Map<string, string>([
   ["NodeEventParams", "GatewayNodeEventParams"],
   ["NodeInvokeResultParams", "GatewayNodeInvokeResultParams"],
   ["NodeInvokeRequestEvent", "GatewayNodeInvokeRequest"],
+  ["QuestionOption", "QuestionOption"],
+  ["Question", "Question"],
+  ["QuestionAnswers", "QuestionAnswers"],
+  ["QuestionRecord", "QuestionRecord"],
+  ["QuestionListResult", "QuestionListResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -225,6 +230,10 @@ function emitWireModels(): string[] {
     const selected = selectedSchemas.get(schema) ?? selectedSignatures.get(schemaSignature(schema));
     if (selected) {
       return selected;
+    }
+    const stringUnion = schema.anyOf?.map(literalValue);
+    if (stringUnion?.length && stringUnion.every((value) => typeof value === "string")) {
+      return "String";
     }
     if (schema.type === "string" || typeof schema.const === "string") {
       return "String";

@@ -85,7 +85,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         ? session.subtitle
         : undefined;
     const meta = display?.meta ?? session.meta;
-    const metaId = meta ? sidebarSessionMetaId(session.key) : undefined;
+    const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
+    const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
+    const menuSession = display ? { ...session, meta } : session;
     const title = display?.title ?? [label, meta].filter(Boolean).join(" · ");
     const rowClass = [
       "sidebar-recent-session",
@@ -123,7 +125,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           ? nothing
           : (event: MouseEvent) => {
               event.preventDefault();
-              this.openSessionMenuForRow(session, event.clientX, event.clientY);
+              this.openSessionMenuForRow(menuSession, event.clientX, event.clientY);
             }}
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
@@ -189,7 +191,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     .startMs=${session.startedAt}
                     .endMs=${session.endedAt ?? null}
                   ></openclaw-elapsed-time>`
-                : meta}</span
+                : nothing}</span
           >
           ${session.isChild
             ? nothing
@@ -225,7 +227,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     }
                     const trigger = event.currentTarget as HTMLElement;
                     const rect = trigger.getBoundingClientRect();
-                    this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
+                    this.openSessionMenuForRow(menuSession, rect.right, rect.bottom + 4, trigger);
                   }}
                 >
                   ${icons.moreHorizontal}

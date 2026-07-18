@@ -195,6 +195,20 @@ struct ChatGatewayRequestTests {
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
     }
 
+    @Test func `question resolve request preserves nested answer contract`() throws {
+        let request = OpenClawChatGatewayRequests.resolveQuestion(
+            id: "ask_123",
+            answers: ["meal": ["Pizza", "Salad"]])
+
+        #expect(request.method == "question.resolve")
+        let data = try JSONEncoder().encode(request.params)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let answers = try #require(object["answers"] as? [String: Any])
+        let values = try #require(answers["answers"] as? [String: Any])
+        let meal = try #require(values["meal"] as? [String: Any])
+        #expect(meal["answers"] as? [String] == ["Pizza", "Salad"])
+    }
+
     @Test func `long running requests share exact gateway timeout margins`() {
         #expect(OpenClawChatGatewayRequests.agentWait(runID: "run-1", timeoutMs: 1).timeoutMs == 5001)
         #expect(OpenClawChatGatewayRequests.agentWait(runID: "run-1", timeoutMs: 30000).timeoutMs == 35000)

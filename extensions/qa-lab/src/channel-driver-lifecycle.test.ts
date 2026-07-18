@@ -7,12 +7,19 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 describe("QA channel driver lifecycle", () => {
   it("runs all lifecycle scenarios through create and cleanup", async () => {
-    const runtimes: Array<{ adapter: QaTransportAdapter; cleanup: () => Promise<void> }> = [];
+    const runtimes: Array<{
+      adapter: QaTransportAdapter;
+      cleanupBeforeGatewayStop: () => Promise<void>;
+      cleanupAfterGatewayStop: () => Promise<void>;
+      cleanupWithoutGateway: () => Promise<void>;
+    }> = [];
     const createAdapter = vi.fn(async () => {
       const id = runtimes.length + 1;
       const runtime = {
         adapter: { id: String(id) } as QaTransportAdapter,
-        cleanup: vi.fn(async () => {}),
+        cleanupBeforeGatewayStop: vi.fn(async () => {}),
+        cleanupAfterGatewayStop: vi.fn(async () => {}),
+        cleanupWithoutGateway: vi.fn(async () => {}),
       };
       runtimes.push(runtime);
       return runtime;
@@ -26,7 +33,7 @@ describe("QA channel driver lifecycle", () => {
 
     const results = await runQaChannelDriverLifecycleScenarios({
       async assertStopped(runtime) {
-        expect(runtime.cleanup).toHaveBeenCalledOnce();
+        expect(runtime.cleanupWithoutGateway).toHaveBeenCalledOnce();
         stoppedIds.push(Number(runtime.adapter.id));
       },
       lifecycle,
@@ -45,7 +52,9 @@ describe("QA channel driver lifecycle", () => {
   it("keeps the running adapter when cleanup fails", async () => {
     const runtime = {
       adapter: {} as QaTransportAdapter,
-      cleanup: vi.fn(async () => {
+      cleanupBeforeGatewayStop: vi.fn(async () => {}),
+      cleanupAfterGatewayStop: vi.fn(async () => {}),
+      cleanupWithoutGateway: vi.fn(async () => {
         throw new Error("cleanup failed");
       }),
     };

@@ -79,6 +79,8 @@ type SystemAgentChatReplyAction = "none" | "exit" | "open-tui" | "open-setup";
 type SystemAgentChatReply = {
   text: string;
   action: SystemAgentChatReplyAction;
+  /** Client-localized draft intent for the destination agent chat. */
+  agentDraft?: "hatch";
   /** The next hosted-wizard reply contains a secret and must be masked/redacted by hosts. */
   sensitive?: boolean;
   /** Present when the host must leave chat for an interactive handoff. */
@@ -623,10 +625,37 @@ export class SystemAgentChatEngine {
     }
     const verify = result?.applied ? await this.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
+    const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
+      .filter(Boolean)
+      .join("\n\n");
+    // The hatch is a ceremony: a fresh-install setup just created the agent,
+    // so hand the user straight into it instead of parking them here. The
+    // seeded BOOTSTRAP runs the birth sequence on the agent's first turn.
+    // Only on clean post-write verification: a non-null verify means the
+    // written config is suspect, and handing off would bury the warning in an
+    // agent session that may not answer — stay in setup to repair it.
+    if (
+      operation.kind === "setup" &&
+      result?.applied &&
+      result.bootstrapPending === true &&
+      verify === null
+    ) {
+      return {
+        text: [
+          baseText,
+          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+        ].join("\n\n"),
+        action: "open-tui",
+        agentDraft: "hatch",
+        handoff: {
+          kind: "open-tui",
+          agentDraft: "hatch",
+          ...(operation.workspace ? { workspace: operation.workspace } : {}),
+        },
+      };
+    }
     return {
-      text: [capture.read() || "Applied. Audit entry written.", verify, followUp]
-        .filter(Boolean)
-        .join("\n\n"),
+      text: baseText,
       action: "none",
     };
   }

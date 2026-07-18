@@ -1,4 +1,4 @@
-// Control UI module owns transient in-thread operator question state.
+// Control UI module owns transient operator question state.
 import type {
   Question,
   QuestionAnswers,
@@ -556,18 +556,10 @@ function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
   };
 }
 
-async function resolveQuestion(
-  client: QuestionClient,
-  id: string,
-  answers: QuestionAnswerValues,
-): Promise<void> {
-  await client.request("question.resolve", { id, answers: buildAnswers(answers) });
-}
-
-export async function submitQuestionPrompt(
+async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
-  answers: QuestionAnswerValues,
+  resolution: { answers: QuestionAnswerValues } | { cancel: true },
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
@@ -581,18 +573,22 @@ export async function submitQuestionPrompt(
     return;
   }
   prompt.submitting = true;
-  prompt.submittedAnswers = buildAnswers(answers);
+  const submittedAnswers = "answers" in resolution ? buildAnswers(resolution.answers) : undefined;
+  prompt.submittedAnswers = submittedAnswers;
   prompt.error = null;
   prompt.revision = ++state.revision;
   state.onChange();
   try {
-    await resolveQuestion(client, id, answers);
+    await client.request(
+      "question.resolve",
+      submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
+    );
     const current = state.prompts.get(id);
     if (!current) {
       return;
     }
     current.localResolutionConfirmed = true;
-    if (current.status === "answered") {
+    if (current.status !== "pending") {
       current.answeredElsewhere = false;
       current.submitting = false;
     }
@@ -616,6 +612,18 @@ export async function submitQuestionPrompt(
     current.revision = ++state.revision;
     state.onChange();
   }
+}
+
+export async function submitQuestionPrompt(
+  state: QuestionPromptState,
+  id: string,
+  answers: QuestionAnswerValues,
+): Promise<void> {
+  await resolveQuestionPrompt(state, id, { answers });
+}
+
+export async function cancelQuestionPrompt(state: QuestionPromptState, id: string): Promise<void> {
+  await resolveQuestionPrompt(state, id, { cancel: true });
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {

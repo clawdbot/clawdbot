@@ -38,10 +38,6 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
-import {
-  parseCodexUserInputActionAnswer,
-  resolveCodexUserInputAction,
-} from "./app-server/user-input-actions.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import {
@@ -381,24 +377,6 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
-  }
-  if (normalized === "answer") {
-    if (rest.length !== 2) {
-      return { text: "Usage: /codex answer <request-token> <choice>" };
-    }
-    if (!canMutateCodexHost(ctx)) {
-      return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
-    }
-    const [token = "", encodedAnswer = ""] = rest;
-    const answer = parseCodexUserInputActionAnswer(encodedAnswer);
-    if (!answer) {
-      return { text: "Invalid Codex answer encoding." };
-    }
-    return {
-      text: resolveCodexUserInputAction(token, answer)
-        ? "Answered Codex."
-        : "That Codex question is no longer pending.",
-    };
   }
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&

@@ -2178,6 +2178,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   letter-spacing: 0.04em;
 }
 
+.session-menu__info {
+  padding: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);

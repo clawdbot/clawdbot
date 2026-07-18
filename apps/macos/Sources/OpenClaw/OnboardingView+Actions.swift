@@ -110,14 +110,14 @@ extension OnboardingView {
         }
     }
 
-    func finish() {
+    func finish(agentDraft: SystemAgentDraft? = nil) {
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
         // Land people in the real conversation, not on an empty desktop: the
         // agent chat is the product, and it is verified working by now.
         if state.connectionMode != .unconfigured {
-            AppNavigationActions.openChat()
+            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
         }
     }
 

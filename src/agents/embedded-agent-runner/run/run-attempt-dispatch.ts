@@ -166,6 +166,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
     continueWorkOpts: params.continueWorkOpts,
     requestCompactionOpts: params.requestCompactionOpts,
+    conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
     trigger: params.trigger,

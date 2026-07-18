@@ -179,6 +179,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             sessionId: (options.params as { sessionId: string }).sessionId,
             reply: "Inference is ready. I can configure the rest.",
             action: "open-agent",
+            agentDraft: "hatch",
           };
         }
         throw new Error(`unexpected Gateway method ${options.method}`);
@@ -192,6 +193,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             }),
           }),
           deliver: false,
+          message: "Wake up, my friend!",
           boundGateway: {
             url: "wss://selected.example/ws",
             ...auth,

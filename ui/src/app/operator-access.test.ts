@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { hasOperatorApprovalsAccess } from "./operator-access.ts";
 

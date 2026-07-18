@@ -6,7 +6,6 @@ import {
   resetToolStream,
   type FallbackStatus,
   type PlanStatus,
-  type QuestionStatus,
   type ToolStreamEntry,
 } from "./tool-stream.ts";
 
@@ -22,14 +21,9 @@ type MutableHost = ToolStreamHost & {
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
   requestUpdate?: () => void;
 };
 const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
-
-function testQuestionActionToken(): string {
-  return "12345678-1234-4123-8123-123456789abc";
-}
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
   const modelOverrides: Record<string, string | null> = {};
@@ -58,7 +52,6 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     fallbackStatus: null,
     fallbackClearTimer: null,
     planStatus: null,
-    questionStatus: null,
     ...overrides,
   };
 }
@@ -260,75 +253,6 @@ describe("app-tool-stream plan snapshots", () => {
     resetToolStream(host);
 
     expect(host.planStatus).toBeNull();
-  });
-});
-
-describe("app-tool-stream native questions", () => {
-  it("stores structured questions and clears only the matching item", () => {
-    const host = createHost();
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 1, "question", {
-        phase: "requested",
-        itemId: "item-1",
-        actionToken: testQuestionActionToken(),
-        questions: [
-          {
-            id: " mode ",
-            header: " Mode ",
-            question: " Pick one ",
-            isOther: true,
-            options: [{ label: " Fast ", description: "Quick" }, { label: "" }],
-          },
-        ],
-      }),
-    );
-    expect(host.questionStatus).toEqual({
-      runId: "run-1",
-      itemId: "item-1",
-      actionToken: testQuestionActionToken(),
-      questions: [
-        {
-          id: " mode ",
-          header: "Mode",
-          question: "Pick one",
-          isOther: true,
-          options: [{ label: " Fast ", description: "Quick" }],
-        },
-      ],
-    });
-
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 2, "question", { phase: "resolved", itemId: "other" }),
-    );
-    expect(host.questionStatus?.itemId).toBe("item-1");
-    handleAgentEvent(
-      host,
-      agentEvent("run-1", 3, "question", { phase: "resolved", itemId: "item-1" }),
-    );
-    expect(host.questionStatus).toBeNull();
-  });
-
-  it("leaves secret questions on the warned text-reply path", () => {
-    const host = createHost();
-    handleAgentEvent(
-      host,
-      agentEvent("run-secret", 1, "question", {
-        phase: "requested",
-        itemId: "item-secret",
-        actionToken: testQuestionActionToken(),
-        questions: [
-          {
-            id: "secret",
-            header: "Secret",
-            question: "Enter it",
-            isSecret: true,
-          },
-        ],
-      }),
-    );
-    expect(host.questionStatus).toBeNull();
   });
 });
 

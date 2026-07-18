@@ -46,13 +46,16 @@ struct BackgroundTasksScreenTests {
           "id":"ledger-1",
           "taskId":"runtime-1",
           "status":"running",
-          "runtime":"cli"
+          "runtime":"cli",
+          "kind":"exec"
         }
         """#.utf8)
 
         let task = try JSONDecoder().decode(MobileBackgroundTask.self, from: data)
 
         #expect(task.displayTitle == "ledger-1")
+        #expect(task.isActive)
+        #expect(task.runtimeLabel == "CLI")
     }
 
     @Test func `terminal snapshot wins a timestamp tie`() throws {

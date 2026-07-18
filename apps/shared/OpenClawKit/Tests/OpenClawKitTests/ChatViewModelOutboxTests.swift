@@ -1536,17 +1536,19 @@ struct ChatViewModelOutboxTests {
         await transport.state.setStaleHistoryRows([])
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
-        try await waitUntil("reconnect history request") {
-            await transport.state.historyRequestCount >= 1
+        try await waitUntil("bootstrap history settles") {
+            let bootstrapComplete = await MainActor.run { !vm.isLoading }
+            let requestCount = await transport.state.historyRequestCount
+            return bootstrapComplete && requestCount >= 1
         }
-        try await Task.sleep(nanoseconds: 200_000_000)
-        let settledRequestCount = await transport.state.historyRequestCount
-        try await Task.sleep(nanoseconds: 200_000_000)
+        // A recursive refresh starts immediately after applying stale history.
+        // Observe beyond bootstrap completion instead of sampling between its
+        // ordinary history request and the health-triggered reconciliation.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
 
         // load() also owns its ordinary visible-session history request. The
         // exact count can be one or two; neither may trigger a recursive pass.
-        #expect(settledRequestCount <= 2)
-        #expect(await transport.state.historyRequestCount == settledRequestCount)
+        #expect(await transport.state.historyRequestCount <= 2)
         #expect(await store.loadCommands().map(\.status) == [.awaitingConfirmation])
     }
 

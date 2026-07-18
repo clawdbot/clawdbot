@@ -44,6 +44,7 @@ class ConnectionManager(
         // sessions.patch (model switching); stored tokens keep their granted scopes.
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",

@@ -654,6 +654,16 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    if (event.event === "config.changed") {
+      // Another writer (agent-approved config_set, other device, CLI) changed
+      // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
+      // dirty local settings draft wins — the autosave/conflict flow owns it.
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
+        void runtimeConfig.refresh();
+      }
+      return;
+    }
     if (event.event !== "ui.command" || !event.payload) {
       return;
     }

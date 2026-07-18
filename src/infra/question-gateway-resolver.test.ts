@@ -1,4 +1,4 @@
-// Covers compact question-button resolution through a stubbed Gateway.
+// Covers question-button value resolution through a stubbed Gateway.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQuestionOverGateway } from "./question-gateway-resolver.js";
 
@@ -34,7 +34,7 @@ describe("resolveQuestionOverGateway", () => {
     hoisted.callGateway.mockReset();
   });
 
-  it("maps the compact option index to the canonical question id and label", async () => {
+  it("maps the rendered option value to the canonical question id", async () => {
     hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord }).mockResolvedValueOnce({
       status: "answered",
       answers: { answers: { deploy_target: { answers: ["Production"] } } },
@@ -44,7 +44,7 @@ describe("resolveQuestionOverGateway", () => {
       resolveQuestionOverGateway({
         cfg: {} as never,
         questionId: recordId,
-        optionIndex: 1,
+        optionValue: "Production",
         senderId: "telegram:42",
       }),
     ).resolves.toEqual({
@@ -85,7 +85,11 @@ describe("resolveQuestionOverGateway", () => {
       hoisted.callGateway.mockRejectedValueOnce(terminalError(reason));
 
       await expect(
-        resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionIndex: 0 }),
+        resolveQuestionOverGateway({
+          cfg: {} as never,
+          questionId: recordId,
+          optionValue: "Staging",
+        }),
       ).resolves.toEqual({ status: "already-terminal", reason: expectedReason });
     },
   );
@@ -96,18 +100,24 @@ describe("resolveQuestionOverGateway", () => {
     });
 
     await expect(
-      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionIndex: 0 }),
+      resolveQuestionOverGateway({
+        cfg: {} as never,
+        questionId: recordId,
+        optionValue: "Staging",
+      }),
     ).resolves.toEqual({ status: "already-terminal", reason: "already-terminal" });
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });
 
-  it("rejects invalid indices before resolving", async () => {
-    hoisted.callGateway.mockResolvedValueOnce({ question: pendingRecord });
+  it("leaves option membership validation to question.resolve", async () => {
+    hoisted.callGateway
+      .mockResolvedValueOnce({ question: pendingRecord })
+      .mockRejectedValueOnce(new Error("invalid answer"));
 
     await expect(
-      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionIndex: 2 }),
-    ).rejects.toThrow("out of range");
-    expect(hoisted.callGateway).toHaveBeenCalledOnce();
+      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionValue: "Other" }),
+    ).rejects.toThrow("invalid answer");
+    expect(hoisted.callGateway).toHaveBeenCalledTimes(2);
   });
 
   it("never partially resolves a multi-question record", async () => {
@@ -127,7 +137,11 @@ describe("resolveQuestionOverGateway", () => {
     });
 
     await expect(
-      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionIndex: 0 }),
+      resolveQuestionOverGateway({
+        cfg: {} as never,
+        questionId: recordId,
+        optionValue: "Staging",
+      }),
     ).rejects.toThrow("one tappable question");
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });

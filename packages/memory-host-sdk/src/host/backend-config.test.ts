@@ -132,6 +132,90 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
   });
 
+  it("keeps QMD session export off by default", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).sessions.enabled).toBe(false);
+  });
+
+  it("enables QMD session export when an agent remembers across conversations", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/tmp/memory-test" },
+        list: [
+          {
+            id: "personal",
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "personal" });
+
+    expect(requireQmdConfig(resolved).sessions.enabled).toBe(true);
+    // Remember-only export stays search-only for trusted recall; ordinary
+    // memory_get must not read transcript exports the operator never opted into.
+    expect(requireQmdConfig(resolved).sessions.readable).toBe(false);
+  });
+
+  it("ignores a configured exportDir for remember-only implied session exports", () => {
+    const cfg = {
+      agents: {
+        defaults: { workspace: "/tmp/memory-test" },
+        list: [
+          {
+            id: "personal",
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+      // sessions.enabled is not set: exportDir was configured for an export
+      // feature the operator never turned on. Honoring it here could write
+      // transcripts into workspace memory/ and leak them into the ordinary
+      // memory corpus.
+      memory: { backend: "qmd", qmd: { sessions: { exportDir: "memory/session-exports" } } },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "personal" });
+
+    expect(requireQmdConfig(resolved).sessions.enabled).toBe(true);
+    expect(requireQmdConfig(resolved).sessions.readable).toBe(false);
+    expect(requireQmdConfig(resolved).sessions.exportDir).toBeUndefined();
+  });
+
+  it("keeps a configured exportDir for explicitly enabled session exports", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: { sessions: { enabled: true, exportDir: "session-exports" } },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).sessions.exportDir).toBe("/tmp/memory-test/session-exports");
+  });
+
+  it("keeps explicitly configured QMD session exports readable", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: { backend: "qmd", qmd: { sessions: { enabled: true } } },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).sessions.enabled).toBe(true);
+    expect(requireQmdConfig(resolved).sessions.readable).toBe(true);
+  });
+
   it("keeps uppercase MEMORY.md as the root pattern when only lowercase memory.md exists", () => {
     const workspaceDir = "/workspace/root";
     withMemoryRootEntries([memoryFileEntry("memory.md")], () => {

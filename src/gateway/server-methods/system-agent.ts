@@ -590,6 +590,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                 ? "Setup here is done — continue with your agent."
                 : "Nothing to change."),
             action,
+            ...(action === "open-agent" && reply.agentDraft
+              ? { agentDraft: reply.agentDraft }
+              : {}),
             ...(reply.sensitive === true ? { sensitive: true } : {}),
             ...(reply.question ? { question: reply.question } : {}),
             ...(proposalId ? { needsApproval: true, proposalId } : {}),

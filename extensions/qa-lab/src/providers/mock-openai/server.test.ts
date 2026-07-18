@@ -3071,6 +3071,108 @@ describe("qa mock openai server", () => {
     expect(String(lastRequestPayload.instructions)).toContain("<active_memory_plugin>");
     expect(String(lastRequestPayload.allInputText)).toContain("<active_memory_plugin>");
 
+    const rememberSearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only the available memory tools.",
+                  "Latest user message:",
+                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(rememberSearch.status).toBe(200);
+    const rememberSearchText = await rememberSearch.text();
+    expect(rememberSearchText).toContain('"name":"memory_search"');
+    expect(rememberSearchText).toContain("QA movie night snack lemon pepper wings blue cheese");
+    expect(rememberSearchText).toContain('\\"maxResults\\":10');
+
+    const rememberSearchSummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only the available memory tools.",
+                  "Latest user message:",
+                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+                ].join("\n"),
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "sessions/private-source.jsonl",
+                  startLine: 2,
+                  endLine: 3,
+                  snippet:
+                    "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
+                },
+              ],
+            }),
+          },
+        ],
+      }),
+    });
+    expect(rememberSearchSummary.status).toBe(200);
+    const rememberSearchSummaryText = await rememberSearchSummary.text();
+    expect(rememberSearchSummaryText).toContain("lemon pepper wings with blue cheese");
+    expect(rememberSearchSummaryText).not.toContain('"name":"memory_get"');
+
+    const rememberInjectedMainReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(rememberInjectedMainReply.status).toBe(200);
+    expect(JSON.stringify(await rememberInjectedMainReply.json())).toContain(
+      "lemon pepper wings with blue cheese",
+    );
+
     const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {

@@ -191,6 +191,7 @@ describe("qa scenario catalog", () => {
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
       "matrix-restart-resume",
+      "remember-across-conversations",
       "slack-restart-resume",
       "subagent-stale-child-links",
       "telegram-repeated-command-authorization",
@@ -907,6 +908,7 @@ describe("qa scenario catalog", () => {
       "goal-context-survives-compaction",
       "goal-followthrough-live",
       "active-memory-preprompt-recall",
+      "remember-across-conversations",
       "memory-recall",
       "session-memory-ranking",
       "thread-memory-isolation",
@@ -950,6 +952,32 @@ describe("qa scenario catalog", () => {
     );
 
     expect(scenario.execution.providerMode).toBe("mock-openai");
+  });
+
+  it("keeps remember-across-conversations isolated and product-only", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("remember-across-conversations"));
+    const config = readQaScenarioExecutionConfig("remember-across-conversations") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(config?.requiredChannelDriver).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      session: { dmScope: "per-channel-peer" },
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+      },
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: { enabled: true, agents: [] },
+          },
+        },
+      },
+    });
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {

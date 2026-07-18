@@ -236,6 +236,12 @@ export function isActiveMemorySubagentPrompt(text: string) {
   return text.includes("You are a memory search agent.");
 }
 
+export function isSnackRecallPrompt(text: string) {
+  return (
+    /silent snack recall check/i.test(text) || /remember across conversations qa check/i.test(text)
+  );
+}
+
 export function extractSnackPreference(text: string) {
   const normalized = text.replace(/\s+/g, " ").trim();
   const match =

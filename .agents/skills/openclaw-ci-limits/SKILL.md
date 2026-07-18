@@ -128,7 +128,10 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `CI` concurrency key version, PR cancellation, and non-canceling canonical
   `main` single-flight with one coalesced pending tip.
 - `preflight` and hosted `security-fast` start immediately without a debounce
-  or standalone admission job.
+  or standalone admission job. On Node-relevant canonical main pushes,
+  preflight also owns the sole dependency sticky-disk write and 8 GiB prune
+  before fanout; replacement visibility is proved only by a later exact-marker
+  restore because Blacksmith snapshot promotion can lag job completion.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
@@ -139,6 +142,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
+- Vitest/test compile caches are restore-only in CI and use immutable Actions
+  caches; the daily/dispatch warmer is their sole writer. Build compile cache
+  writes rotate at most once per UTC day. PRs create no runtime-cache archives.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 

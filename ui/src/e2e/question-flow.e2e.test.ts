@@ -1,4 +1,4 @@
-// Control UI E2E tests cover Gateway question cards through the mocked WebSocket.
+// Control UI E2E tests cover docked Gateway questions through the mocked WebSocket.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -58,6 +58,22 @@ async function screenshot(page: Page, name: string) {
   });
 }
 
+function historyMessages() {
+  return Array.from({ length: 12 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: [
+      {
+        type: "text",
+        text:
+          index === 11
+            ? "I have the release context ready. I only need your deployment choice."
+            : `Release preparation note ${index + 1}: deterministic transcript content for the docked panel proof.`,
+      },
+    ],
+    timestamp: 1_750_000_000_000 + index * 1_000,
+  }));
+}
+
 async function openQuestionPage() {
   context = await browser.newContext({
     locale: "en-US",
@@ -66,6 +82,7 @@ async function openQuestionPage() {
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
+    historyMessages: historyMessages(),
     methodResponses: {
       "question.list": { questions: [] },
     },
@@ -76,8 +93,8 @@ async function openQuestionPage() {
   return { gateway, page };
 }
 
-function cardFor(page: Page, prompt: string) {
-  return page.locator("openclaw-chat-question").filter({ hasText: prompt });
+function panelFor(page: Page, prompt: string) {
+  return page.locator("openclaw-chat-question-panel").filter({ hasText: prompt });
 }
 
 async function emitRequested(
@@ -106,7 +123,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await server?.close();
   });
 
-  it("renders and resolves a single-choice question in the active thread", async () => {
+  it("docks a pending question and replaces it with a compact answer summary", async () => {
     const { gateway, page } = await openQuestionPage();
     const request = questionRecord("question-deploy-target", [
       {
@@ -128,22 +145,37 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     ]);
 
     await emitRequested(gateway, request);
-    const card = cardFor(page, "Where should I deploy?");
-    await card.waitFor();
-    await expect.poll(() => card.getByText("Deploy", { exact: true }).count()).toBe(1);
+    const panel = panelFor(page, "Where should I deploy?");
+    await panel.waitFor();
     await expect
-      .poll(() => card.getByText("Staging (Recommended)", { exact: true }).count())
-      .toBe(1);
-    await expect.poll(() => card.getByText("Production", { exact: true }).count()).toBe(1);
+      .poll(() => page.locator(".chat-thread openclaw-chat-question-panel").count())
+      .toBe(0);
+    await expect.poll(() => panel.getByText("1/1", { exact: true }).count()).toBe(1);
+    await expect.poll(() => panel.getByPlaceholder("Type your own answer here").count()).toBe(1);
+
     await expect
-      .poll(() => card.getByRole("textbox", { name: "Your own answer for Deploy" }).count())
-      .toBe(1);
-    await expect.poll(() => card.getByRole("button", { name: "Submit answer" }).count()).toBe(1);
+      .poll(async () => {
+        const panelBox = await panel.boundingBox();
+        const composerBox = await page.locator(".agent-chat__input").boundingBox();
+        if (!panelBox || !composerBox) {
+          return null;
+        }
+        return Math.round(composerBox.y - (panelBox.y + panelBox.height));
+      })
+      .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(async () => {
+        const panelHeight = (await panel.boundingBox())?.height ?? 0;
+        const padding = await page
+          .locator(".chat-thread")
+          .evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
+        return padding >= panelHeight;
+      })
+      .toBe(true);
     await screenshot(page, "01-question-pending.png");
 
-    const staging = card.locator('input[type="radio"]').first();
-    await staging.check();
-    await card.getByRole("button", { name: "Submit answer" }).click();
+    await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
       id: request.id,
@@ -163,13 +195,16 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         },
       },
     });
-    await card.getByText("Answered", { exact: true }).waitFor();
-    await expect.poll(() => staging.isChecked()).toBe(true);
-    await expect.poll(() => staging.isDisabled()).toBe(true);
+    await expect.poll(() => panel.count()).toBe(0);
+    const summary = page.locator(".chat-question-summary").filter({ hasText: "Deploy:" });
+    await summary.waitFor();
+    await expect
+      .poll(() => summary.getByText("Staging (Recommended)", { exact: true }).count())
+      .toBe(1);
     await screenshot(page, "02-question-answered.png");
   });
 
-  it("submits multi-select answers as an array", async () => {
+  it("keeps multi-select on one step and submits labels as an array", async () => {
     const { gateway, page } = await openQuestionPage();
     const request = questionRecord("question-release-checks", [
       {
@@ -187,16 +222,19 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     ]);
 
     await emitRequested(gateway, request);
-    const card = cardFor(page, "Which release checks should I run?");
-    await card.waitFor();
-    const options = card.locator('input[type="checkbox"]');
-    await options.nth(0).check();
-    await options.nth(2).check();
-    await expect.poll(() => options.nth(0).isChecked()).toBe(true);
-    await expect.poll(() => options.nth(2).isChecked()).toBe(true);
+    const panel = panelFor(page, "Which release checks should I run?");
+    await panel.waitFor();
+    await panel.getByRole("checkbox", { name: /Tests/ }).click();
+    await panel.getByRole("checkbox", { name: /Metrics/ }).click();
+    await expect
+      .poll(() => panel.getByRole("checkbox", { name: /Tests/ }).getAttribute("aria-checked"))
+      .toBe("true");
+    await expect
+      .poll(() => panel.getByRole("checkbox", { name: /Metrics/ }).getAttribute("aria-checked"))
+      .toBe("true");
     await screenshot(page, "03-question-multiselect.png");
 
-    await card.getByRole("button", { name: "Submit answer" }).click();
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({
       id: request.id,
@@ -208,7 +246,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     });
   });
 
-  it("renders answered-elsewhere and expired terminal states", async () => {
+  it("shows a 1/2 stepper with answered and expired summaries", async () => {
     const { gateway, page } = await openQuestionPage();
     const elsewhere = questionRecord("question-external-answer", [
       {
@@ -228,34 +266,47 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     ]);
 
     await emitRequested(gateway, elsewhere);
-    await emitRequested(gateway, expired);
-    const elsewhereCard = cardFor(page, "Who should approve the release?");
-    const expiredCard = cardFor(page, "When should the release start?");
-    await elsewhereCard.waitFor();
-    await expiredCard.waitFor();
-
     await gateway.emitGatewayEvent("question.resolved", {
       id: elsewhere.id,
       status: "answered",
-      answers: {
-        answers: {
-          approval_path: { answers: ["Release manager"] },
-        },
-      },
+      answers: { answers: { approval_path: { answers: ["Release manager"] } } },
     });
-    await elsewhereCard.getByText("Answered elsewhere", { exact: true }).waitFor();
-    const elsewhereAnswer = elsewhereCard.locator('input[type="radio"]').nth(1);
-    await expect.poll(() => elsewhereAnswer.isChecked()).toBe(true);
-    await expect.poll(() => elsewhereAnswer.isDisabled()).toBe(true);
-
+    await emitRequested(gateway, expired);
     await gateway.emitGatewayEvent("question.resolved", {
       id: expired.id,
       status: "expired",
     });
-    await expiredCard.getByText("Expired", { exact: true }).waitFor();
+
+    const stepper = questionRecord("question-release-plan", [
+      {
+        id: "channel",
+        header: "Channel",
+        question: "Which release channel should I use?",
+        options: [{ label: "Beta" }, { label: "Stable" }],
+        isOther: true,
+      },
+      {
+        id: "notes",
+        header: "Notes",
+        question: "Which notes should I include?",
+        options: [{ label: "Highlights" }, { label: "Full details" }],
+        multiSelect: true,
+        isOther: true,
+      },
+    ]);
+    await emitRequested(gateway, stepper);
+
+    const panel = panelFor(page, "Which release channel should I use?");
+    await panel.waitFor();
+    await expect.poll(() => panel.getByText("1/2", { exact: true }).count()).toBe(1);
     await expect
-      .poll(() => expiredCard.locator('input[type="radio"]').first().isDisabled())
-      .toBe(true);
+      .poll(() =>
+        page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
+      )
+      .toBe(1);
+    await expect
+      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Expired" }).count())
+      .toBe(1);
     await screenshot(page, "04-question-terminal-states.png");
   });
 });

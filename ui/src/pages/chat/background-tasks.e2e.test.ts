@@ -61,6 +61,20 @@ const finishedCli = {
   error: "Index generation failed",
 };
 
+const runningExec = {
+  id: "task-exec",
+  taskId: "task-exec",
+  kind: "exec",
+  runtime: "cli",
+  status: "running",
+  title: "CLI command",
+  agentId: "main",
+  createdAt: baseTime - 2_000,
+  updatedAt: baseTime,
+  startedAt: baseTime - 2_000,
+  progressSummary: "Command running",
+};
+
 let server: ControlUiE2eServer;
 let browser: Browser;
 
@@ -220,6 +234,51 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
         .toBe(true);
       await page.screenshot({
         path: path.join(artifactDir, "04-transcript-open.png"),
+        fullPage: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows one detached exec after the agent turn ends", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    try {
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            content: [{ type: "text", text: "I started the CLI command in the background." }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+        ],
+        methodResponses: {
+          "tasks.list": { tasks: [runningExec] },
+        },
+      });
+
+      const response = await page.goto(`${server.baseUrl}chat`);
+      expect(response?.status()).toBe(200);
+      await page
+        .getByText("I started the CLI command in the background.")
+        .waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-tasks-toggle__badge").textContent()).toBe("1");
+      expect(await page.locator(".chat-tasks-status__link").textContent()).toContain(
+        "1 running task",
+      );
+
+      await page.getByRole("button", { name: "Show background tasks" }).click();
+      const row = page.locator('[data-task-id="task-exec"]');
+      await row.waitFor({ state: "visible" });
+      expect(await row.textContent()).toContain("CLI command");
+      expect(await row.textContent()).toContain("Command running");
+      await page.screenshot({
+        path: path.join(artifactDir, "05-one-background-exec.png"),
         fullPage: true,
       });
     } finally {

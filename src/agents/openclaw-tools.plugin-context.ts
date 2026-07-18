@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -38,6 +39,7 @@ export type OpenClawPluginToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  conversationRecall?: ConversationRecallContext;
   /**
    * Explicit one-shot local CLI runs should not keep plugin-owned process
    * resources alive after emitting their result.
@@ -99,6 +101,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
       toolBindings: options?.toolBindings,
+      conversationRecall: options?.conversationRecall,
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
 import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";

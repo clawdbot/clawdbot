@@ -7,6 +7,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { USAGE_PAYLOAD_TTL_MS, type UsageRefreshReason } from "../usage/refresh-policy.ts";
 import { ProfilePage } from "./profile-page.ts";
 
@@ -189,8 +190,8 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   };
   provider.append(page);
   document.body.append(provider);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-  await vi.waitFor(() => expect(page.loading).toBe(false));
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForFast(() => expect(page.loading).toBe(false));
 
   harness.emitConnected(false);
   harness.emitConnected(true);
@@ -226,12 +227,12 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   visibility.mockReturnValue("visible");
   document.dispatchEvent(new Event("visibilitychange"));
   window.dispatchEvent(new Event("focus"));
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
-  await vi.waitFor(() => expect(page.loading).toBe(false));
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+  await waitForFast(() => expect(page.loading).toBe(false));
 
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(6));
-  await vi.waitFor(() => expect(page.loading).toBe(false));
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+  await waitForFast(() => expect(page.loading).toBe(false));
 
   let settlePoll: TimerHandler | null = null;
   let settleDelayMs: number | undefined;
@@ -264,5 +265,5 @@ it("gates profile usage refreshes by payload age and page visibility", async () 
   setTimeoutSpy.mockRestore();
   visibility.mockReturnValue("visible");
   window.dispatchEvent(new Event("focus"));
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(8));
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
 });

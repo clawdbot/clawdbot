@@ -10,6 +10,12 @@
 @import "./styles/lobster-pet.css";
 @import "@create-markdown/preview/themes/system.css";
 
+/* Contract read by stale-chunk-reload.ts to detect a failed entry stylesheet load.
+ * Removing it leaves a fully unstyled page undetected. */
+:root {
+  --openclaw-css-ok: 1;
+}
+
 .cm-preview {
   --cm-mono: var(--mono);
   --cm-link: var(--accent);

@@ -7344,6 +7344,56 @@
       "translated": "지원되지 않는 첨부 파일"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "기타 답변"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "제출"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "응답 완료"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "다른 곳에서 응답 완료"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "만료됨"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "취소됨"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "대기 중"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "제출 중…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "${seconds / 60}분 ${seconds % 60}초 후 만료"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "${seconds}초 후 만료"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "모델"
@@ -20104,6 +20154,11 @@
       "translated": "Gateway에서 \\(plan.summary.errors)개의 \\(Self.memoryNoun(plan.summary.errors))을(를) 계획할 수 없습니다. 다시 시도해 보세요."
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "일어나, 친구야!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<가려진 비밀 값>"
@@ -22907,6 +22962,41 @@
       "id": "native.apple.b6b3b9af4c618060",
       "source": "Expand plan",
       "translated": "계획 펼치기"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "기타 답변"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "선택되지 않음"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "선택됨"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "제출"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "제출 중…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "\\(seconds / 60)분 \\(seconds % 60)초 후 만료"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "\\(seconds)초 후 만료"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

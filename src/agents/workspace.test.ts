@@ -775,11 +775,12 @@ describe("ensureAgentWorkspace", () => {
       .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
 
     try {
-      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(result.bootstrapPending).toBe(false);
       await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
       await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {

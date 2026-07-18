@@ -226,7 +226,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "start",
       ok: false,
@@ -242,7 +242,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
     expectLatestRuntimeJson({
       action: "start",
       ok: false,
@@ -272,7 +272,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(onNotLoaded).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.start).not.toHaveBeenCalled();
   });
 
   it("proceeds with start when config is valid", async () => {
@@ -280,7 +280,7 @@ describe("runServiceStart config pre-flight (#35862)", () => {
 
     await runServiceStart(createServiceRunArgs());
 
-    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(service.start).toHaveBeenCalledTimes(1);
   });
 });
 

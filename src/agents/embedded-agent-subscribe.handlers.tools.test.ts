@@ -346,11 +346,10 @@ describe("handleToolExecutionStart read path checks", () => {
       presentationTextMode: "fallback",
       presentation: {
         blocks: [
+          { type: "text", text: "Where should this deploy?" },
           {
             type: "text",
             text: [
-              "Where should this deploy?",
-              "",
               "- Staging (Recommended): Safer default",
               "- Production",
               "",
@@ -430,7 +429,11 @@ describe("handleToolExecutionStart read path checks", () => {
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
 
     const payload = onToolResult.mock.calls[0]?.[0];
-    expect(payload?.text).toContain("Reply with the number, the option text, or your own answer.");
+    expect(payload?.text).toContain(
+      questions.length > 1
+        ? "Reply by number or question id. Use a declared option where choices are fixed."
+        : "Reply with the number, the option text, or your own answer.",
+    );
     expect(payload).not.toHaveProperty("presentation");
     expect(payload).not.toHaveProperty("presentationTextMode");
     await activation.finish();

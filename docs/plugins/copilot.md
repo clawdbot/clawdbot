@@ -279,10 +279,10 @@ keeps `/btw` behavior identical to other non-Codex runtimes.
   surface.
 - PI session state does not migrate when an agent switches to `copilot`.
   Selection is per attempt; existing PI sessions remain valid.
-- `ask_user` uses the same OpenClaw prompt-and-reply path as the Codex
-  harness: when the Copilot SDK asks for user input, OpenClaw posts a
-  blocking prompt to the active channel/TUI, and the next queued user
-  message resolves the SDK request.
+- `ask_user` uses the provider-neutral gateway question runtime. The Control
+  UI shows the same question card as other OpenClaw questions, supported
+  channels render choice buttons, and the next queued plain-text message
+  resolves that gateway record before the SDK request returns.
 
 ## Permissions and ask_user
 
@@ -361,10 +361,11 @@ a configured `github-copilot` auth profile). When the resolved mode is
 `useLoggedInUser`, the session-level field is omitted so the SDK keeps
 deriving identity from the logged-in identity.
 
-`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge accepts choice
-indexes or labels for fixed-choice requests, accepts free-form answers when
-the SDK request allows them, and cancels a pending request when the OpenClaw
-attempt is aborted.
+`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge registers SDK
+choices or option-less free-text prompts as gateway questions, accepts choice
+indexes or labels for fixed-choice requests, and accepts free-form answers
+when the SDK request allows them. Aborting the OpenClaw attempt cancels the
+gateway record and returns an empty SDK answer.
 
 ## Related
 

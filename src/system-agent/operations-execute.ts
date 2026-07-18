@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId } from "./agent-id.js";
 import { resolveSystemAgentAuditPath } from "./audit.js";
 import {
@@ -464,7 +465,15 @@ export async function executeSystemAgentOperation(
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
-      const result = await runTui({ local: true, session, deliver: false, historyLimit: 200 });
+      const result = await runTui({
+        local: true,
+        session,
+        deliver: false,
+        historyLimit: 200,
+        ...(operation.agentDraft === "hatch"
+          ? { message: t("wizard.finalize.bootstrapHatchMessage") }
+          : {}),
+      });
       if (result?.exitReason === "return-to-system-agent") {
         runtime.log(
           result.systemAgentMessage

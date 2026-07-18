@@ -360,6 +360,15 @@ Gateways that predate the unified approval methods fall back to the shipped
 exec-specific methods. Pending review still works, but retained terminal state
 and the richer cross-surface result require an updated Gateway.
 
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
+
 ## Assistant entrypoints
 
 Android supports launching OpenClaw from the system assistant trigger (Google Assistant). Holding the home button (or another `ACTION_ASSIST` trigger) opens the app; saying "Hey Google, ask OpenClaw `<prompt>`" matches the app's declared App Actions query pattern and hands the prompt into the chat composer without auto-sending it.

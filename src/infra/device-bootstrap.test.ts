@@ -64,7 +64,13 @@ describe("device bootstrap tokens", () => {
       issuedAtMs: Date.now(),
       profile: {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     });
   });
@@ -154,7 +160,13 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -524,7 +536,13 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: [
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
     });
   });
 

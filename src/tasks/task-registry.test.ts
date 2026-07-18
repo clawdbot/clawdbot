@@ -124,11 +124,13 @@ function createTaskFlowForTask(
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
+  const cancelBackgroundExecSessionMock = vi.fn();
   const cancelActiveCronTaskRunMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
   return {
     sendMessageMock,
     cancelSessionMock,
+    cancelBackgroundExecSessionMock,
     cancelActiveCronTaskRunMock,
     killSubagentRunAdminMock,
   };
@@ -167,6 +169,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   acpEntries?: AcpSessionStoreEntry[];
   listAcpSessionEntries?: () => Promise<AcpSessionStoreEntry[]>;
   hasActiveAcpTurn?: (sessionKey: string) => boolean;
+  isBackgroundExecSessionActive?: (sessionId: string) => boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -198,6 +201,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
+    isBackgroundExecSessionActive: params.isBackgroundExecSessionActive,
     hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
     hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
       const normalized = sessionKey.trim().toLowerCase();
@@ -523,6 +527,8 @@ describe("task-registry", () => {
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelBackgroundExecSession: (sessionId) =>
+        hoisted.cancelBackgroundExecSessionMock(sessionId),
       cancelActiveCronTaskRun: (params) => hoisted.cancelActiveCronTaskRunMock(params),
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
@@ -547,6 +553,7 @@ describe("task-registry", () => {
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
+    hoisted.cancelBackgroundExecSessionMock.mockReset();
     hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
   });
@@ -2904,6 +2911,54 @@ describe("task-registry", () => {
     });
   });
 
+  it("retains live background exec tasks and marks missing process sessions lost", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const task = createTaskRecord({
+        runtime: "cli",
+        taskKind: "exec",
+        sourceId: "amber-reef",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "exec:amber-reef",
+        task: "Background CLI command",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        lastEventAt: Date.now() - 10 * 60_000,
+      });
+      const currentTasks = new Map([[task.taskId, task]]);
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [task],
+        isBackgroundExecSessionActive: () => true,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expectRecordFields(currentTasks.get(task.taskId), { status: "running" });
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [task],
+        isBackgroundExecSessionActive: () => false,
+      });
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 1,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expectRecordFields(currentTasks.get(task.taskId), {
+        status: "lost",
+        error: "backing session missing",
+      });
+    });
+  });
+
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -4376,6 +4431,33 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
       vi.useRealTimers();
+    });
+  });
+
+  it("cancels background exec tasks through process control", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelBackgroundExecSessionMock.mockReturnValue(true);
+      const task = createTaskRecord({
+        runtime: "cli",
+        taskKind: "exec",
+        sourceId: "amber-reef",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "exec:amber-reef",
+        task: "Background CLI command",
+        status: "running",
+        deliveryStatus: "not_applicable",
+      });
+
+      const result = await cancelTaskById({ cfg: {} as never, taskId: task.taskId });
+
+      expect(hoisted.cancelBackgroundExecSessionMock).toHaveBeenCalledWith("amber-reef");
+      expectRecordFields(result, { found: true, cancelled: true });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
     });
   });
 

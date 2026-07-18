@@ -53,13 +53,14 @@ final class WebChatManager {
         self.currentChatRoute?.sessionKey ?? self.panelRoute?.sessionKey ?? self.windowRoute?.sessionKey
     }
 
-    func show(sessionKey: String, agentID: String? = nil) {
+    func show(sessionKey: String, agentID: String? = nil, draft: String? = nil) {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         self.closePanel()
         if let controller = self.windowController {
             // The window shell switches sessions in place (sidebar, /new);
             // full route identity tracks those switches and the global owner.
             if Self.shouldReuseController(currentRoute: self.windowRoute, requestedRoute: route) {
+                controller.applyDraftIfEmpty(draft)
                 controller.show()
                 return
             }
@@ -71,6 +72,7 @@ final class WebChatManager {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
+            initialDraft: draft,
             presentation: .window)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)

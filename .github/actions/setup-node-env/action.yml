@@ -43,10 +43,6 @@ inputs:
       snapshot.
     required: false
     default: "false"
-  runtime-cache-sticky-disk:
-    description: Whether runtime caches should use Blacksmith sticky disks instead of actions/cache.
-    required: false
-    default: "false"
   vitest-fs-cache:
     description: Whether to persist Vitest's experimental filesystem module cache.
     required: false
@@ -64,10 +60,7 @@ inputs:
     required: false
     default: "false"
   save-vitest-fs-cache:
-    description: >
-      Whether this job may save the shared Vitest filesystem module cache.
-      Only honored outside pull_request events for sticky disks; PR jobs
-      always mount the protected snapshot read-only.
+    description: Whether this job may save the shared Vitest filesystem module cache.
     required: false
     default: "false"
   build-all-cache-scope:
@@ -122,15 +115,15 @@ runs:
 
     - name: Mount dependency sticky disk
       if: inputs.sticky-disk == 'true'
-      uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+      uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
       with:
-        # One stable disk per Node line. v4 resets the v3 lineage after
-        # Blacksmith repeatedly acknowledged commits but kept restoring its
-        # original snapshot. The v2 per-PR/per-manifest-hash keys
+        # One stable disk per Node line. v5 starts a fresh lineage for the
+        # preflight-serialized writer after Blacksmith acknowledged repeated v4
+        # commits but kept restoring its original snapshot. The v2 per-PR/per-manifest-hash keys
         # saturated Blacksmith's installation-wide sticky-disk budget. Install
         # inputs, runner platform, and the exact Node patch live in the runtime
         # marker below, so changes refresh this disk in place.
-        key: ${{ github.repository }}-node-deps-bind-v4-${{ inputs.node-version }}
+        key: ${{ github.repository }}-node-deps-bind-v5-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-deps
         # Single semantic writer: only the designated trusted-push job may
         # commit, so pull_request clones stay read-only. Like every sticky
@@ -139,58 +132,37 @@ runs:
         # and same-repo PR authors already hold repository write access.
         # Explicit true (not on-change) because the allocated-byte heuristic
         # can miss a fingerprint refresh whose reinstall keeps disk usage
-        # stable, permanently stranding consumers on a stale marker. v1.4.0
-        # skips commit after failed/cancelled steps, so a broken install
-        # cannot seed this key.
+        # stable, permanently stranding consumers on a stale marker. The action
+        # skips commit after failed/cancelled steps, so a broken install cannot
+        # seed this key.
         commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
 
-    - name: Mount Vitest transform cache sticky disk
-      if: inputs.vitest-fs-cache == 'true' && (inputs.sticky-disk == 'true' || inputs.runtime-cache-sticky-disk == 'true') && runner.os != 'Windows'
-      uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
-      with:
-        # One stable disk per runner shape. The old per-PR overlay disks
-        # minted a new backing disk for every PR and helped saturate
-        # Blacksmith's installation-wide sticky-disk budget, 429-failing every
-        # mount. Cache entries are content-hash keyed (id+content+env), so PRs
-        # can safely read the protected snapshot directly; PR-local misses are
-        # rebuilt in the discarded mount. The generation guard below clears
-        # incompatible transform inputs without leaking one disk per lockfile.
-        key: ${{ github.repository }}-vitest-fs-v2-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}
-        path: /var/tmp/openclaw-vitest-fs-cache
-        # Single semantic writer: only the designated non-PR writer commits;
-        # pull_request mounts stay read-only clones. Explicit true avoids
-        # stickydisk's allocated-byte heuristic missing equal-size
-        # replacements or prune-balanced writes.
-        commit: ${{ inputs.save-vitest-fs-cache == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
-
     - name: Restore and save Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
+      if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        # actions/cache entries are immutable. One matrix job writes a new
-        # run key; every job restores the newest cache through coarse prefixes.
-        key: ${{ github.repository }}-vitest-fs-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # Blacksmith transparently accelerates the upstream Actions cache API.
+        # The scheduled/dispatch warmer writes one immutable protected archive;
+        # all CI shards restore it into isolated runner-local directories.
+        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}-
+          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-
 
     - name: Restore Vitest transform cache
-      if: inputs.vitest-fs-cache == 'true' && inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
+      if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}-
+          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-
 
     - name: Configure Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && runner.os != 'Windows'
       env:
-        CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**') }}
-        # Sticky PR mounts never commit, so pruning there would only burn
-        # shard wall clock on a discarded clone; non-sticky (actions/cache)
-        # writers still prune their PR-scoped archives.
-        CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && ((inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true') || github.event_name != 'pull_request') && '1' || '0' }}
+        CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}
+        CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -202,9 +174,8 @@ runs:
           cache_generation="$(<"$generation_file")"
         fi
         cache_entry="$(find "$cache_root" -mindepth 1 -maxdepth 1 -print -quit)"
-        # Read-only PR mounts clear a mismatched generation too: the wipe only
-        # affects the discarded local clone, and mixing generations could
-        # false-hit transforms produced under incompatible tsconfig/lockfile.
+        # Every restore is runner-local. Never mix incompatible transform
+        # inputs even when an older archive was selected through a prefix.
         if [[ -n "$cache_entry" ]] && [[ "$cache_generation" != "$CACHE_GENERATION" ]]; then
           echo "Vitest transform inputs changed; clearing incompatible cache generation"
           find "$cache_root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -215,39 +186,42 @@ runs:
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
-    - name: Mount Node compile cache sticky disk
-      if: inputs.node-compile-cache == 'true' && (inputs.sticky-disk == 'true' || inputs.runtime-cache-sticky-disk == 'true') && runner.os != 'Windows'
-      uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
-      with:
-        # Trusted PRs read the protected dependency bytecode seed but cannot
-        # publish feature-branch code into it. Node isolates exact versions and
-        # invalidates bytecode when module contents change.
-        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}
-        path: /var/tmp/openclaw-node-compile-cache
-        commit: ${{ inputs.save-node-compile-cache == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
+    - name: Select Node compile cache epoch
+      id: node-compile-cache-epoch
+      if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'
+      shell: bash
+      env:
+        CACHE_SCOPE: ${{ inputs.node-compile-cache-scope }}
+      run: |
+        set -euo pipefail
+        if [ "$CACHE_SCOPE" = "build" ]; then
+          echo "value=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+        else
+          echo "value=${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Restore and save Node compile cache
-      if: inputs.node-compile-cache == 'true' && inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true' && inputs.save-node-compile-cache == 'true' && runner.os != 'Windows'
+      if: inputs.node-compile-cache == 'true' && inputs.save-node-compile-cache == 'true' && runner.os != 'Windows'
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Restore Node compile cache
-      if: inputs.node-compile-cache == 'true' && inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true' && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
+      if: inputs.node-compile-cache == 'true' && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'
       env:
-        CACHE_WRITER: ${{ inputs.save-node-compile-cache == 'true' && ((inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true') || github.event_name != 'pull_request') && '1' || '0' }}
+        CACHE_WRITER: ${{ inputs.save-node-compile-cache == 'true' && '1' || '0' }}
       shell: bash
       run: |
         set -euo pipefail

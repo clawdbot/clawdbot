@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
 import { renderWorkspace as renderWorkspaceView } from "./workspace-view.ts";
 
@@ -165,7 +166,7 @@ describe("renderWorkspace", () => {
       render(renderWorkspace({ host, client, connected: true }), host);
 
       resolveWorkspace({ doc, workspaceVersion: doc.workspaceVersion });
-      await vi.waitFor(() => expect(state.loaded).toBe(true));
+      await waitForFast(() => expect(state.loaded).toBe(true));
       expect(state.activeSlug).toBe("main");
     } finally {
       stopWorkspace(host);
@@ -226,7 +227,7 @@ describe("renderWorkspace", () => {
 
       resolveFresh(2);
       await freshResult;
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("2");
       });
@@ -293,8 +294,8 @@ describe("renderWorkspace", () => {
 
     try {
       render(renderWorkspace({ host, client, connected: true }), host);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => {
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(
           host.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
@@ -303,10 +304,10 @@ describe("renderWorkspace", () => {
 
       active = true;
       render(renderWorkspace({ host, client, connected: true, sessionListRevision: 1 }), host);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
       });
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true, sessionListRevision: 1 }), host);
         expect(
           host.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
@@ -371,24 +372,24 @@ describe("renderWorkspace", () => {
     try {
       state.workspace = workspace(1);
       render(renderWorkspace({ host, client, connected: true }), host);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => {
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector("iframe")?.getAttribute("src")).toContain("old.html");
       });
 
       state.workspace = workspace(2);
       render(renderWorkspace({ host, client, connected: true }), host);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => {
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector("iframe")?.getAttribute("src")).toContain("new.html");
       });
 
       render(renderWorkspace({ host, client, connected: false }), host);
       render(renderWorkspace({ host, client, connected: true }), host);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
-      await vi.waitFor(() => {
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+      await waitForFast(() => {
         render(renderWorkspace({ host, client, connected: true }), host);
         expect(host.querySelector("iframe")?.getAttribute("src")).toContain(
           "3333333333333333333333333333333333333333333",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
   retryStaleChunkReload,
@@ -63,7 +64,9 @@ function memoryStorage(initial: Record<string, string> = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
+  document.body.replaceChildren();
 });
 
 describe("isStaleChunkImportError", () => {
@@ -259,6 +262,139 @@ describe("installStaleChunkReloadListener", () => {
       expect(schedule).not.toHaveBeenCalled();
 
       dispatchPreloadError(new Error("Importing a module script failed."));
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+});
+
+describe("installMissingStylesheetRecovery", () => {
+  function setReadyState(readyState: DocumentReadyState) {
+    return vi.spyOn(document, "readyState", "get").mockReturnValue(readyState);
+  }
+
+  function dispatchStylesheetError() {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    document.head.append(link);
+    link.dispatchEvent(new Event("error"));
+    link.remove();
+  }
+
+  it("does nothing when the stylesheet sentinel is present and removes listeners", () => {
+    setReadyState("complete");
+    const schedule = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => true,
+      schedule,
+    });
+    try {
+      window.dispatchEvent(new Event("load"));
+      dispatchStylesheetError();
+      expect(schedule).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("schedules recovery when the sentinel is missing at load", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      window.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("shows a reload banner when automatic recovery is unavailable", async () => {
+    setReadyState("complete");
+    const retry = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule: vi.fn(async () => false),
+      retry,
+    });
+    try {
+      await Promise.resolve();
+      const banner = document.querySelector<HTMLElement>('[role="alert"]');
+      const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
+      expect(banner?.textContent).toContain("Styles failed to load, so the page may look broken.");
+      expect(reloadButton?.textContent).toBe("Reload");
+      reloadButton?.click();
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(banner?.isConnected).toBe(true);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("detects a capture-phase stylesheet error before load", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => true,
+      schedule,
+    });
+    try {
+      dispatchStylesheetError();
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("detects at most once when the resource error and load paths both fire", async () => {
+    setReadyState("loading");
+    const schedule = vi.fn(async () => true);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      dispatchStylesheetError();
+      window.dispatchEvent(new Event("load"));
+      await Promise.resolve();
+      expect(schedule).toHaveBeenCalledTimes(1);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("uninstall removes the banner and listeners", async () => {
+    const readyState = setReadyState("loading");
+    const listenerSchedule = vi.fn(async () => true);
+    const uninstallListeners = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule: listenerSchedule,
+    });
+    uninstallListeners();
+    dispatchStylesheetError();
+    window.dispatchEvent(new Event("load"));
+    expect(listenerSchedule).not.toHaveBeenCalled();
+
+    readyState.mockReturnValue("complete");
+    const schedule = vi.fn(async () => false);
+    const uninstall = installMissingStylesheetRecovery({
+      isCssApplied: () => false,
+      schedule,
+    });
+    try {
+      await Promise.resolve();
+      expect(document.querySelector('[role="alert"]')).not.toBeNull();
+
+      uninstall();
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      dispatchStylesheetError();
+      window.dispatchEvent(new Event("load"));
       expect(schedule).toHaveBeenCalledTimes(1);
     } finally {
       uninstall();

@@ -34,6 +34,7 @@ type MemoryToolOptions = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 };
@@ -158,6 +159,7 @@ function resolveMemoryToolOptions(
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
+    conversationRecall: ctx.conversationRecall,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
     ...(host.withLease ? { withLease: host.withLease } : {}),
   };

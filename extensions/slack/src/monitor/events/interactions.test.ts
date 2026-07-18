@@ -63,7 +63,9 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
-  resolveQuestionOverGateway: (arg: unknown) => resolveQuestionOverGatewayMock(arg),
+  questionGatewayRuntime: {
+    resolveOption: (arg: unknown) => resolveQuestionOverGatewayMock(arg),
+  },
 }));
 
 vi.mock("../../interactive-dispatch.js", () => ({

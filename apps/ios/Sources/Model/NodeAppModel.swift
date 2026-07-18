@@ -4869,10 +4869,10 @@ extension NodeAppModel {
         if includeAdminScope {
             scopes.append("operator.admin")
         }
-        // Preserve reconnect compatibility for older paired operator tokens that were
-        // approved before iOS requested operator.approvals by default.
+        // Older paired tokens request a scope upgrade before interactive prompts can arrive.
         if includeApprovalScope {
             scopes.append("operator.approvals")
+            scopes.append("operator.questions")
         }
         return GatewayConnectOptions(
             role: "operator",

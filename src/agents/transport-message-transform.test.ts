@@ -547,6 +547,35 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("call_error");
   });
 
+  it("does not reassign a dropped errored turn's repeated-id result to an older turn", () => {
+    const messages: Context["messages"] = [
+      assistantToolCall("call_repeated"),
+      assistantToolCall("call_repeated", "exec", "error"),
+      {
+        role: "toolResult",
+        toolCallId: "call_repeated",
+        toolName: "exec",
+        content: [{ type: "text", text: "failed turn output" }],
+        isError: true,
+        timestamp: Date.now(),
+      },
+      { role: "user", content: "retry after error", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+
+    expect(result.map((message) => message.role)).toEqual(["assistant", "toolResult", "user"]);
+    expect(requireToolResultMessage(result[1])).toMatchObject({
+      toolCallId: "call_repeated",
+      isError: true,
+      content: [{ type: "text", text: "No result provided" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("failed turn output");
+  });
+
   it("still synthesizes missing tool results for Anthropic transports", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_anthropic_1"),

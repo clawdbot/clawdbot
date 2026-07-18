@@ -19,6 +19,8 @@ export type { SystemAgentOperation };
 /** Result returned by the operation executor. */
 export type SystemAgentOperationResult = {
   applied: boolean;
+  /** Setup created or preserved BOOTSTRAP.md for the agent's first turn. */
+  bootstrapPending?: boolean;
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
@@ -64,6 +66,7 @@ export type SystemAgentCommandDeps = {
     session?: string;
     deliver?: boolean;
     historyLimit?: number;
+    message?: string;
   }) => Promise<TuiResult | void>;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";

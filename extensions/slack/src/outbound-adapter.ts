@@ -11,6 +11,7 @@ import {
   resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -27,6 +28,7 @@ import {
   isSlackInteractiveRepliesEnabled,
 } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import {
   parseSlackReplyBlockSegments,
@@ -398,6 +400,60 @@ export const slackOutbound: ChannelOutboundAdapter = {
         },
       }),
     );
+  },
+  afterDeliverPayload: async ({ cfg, target, payload, results }) => {
+    const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+    const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
+    if (
+      !questionId ||
+      slackData?.renderedPresentationProvenance !== SLACK_RENDERED_PRESENTATION_PROVENANCE
+    ) {
+      return;
+    }
+    const segments = parseSlackReplyBlockSegments(slackData.renderedPresentationSegments);
+    const placement = readSlackAuthoredTextPlacement(slackData.authoredTextPlacement);
+    if (!segments || !placement) {
+      return;
+    }
+    const deliveryMessages = resolveSlackReplyDeliveryMessages({
+      authoredTextPlacement: placement,
+      segments,
+      text: payload.text,
+    });
+    const blockMessageIndex = deliveryMessages.findIndex((message) =>
+      message.blocks?.some((block) => block.type === "actions"),
+    );
+    const deliveryMessage = deliveryMessages[blockMessageIndex];
+    const result =
+      results[blockMessageIndex] ?? results.find((candidate) => candidate.channel === "slack");
+    const deliveryBlocks = deliveryMessage?.blocks;
+    if (!deliveryMessage || !deliveryBlocks || !result?.messageId) {
+      return;
+    }
+    const channelId = result.channelId;
+    if (!channelId) {
+      return;
+    }
+    questionGatewayRuntime.registerChannelDelivery({
+      questionId,
+      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${result.messageId}`,
+      finalize: async (statusLine) => {
+        const { updateMessageSlack } = await loadSlackSendRuntime();
+        const escapedStatusLine = escapeSlackMrkdwn(statusLine);
+        const blocks = [
+          ...deliveryBlocks.filter((block) => block.type !== "actions"),
+          { type: "context", elements: [{ type: "mrkdwn", text: escapedStatusLine }] },
+        ];
+        await updateMessageSlack({
+          cfg,
+          accountId: target.accountId ?? undefined,
+          channelId,
+          messageTs: result.messageId,
+          text: `${deliveryMessage.text}\n\n${escapedStatusLine}`,
+          blocks,
+        });
+      },
+    });
   },
   ...createSlackAttachedSendAdapter(),
 };

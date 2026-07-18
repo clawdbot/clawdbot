@@ -30,6 +30,7 @@ import type {
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -258,6 +259,8 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {

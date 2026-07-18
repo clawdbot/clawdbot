@@ -68,6 +68,7 @@ export class SidebarCatalogMenuController {
         .x=${menu.x}
         .y=${menu.y}
         .trigger=${this.trigger}
+        .lastActive=${menu.meta}
         .terminalDisabled=${!menu.canOpenTerminal || !this.hooks.terminalAvailable()}
         .onAction=${(action: CatalogSessionMenuAction) => this.handleAction(menu, action)}
         .onClose=${() => this.close()}

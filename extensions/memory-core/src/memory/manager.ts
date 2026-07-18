@@ -779,7 +779,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     ) {
       return [];
     }
-    const sourceFilterList = searchSources ?? [...this.sources];
+    // The manager may index recall-only transcripts without making them part of
+    // ordinary searches. Trusted recall passes an explicit source override;
+    // every other caller defaults to the configured search corpus.
+    const sourceFilterList = searchSources ?? this.settings.searchSources;
     const hybrid = this.settings.query.hybrid;
     const candidates = Math.min(
       200,

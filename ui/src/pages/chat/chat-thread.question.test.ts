@@ -1,7 +1,11 @@
-// Control UI tests cover question-card placement in live and terminal chat runs.
+/* @vitest-environment jsdom */
+
+// Control UI tests cover composer-only pending questions and terminal transcript summaries.
+import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { buildCachedChatItems, coalesceStreamRuns, resetChatThreadState } from "./chat-thread.ts";
+import { renderChatQuestionSummary } from "./components/chat-question-card.ts";
 
 function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
   return {
@@ -52,13 +56,12 @@ function items(question: QuestionPrompt, runActive: boolean) {
 afterEach(() => resetChatThreadState());
 
 describe("question chat items", () => {
-  it("groups a pending question with the active run and plan", () => {
+  it("keeps a pending question out of the message stream", () => {
     const result = coalesceStreamRuns(items(prompt("pending"), true));
     const run = result.find((item) => item.kind === "stream-run");
 
     expect(run?.kind).toBe("stream-run");
     expect(run?.kind === "stream-run" ? run.parts.map((part) => part.kind) : []).toEqual([
-      "question",
       "reading-indicator",
       "plan",
     ]);
@@ -67,7 +70,38 @@ describe("question chat items", () => {
   it("keeps a terminal question as a stable transcript item", () => {
     const result = coalesceStreamRuns(items(prompt("expired"), false));
 
-    expect(result).toMatchObject([{ kind: "question", questionId: "question-1", pending: false }]);
+    expect(result).toMatchObject([{ kind: "question", questionId: "question-1" }]);
+  });
+
+  it("renders answered and skipped prompts as compact summary lines", () => {
+    const answered = prompt("answered");
+    answered.answers = { answers: { format: { answers: ["Compact"] } } };
+    const skipped = prompt("cancelled");
+    const container = document.createElement("div");
+
+    render(renderChatQuestionSummary(answered), container);
+    expect(
+      container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
+    ).toContain("Format: Compact");
+
+    render(renderChatQuestionSummary(skipped), container);
+    expect(
+      container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
+    ).toContain("Format: Skipped");
+    expect(container.querySelector(".chat-question-panel")).toBeNull();
+  });
+
+  it("keeps supplied answer labels when another client resolved the question", () => {
+    const answered = prompt("answered");
+    answered.answeredElsewhere = true;
+    answered.answers = { answers: { format: { answers: ["Detailed"] } } };
+    const container = document.createElement("div");
+
+    render(renderChatQuestionSummary(answered), container);
+
+    expect(
+      container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
+    ).toContain("Format: Detailed");
   });
 
   it("omits questions belonging to another session", () => {

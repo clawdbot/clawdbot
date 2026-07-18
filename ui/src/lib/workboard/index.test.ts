@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -268,7 +269,7 @@ describe("workboard controller", () => {
         client: client as never,
         sessions: [sampleSession],
       });
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(client.request).toHaveBeenCalledWith(
           "workboard.cards.update",
           expect.objectContaining({ id: linkedCard.id }),
@@ -1863,7 +1864,7 @@ describe("workboard controller", () => {
     const refresh = loadWorkboard({ host, client: client as never, force: true });
     await Promise.resolve();
     const save = saveWorkboardCardDraft({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     refreshList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
@@ -2121,7 +2122,7 @@ describe("workboard controller", () => {
     state.draftTitle = "Unsaved edit";
 
     const save = saveWorkboardCardDraft({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     stopWorkboardLifecycleRefresh(host);
@@ -2156,7 +2157,7 @@ describe("workboard controller", () => {
     state.cards = [sampleCard];
 
     const dispatch = dispatchWorkboard({ host, client: client as never });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
     });
     stopWorkboardLifecycleRefresh(host);
@@ -3302,7 +3303,7 @@ describe("workboard controller", () => {
       client: client as never,
       session: firstSession,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.create",
         expect.objectContaining({ sessionKey: firstSession.key }),
@@ -3353,7 +3354,7 @@ describe("workboard controller", () => {
       session: sampleSession,
     });
     list.resolve({ cards: [], statuses: ["todo"] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.create",
         expect.objectContaining({ sessionKey: sampleSession.key }),
@@ -3488,7 +3489,7 @@ describe("workboard controller", () => {
       client: client as never,
       sessions: [sampleSession],
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("workboard.cards.update", expect.anything());
     });
     stopWorkboardLifecycleRefresh(host);
@@ -5150,7 +5151,7 @@ describe("workboard controller", () => {
     });
 
     const sync = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     stopWorkboardLifecycleRefresh(host);
@@ -5188,7 +5189,7 @@ describe("workboard controller", () => {
     ];
 
     const syncing = syncWorkboardLifecycle({ host, client: client as never, sessions });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith(
         "workboard.cards.update",
         expect.objectContaining({ id: first.id }),
@@ -5231,7 +5232,7 @@ describe("workboard controller", () => {
     });
 
     const first = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     const second = syncWorkboardLifecycle({ host, client: client as never, sessions: [] });
@@ -5288,7 +5289,7 @@ describe("workboard controller", () => {
       sessions: [],
       requestUpdate,
     });
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
     });
     await addWorkboardCardComment({

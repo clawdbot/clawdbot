@@ -32,15 +32,66 @@ This page lists every configuration knob for OpenClaw memory search. For concept
 All memory search settings live under `agents.defaults.memorySearch` in `openclaw.json` (or a per-agent `agents.list[].memorySearch` override) unless noted otherwise.
 
 <Note>
-If you are looking for the **active memory** feature toggle and sub-agent config, that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+For the recommended personal-agent workflow, use
+`memorySearch.rememberAcrossConversations`. Advanced Active Memory targeting,
+model, prompt, and latency controls live under `plugins.entries.active-memory`.
 
-Active memory uses a two-gate model:
-
-1. the plugin must be enabled and target the current agent id
-2. the request must be an eligible interactive persistent chat session
-
-See [Active Memory](/concepts/active-memory) for the activation model, plugin-owned config, transcript persistence, and safe rollout pattern.
+See [Active Memory](/concepts/active-memory) for both activation paths,
+transcript persistence, and safe rollout guidance.
 </Note>
+
+---
+
+## Remember across conversations
+
+| Key                           | Type      | Default | Description                                                                    |
+| ----------------------------- | --------- | ------- | ------------------------------------------------------------------------------ |
+| `rememberAcrossConversations` | `boolean` | `false` | Use relevant context from this agent's other recognized private conversations. |
+
+Configure it per agent when only a trusted personal agent should use
+cross-conversation transcript recall:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "personal",
+        memorySearch: {
+          rememberAcrossConversations: true,
+        },
+      },
+    ],
+  },
+}
+```
+
+The value follows normal `agents.defaults.memorySearch` inheritance with a
+per-agent override. Enabling it implies session transcript indexing and
+adds `sessions` to the agent's resolved memory sources. With QMD, it also
+enables that agent's session export; no separate
+`memory.qmd.sessions.enabled` setting is required for this mode.
+
+OpenClaw's built-in memory provider supports this protected path with both the
+builtin and QMD backends. Alternate memory providers can keep using their own
+recall hooks and advanced Active Memory tools, but this setting is skipped
+unless the current provider supports protected private transcript recall.
+`openclaw doctor` reports an unsupported provider or an explicit Active Memory
+`toolsAllow` list that omits `memory_search`.
+
+The retrieval boundary is narrower than general session search:
+
+- only the same agent's recognized private conversations are eligible
+- the conversation being answered is excluded
+- groups and channels are excluded as sources and destinations
+- unknown conversation kinds fail closed
+- sandboxed recall cannot use the special cross-conversation authorization
+
+The setting does not change `tools.sessions.visibility`, session keys,
+transcript storage, delivery routing, or the permissions of `sessions_list`,
+`sessions_history`, and `sessions_send`. Active Memory performs a bounded
+read-only retrieval pass; unavailable or timed-out retrieval does not block the
+reply.
 
 ---
 
@@ -483,12 +534,16 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
-Session transcript hits also obey
+Ordinary model-invoked session transcript search obeys
 [`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
 `tree` visibility only exposes the current session and sessions it spawned. To
-recall an unrelated same-agent gateway-dispatched session from a different
-session, such as a DM, intentionally widen visibility to `agent` (or `all` only
-when cross-agent recall is also required and agent-to-agent policy allows it).
+let ordinary `memory_search` calls inspect unrelated sessions, intentionally
+widen visibility to `agent` (or `all` only when cross-agent recall is also
+required and agent-to-agent policy allows it).
+
+`rememberAcrossConversations` does not widen that setting. It supplies a
+separate runtime-only authorization limited to same-agent private
+transcripts during the bounded Active Memory pass.
 
 The examples below place these settings under `agents.defaults`. You can also
 apply equivalent `memorySearch` settings in a per-agent override when only one
@@ -541,7 +596,15 @@ For same-agent gateway-to-DM recall:
 
 When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
 `sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
-`memory.qmd.sessions.enabled: true` as well.
+`memory.qmd.sessions.enabled: true` as well. The higher-level
+`rememberAcrossConversations: true` setting is the exception: it implies the
+required QMD session export for that agent. Implied exports stay private:
+they always use the default internal export location (a configured
+`sessions.exportDir` applies only to explicit exports), they are searched only
+during that agent's cross-conversation recall, and ordinary `memory_get`
+cannot read them. Explicit
+`memory.qmd.sessions.enabled: true` keeps its existing behavior and makes
+exported transcripts part of the ordinary memory corpus.
 
 ---
 

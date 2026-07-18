@@ -308,6 +308,55 @@ describe("ask_user execution", () => {
     expect(isAskUserPromptActive(reservation.questionId)).toBe(false);
   });
 
+  it("suppresses a stale prompt when an image arrives during registration", async () => {
+    let finishRegistration: ((value: unknown) => void) | undefined;
+    let resolveCount = 0;
+    const gateway = gatewayStub(async (method) => {
+      if (method === "question.request") {
+        return await new Promise((resolve) => {
+          finishRegistration = resolve;
+        });
+      }
+      if (method === "question.resolve") {
+        resolveCount += 1;
+        if (resolveCount === 1) {
+          throw Object.assign(new Error("not registered yet"), {
+            name: "GatewayClientRequestError",
+            details: { reason: "QUESTION_NOT_FOUND" },
+          });
+        }
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    const sessionKey = "agent:main:register-image";
+    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
+      "call-register-image",
+      validArgs,
+    );
+    await vi.waitFor(() => expect(finishRegistration).toBeTypeOf("function"));
+    const questionId = requestedQuestionId(gateway.mock);
+    const steer = vi.fn(async () => undefined);
+    const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
+
+    await steerActiveSessionWithOptionalDeliveryWait(
+      { steer, subscribe: vi.fn(() => () => undefined) },
+      "Use this image",
+      { isInboundUserMessage: true, images },
+      sessionKey,
+    );
+    finishRegistration?.({ id: questionId });
+
+    expect(steer).toHaveBeenCalledWith("Use this image", images);
+    await expect(pending).resolves.toMatchObject({ details: { status: "no_answer" } });
+    expect(
+      gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
+    ).toHaveLength(2);
+    expect(gateway.mock.mock.calls.some(([method]) => method === "question.waitAnswer")).toBe(
+      false,
+    );
+  });
+
   it("best-effort cancels a deterministic id after an ambiguous registration failure", async () => {
     const sessionKey = "agent:main:registration-loss";
     const gateway = gatewayStub(async (method) => {
@@ -539,11 +588,16 @@ describe("ask_user execution", () => {
         });
       }
       if (method === "question.resolve") {
-        if (cancelFails) {
-          throw new Error("gateway unavailable");
+        if ("cancel" in params) {
+          if (cancelFails) {
+            throw new Error("gateway unavailable");
+          }
+          finishWait?.({ status: "cancelled" });
+          return { status: "cancelled" };
         }
-        finishWait?.({ status: "cancelled" });
-        return { status: "cancelled" };
+        const result = { status: "answered", answers: params.answers };
+        finishWait?.(result);
+        return result;
       }
       throw new Error(`unexpected method ${method}`);
     });
@@ -576,9 +630,18 @@ describe("ask_user execution", () => {
       },
     );
     if (cancelFails) {
-      finishWait?.({ status: "cancelled" });
+      const followUpSteer = vi.fn(async () => undefined);
+      await steerActiveSessionWithOptionalDeliveryWait(
+        { steer: followUpSteer, subscribe: vi.fn(() => () => undefined) },
+        "Follow-up after image",
+        { isInboundUserMessage: true },
+        sessionKey,
+      );
+      expect(followUpSteer).not.toHaveBeenCalled();
     }
-    await pending;
+    await expect(pending).resolves.toMatchObject({
+      details: { status: cancelFails ? "answered" : "no_answer" },
+    });
   });
 
   it("confirms a committed plain-text answer after its resolve response is lost", async () => {

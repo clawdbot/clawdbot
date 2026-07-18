@@ -54,6 +54,7 @@ vi.mock("../utils.js", async () => {
 const {
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,
+  startScheduledTask,
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,
 } = await import("./schtasks.js");
@@ -350,6 +351,39 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
+    });
+  });
+
+  it("starts a registered task and ignores audit observer failures", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          ...SUCCESS_RESPONSE,
+          stdout: "Status: Running\r\nLast Run Result: 0x41301\r\n",
+        },
+      );
+      const write = vi.fn();
+      const onMutation = vi.fn(() => {
+        throw new Error("audit failed");
+      });
+
+      await expect(
+        startScheduledTask({
+          env,
+          stdout: { write } as unknown as NodeJS.WritableStream,
+          onMutation,
+        }),
+      ).resolves.toEqual({ outcome: "completed" });
+
+      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-start" });
+      expect(
+        expectDefined(onMutation.mock.invocationCallOrder[0], "start audit call order"),
+      ).toBeLessThan(expectDefined(write.mock.invocationCallOrder[0], "start output call order"));
     });
   });
 

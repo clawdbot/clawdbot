@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover tool-call classification and view-model resolution.
 import { describe, expect, it } from "vitest";
 import {

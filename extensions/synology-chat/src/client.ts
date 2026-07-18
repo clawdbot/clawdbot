@@ -21,6 +21,8 @@ const MIN_SEND_INTERVAL_MS = 500;
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
 const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
+/** Wall-clock budget for outgoing webhook requests including response body. */
+const POST_REQUEST_TIMEOUT_MS = 30_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
 
@@ -335,6 +337,24 @@ function parseNumericUserId(userId?: string | number): number | undefined {
 
 function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let response: http.IncomingMessage | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: { ok?: boolean; error?: Error }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (deadlineTimer !== undefined) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = undefined;
+      }
+      if (result.error) {
+        reject(result.error);
+        return;
+      }
+      resolve(result.ok === true);
+    };
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
@@ -352,24 +372,30 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
           "Content-Type": "application/x-www-form-urlencoded",
           "Content-Length": Buffer.byteLength(body),
         },
-        timeout: 30_000,
         // Synology NAS may use self-signed certs on local network.
         // Set allowInsecureSsl: true in channel config to skip verification.
         rejectUnauthorized: !allowInsecureSsl,
       },
       (res) => {
+        response = res;
         res.on("end", () => {
-          resolve(res.statusCode === 200);
+          finish({ ok: res.statusCode === 200 });
         });
+        res.on("error", (error) => finish({ error }));
         res.resume();
       },
     );
 
-    req.on("error", reject);
-    req.on("timeout", () => {
+    req.on("error", (error) => finish({ error }));
+    // ClientRequest timeout is socket-idle based. Keep one absolute budget
+    // across connect, upload, and response drain so trickling bodies terminate.
+    deadlineTimer = setTimeout(() => {
+      const error = new Error("Request timeout");
+      finish({ error });
+      response?.destroy();
       req.destroy();
-      reject(new Error("Request timeout"));
-    });
+    }, POST_REQUEST_TIMEOUT_MS);
+    deadlineTimer.unref?.();
     req.write(body);
     req.end();
   });

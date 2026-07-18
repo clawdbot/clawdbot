@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import * as http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveLegacyWebhookNameToChatUserId } from "./client.js";
+import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
@@ -148,5 +148,55 @@ describe("Synology Chat user_list loopback", () => {
     expect(warnings).toContain("fetchChatUsers: request timed out, using cached data");
     expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+  });
+
+  it("bounds a dripping chatbot response with a wall-clock deadline", async () => {
+    let requestCount = 0;
+    server = http.createServer((_req, res) => {
+      requestCount += 1;
+      res.on("error", () => {});
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Transfer-Encoding": "chunked",
+      });
+      const dripTimer = setInterval(() => {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write("x");
+        }
+      }, 20);
+      res.on("close", () => clearInterval(dripTimer));
+      res.write("x");
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const incomingUrl = `http://127.0.0.1:${address.port}/webapi/entry.cgi`;
+    const timeoutMs = 250;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    timeoutSpy.mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      delay?: number,
+      ...args: unknown[]
+    ) =>
+      nativeSetTimeout(
+        callback,
+        delay === 30_000 ? timeoutMs : delay,
+        ...args,
+      )) as typeof setTimeout);
+
+    const startedAt = performance.now();
+    await expect(sendMessage(incomingUrl, "hello")).resolves.toBe(false);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(requestCount).toBe(3);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 3 - 100);
+    expect(elapsedMs).toBeLessThan(3_500);
   });
 });

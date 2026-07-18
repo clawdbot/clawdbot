@@ -15,10 +15,55 @@ moment for the recalled fact to feel natural has passed. Active memory gives
 the system one bounded chance to surface relevant memory before the main
 reply is generated.
 
-## Quick start
+## Remember across conversations
 
-Paste into `openclaw.json` for a safe default: plugin on, scoped to `main`,
-direct-message sessions only, model inherited from the session.
+For a personal or fully trusted agent, enable bounded recall across its other
+private conversations with one per-agent setting:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "personal",
+        memorySearch: {
+          rememberAcrossConversations: true,
+        },
+      },
+    ],
+  },
+}
+```
+
+The setting is off by default. When enabled, OpenClaw indexes that agent's
+session transcripts and runs an Active Memory retrieval pass before eligible
+private replies. The pass can read relevant transcript excerpts from the same
+agent's other private conversations. It excludes the conversation already
+being answered.
+
+The privacy boundary is fixed:
+
+- private direct and persistent explicit UI conversations can recall one another
+- groups and channels are neither recall sources nor recall destinations
+- another agent's transcripts are never eligible
+- unknown or archived transcripts without enough conversation metadata are rejected
+
+This does not merge transcripts, change session keys or delivery routes, widen
+`tools.sessions.visibility`, or grant broader `sessions_*` tool access. Shared
+workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
+
+Active Memory must remain enabled. Retrieval adds a bounded blocking step to
+eligible replies; timeout, unavailable search, and empty results all continue
+the reply without recalled transcript context. OpenClaw's built-in memory
+provider supports this protected transcript-recall path with both the builtin
+and QMD backends. Other memory providers keep their own recall behavior but do
+not automatically receive private transcript authorization. `openclaw doctor`
+reports an unsupported provider or missing `memory_search` tool.
+
+## Advanced Active Memory quick start
+
+Paste into `openclaw.json` for an advanced safe default: plugin on, scoped to
+`main`, direct-message sessions only, model inherited from the session.
 
 ```json5
 {
@@ -90,14 +135,14 @@ without extra context.
 Active memory is a conversational enrichment feature, not a platform-wide
 inference feature:
 
-| Surface                                                             | Runs active memory?                                     |
-| ------------------------------------------------------------------- | ------------------------------------------------------- |
-| Control UI / web chat persistent sessions                           | Yes, if the plugin is enabled and the agent is targeted |
-| Other interactive channel sessions on the same persistent chat path | Yes, if the plugin is enabled and the agent is targeted |
-| Headless one-shot runs                                              | No                                                      |
-| Heartbeat/background runs                                           | No                                                      |
-| Generic internal `agent-command` paths                              | No                                                      |
-| Sub-agent/internal helper execution                                 | No                                                      |
+| Surface                                                             | Runs active memory?                                      |
+| ------------------------------------------------------------------- | -------------------------------------------------------- |
+| Control UI / web chat persistent sessions                           | Yes, when either activation path targets the agent       |
+| Other interactive channel sessions on the same persistent chat path | Yes, when either activation path allows the conversation |
+| Headless one-shot runs                                              | No                                                       |
+| Heartbeat/background runs                                           | No                                                       |
+| Generic internal `agent-command` paths                              | No                                                       |
+| Sub-agent/internal helper execution                                 | No                                                       |
 
 Use it when the session is persistent and user-facing, the agent has
 meaningful long-term memory to search, and continuity/personalization matter
@@ -108,32 +153,26 @@ personalization would be surprising.
 
 ## When it runs
 
-Two gates must both pass:
+Active Memory has two activation paths:
 
-1. **Config opt-in** — the plugin is enabled and the current agent id is in `config.agents`.
-2. **Runtime eligibility** — the session is an eligible interactive persistent chat session, its chat type is allowed, and its conversation id is not filtered out.
+1. **Remember across conversations** automatically targets agents whose
+   `memorySearch.rememberAcrossConversations` setting is enabled, but only for
+   private direct or persistent explicit UI conversations.
+2. **Advanced Active Memory** targets agent IDs listed in
+   `plugins.entries.active-memory.config.agents` and applies the plugin's chat
+   type and chat ID controls.
 
-```text
-plugin enabled
-+
-agent id targeted
-+
-allowed chat type
-+
-allowed/not-denied chat id
-+
-eligible interactive persistent chat session
-=
-active memory runs
-```
-
-If any condition fails, active memory does not run for that turn (and the
-main reply is unaffected).
+Both paths require the plugin to be enabled and an eligible interactive
+persistent conversation. A session-scoped `/active-memory off` pauses both
+paths for that conversation. If any condition fails, active memory does not run
+for that turn, and the main reply is unaffected.
 
 ### Session types
 
-`config.allowedChatTypes` controls which kinds of conversations may run
-active memory. Default:
+`config.allowedChatTypes` controls which kinds of conversations may run the
+advanced Active Memory path. It cannot widen Remember across conversations:
+that product setting remains private-only even when advanced Active Memory is
+allowed in groups or channels. Default:
 
 ```json5
 allowedChatTypes: ["direct"];
@@ -185,7 +224,9 @@ config:
 ```
 
 This only affects the current session; it does not change
-`plugins.entries.active-memory.config.enabled` or other global configuration.
+`plugins.entries.active-memory.config.enabled`, an agent's
+`memorySearch.rememberAcrossConversations` setting, or other global
+configuration.
 
 To pause/resume for all sessions instead, use the global form (requires
 owner or `operator.admin`):
@@ -392,12 +433,12 @@ model — `/v1/models` visibility alone does not guarantee it.
 ## Memory tools
 
 `config.toolsAllow` sets the concrete tool names the blocking sub-agent may
-call. Defaults depend on the active memory provider:
+call for advanced Active Memory. Defaults depend on the current memory provider:
 
-| `plugins.slots.memory`           | Default `toolsAllow`              |
-| -------------------------------- | --------------------------------- |
-| unset / `memory-core` (built-in) | `["memory_search", "memory_get"]` |
-| `memory-lancedb`                 | `["memory_recall"]`               |
+| Memory provider | Default `toolsAllow`              |
+| --------------- | --------------------------------- |
+| Built-in memory | `["memory_search", "memory_get"]` |
+| LanceDB         | `["memory_recall"]`               |
 
 If none of the configured tools are available, or the sub-agent run fails,
 active memory skips recall for that turn and the main reply continues
@@ -409,7 +450,7 @@ explicitly report an empty result or failure.
 entries, and core agent tools (`read`, `exec`, `message`, `web_search`, and
 similar) are silently filtered out before the hidden sub-agent starts.
 
-### Built-in memory-core
+### Built-in memory
 
 No explicit `toolsAllow` needed:
 
@@ -431,24 +472,13 @@ No explicit `toolsAllow` needed:
 
 ### LanceDB memory
 
-Selecting the memory slot is enough for active memory to use `memory_recall`:
+After [installing and configuring LanceDB](/plugins/memory-lancedb), Active
+Memory automatically uses `memory_recall`; no explicit `toolsAllow` is needed:
 
 ```json5
 {
   plugins: {
-    slots: {
-      memory: "memory-lancedb",
-    },
     entries: {
-      "memory-lancedb": {
-        enabled: true,
-        config: {
-          embedding: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
-      },
       "active-memory": {
         enabled: true,
         config: {
@@ -461,6 +491,11 @@ Selecting the memory slot is enough for active memory to use `memory_recall`:
 }
 ```
 
+This is the advanced Active Memory path for LanceDB's own stored memories.
+`memorySearch.rememberAcrossConversations` does not expose private session
+transcripts through `memory_recall`. Use LanceDB's auto-recall or the advanced
+configuration above when LanceDB is the active memory provider.
+
 ### Lossless Claw
 
 [Lossless Claw](https://github.com/martian-engineering/lossless-claw) is an
@@ -472,6 +507,9 @@ point active memory at its tools:
 ```json5
 {
   plugins: {
+    slots: {
+      contextEngine: "lossless-claw",
+    },
     entries: {
       "lossless-claw": {
         enabled: true,
@@ -480,7 +518,7 @@ point active memory at its tools:
         enabled: true,
         config: {
           agents: ["main"],
-          toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+          toolsAllow: ["memory_search", "lcm_grep", "lcm_describe", "lcm_expand_query"],
           promptAppend: "Use lcm_grep first for compacted conversation recall. Use lcm_describe to inspect a specific summary. Use lcm_expand_query only when the latest user message needs exact details that may have been compacted away. Return NONE if the retrieved context is not clearly useful.",
         },
       },
@@ -491,7 +529,11 @@ point active memory at its tools:
 
 Do not add `lcm_expand` to `toolsAllow` here; Lossless Claw uses it as a
 lower-level tool for delegated expansion, not meant for the top-level
-active-memory sub-agent.
+active-memory sub-agent. Lossless Claw changes context assembly without
+replacing the current memory provider. Keep `memory_search` in `toolsAllow`
+when also using `rememberAcrossConversations`; an LCM-only tool list remains
+valid for advanced Active Memory but disables the product transcript-recall
+path.
 
 ## Advanced escape hatches
 
@@ -685,10 +727,16 @@ while warm-up finishes.
 If active memory is not showing up where you expect:
 
 1. Confirm the plugin is enabled under `plugins.entries.active-memory.enabled`.
-2. Confirm the current agent id is listed in `config.agents`.
-3. Confirm you are testing through an interactive persistent chat session.
-4. Turn on `config.logging: true` and watch the gateway logs.
-5. Verify memory search itself works with `openclaw status --deep`.
+2. For Remember across conversations, confirm the agent's
+   `memorySearch.rememberAcrossConversations` setting is `true`, run
+   `openclaw doctor` to verify the current memory provider supports protected
+   transcript recall, and confirm `config.toolsAllow` includes `memory_search`
+   when explicitly configured. For advanced Active Memory, confirm the agent ID
+   is listed in `config.agents`.
+3. Confirm you are testing through an eligible interactive persistent conversation.
+4. Remember that groups and channels never use cross-conversation transcript recall.
+5. Turn on `config.logging: true` and watch the gateway logs.
+6. Verify memory search itself works with `openclaw status --deep`.
 
 If memory hits are noisy, tighten `maxSummaryChars`. If active memory is too
 slow, lower `queryMode`, lower `timeoutMs`, or reduce recent turn counts and
@@ -696,12 +744,14 @@ per-turn char caps.
 
 ## Common issues
 
-Active memory rides on the configured memory plugin's recall pipeline, so
-most recall surprises are embedding-provider problems, not active-memory
-bugs. The default `memory-core` path uses `memory_search` and `memory_get`;
-the `memory-lancedb` slot uses `memory_recall`. If you use another memory
-plugin, confirm `config.toolsAllow` names the tools that plugin actually
-registers.
+Advanced Active Memory rides on the configured memory plugin's recall
+pipeline, so most recall surprises are embedding-provider problems, not
+active-memory bugs. The default `memory-core` path uses `memory_search` and
+`memory_get`; the `memory-lancedb` slot uses `memory_recall`. If you use another
+memory plugin, confirm `config.toolsAllow` names the tools that plugin actually
+registers. Remember across conversations is narrower: the current memory
+provider must support OpenClaw's protected same-agent/private-session recall
+path.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">

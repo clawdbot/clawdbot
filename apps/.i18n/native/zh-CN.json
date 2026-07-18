@@ -7344,6 +7344,56 @@
       "translated": "不支持的附件"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "其他答案"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "提交"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "已回答"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "已在其他地方回答"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "已过期"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "已取消"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "待处理"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "正在提交…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "${seconds / 60}分${seconds % 60}秒后过期"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "${seconds}秒后过期"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "模型"
@@ -20104,6 +20154,11 @@
       "translated": "Gateway 无法规划 \\(plan.summary.errors) 个\\(Self.memoryNoun(plan.summary.errors))。请重试。"
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "醒醒，我的朋友！"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<已隐藏的密钥>"
@@ -22907,6 +22962,41 @@
       "id": "native.apple.b6b3b9af4c618060",
       "source": "Expand plan",
       "translated": "展开计划"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "其他答案"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "未选择"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "已选择"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "提交"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "正在提交…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "\\(seconds / 60)分\\(seconds % 60)秒后过期"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "\\(seconds)秒后过期"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { decideUsageRefresh, USAGE_PAYLOAD_TTL_MS } from "./refresh-policy.ts";
 

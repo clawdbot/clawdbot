@@ -137,6 +137,7 @@ describe("pairing setup code", () => {
         scopes: [
           "operator.admin",
           "operator.approvals",
+          "operator.questions",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",

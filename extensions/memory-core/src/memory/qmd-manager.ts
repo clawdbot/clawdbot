@@ -380,8 +380,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       async (args, opts) => await this.commands.run(args, opts),
       async (signal) => await this.buildQmdCollectionValidationCacheContext(signal),
     );
-    this.documentResolver = new QmdDocumentResolver(this.workspaceDir, this.collectionRoots, () =>
-      this.ensureDb(),
+    this.documentResolver = new QmdDocumentResolver(
+      this.workspaceDir,
+      this.collectionRoots,
+      () => this.ensureDb(),
+      this.qmd.sessions.readable,
     );
     this.closeSignal = new Promise<void>((resolve) => {
       this.resolveCloseSignal = resolve;
@@ -731,7 +734,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const requestedSources = opts?.sources?.length ? uniqueValues(opts.sources) : undefined;
+    // Remember-only session exports are indexed for trusted recall but are not
+    // part of ordinary manager searches. Explicit export keeps its existing
+    // ordinary-access behavior; trusted recall always passes sources=sessions.
+    const requestedSources = opts?.sources?.length
+      ? uniqueValues(opts.sources)
+      : this.qmd.sessions.readable
+        ? undefined
+        : (["memory"] satisfies MemorySource[]);
     const collectionNames = this.listManagedCollectionNames(requestedSources);
     const limit = resultLimit;
     if (collectionNames.length === 0) {

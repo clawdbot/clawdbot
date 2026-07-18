@@ -1340,7 +1340,7 @@ function isRunningAsRoot(): boolean {
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
-  action: "stop" | "restart";
+  action: "start" | "stop" | "restart";
   label: string;
   onMutation?: () => void;
 }) {
@@ -1380,6 +1380,27 @@ async function runSystemdServiceAction(params: {
   }
   params.onMutation?.();
   params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+}
+
+export async function startSystemdService({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  await runSystemdServiceAction({
+    stdout,
+    env,
+    action: "start",
+    label: "Started systemd service",
+    onMutation: () => {
+      try {
+        onMutation?.({ mode: "systemctl-start" });
+      } catch {
+        // Audit observers are diagnostic; never interrupt service control.
+      }
+    },
+  });
+  return { outcome: "completed" };
 }
 
 export async function stopSystemdService({

@@ -224,6 +224,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
+  "agents.defaults.memorySearch.rememberAcrossConversations":
+    "Use relevant context from this agent's other private conversations through protected transcript recall. Groups and channels stay separate. Enable this only for a personal or fully trusted agent.",
   "agents.defaults.memorySearch.sources":
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":

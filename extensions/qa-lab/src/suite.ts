@@ -320,22 +320,36 @@ async function runQaSuiteCleanupSteps(steps: ReadonlyArray<() => Promise<void>>)
 
 async function runQaFlowSuiteCleanupPlan(params: {
   closeWebSessions?: () => Promise<void>;
-  cleanupTransport: () => Promise<void>;
+  cleanupTransportBeforeGatewayStop: () => Promise<void>;
+  cleanupTransportAfterGatewayStop: () => Promise<void>;
   stopGateway?: () => Promise<void>;
   disposeAgentHarnesses: () => Promise<void>;
   stopProvider?: () => Promise<void>;
   finishLab: () => Promise<void>;
 }) {
-  return await runQaSuiteCleanupSteps([
+  const errors = await runQaSuiteCleanupSteps([
     ...(params.closeWebSessions ? [params.closeWebSessions] : []),
     // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
     // emit an unhandled response-close rejection during delivery.
-    params.cleanupTransport,
-    ...(params.stopGateway ? [params.stopGateway] : []),
-    params.disposeAgentHarnesses,
-    ...(params.stopProvider ? [params.stopProvider] : []),
-    params.finishLab,
+    params.cleanupTransportBeforeGatewayStop,
   ]);
+  let gatewayStopped = !params.stopGateway;
+  if (params.stopGateway) {
+    const gatewayErrors = await runQaSuiteCleanupSteps([params.stopGateway]);
+    errors.push(...gatewayErrors);
+    gatewayStopped = gatewayErrors.length === 0;
+  }
+  errors.push(
+    ...(await runQaSuiteCleanupSteps([
+      // Never release a credential-backed transport until gateway teardown proves
+      // that the isolated runtime reached its terminal boundary.
+      ...(gatewayStopped ? [params.cleanupTransportAfterGatewayStop] : []),
+      params.disposeAgentHarnesses,
+      ...(params.stopProvider ? [params.stopProvider] : []),
+      params.finishLab,
+    ])),
+  );
+  return errors;
 }
 
 function throwQaSuiteCleanupErrors(params: {
@@ -975,7 +989,7 @@ async function runQaRuntimeParitySuite(params: {
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
-    await transportFactoryResult.cleanup();
+    await transportFactoryResult.cleanupWithoutGateway();
     if (ownsLab) {
       await lab.stop();
     }
@@ -1498,7 +1512,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         // The parent only renders aggregate artifacts. Release its live credentials
         // before child workers acquire the same exclusive transport lease.
         parentTransportCleaned = true;
-        await transportFactoryResult.cleanup();
+        await transportFactoryResult.cleanupWithoutGateway();
       }
       updateScenarioRun();
       const workerStartStaggerMs =
@@ -1673,7 +1687,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       throw error;
     } finally {
       const cleanupSteps: Array<() => Promise<void>> = [
-        ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanup()] : []),
+        ...(!parentTransportCleaned ? [() => transportFactoryResult.cleanupWithoutGateway()] : []),
         () => disposeRegisteredAgentHarnesses(),
       ];
       if (ownsLab) {
@@ -2026,7 +2040,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     const activeMock = mock;
     const cleanupErrors = await runQaFlowSuiteCleanupPlan({
       closeWebSessions: activeEnv ? () => closeQaWebSessions(activeEnv.webSessionIds) : undefined,
-      cleanupTransport: () => transportFactoryResult.cleanup(),
+      cleanupTransportBeforeGatewayStop: () => transportFactoryResult.cleanupBeforeGatewayStop(),
+      cleanupTransportAfterGatewayStop: () => transportFactoryResult.cleanupAfterGatewayStop(),
       stopGateway: activeGateway
         ? () =>
             activeGateway.stop({

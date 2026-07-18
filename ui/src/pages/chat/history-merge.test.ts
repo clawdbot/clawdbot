@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover history merge behavior.
 import { describe, expect, it } from "vitest";
 import { preserveOptimisticTailMessages } from "./history-merge.ts";

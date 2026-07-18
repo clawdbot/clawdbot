@@ -3423,6 +3423,62 @@ openclaw-chat-page {
   min-width: 0;
 }
 
+/* Model provenance sits above the provider browser, outside the reasoning
+   panel; mirrors the reasoning head's anatomy with its own class family so
+   test selectors and semantics stay distinct. */
+.chat-controls__model-provenance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.chat-controls__model-provenance-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 6px;
+}
+
+.chat-controls__model-provenance-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.chat-controls__model-provenance-value--inherit {
+  color: var(--muted);
+}
+
+.chat-controls__model-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-controls__model-reset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  color: var(--fg);
+}
+
+.chat-controls__model-reset svg {
+  width: 12px;
+  height: 12px;
+}
+
 .chat-controls__reasoning-state {
   display: inline-flex;
   align-items: center;

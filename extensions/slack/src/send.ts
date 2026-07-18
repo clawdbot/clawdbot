@@ -272,6 +272,30 @@ export type SlackSendResult = {
   threadTs?: string;
 };
 
+export async function updateMessageSlack(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  channelId: string;
+  messageTs: string;
+  text: string;
+  blocks: (Block | KnownBlock)[];
+}): Promise<void> {
+  const cfg = requireRuntimeConfig(params.cfg, "Slack update");
+  const account = resolveSlackAccount({ cfg, accountId: params.accountId });
+  const token = resolveToken({
+    accountId: account.accountId,
+    fallbackToken: account.botToken,
+    fallbackSource: account.botTokenSource,
+  });
+  const client = getSlackWriteClient(token);
+  await client.chat.update({
+    channel: params.channelId,
+    ts: params.messageTs,
+    text: truncateSlackText(params.text, SLACK_TEXT_LIMIT),
+    blocks: validateSlackBlocksArray(params.blocks),
+  });
+}
+
 type SlackConversationMessage = {
   ts?: unknown;
   thread_ts?: unknown;

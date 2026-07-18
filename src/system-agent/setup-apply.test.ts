@@ -288,6 +288,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
     mocks.ensureWorkspace.mockImplementation(async () => {
       mocks.events.push("workspace");
+      return { bootstrapPending: true };
     });
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
@@ -321,6 +322,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const result = await applySystemAgentSetup(baseParams({ expectedConfigHash: null }));
 
     expect(result.configHashBefore).toBeNull();
+    expect(result.bootstrapPending).toBe(true);
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
     });

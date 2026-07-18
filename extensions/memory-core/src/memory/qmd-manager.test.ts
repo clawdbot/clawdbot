@@ -737,6 +737,44 @@ describe("QmdMemoryManager", () => {
     expect(secondDebug.at(-1)?.qmd?.searchPlan?.sources).toEqual(["sessions"]);
   });
 
+  it("keeps remember-only session exports out of ordinary manager searches", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+    const { manager } = await createManager({ mode: "cli" });
+
+    await manager.search("remember-only", {
+      sessionKey: "agent:main:cli:direct:memory-search",
+    });
+
+    const searchCalls = spawnMock.mock.calls
+      .filter(([, args]) => args[0] === "search")
+      .map(([, args]) => args);
+    expect(searchCalls.some((args) => args.includes("workspace-main"))).toBe(true);
+    expect(searchCalls.some((args) => args.includes("sessions-main"))).toBe(false);
+    await manager.close();
+  });
+
   it("rewrites stale multi-collection probe cache when combined filters are rejected", async () => {
     await configureMemoryCoreDreamingStateForTests();
     const otherWorkspaceDir = path.join(tmpRoot, "other-workspace");
@@ -6533,6 +6571,56 @@ describe("QmdMemoryManager", () => {
     await expect(manager.readFile({ relPath: "qmd/workspace-main/link.md" })).rejects.toThrow(
       "path required",
     );
+
+    await manager.close();
+  });
+
+  it("blocks memory_get reads of remember-only session exports", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [{ id: "main", memorySearch: { rememberAcrossConversations: true } }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    // Remember-only export is search-only for trusted recall; ordinary
+    // memory_get must not read transcript exports the operator never opted into.
+    await expect(manager.readFile({ relPath: "qmd/sessions-main/export.md" })).rejects.toThrow(
+      "path required",
+    );
+
+    await manager.close();
+  });
+
+  it("keeps explicitly configured session exports readable via memory_get", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          sessions: { enabled: true },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager();
+
+    await expect(manager.readFile({ relPath: "qmd/sessions-main/export.md" })).resolves.toEqual({
+      path: "qmd/sessions-main/export.md",
+      text: "",
+    });
 
     await manager.close();
   });

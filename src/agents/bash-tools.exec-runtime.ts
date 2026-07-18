@@ -600,6 +600,8 @@ export async function runExecProcess(opts: {
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  /** Runs after process finalization and before the exit wake is queued. */
+  onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
@@ -751,7 +753,8 @@ export async function runExecProcess(opts: {
       // Finalization can release remote process/session resources. Keep the
       // background-work blocker until that owner transition has settled.
       session.finalizing = false;
-      if (!session.exited) {
+      const shouldNotify = !session.exited;
+      if (shouldNotify) {
         markExited(
           session,
           finalOutcome.exitCode,
@@ -760,6 +763,9 @@ export async function runExecProcess(opts: {
           finalOutcome.exitReason,
           finalOutcome.noOutputTimedOut,
         );
+      }
+      opts.onSettledBeforeNotify?.(finalOutcome);
+      if (shouldNotify) {
         maybeNotifyOnExit(session, finalOutcome.status);
       }
     }

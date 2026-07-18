@@ -1488,9 +1488,12 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
   }
   for (const prompt of props.questionPrompts ?? []) {
-    // In-thread questions need an explicit owner. Routing an unscoped prompt to the active pane
-    // could expose it to the wrong session; ask_user supplies the originating session key.
-    if (!prompt.sessionKey || !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)) {
+    // Pending questions live in the composer dock. Only their terminal summary becomes transcript.
+    if (
+      prompt.status === "pending" ||
+      !prompt.sessionKey ||
+      !areUiSessionKeysEquivalent(prompt.sessionKey, props.sessionKey)
+    ) {
       continue;
     }
     items.push({
@@ -1498,7 +1501,6 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       key: `question:${prompt.id}`,
       questionId: prompt.id,
       startedAt: prompt.createdAtMs,
-      pending: prompt.status === "pending",
     });
   }
 
@@ -1568,8 +1570,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "question" &&
         previous.questionId === next.questionId &&
-        previous.startedAt === next.startedAt &&
-        previous.pending === next.pending
+        previous.startedAt === next.startedAt
       );
     case "plan":
       return previous.kind === "plan";
@@ -1776,7 +1777,7 @@ export function coalesceStreamRuns(
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream, question, plan, and reading-indicator items render under one
+  // Contiguous in-flight stream, plan, and reading-indicator items render under one
   // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
@@ -1786,12 +1787,7 @@ export function coalesceStreamRuns(
     }
   };
   for (const item of items) {
-    if (
-      item.kind === "stream" ||
-      item.kind === "reading-indicator" ||
-      (item.kind === "question" && item.pending) ||
-      item.kind === "plan"
-    ) {
+    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
       run.push(item);
       continue;
     }

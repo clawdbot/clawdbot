@@ -48,6 +48,15 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   );
 }
 
+function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.stopReason === "error" || message.stopReason === "aborted") &&
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === "toolCall")
+  );
+}
+
 /** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
@@ -155,12 +164,17 @@ export function transformTransportMessages(
     }
     return { ...msg, content };
   });
-  // Preserve the old transport replay filter: failed streamed turns can contain
-  // partial text, partial tool calls, or both, and strict providers can treat
-  // them as valid assistant context on retry unless we drop the whole turn.
+  // Pairing-aware transports must let shared repair see errored tool-call frames and
+  // their adjacent results together; pre-filtering the call can misattribute its result
+  // to an older turn that reused the same provider id.
   const replayable = transformed.filter((_, index) => {
     const original = messages[index];
-    return original ? !isFailedAssistantTurn(original) : true;
+    if (!original) {
+      return true;
+    }
+    return allowSyntheticToolResults
+      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
+      : !isFailedAssistantTurn(original);
   });
 
   if (!allowSyntheticToolResults) {
@@ -169,8 +183,7 @@ export function transformTransportMessages(
 
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
-  // handles both, while preserving the previous transport behavior of dropping
-  // aborted/error assistant tool-call turns before replaying strict providers.
+  // handles both and drops aborted/error turns together with their owned results.
   return repairToolUseResultPairing(replayable, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,

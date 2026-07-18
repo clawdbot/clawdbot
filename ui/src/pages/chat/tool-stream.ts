@@ -66,7 +66,6 @@ type ToolStreamHost = {
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -331,7 +330,6 @@ export function resetToolStream(host: ToolStreamHost) {
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
-  host.questionStatus = null;
 }
 
 export type CompactionStatus = {
@@ -361,26 +359,8 @@ export type PlanStatus = {
   }>;
 };
 
-export type QuestionStatus = {
-  runId?: string;
-  itemId: string;
-  actionToken: string;
-  questions: Array<{
-    id: string;
-    header: string;
-    question: string;
-    isOther: boolean;
-    options: Array<{ label: string; description?: string }>;
-  }>;
-};
-
 type PlanHost = ToolStreamHost & {
   planStatus?: PlanStatus | null;
-  requestUpdate?: () => void;
-};
-
-type QuestionHost = ToolStreamHost & {
-  questionStatus?: QuestionStatus | null;
   requestUpdate?: () => void;
 };
 
@@ -772,71 +752,6 @@ function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
   host.requestUpdate?.();
 }
 
-function parseQuestionStatus(
-  data: Record<string, unknown>,
-  runId: string | null,
-): QuestionStatus | null {
-  const itemId = toTrimmedString(data.itemId);
-  const actionToken = toTrimmedString(data.actionToken);
-  if (!itemId || !actionToken?.match(/^[0-9a-f-]{36}$/u) || !Array.isArray(data.questions)) {
-    return null;
-  }
-  // Sensitive answers cannot use the chat-send seam without becoming transcript content.
-  // Keep the existing warned text prompt until the dedicated question RPC exists.
-  if (data.questions.some((value) => readRecord(value)?.isSecret === true)) {
-    return null;
-  }
-  const questions = data.questions.flatMap((value) => {
-    const question = readRecord(value);
-    const id = typeof question?.id === "string" ? question.id : undefined;
-    const header = toTrimmedString(question?.header);
-    const prompt = toTrimmedString(question?.question);
-    if (!id?.trim() || !header || !prompt) {
-      return [];
-    }
-    const options = Array.isArray(question?.options)
-      ? question.options.flatMap((rawOption) => {
-          const option = readRecord(rawOption);
-          const label = typeof option?.label === "string" ? option.label : undefined;
-          const description = toTrimmedString(option?.description);
-          return label?.trim() ? [{ label, ...(description ? { description } : {}) }] : [];
-        })
-      : [];
-    return [
-      {
-        id,
-        header,
-        question: prompt,
-        isOther: question?.isOther === true,
-        options,
-      },
-    ];
-  });
-  return questions.length > 0
-    ? { ...(runId ? { runId } : {}), itemId, actionToken, questions }
-    : null;
-}
-
-function handleQuestionEvent(host: QuestionHost, payload: AgentEventPayload) {
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
-    return;
-  }
-  const data = payload.data ?? {};
-  const itemId = toTrimmedString(data.itemId);
-  if (data.phase === "resolved") {
-    if (!itemId || host.questionStatus?.itemId === itemId) {
-      host.questionStatus = null;
-      host.requestUpdate?.();
-    }
-    return;
-  }
-  if (data.phase !== "requested") {
-    return;
-  }
-  host.questionStatus = parseQuestionStatus(data, toTrimmedString(payload.runId));
-  host.requestUpdate?.();
-}
-
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -873,11 +788,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   if (payload.stream === "plan") {
     handlePlanEvent(host as PlanHost, payload);
-    return;
-  }
-
-  if (payload.stream === "question") {
-    handleQuestionEvent(host as QuestionHost, payload);
     return;
   }
 

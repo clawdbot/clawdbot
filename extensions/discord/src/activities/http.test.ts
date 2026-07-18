@@ -223,16 +223,26 @@ describe("Discord Activity HTTP OAuth", () => {
     expect(response.status).toBe(401);
   });
 
-  it("returns 403 for a user outside the account allowlist", async () => {
-    const base = await startServer(createActivityTestRuntime(), {
-      fetchGuard: guardedJsonFetch({ userId: "99" }),
+  it("lets a channel member outside the agent allowlist open the widget", async () => {
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime);
+    const base = await startServer(runtime, {
+      fetchGuard: guardedJsonFetch({ userId: "99", instanceUsers: ["99"] }),
     });
     const response = await fetch(`${base}/discord/activity/api/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: "oauth-code" }),
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    const token = (await response.json()) as { session_token: string };
+
+    const widgetResponse = await fetch(
+      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
+      { headers: { Authorization: `Bearer ${token.session_token}` } },
+    );
+    expect(widgetResponse.status).toBe(200);
+    await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
   });
 
   it("returns 503 when the configured account no longer resolves a secret", async () => {

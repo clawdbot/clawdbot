@@ -608,12 +608,15 @@ async function bootstrapLaunchAgentOrThrow(params: {
   plistPath: string;
   actionHint: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
+  skipEnable?: boolean;
 }) {
   // `disable` state survives bootout and plist rewrites; explicit start/repair
   // paths must clear it before asking launchd to load the job again.
-  const enable = await execLaunchctl(["enable", params.serviceTarget]);
-  if (enable.code === 0) {
-    params.onMutation?.("enable");
+  if (!params.skipEnable) {
+    const enable = await execLaunchctl(["enable", params.serviceTarget]);
+    if (enable.code === 0) {
+      params.onMutation?.("enable");
+    }
   }
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
@@ -1252,6 +1255,57 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   }
 }
 
+function createLaunchAgentMutationReporter(
+  onMutation: GatewayServiceControlArgs["onMutation"],
+): (mode: string) => void {
+  return (mode) => {
+    try {
+      onMutation?.({ mode });
+    } catch {
+      // Audit observers are diagnostic; never interrupt service control.
+    }
+  };
+}
+
+export async function startLaunchAgent({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const serviceTarget = `${domain}/${label}`;
+  const reportMutation = createLaunchAgentMutationReporter(onMutation);
+
+  // Enable is an independent mutation; audit it even if the later launch fails.
+  const enable = await execLaunchctl(["enable", serviceTarget]);
+  const enabled = enable.code === 0;
+  if (enabled) {
+    reportMutation("enable");
+  }
+
+  const start = await execLaunchctl(["kickstart", serviceTarget]);
+  if (start.code === 0) {
+    reportMutation("kickstart");
+  } else if (isLaunchctlNotLoaded(start)) {
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath,
+      actionHint: "openclaw gateway start",
+      onMutation: reportMutation,
+      skipEnable: enabled,
+    });
+  } else {
+    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+  }
+
+  writeLaunchAgentActionLine(stdout, "Started LaunchAgent", serviceTarget);
+  return { outcome: "completed" };
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
@@ -1263,13 +1317,7 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
-  const reportMutation = (mode: string) => {
-    try {
-      onMutation?.({ mode });
-    } catch {
-      // Audit observers are diagnostic; never interrupt a multi-step restart.
-    }
-  };
+  const reportMutation = createLaunchAgentMutationReporter(onMutation);
 
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before

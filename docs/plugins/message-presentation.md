@@ -145,8 +145,12 @@ Button semantics:
   `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
   agents and plugins must not synthesize question IDs. Telegram, Discord, and
   Slack map it to transport-private native callbacks and resolve the choice
-  through the Gateway. Other channels degrade the controls to label text, and
-  the user can answer with a plain-text reply.
+  through the Gateway. When the question becomes answered, expired, or
+  cancelled, those channels edit the delivered message, remove its actions,
+  and append the terminal status. WhatsApp, Signal, and iMessage render up to
+  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  shapes degrade to label text, and the user can answer with a plain-text
+  reply.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch

@@ -2,6 +2,16 @@ import Foundation
 import Observation
 import SwiftUI
 
+enum SystemAgentDraft: String, Decodable {
+    case hatch
+
+    var composerValue: String {
+        switch self {
+        case .hatch: String(localized: "Wake up, my friend!")
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class OnboardingSystemAgentChatState {
@@ -58,7 +68,7 @@ final class SystemAgentOnboardingChatModel {
     private(set) var expectsSensitiveReply = false
     var input = ""
     /// Set when OpenClaw hands off to the normal agent ("talk to agent").
-    var onAgentHandoff: (() -> Void)?
+    var onAgentHandoff: ((SystemAgentDraft?) -> Void)?
     /// Called after every assistant reply (setup may have applied config).
     var onReplyReceived: (() -> Void)?
 
@@ -89,6 +99,7 @@ final class SystemAgentOnboardingChatModel {
         let reply: String
         let action: String
         let sensitive: Bool?
+        let agentDraft: SystemAgentDraft?
     }
 
     func startIfNeeded() async {
@@ -207,7 +218,7 @@ final class SystemAgentOnboardingChatModel {
             self.messages.append(Message(role: .assistant, text: result.reply))
             self.onReplyReceived?()
             if result.action == "open-agent" {
-                self.onAgentHandoff?()
+                self.onAgentHandoff?(result.agentDraft)
             }
         } catch {
             guard self.requestGeneration == generation else { return }

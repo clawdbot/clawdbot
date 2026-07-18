@@ -5,10 +5,6 @@ on:
     types: [vitest-cache-warm]
   schedule:
     - cron: "17 8 * * *"
-  workflow_run: # zizmor: ignore[dangerous-triggers] successful main-push CI only; read-only default-branch checkout, no artifacts or untrusted ref
-    workflows: [CI]
-    branches: [main]
-    types: [completed]
 
 permissions:
   contents: read
@@ -19,73 +15,29 @@ concurrency:
 
 jobs:
   warm:
-    # Canonical main CI is single-flight, so only a completed green integration
-    # cycle may refresh the dependency snapshot. Scheduled/dispatch runs remain
-    # the transform and compile cache writers.
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
+    # Dependency snapshots are serialized before main CI fanout. This workflow
+    # writes only the transform and compile caches from scheduled/trusted runs.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          # workflow_run's github.sha follows the current default-branch tip,
-          # which can be newer than the green run that authorized this write.
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+          node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          save-node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          # This disposable, non-cancelled workflow is the sole dependency
-          # snapshot writer. Main CI completion coalesces refreshes without
-          # putting required build jobs in a cancel-on-pending mutex.
-          save-sticky-disk: "true"
-          save-vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-          sticky-disk: "true"
-          use-actions-cache: "false"
-          vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
-
-      - name: Maintain dependency store budget
-        shell: bash
-        env:
-          # The current store is well below this ceiling. Prune only after
-          # accumulated retired package versions exceed 8 GiB.
-          OPENCLAW_PNPM_STORE_MAX_KIB: "8388608"
-        run: |
-          set -euo pipefail
-          store_dir="${PNPM_CONFIG_STORE_DIR:?}"
-          before_kib="$(du -sk "$store_dir" | cut -f1)"
-          after_kib="$before_kib"
-          pruned=false
-
-          if [ "$before_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
-            echo "pnpm store is ${before_kib} KiB; pruning above ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
-            PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune
-            after_kib="$(du -sk "$store_dir" | cut -f1)"
-            pruned=true
-          else
-            echo "pnpm store is ${before_kib} KiB; below ${OPENCLAW_PNPM_STORE_MAX_KIB} KiB ceiling"
-          fi
-
-          {
-            echo "### Dependency store maintenance"
-            echo
-            echo "- Before: ${before_kib} KiB"
-            echo "- After: ${after_kib} KiB"
-            echo "- Pruned: ${pruned}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
-            echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
-          fi
+          save-actions-cache: "true"
+          save-node-compile-cache: "true"
+          save-vitest-fs-cache: "true"
+          sticky-disk: "false"
+          use-actions-cache: "true"
+          vitest-fs-cache: "true"
 
       - name: Select broad cache seed
-        if: github.event_name != 'workflow_run'
         shell: bash
         run: |
           set -euo pipefail
@@ -113,5 +65,4 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
-        if: github.event_name != 'workflow_run'
         run: node scripts/ci-run-node-test-shard.mjs

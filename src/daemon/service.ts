@@ -13,6 +13,7 @@ import {
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
+  startLaunchAgent,
   stageLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -23,6 +24,7 @@ import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   restartScheduledTask,
+  startScheduledTask,
   stageScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
@@ -49,6 +51,7 @@ import {
   readSystemdServiceExecStart,
   readSystemdServiceRuntime,
   restartSystemdService,
+  startSystemdService,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -76,6 +79,7 @@ export type GatewayService = {
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
@@ -230,10 +234,10 @@ export async function startGatewayService(
   }
 
   try {
-    const restartResult = await service.restart({ ...args, env: state.env });
+    const startResult = await service.start({ ...args, env: state.env });
     const nextState = await readGatewayServiceState(service, { env: state.env });
     return {
-      outcome: restartResult.outcome === "scheduled" ? "scheduled" : "started",
+      outcome: startResult.outcome === "scheduled" ? "scheduled" : "started",
       state: nextState,
     };
   } catch (err) {
@@ -291,6 +295,7 @@ function createUnsupportedGatewayService(): GatewayService {
     stage: rejectUnsupportedGatewayService,
     install: rejectUnsupportedGatewayService,
     uninstall: rejectUnsupportedGatewayService,
+    start: rejectUnsupportedGatewayService,
     stop: rejectUnsupportedGatewayService,
     restart: rejectUnsupportedGatewayService,
     isLoaded: rejectUnsupportedGatewayService,
@@ -310,6 +315,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageLaunchAgent),
     install: ignoreServiceWriteResult(installLaunchAgent),
     uninstall: uninstallLaunchAgent,
+    start: startLaunchAgent,
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
@@ -323,6 +329,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageSystemdService),
     install: ignoreServiceWriteResult(installSystemdService),
     uninstall: uninstallSystemdService,
+    start: startSystemdService,
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
@@ -336,6 +343,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageScheduledTask),
     install: ignoreServiceWriteResult(installScheduledTask),
     uninstall: uninstallScheduledTask,
+    start: startScheduledTask,
     stop: stopScheduledTask,
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
@@ -376,6 +384,11 @@ function withGatewayServiceMutationGuards(service: GatewayService): GatewayServi
       assertGatewayServiceMutationOwnedByOpenClaw("uninstall the gateway service", args.env);
       await assertFutureConfigActionAllowed("uninstall the gateway service");
       return await service.uninstall(args);
+    },
+    start: async (args) => {
+      assertGatewayServiceMutationOwnedByOpenClaw("start the gateway service", args.env);
+      await assertFutureConfigActionAllowed("start the gateway service");
+      return await service.start(args);
     },
     stop: async (args) => {
       assertGatewayServiceMutationOwnedByOpenClaw("stop the gateway service", args.env);

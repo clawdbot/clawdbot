@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import {
   configureWorkboardLiveRefresh,
@@ -61,7 +62,7 @@ describe("Workboard live refresh", () => {
     configureWorkboardLiveRefresh({ host, client: client as never });
 
     expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 })).toBe(true);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(getWorkboardState(host).cards[0]?.title).toBe("Updated elsewhere"),
     );
     expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 })).toBe(false);
@@ -98,12 +99,12 @@ describe("Workboard live refresh", () => {
     configureWorkboardLiveRefresh({ host, client: client as never });
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
-    await vi.waitFor(() => expect(listCalls).toBe(1));
+    await waitForFast(() => expect(listCalls).toBe(1));
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 });
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 3 });
     firstList.resolve({ cards: [], statuses: ["todo", "done"] });
 
-    await vi.waitFor(() => expect(listCalls).toBe(2));
+    await waitForFast(() => expect(listCalls).toBe(2));
     await Promise.resolve();
     expect(listCalls).toBe(2);
   });
@@ -127,7 +128,9 @@ describe("Workboard live refresh", () => {
     state.draftOpen = false;
     state.editingCardId = null;
     resumeWorkboardLiveRefresh(host);
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}));
+    await waitForFast(() =>
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
+    );
   });
 
   it("retries transient failures and treats a new epoch as authoritative", async () => {
@@ -146,7 +149,9 @@ describe("Workboard live refresh", () => {
     configureWorkboardLiveRefresh({ host, client: client as never });
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 9 });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}));
+    await waitForFast(() =>
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
+    );
     resumeWorkboardLiveRefresh(host);
     configureWorkboardLiveRefresh({ host, client: client as never });
     await Promise.resolve();
@@ -160,7 +165,7 @@ describe("Workboard live refresh", () => {
     ).toHaveLength(2);
 
     expect(handleWorkboardChanged(host, { epoch: "epoch-b", revision: 1 })).toBe(true);
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(
         client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
       ).toHaveLength(3),
@@ -176,7 +181,9 @@ describe("Workboard live refresh", () => {
     );
     configureWorkboardLiveRefresh({ host, client: client as never });
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}));
+    await waitForFast(() =>
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
+    );
 
     stopWorkboardLiveRefresh(host);
     list.resolve({
@@ -210,7 +217,9 @@ describe("Workboard live refresh", () => {
     );
     configureWorkboardLiveRefresh({ host, client: client as never });
     const loading = loadWorkboard({ host, client: client as never, force: true });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}));
+    await waitForFast(() =>
+      expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
+    );
 
     stopWorkboardLiveRefresh(host);
     list.resolve({

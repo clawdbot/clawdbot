@@ -231,7 +231,7 @@ async function main() {
     );
 
     const waitMessage = `wait event ${randomUUID()}`;
-    const waited = (await Promise.all([
+    const [waited, waitRun] = await Promise.all([
       callTool<{
         structuredContent?: { event?: Record<string, unknown> };
       }>({
@@ -242,20 +242,31 @@ async function main() {
           timeout_ms: 10_000,
         },
       }),
-      gateway.request("chat.send", {
+      gateway.request<{ runId?: string; status?: string }>("chat.send", {
         sessionKey: "agent:main:main",
         message: waitMessage,
         idempotencyKey: randomUUID(),
       }),
-    ]).then(([result]) => result)) as {
-      structuredContent?: { event?: Record<string, unknown> };
-    };
+    ]);
     const waitEvent = waited.structuredContent?.event;
     assert(waitEvent, "expected events_wait result");
     assert(waitEvent.type === "message", "expected message event");
     assert(waitEvent.role === "user", "expected user event role");
     assert(waitEvent.text === waitMessage, "expected wait event text");
     const waitCursor = typeof waitEvent.cursor === "number" ? waitEvent.cursor : 0;
+    assert(
+      waitRun.status === "started" && typeof waitRun.runId === "string",
+      `chat.send did not start: ${JSON.stringify(waitRun)}`,
+    );
+    const waitRunResult = await gateway.request<{ status?: string }>(
+      "agent.wait",
+      { runId: waitRun.runId, timeoutMs: 240_000 },
+      { timeoutMs: 245_000 },
+    );
+    assert(
+      waitRunResult.status === "ok",
+      `agent.wait failed for ${waitRun.runId}: ${JSON.stringify(waitRunResult)}`,
+    );
 
     const polled = await callTool<{
       structuredContent?: { events?: Array<Record<string, unknown>> };

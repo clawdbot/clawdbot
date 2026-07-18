@@ -611,6 +611,9 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `node.invoke.request`: node invoke request broadcast.
 - `device.pair.requested` / `device.pair.resolved`: paired-device lifecycle.
 - `voicewake.changed`: wake-word trigger config changed.
+- `config.changed`: a config write persisted (payload carries the config path,
+  the new snapshot hash, and a timestamp — never config content). Operator-read
+  scoped; clients refresh via `config.get`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval

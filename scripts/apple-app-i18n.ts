@@ -381,6 +381,7 @@ const MACOS_CATALOG = {
       "Save",
     ],
     "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
+    "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift": ["Wake up, my friend!"],
   },
 } as const;
 

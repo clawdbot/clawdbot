@@ -94,6 +94,19 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
+    @Test func `initial draft populates an empty composer without replacing user text`() {
+        let controller = WebChatSwiftUIWindowController(
+            sessionKey: "main",
+            initialDraft: "Wake up, my friend!",
+            presentation: .window,
+            transport: TestTransport())
+
+        #expect(controller._testDraft == "Wake up, my friend!")
+        controller.applyDraftIfEmpty("replacement")
+        #expect(controller._testDraft == "Wake up, my friend!")
+        controller.close()
+    }
+
     @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
         let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
             scope: "global",

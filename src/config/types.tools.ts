@@ -436,6 +436,8 @@ export type AgentToolsConfig = {
 export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
+  /** Use relevant context from this agent's other private conversations. */
+  rememberAcrossConversations?: boolean;
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */

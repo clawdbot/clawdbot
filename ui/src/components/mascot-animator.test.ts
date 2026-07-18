@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { MascotAnimator } from "./mascot-animator.ts";
 import { staticMascotPose, type MascotMood, type MascotPose } from "./mascot-pose.ts";

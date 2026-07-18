@@ -138,6 +138,15 @@ unified approval methods fall back to the shipped exec-specific methods;
 retained terminal state and richer cross-surface results require an updated
 Gateway.
 
+## Answer agent questions
+
+Chat shows pending Gateway questions as native cards for operator connections
+with `operator.questions` (or `operator.admin`). Cards support single- and
+multi-select options, option descriptions, free-text **Other** answers, and an
+expiry countdown. Reconnects reload pending questions from the Gateway. A card
+locks when this device answers it, another surface answers it first, or the
+question expires or is cancelled.
+
 ## Optional direct Apple Watch node
 
 Direct mode gives the watch its own signed node identity and Gateway connection.

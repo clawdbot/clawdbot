@@ -522,6 +522,28 @@ function clearConfigSchemaResponseCache() {
   configSchemaResponseCache = null;
 }
 
+/**
+ * Hash-only change notice so connected operator clients can refresh their
+ * config snapshot (e.g. live ui.prefs sync after an agent-approved write).
+ * Config content never rides the event; readers fetch via config.get.
+ */
+function broadcastConfigChanged(
+  context: GatewayRequestContext | undefined,
+  writeResult: Pick<ConfigWriteCommitResult, "path" | "hash">,
+): void {
+  // Test doubles and embedded hosts may omit broadcast; the notice is
+  // best-effort either way.
+  context?.broadcast?.(
+    "config.changed",
+    {
+      path: writeResult.path,
+      hash: writeResult.hash ?? null,
+      ts: Date.now(),
+    },
+    { dropIfSlow: true },
+  );
+}
+
 async function respondWithConfigRestartWrite(params: {
   requestParams: unknown;
   kind: ConfigRestartWriteKind;
@@ -561,6 +583,7 @@ async function respondWithConfigRestartWrite(params: {
     },
     undefined,
   );
+  broadcastConfigChanged(params.context, params.writeResult);
   params.writeResult.queueFollowUp();
 }
 
@@ -714,6 +737,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    broadcastConfigChanged(context, writeResult);
     writeResult.queueFollowUp();
   },
   "config.patch": async ({ params, respond, client, context }) => {

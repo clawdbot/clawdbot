@@ -1082,6 +1082,7 @@ class GatewaySession(
             setOf(
               "operator.admin",
               "operator.approvals",
+              "operator.questions",
               "operator.read",
               "operator.talk.secrets",
               "operator.write",

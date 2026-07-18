@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Channel wizard controller: step/answer state machine over wizard.* RPCs.
 import { describe, expect, it, vi } from "vitest";
 import { ChannelWizardController } from "./wizard-controller.ts";

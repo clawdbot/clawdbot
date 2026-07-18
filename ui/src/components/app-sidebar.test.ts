@@ -710,6 +710,9 @@ describe("AppSidebar agent chip", () => {
         | (HTMLElement & { startMs: number })
         | null
     )?.startMs;
+    const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
+    expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+    expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
     expect(runtimeStartMs).toBeGreaterThan(Date.now() - 31_000);
     expect(runtimeStartMs).toBeLessThan(Date.now() - 29_000);
 
@@ -3490,9 +3493,9 @@ describe("AppSidebar session accessibility", () => {
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
-    const descriptionId = link?.getAttribute("aria-describedby");
-    expect(descriptionId).toBeTruthy();
-    expect(descriptionId ? document.getElementById(descriptionId)?.textContent : "").toBe("now");
+    expect(link?.getAttribute("title")).toBe("Quarterly launch plan · now");
+    expect(link?.hasAttribute("aria-describedby")).toBe(false);
+    expect(row?.querySelector(".session-row-trail")?.textContent?.trim()).toBe("");
   });
 
   it("renders no chat rows when only the main session exists", async () => {
@@ -4308,6 +4311,8 @@ describe("AppSidebar catalog session rows", () => {
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
       expect(active[0]?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+      expect(active[0]?.querySelector("a")?.hasAttribute("aria-describedby")).toBe(false);
+      expect(active[0]?.querySelector(".session-row-trail")).toBeNull();
       // The raw catalog key must not surface as a synthesized chat row.
       // Catalogs nest inside the Coding zone, so classify each row by its
       // closest section rather than any ancestor group.

@@ -1,0 +1,108 @@
+package ai.openclaw.app.chat
+
+import ai.openclaw.app.gateway.Question
+import ai.openclaw.app.gateway.QuestionRecord
+
+internal const val QUESTION_TERMINAL_RETENTION_MS = 15_000L
+
+enum class ChatQuestionStatus {
+  Pending,
+  Submitting,
+  Answered,
+  AnsweredElsewhere,
+  Expired,
+  Cancelled,
+}
+
+data class ChatQuestionPrompt(
+  val record: QuestionRecord,
+  val submitting: Boolean = false,
+  val answeredLocally: Boolean = false,
+  val errorText: String? = null,
+  val terminalObservedAtMs: Long? = null,
+) {
+  fun status(nowMs: Long = System.currentTimeMillis()): ChatQuestionStatus =
+    when (record.status) {
+      "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
+      "cancelled" -> ChatQuestionStatus.Cancelled
+      "expired" -> ChatQuestionStatus.Expired
+      else ->
+        when {
+          nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
+          submitting -> ChatQuestionStatus.Submitting
+          else -> ChatQuestionStatus.Pending
+        }
+    }
+
+  fun shouldRetainAfterList(nowMs: Long): Boolean = terminalObservedAtMs?.let { nowMs - it < QUESTION_TERMINAL_RETENTION_MS } == true
+}
+
+data class ChatQuestionDraft(
+  val selectedOptions: Map<String, Set<String>> = emptyMap(),
+  val otherText: Map<String, String> = emptyMap(),
+) {
+  fun toggle(
+    question: Question,
+    label: String,
+  ): ChatQuestionDraft {
+    if (question.options.none { it.label == label }) return this
+    val selected = selectedOptions[question.id].orEmpty()
+    val next =
+      if (question.multiSelect == true) {
+        if (label in selected) selected - label else selected + label
+      } else if (selected == setOf(label)) {
+        emptySet()
+      } else {
+        setOf(label)
+      }
+    return copy(
+      selectedOptions = selectedOptions + (question.id to next),
+      otherText = if (question.multiSelect != true && next.isNotEmpty()) otherText + (question.id to "") else otherText,
+    )
+  }
+
+  fun setOther(
+    question: Question,
+    value: String,
+  ): ChatQuestionDraft {
+    if (question.options.isNotEmpty() && question.isOther != true) return this
+    val clearOptions = question.multiSelect != true && value.isNotBlank()
+    return copy(
+      selectedOptions = if (clearOptions) selectedOptions + (question.id to emptySet()) else selectedOptions,
+      otherText = otherText + (question.id to value),
+    )
+  }
+
+  fun answers(questions: List<Question>): Map<String, List<String>>? {
+    val result = linkedMapOf<String, List<String>>()
+    for (question in questions) {
+      val selected = selectedOptions[question.id].orEmpty()
+      val values = question.options.mapNotNull { option -> option.label.takeIf { it in selected } }.toMutableList()
+      otherText[question.id]?.trim()?.takeIf { it.isNotEmpty() }?.let(values::add)
+      if (values.isEmpty()) return null
+      result[question.id] = values
+    }
+    return result
+  }
+}
+
+internal fun questionsForSession(
+  prompts: List<ChatQuestionPrompt>,
+  sessionKey: String,
+  mainSessionKey: String,
+  activeAgentId: String,
+): List<ChatQuestionPrompt> {
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  val current = sessionKey.trim().let { if (it == "main") main else it }
+  val activeAgent = activeAgentId.trim().lowercase()
+  return prompts.filter { prompt ->
+    val key = prompt.record.sessionKey?.trim() ?: return@filter true
+    val sessionMatches = key == sessionKey || key == current || (key == "main" && current == main)
+    val promptAgent =
+      prompt.record.agentId
+        ?.trim()
+        .orEmpty()
+        .lowercase()
+    sessionMatches && (promptAgent.isEmpty() || activeAgent.isEmpty() || promptAgent == activeAgent)
+  }
+}

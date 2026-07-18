@@ -71,6 +71,11 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
+import {
+  type BackgroundExecTaskHandle,
+  createBackgroundExecTask,
+  finalizeBackgroundExecTask,
+} from "./bash-tools.exec-task-tracking.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   type ExecWorkdirResolution,
@@ -1782,6 +1787,8 @@ export function createExecTool(
         workdir = workdirResolution.remoteCwd;
       }
       let run: ExecProcessHandle;
+      let backgroundTask: BackgroundExecTaskHandle | null = null;
+      let settledOutcome: ExecProcessOutcome | null = null;
       let effectiveTimeout: number;
       try {
         if (elevatedRequested) {
@@ -2010,6 +2017,10 @@ export function createExecTool(
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
           onUpdate,
+          onSettledBeforeNotify: (outcome) => {
+            settledOutcome = outcome;
+            finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
+          },
         });
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
@@ -2082,8 +2093,27 @@ export function createExecTool(
           if (yielded) {
             return;
           }
+          if (settledOutcome) {
+            cleanupToolRunListeners();
+            resolve(
+              buildExecForegroundResult({
+                outcome: settledOutcome,
+                cwd: run.session.cwd,
+                warningText: getWarningText(),
+              }),
+            );
+            return;
+          }
           yielded = true;
           markBackgrounded(run.session);
+          // Only the guarded yield transition owns task registration. A process
+          // that settles before this timer fires must stay out of the task ledger.
+          backgroundTask = createBackgroundExecTask({
+            processSessionId: run.session.id,
+            sessionKey: notifySessionKey,
+            agentId,
+            startedAt: run.startedAt,
+          });
           resolveRunning();
         };
 
@@ -2092,12 +2122,7 @@ export function createExecTool(
             onYieldNow();
           } else {
             yieldTimer = setTimeout(() => {
-              if (yielded) {
-                return;
-              }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              onYieldNow();
             }, yieldWindow);
           }
         }

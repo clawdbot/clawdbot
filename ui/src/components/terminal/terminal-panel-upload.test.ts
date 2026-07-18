@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
@@ -113,7 +114,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
     });
     expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(true);
@@ -128,7 +129,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     });
     panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(requests).toContainEqual({
         method: "terminal.upload",
         params: {
@@ -175,7 +176,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
     });
 
@@ -192,7 +193,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     });
     panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const progress = panel.renderRoot.querySelector(".tp-upload-progress");
       expect(progress?.getAttribute("aria-valuenow")).toBe("1");
       expect(progress?.getAttribute("aria-valuemax")).toBe("2");
@@ -209,7 +210,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
         retryable: false,
       }),
     );
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const failed = panel.renderRoot.querySelector(".tp-upload-card--failed");
       expect(failed?.textContent).toContain("Upload failed");
       expect(failed?.textContent).toContain("paired node went offline");
@@ -217,7 +218,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     });
     panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload-retry")?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(controller.terminal.paste).toHaveBeenCalledWith(
         "'/tmp/openclaw upload/scan final.pdf' '/tmp/openclaw upload/notes.txt'",
       );
@@ -254,7 +255,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
     });
 
@@ -267,7 +268,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       },
     });
     panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-upload-card")?.textContent).toContain(
         "Uploading 1 of 1",
       );
@@ -315,7 +316,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     panel.available = true;
     document.body.append(panel);
     panel.toggle();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
     });
 
@@ -328,14 +329,14 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
       },
     });
     panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(panel.renderRoot.querySelector(".tp-upload-card")?.textContent).toContain(
         "Uploading 1 of 1",
       );
     });
 
     panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")?.click();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(uploadSignal?.aborted).toBe(true);
       expect(panel.renderRoot.querySelector(".tp-upload-card")).toBeNull();
     });

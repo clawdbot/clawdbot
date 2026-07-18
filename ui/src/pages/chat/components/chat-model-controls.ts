@@ -245,6 +245,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !props.gatewayAvailable ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   return renderChatModelReasoningSelect({
+    defaultModelLabel: formatCombinedPickerModelLabel(pickerDefaultLabel),
     disabled,
     fastMode,
     modelSelectionLocked: props.modelSelectionLocked === true,
@@ -291,7 +292,68 @@ function formatCombinedPickerThinkingLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
 }
 
+/**
+ * Provenance for the model choice, mirroring the reasoning row: an inherited
+ * default renders muted with no affordance, a session override names itself
+ * and offers an icon reset back to the Settings default.
+ */
+function renderModelProvenanceRow(params: {
+  defaultModelLabel: string;
+  disabled: boolean;
+  hasModelOverride: boolean;
+  onReset: () => void;
+}) {
+  return html`
+    <div class="chat-controls__model-provenance">
+      <span class="chat-controls__inline-select-section-label">
+        ${t("chat.selectors.modelSection")}
+      </span>
+      <span class="chat-controls__model-provenance-state">
+        <span
+          class="chat-controls__model-provenance-value ${params.hasModelOverride
+            ? ""
+            : "chat-controls__model-provenance-value--inherit"}"
+        >
+          ${params.hasModelOverride
+            ? t("chat.modelControls.sessionOverride")
+            : t("chat.modelControls.usingDefault")}
+        </span>
+        ${params.hasModelOverride
+          ? html`
+              <openclaw-tooltip
+                .content=${t("chat.modelControls.resetToDefault", {
+                  model: params.defaultModelLabel,
+                })}
+              >
+                <button
+                  class="chat-controls__model-reset"
+                  data-chat-model-reset="true"
+                  type="button"
+                  aria-label=${t("chat.modelControls.resetToDefault", {
+                    model: params.defaultModelLabel,
+                  })}
+                  ?disabled=${params.disabled}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    if (params.disabled) {
+                      event.preventDefault();
+                      return;
+                    }
+                    params.onReset();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `
+          : ""}
+      </span>
+    </div>
+  `;
+}
+
 function renderChatModelReasoningSelect(params: {
+  defaultModelLabel: string;
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
   modelSelectionLocked: boolean;
@@ -312,6 +374,7 @@ function renderChatModelReasoningSelect(params: {
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
 }) {
   const {
+    defaultModelLabel,
     disabled,
     fastMode,
     modelSelectionLocked,
@@ -549,6 +612,12 @@ function renderChatModelReasoningSelect(params: {
               </div>
             `
           : html`
+              ${renderModelProvenanceRow({
+                defaultModelLabel,
+                disabled,
+                hasModelOverride: selectedModelValue !== "",
+                onReset: () => commitModel(""),
+              })}
               <div class="chat-controls__model-browser">
                 <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
                   <div class="chat-controls__inline-select-section-label">

@@ -168,6 +168,10 @@ type TelegramSendResult = {
   messageId: string;
   chatId: string;
   receipt?: MessageReceipt;
+  meta?: {
+    telegramDeliveredText?: string;
+    telegramHasInlineKeyboard?: boolean;
+  };
 };
 
 type TelegramLocationSendOpts = Pick<
@@ -841,10 +845,15 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-  const reportDelivery = async (messageId: string | number, deliveredChatId: string | number) => {
+  const reportDelivery = async (
+    messageId: string | number,
+    deliveredChatId: string | number,
+    meta?: TelegramSendResult["meta"],
+  ) => {
     await opts.onDeliveryResult?.({
       messageId: String(messageId),
       chatId: String(deliveredChatId),
+      ...(meta ? { meta } : {}),
     });
   };
   const recordDeliveredPromptContext = async (
@@ -1049,7 +1058,10 @@ async function sendMessageTelegramWithContext(
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, res?.chat?.id ?? chatId);
+      await reportDelivery(messageId, res?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: res,
@@ -1244,7 +1256,13 @@ async function sendMessageTelegramWithContext(
           );
           const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
           recordSentMessage(chatId, fallbackMessageId, cfg);
-          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId);
+          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId, {
+            telegramDeliveredText: fallbackText,
+            telegramHasInlineKeyboard:
+              index === chunks.length - 1 &&
+              fallbackIndex === fallbackChunks.length - 1 &&
+              Boolean(replyMarkup),
+          });
           await recordDeliveredPromptContext(
             {
               message: plainResult.result,
@@ -1267,7 +1285,10 @@ async function sendMessageTelegramWithContext(
       }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, result?.chat?.id ?? chatId);
+      await reportDelivery(messageId, result?.chat?.id ?? chatId, {
+        telegramDeliveredText: chunk.plainText,
+        telegramHasInlineKeyboard: index === chunks.length - 1 && Boolean(replyMarkup),
+      });
       await recordDeliveredPromptContext(
         {
           message: result,
@@ -1542,7 +1563,10 @@ async function sendMessageTelegramWithContext(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
-    await reportDelivery(mediaMessageId, resolvedChatId);
+    await reportDelivery(mediaMessageId, resolvedChatId, {
+      ...(caption ? { telegramDeliveredText: caption } : {}),
+      telegramHasInlineKeyboard: !needsSeparateText && Boolean(replyMarkup),
+    });
     await recordDeliveredPromptContext(
       {
         message: result,

@@ -405,6 +405,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
             category: batchRows ? sharedCategory : (session.category ?? null),
           }}
           .selectionCount=${rows.length}
+          .lastActive=${batchRows ? "" : session.meta}
           .anchor=${menu}
           .trigger=${this.sessionMenuTrigger}
           .disabled=${!this.connected}

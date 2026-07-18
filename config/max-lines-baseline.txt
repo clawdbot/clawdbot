@@ -526,7 +526,6 @@ src/agents/session-file-repair.test.ts
 src/agents/session-file-repair.ts
 src/agents/session-tool-result-guard.ts
 src/agents/session-transcript-repair.test.ts
-src/agents/session-transcript-repair.ts
 src/agents/session-write-lock.test.ts
 src/agents/session-write-lock.ts
 src/agents/sessions/extensions/runner.ts

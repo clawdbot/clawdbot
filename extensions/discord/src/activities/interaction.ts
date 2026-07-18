@@ -5,7 +5,6 @@ import {
 } from "../component-custom-id.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
 import { Button } from "../internal/discord.js";
-import { resolveAuthorizedComponentInteraction } from "../monitor/agent-components-auth.js";
 import { replySilently } from "../monitor/agent-components-reply.js";
 import type { AgentComponentContext } from "../monitor/agent-components.types.js";
 import { getDiscordActivitiesRuntime } from "./runtime.js";
@@ -22,7 +21,6 @@ class DiscordActivityButton extends Button {
   constructor(
     private readonly ctx: AgentComponentContext,
     private readonly deps: {
-      authorize: typeof resolveAuthorizedComponentInteraction;
       reply: typeof replySilently;
       logError: (message: string) => void;
     },
@@ -46,21 +44,6 @@ class DiscordActivityButton extends Button {
         content: "This widget is no longer valid.",
         ephemeral: true,
       });
-      return;
-    }
-    const authorized = await this.deps.authorize({
-      ctx: this.ctx,
-      interaction,
-      label: "discord activity",
-      componentLabel: "widget button",
-      unauthorizedReply: "not allowed",
-      defer: false,
-    });
-    if (!authorized) {
-      return;
-    }
-    if (!authorized.commandAuthorized) {
-      await this.deps.reply(interaction, { content: "not allowed", ephemeral: true });
       return;
     }
     const runtime = getDiscordActivitiesRuntime();
@@ -104,7 +87,6 @@ export function createDiscordActivityButton(
   ctx: AgentComponentContext,
   applicationId?: string,
   deps: {
-    authorize?: typeof resolveAuthorizedComponentInteraction;
     reply?: typeof replySilently;
     logError?: (message: string) => void;
   } = {},
@@ -120,7 +102,6 @@ export function createDiscordActivityButton(
     return null;
   }
   return new DiscordActivityButton(ctx, {
-    authorize: deps.authorize ?? resolveAuthorizedComponentInteraction,
     reply: deps.reply ?? replySilently,
     logError: deps.logError ?? logError,
   });

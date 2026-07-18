@@ -139,6 +139,18 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        case "question.requested":
+            guard let payload = frame.payload,
+                  let question = try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self)
+            else { return nil }
+            return .questionRequested(question)
+        case "question.resolved":
+            guard let payload = frame.payload,
+                  let resolved = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: OpenClawQuestionResolvedEvent.self)
+            else { return nil }
+            return .questionResolved(resolved)
         default:
             return nil
         }

@@ -1308,22 +1308,23 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
     return fullIndex;
   }
 
-  // Prompt bytes and ordering must stay stable for provider prompt caches.
-  // Truncated entries remain discoverable inside the guest through ALL_TOOLS.
-  let low = 0;
-  let high = lines.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
+  // Greedily pack lines in the deterministic sorted order, skipping any single
+  // line too large to fit rather than dropping the whole tail after it. A prefix
+  // cut let one oversized entry — a pathological plugin id or input hint — blank
+  // the entire index; skipping it keeps every other declared contract visible
+  // and fits more of them when the declared tier alone overflows. Skipped
+  // entries stay discoverable through ALL_TOOLS, and the stable input order
+  // keeps prompt bytes deterministic for provider caches.
+  const included: string[] = [];
+  for (const line of lines) {
     if (
-      renderCodeModeCatalogIndex(lines.slice(0, middle), lines.length).length <=
+      renderCodeModeCatalogIndex([...included, line], lines.length).length <=
       MAX_CODE_MODE_CATALOG_INDEX_CHARS
     ) {
-      low = middle;
-    } else {
-      high = middle - 1;
+      included.push(line);
     }
   }
-  return renderCodeModeCatalogIndex(lines.slice(0, low), lines.length);
+  return renderCodeModeCatalogIndex(included, lines.length);
 }
 
 function createCodeModeExecDescription(

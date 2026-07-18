@@ -22,7 +22,6 @@ import {
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
-import { sidebarSessionMetaId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -60,6 +59,7 @@ export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
   search: string;
   canOpenTerminal: boolean;
+  meta: string;
 };
 
 /** Stamps a freshly adopted session key onto its catalog row so the sidebar
@@ -363,7 +363,6 @@ function renderCatalogSessionRow(
   const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const metaId = meta ? sidebarSessionMetaId(key) : undefined;
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
@@ -371,7 +370,7 @@ function renderCatalogSessionRow(
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
-      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true },
+      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true, meta },
       x,
       y,
       trigger,
@@ -393,7 +392,6 @@ function renderCatalogSessionRow(
         class="sidebar-recent-session__link"
         title=${`${label} · ${host.label}`}
         aria-current=${active ? "page" : nothing}
-        aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -411,7 +409,6 @@ function renderCatalogSessionRow(
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail" id=${metaId ?? nothing}>${meta}</span>
         <span class="session-row-actions">
           <button
             class="session-action"

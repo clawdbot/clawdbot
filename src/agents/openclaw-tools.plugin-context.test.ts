@@ -92,6 +92,22 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
+  it("forwards trusted private conversation recall context", () => {
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationRecall,
+      },
+    });
+
+    expect(result.context.conversationRecall).toEqual(conversationRecall);
+  });
+
   it("forwards runtime-owned active model metadata", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

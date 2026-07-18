@@ -67,6 +67,8 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  /** Optional localized-draft intent for an `open-agent` handoff. */
+  agentDraft: Type.Optional(Type.Literal("hatch")),
   needsApproval: Type.Optional(Type.Boolean()),
   proposalId: Type.Optional(NonEmptyString),
   question: Type.Optional(SystemAgentChatQuestionSchema),

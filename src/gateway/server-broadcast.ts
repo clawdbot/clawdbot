@@ -55,6 +55,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  // Hash-only change notice after a persisted config write; content stays
+  // behind the operator-scoped config.get.
+  "config.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],

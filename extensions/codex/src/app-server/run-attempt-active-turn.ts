@@ -1,4 +1,9 @@
-import { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+  embeddedAgentLog,
+  setActiveEmbeddedRun,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   interruptCodexTurnBestEffort,
   retireCodexAppServerClientAfterTimedOutTurn,
@@ -146,8 +151,31 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, optionsLocal),
+    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
+      const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+      if (isInboundUserMessage && !optionsLocal?.images?.length) {
+        const claimed = await claimPendingAgentQuestionAnswer({
+          sessionKey: params.sessionKey ?? params.sessionId,
+          text,
+        });
+        if (claimed) {
+          return;
+        }
+      } else if (isInboundUserMessage) {
+        try {
+          await cancelPendingAgentQuestionForSession({
+            sessionKey: params.sessionKey ?? params.sessionId,
+            resolvedBy: "image-reply",
+          });
+        } catch (error) {
+          // Cleanup failure must not drop the user's image turn.
+          embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
+            error,
+          });
+        }
+      }
+      await activeSteeringQueue.queue(text, optionsLocal);
+    },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isStopped: () => state.completed || state.timedOut || runAbortController.signal.aborted,
     isAbortable: () =>

@@ -114,6 +114,7 @@ function setupDeps(params: {
         configPath: "/tmp/openclaw.json",
         configHashBefore: null,
         configHashAfter: null,
+        bootstrapPending: false,
         lines: [],
       })),
     launchHatchTui: vi.fn(async () => undefined),

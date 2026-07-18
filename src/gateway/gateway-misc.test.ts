@@ -518,6 +518,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("requires operator.read for config.changed broadcasts", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("config.changed", { path: "/tmp/openclaw.json", hash: "hash-1", ts: 1 });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    expect(writeSocket.send).toHaveBeenCalledTimes(1);
+    expect(adminSocket.send).toHaveBeenCalledTimes(1);
+  });
+
   it("requires operator.questions for question broadcasts", () => {
     const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
     const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };

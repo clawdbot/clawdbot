@@ -31,6 +31,15 @@ Companion plugins such as `memory-wiki` can run alongside `memory-lancedb`,
 but only one plugin owns the active memory slot at a time.
 </Note>
 
+<Note>
+LanceDB's `memory_recall` does not receive the protected private transcript
+authorization used by `memorySearch.rememberAcrossConversations`. Use LanceDB's
+`autoRecall` or its `memory_recall` tool through
+[advanced Active Memory](/concepts/active-memory#lancedb-memory).
+`openclaw doctor` reports when Remember across conversations is unavailable
+with the current memory provider.
+</Note>
+
 ## Quick start
 
 ```json5

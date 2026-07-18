@@ -5,6 +5,8 @@ import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.QuestionListResult
+import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -249,6 +252,19 @@ class ChatController internal constructor(
   private val pendingToolCallsById = ConcurrentHashMap<String, ChatPendingToolCall>()
   private val _pendingToolCalls = MutableStateFlow<List<ChatPendingToolCall>>(emptyList())
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
+
+  private val _questions = MutableStateFlow<List<ChatQuestionPrompt>>(emptyList())
+  val questions: StateFlow<List<ChatQuestionPrompt>> = _questions.asStateFlow()
+  private val questionStateLock = Any()
+  private var questionStateRevision = 0L
+  private var questionRefreshGeneration = 0L
+
+  private data class QuestionEvictionJob(
+    val job: Job,
+    val observedAtMs: Long?,
+  )
+
+  private val questionEvictionJobs = mutableMapOf<String, QuestionEvictionJob>()
 
   private val _planSteps = MutableStateFlow<List<ChatPlanStep>>(emptyList())
   val planSteps: StateFlow<List<ChatPlanStep>> = _planSteps.asStateFlow()
@@ -517,6 +533,7 @@ class ChatController internal constructor(
   }
 
   private fun refreshConnectedGateway() {
+    refreshQuestions()
     if (!restoreRunStateOnReconnect) {
       refresh()
       return
@@ -546,6 +563,7 @@ class ChatController internal constructor(
       )
       clearLiveHistoryMarker()
       _sessions.value = emptyList()
+      clearQuestions()
       applyThinkingMetadata(null)
       sessionsListArchived = false
       unreadPatchSessionKey = null
@@ -2030,6 +2048,7 @@ class ChatController internal constructor(
         }
       }
       "health" -> {
+        refreshQuestions()
         if (restoreRunStateOnReconnect) {
           refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
         } else {
@@ -2043,6 +2062,7 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
+        refreshQuestions()
         refreshHistoryForRecovery()
       }
       "chat" -> {
@@ -2064,6 +2084,250 @@ class ChatController internal constructor(
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
       }
+      "question.requested" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleQuestionRequested(payloadJson)
+      }
+      "question.resolved" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleQuestionResolved(payloadJson)
+      }
+    }
+  }
+
+  fun resolveQuestion(
+    id: String,
+    answers: Map<String, List<String>>,
+  ) {
+    val gatewayId = currentCacheScope()?.gatewayId
+    updateQuestions { prompts ->
+      prompts.map { prompt ->
+        if (prompt.record.id == id) prompt.copy(submitting = true, errorText = null) else prompt
+      }
+    }
+    scope.launch {
+      try {
+        val params =
+          buildJsonObject {
+            put("id", JsonPrimitive(id))
+            put(
+              "answers",
+              buildJsonObject {
+                put(
+                  "answers",
+                  buildJsonObject {
+                    answers.forEach { (questionId, values) ->
+                      put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
+                    }
+                  },
+                )
+              },
+            )
+          }
+        requestGatewayBound(gatewayId, "question.resolve", params.toString())
+        updateQuestions { prompts ->
+          prompts.map { prompt ->
+            if (prompt.record.id == id) {
+              prompt.copy(
+                record = prompt.record.copy(status = "answered"),
+                submitting = false,
+                answeredLocally = true,
+                terminalObservedAtMs = prompt.terminalObservedAtMs ?: System.currentTimeMillis(),
+              )
+            } else {
+              prompt
+            }
+          }
+        }
+      } catch (error: Throwable) {
+        updateQuestions { prompts ->
+          prompts.map { prompt ->
+            if (prompt.record.id == id) prompt.copy(submitting = false, errorText = error.message ?: "Question failed") else prompt
+          }
+        }
+      }
+    }
+  }
+
+  private fun refreshQuestions() {
+    val gatewayScope = currentCacheScope()
+    val (refreshGeneration, stateRevision) =
+      synchronized(questionStateLock) {
+        questionRefreshGeneration += 1
+        questionRefreshGeneration to questionStateRevision
+      }
+    scope.launch {
+      try {
+        val response = requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+        if (gatewayScope != currentCacheScope()) return@launch
+        val records = json.decodeFromString<QuestionListResult>(response).questions
+        synchronized(questionStateLock) {
+          if (refreshGeneration != questionRefreshGeneration || stateRevision != questionStateRevision) {
+            return@synchronized
+          }
+          val current = _questions.value
+          val existing = current.associateBy { it.record.id }
+          val nowMs = System.currentTimeMillis()
+          val listedIds = records.mapTo(mutableSetOf()) { it.id }
+          val retainedTerminal = current.filter { it.record.id !in listedIds && it.shouldRetainAfterList(nowMs) }
+          val next =
+            records.map { record ->
+              existing[record.id]?.let { prompt ->
+                prompt.copy(
+                  record = record,
+                  submitting = prompt.submitting && record.status == "pending",
+                  terminalObservedAtMs =
+                    if (record.status == "pending" && nowMs < record.expiresAtMs) {
+                      null
+                    } else {
+                      prompt.terminalObservedAtMs ?: nowMs
+                    },
+                )
+              } ?: ChatQuestionPrompt(
+                record = record,
+                terminalObservedAtMs = nowMs.takeIf { record.status != "pending" },
+              )
+            } + retainedTerminal
+          if (next != current) {
+            _questions.value = next
+            questionStateRevision += 1
+          }
+          syncQuestionEvictionsLocked()
+        }
+      } catch (_: Throwable) {
+        // Older gateways and tokens without operator.questions keep ordinary chat usable.
+      }
+    }
+  }
+
+  private fun handleQuestionRequested(payloadJson: String) {
+    val record = runCatching { json.decodeFromString<QuestionRecord>(payloadJson) }.getOrNull() ?: return
+    updateQuestions { prompts ->
+      if (prompts.any { it.record.id == record.id }) {
+        prompts.map { prompt ->
+          if (prompt.record.id == record.id) {
+            prompt.copy(
+              record = record,
+              submitting = prompt.submitting && record.status == "pending",
+              // A replayed pending event must drop stale terminal retention or
+              // the zero-delay eviction loop respins without ever removing it.
+              terminalObservedAtMs =
+                if (record.status == "pending") null else prompt.terminalObservedAtMs,
+            )
+          } else {
+            prompt
+          }
+        }
+      } else {
+        prompts + ChatQuestionPrompt(record)
+      }
+    }
+    refreshQuestions()
+  }
+
+  private fun handleQuestionResolved(payloadJson: String) {
+    val payload = runCatching { json.parseToJsonElement(payloadJson).jsonObject }.getOrNull() ?: return
+    val id = payload["id"].asStringOrNull() ?: return
+    val status = payload["status"].asStringOrNull() ?: return
+    val nowMs = System.currentTimeMillis()
+    updateQuestions { prompts ->
+      prompts.map { prompt ->
+        if (prompt.record.id == id) {
+          prompt.copy(
+            record = prompt.record.copy(status = status),
+            submitting = false,
+            terminalObservedAtMs = prompt.terminalObservedAtMs ?: nowMs,
+          )
+        } else {
+          prompt
+        }
+      }
+    }
+    refreshQuestions()
+  }
+
+  private fun updateQuestions(transform: (List<ChatQuestionPrompt>) -> List<ChatQuestionPrompt>) {
+    synchronized(questionStateLock) {
+      val current = _questions.value
+      val next = transform(current)
+      if (next == current) return
+      _questions.value = next
+      questionStateRevision += 1
+      syncQuestionEvictionsLocked()
+    }
+  }
+
+  private fun syncQuestionEvictionsLocked(nowMs: Long = System.currentTimeMillis()) {
+    val currentById = _questions.value.associateBy { it.record.id }
+    questionEvictionJobs.entries.removeAll { (id, scheduled) ->
+      val prompt = currentById[id]
+      if (prompt == null || scheduled.observedAtMs != prompt.terminalObservedAtMs) {
+        scheduled.job.cancel()
+        true
+      } else {
+        false
+      }
+    }
+    for (prompt in _questions.value) {
+      if (questionEvictionJobs.containsKey(prompt.record.id)) continue
+      val id = prompt.record.id
+      val observedAt = prompt.terminalObservedAtMs
+      val remainingMs =
+        if (observedAt == null && prompt.record.status == "pending" && prompt.record.expiresAtMs != Long.MAX_VALUE) {
+          (prompt.record.expiresAtMs - nowMs).coerceAtLeast(0)
+        } else if (observedAt != null) {
+          (QUESTION_TERMINAL_RETENTION_MS - (nowMs - observedAt)).coerceAtLeast(0)
+        } else {
+          continue
+        }
+      val job =
+        scope.launch(start = CoroutineStart.LAZY) {
+          delay(remainingMs)
+          synchronized(questionStateLock) {
+            questionEvictionJobs.remove(id)
+            val current = _questions.value
+            if (observedAt == null) {
+              val next =
+                current.map {
+                  if (it.record.id == id && it.record.status == "pending" && it.terminalObservedAtMs == null) {
+                    it.copy(terminalObservedAtMs = System.currentTimeMillis())
+                  } else {
+                    it
+                  }
+                }
+              if (next != current) {
+                _questions.value = next
+                questionStateRevision += 1
+              }
+              syncQuestionEvictionsLocked()
+              return@synchronized
+            }
+            val next =
+              current.filterNot {
+                it.record.id == id &&
+                  it.terminalObservedAtMs == observedAt &&
+                  (it.status() == ChatQuestionStatus.Expired || it.record.status != "pending")
+              }
+            if (next != current) {
+              _questions.value = next
+              questionStateRevision += 1
+            } else {
+              syncQuestionEvictionsLocked()
+            }
+          }
+        }
+      questionEvictionJobs[id] = QuestionEvictionJob(job, observedAt)
+      job.start()
+    }
+  }
+
+  private fun clearQuestions() {
+    synchronized(questionStateLock) {
+      questionRefreshGeneration += 1
+      if (_questions.value.isEmpty()) return
+      _questions.value = emptyList()
+      questionStateRevision += 1
+      syncQuestionEvictionsLocked()
     }
   }
 

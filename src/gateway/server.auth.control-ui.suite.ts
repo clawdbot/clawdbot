@@ -1202,6 +1202,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(operatorHandoff?.scopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -1224,6 +1225,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(paired?.approvedScopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -1234,6 +1236,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(paired?.tokens?.operator?.scopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -1374,6 +1377,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(operatorHandoff?.scopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -1389,6 +1393,7 @@ export function registerControlUiAndPairingSuite(): void {
       expect(paired?.approvedScopes).toEqual([
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -1423,6 +1428,7 @@ export function registerControlUiAndPairingSuite(): void {
     }
     expect(operatorHandoff?.scopes).toEqual([
       "operator.approvals",
+      "operator.questions",
       "operator.read",
       "operator.talk.secrets",
       "operator.write",

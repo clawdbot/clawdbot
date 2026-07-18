@@ -175,7 +175,10 @@ describe("Telegram QA transport adapter", () => {
     mocks.heartbeatStop.mockRejectedValueOnce(new Error("heartbeat stop failed"));
     const cleanup = adapter.cleanup?.();
     pollResolvers[2]?.([]);
-    await expect(cleanup).rejects.toThrow("heartbeat stop failed");
+    await cleanup;
+    expect(mocks.shouldRetainQaGatewayCredentialLease).not.toHaveBeenCalled();
+    await expect(adapter.cleanupAfterGatewayStop?.()).rejects.toThrow("heartbeat stop failed");
+    expect(mocks.shouldRetainQaGatewayCredentialLease).toHaveBeenCalledOnce();
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
     expect(mocks.leaseRelease).toHaveBeenCalledOnce();
   });

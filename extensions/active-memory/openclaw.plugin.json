@@ -4,7 +4,7 @@
     "onStartup": true
   },
   "name": "Active Memory",
-  "description": "Runs a bounded blocking memory sub-agent before eligible conversational replies and injects relevant memory into prompt context.",
+  "description": "Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -98,11 +98,11 @@
   "uiHints": {
     "enabled": {
       "label": "Active Memory Recall",
-      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available."
+      "help": "Globally enable or pause Active Memory recall while keeping the plugin command available. Remember across conversations requires this plugin to remain enabled."
     },
     "agents": {
       "label": "Target Agents",
-      "help": "Explicit agent ids that may use active memory."
+      "help": "Advanced: explicit agent IDs that may use configured Active Memory recall. Agents with Remember across conversations enabled are automatically targeted for private-conversation transcript recall."
     },
     "model": {
       "label": "Memory Model",
@@ -118,7 +118,7 @@
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
-      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only, but explicit portal/webchat sessions can also be enabled."
+      "help": "Advanced: choose which conversation types may run configured Active Memory. Remember across conversations remains limited to private direct and explicit UI conversations regardless of this setting."
     },
     "allowedChatIds": {
       "label": "Allowed Chat IDs",
@@ -146,7 +146,7 @@
     },
     "toolsAllow": {
       "label": "Allowed Memory Tools",
-      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get for built-in memory, or memory_recall for LanceDB; configure this for other memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",

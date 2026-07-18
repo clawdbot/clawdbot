@@ -1,5 +1,6 @@
 // Launchd tests cover macOS service plist generation and command handling.
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -19,6 +20,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  startLaunchAgent,
   stopLaunchAgent,
 } from "./launchd.js";
 
@@ -1995,6 +1997,66 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).not.toContain("bootout");
     expect(launchctlCommandNames()).not.toContain("bootstrap");
     expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+  });
+
+  it("starts a loaded LaunchAgent and audits before output", async () => {
+    const env = createDefaultLaunchdEnv();
+    const write = vi.fn();
+    const onMutation = vi.fn(({ mode }: { mode: string }) => {
+      if (mode === "kickstart") {
+        throw new Error("audit failed");
+      }
+    });
+
+    await expect(
+      startLaunchAgent({
+        env,
+        stdout: { write } as unknown as NodeJS.WritableStream,
+        onMutation,
+      }),
+    ).resolves.toEqual({ outcome: "completed" });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["enable", serviceId],
+      ["kickstart", serviceId],
+    ]);
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "kickstart" }]]);
+    expect(
+      expectDefined(onMutation.mock.invocationCallOrder[1], "kickstart audit call order"),
+    ).toBeLessThan(expectDefined(write.mock.invocationCallOrder[0], "start output call order"));
+  });
+
+  it("bootstraps an unloaded LaunchAgent and audits the successful mutation", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Could not find service";
+    state.kickstartFailuresRemaining = 1;
+
+    await startLaunchAgent({ env, stdout: new PassThrough(), onMutation });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["enable", serviceId],
+      ["kickstart", serviceId],
+      ["bootstrap", domain, resolveLaunchAgentPlistPath(env)],
+    ]);
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }], [{ mode: "bootstrap" }]]);
+  });
+
+  it("audits enable but not kickstart when the later launch fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    const onMutation = vi.fn();
+    state.kickstartError = "Input/output error";
+    state.kickstartFailuresRemaining = 1;
+
+    await expect(startLaunchAgent({ env, stdout: new PassThrough(), onMutation })).rejects.toThrow(
+      "launchctl kickstart failed: Input/output error",
+    );
+
+    expect(onMutation.mock.calls).toEqual([[{ mode: "enable" }]]);
   });
 
   it("audits kickstart before a later output failure", async () => {

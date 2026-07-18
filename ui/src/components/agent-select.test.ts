@@ -3,6 +3,7 @@
 import { expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { AgentSelect } from "./agent-select.ts";
 
 const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}`;
@@ -117,7 +118,7 @@ it("fetches local avatars with the bearer credential when token auth is active",
       signal: expect.any(AbortSignal),
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
       ).toBe("blob:agent-avatar");
@@ -152,13 +153,13 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
   });
 
   try {
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(element.querySelector("img.agent-select__avatar")).toBeNull();
 
     element.authToken = "tok2";
     await element.updateComplete;
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(fetchMock).toHaveBeenLastCalledWith("/avatar/alpha", {
         headers: { Authorization: "Bearer tok2" },
         signal: expect.any(AbortSignal),
@@ -208,7 +209,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
     expect(fetchMock).toHaveBeenCalledTimes(1);
     element.authToken = "tok2";
     await element.updateComplete;
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
     expect(pending[0]?.signal.aborted).toBe(true);
     expect(
@@ -226,7 +227,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
       ok: true,
       blob: async () => new Blob(["avatar"]),
     } as Response);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
       ).toBe("blob:rotated-avatar");
@@ -272,7 +273,7 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchInit?.signal?.aborted).toBe(true);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(element.querySelector("img.agent-select__avatar")).toBeNull();
       expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
     });
@@ -311,12 +312,12 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
 
   try {
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(blob).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(blob).toHaveBeenCalledTimes(1));
     const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(fetchInit?.signal?.aborted).toBe(true);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(element.querySelector("img.agent-select__avatar")).toBeNull();
       expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
     });

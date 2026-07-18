@@ -234,6 +234,77 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("keeps cross-conversation recall off by default", () => {
+    const resolved = resolveMemorySearchConfig(asConfig({}), "main");
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
+
+  it("enables transcript indexing for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: { rememberAcrossConversations: true },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.rememberAcrossConversations).toBe(true);
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+    expect(resolved?.searchSources).toEqual(["memory"]);
+  });
+
+  it("preserves explicitly configured transcript search for an opted-in agent", () => {
+    const cfg = asConfig({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            memorySearch: {
+              rememberAcrossConversations: true,
+              sources: ["sessions"],
+            },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "personal");
+
+    expect(resolved?.sources).toEqual(["sessions"]);
+    expect(resolved?.searchSources).toEqual(["sessions"]);
+  });
+
+  it("lets a per-agent false override a default true", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { rememberAcrossConversations: true },
+        },
+        list: [
+          {
+            id: "shared",
+            memorySearch: { rememberAcrossConversations: false },
+          },
+        ],
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "shared");
+
+    expect(resolved?.rememberAcrossConversations).toBe(false);
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
+
   it("defaults provider to openai when unspecified", () => {
     const cfg = asConfig({
       agents: {

@@ -88,6 +88,11 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var pendingRunCount: Int = 0
+    public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
+    var questionRefreshGeneration: UInt64 = 0
+    var questionStateRevision: UInt64 = 0
+    var questionEvictionTasks: [String: Task<Void, Never>] = [:]
+    var questionEvictionDeadlines: [String: Date] = [:]
     var hasActiveSessionRunWithoutChatSnapshot = false
 
     public private(set) var sessionKey: String {
@@ -483,12 +488,15 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    deinit {
+    isolated deinit {
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()
         self.outboxRetryTask?.cancel()
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
+        for (_, task) in self.questionEvictionTasks {
+            task.cancel()
+        }
         for (_, task) in self.pendingRunOwnerTasks {
             task.cancel()
         }
@@ -874,6 +882,8 @@ extension OpenClawChatViewModel {
         do {
             await self.syncActiveSessionSubscription(startingWith: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
+
+            Task { [weak self] in await self?.refreshQuestions() }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }

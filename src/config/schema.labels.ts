@@ -492,6 +492,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.envelopeElapsed": "Envelope Elapsed",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.rememberAcrossConversations": "Remember Across Conversations",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
   "agents.defaults.memorySearch.qmd": "Memory Search QMD Collections",

@@ -5410,6 +5410,22 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Not selected",
+      "translations": [
+        "No seleccionada",
+        "No seleccionado"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Not selected",
+      "translations": [
+        "Inte vald",
+        "Inte valt"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Notifications",
       "translations": [
@@ -7582,6 +7598,30 @@
       "translations": [
         "Безпечне (TLS)",
         "Захищено (TLS)"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Selected",
+      "translations": [
+        "Seleccionada",
+        "Seleccionado"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Selected",
+      "translations": [
+        "انتخاب شده",
+        "انتخاب‌شده"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Selected",
+      "translations": [
+        "Vald",
+        "Valt"
       ]
     },
     {

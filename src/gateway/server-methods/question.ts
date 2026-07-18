@@ -14,6 +14,10 @@ import {
   validateQuestionWaitAnswerParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  handleQuestionChannelRequested,
+  handleQuestionChannelResolved,
+} from "../../infra/question-channel-runtime.js";
+import {
   QuestionManager,
   QuestionManagerError,
   QuestionManagerErrorCodes,
@@ -101,8 +105,12 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
           ...(request.agentId ? { agentId: request.agentId } : {}),
           ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
-          onResolved: (event) => context.broadcast("question.resolved", event),
+          onResolved: (event) => {
+            handleQuestionChannelResolved(event);
+            context.broadcast("question.resolved", event);
+          },
         });
+        handleQuestionChannelRequested(record);
         context.broadcast("question.requested", record);
         respond(true, { id: record.id, expiresAtMs: record.expiresAtMs }, undefined);
       } catch (error) {

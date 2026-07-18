@@ -115,6 +115,7 @@ type MemoryConfig = {
 /** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
+  rememberAcrossConversations?: boolean;
   extraPaths?: string[];
   qmd?: {
     extraCollections?: MemoryQmdIndexPath[];
@@ -327,7 +328,7 @@ export function resolveMemoryHostAgentContextLimits(
 export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
-): { enabled: boolean; extraPaths: string[] } | null {
+): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
@@ -340,6 +341,8 @@ export function resolveMemoryHostSearchPathConfig(
   ]);
   return {
     enabled,
+    rememberAcrossConversations:
+      overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations ?? false,
     extraPaths: uniqueStrings(rawPaths),
   };
 }

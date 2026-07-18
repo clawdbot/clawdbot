@@ -44,10 +44,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
-import {
-  addSignalApprovalReactionHintToStructuredPayload,
-  registerSignalApprovalReactionTargetForDeliveredPayload,
-} from "./approval-reactions.js";
+import { addSignalApprovalReactionHintToStructuredPayload } from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -59,6 +56,7 @@ import type {
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
+import { registerSignalReactionTargetsForDeliveredPayload } from "./reaction-targets.js";
 import { sendMessageSignal } from "./send.js";
 import { startSignalIngressMonitor, type SignalIngressMonitor } from "./signal-ingress.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
@@ -435,7 +433,7 @@ export async function deliverReplies(params: {
       },
     });
     if (delivered !== "empty") {
-      registerSignalApprovalReactionTargetForDeliveredPayload({
+      registerSignalReactionTargetsForDeliveredPayload({
         cfg: params.cfg,
         target: {
           channel: "signal",

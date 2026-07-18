@@ -410,15 +410,17 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
 
-      // Sidebar: pinned rows form their own group ahead of the Sessions group.
+      // Sidebar: pinned rows form their own headerless group ahead of the
+      // Sessions group, styled like the nav entries above them.
       const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
       const groups = page.locator(".sidebar-recent-sessions__group");
       await expect.poll(() => groups.count()).toBe(2);
+      await expect.poll(() => groups.first().getAttribute("data-session-section")).toBe("pinned");
       await expect
-        .poll(() => groups.first().locator(".sidebar-recent-sessions__label-text").textContent())
-        .toContain("Pinned");
+        .poll(() => groups.first().locator(".sidebar-recent-sessions__head").count())
+        .toBe(0);
 
       // Chats keep recency order with the open session highlighted in place —
       // selecting a row must not reshuffle the list.

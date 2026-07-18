@@ -92,9 +92,7 @@ async function run() {
   app.append(bar, frame);
 }
 run().catch((error) => {
-  if (error?.status === 403) {
-    show("Not authorized", "This Discord account is not allowed to open this widget.");
-  } else if (error?.status === 404) {
+  if (error?.status === 404) {
     show("Widget unavailable", "No widget could be resolved for this channel.");
   } else {
     show("Gateway offline", "The OpenClaw gateway could not load this widget. Try again shortly.");

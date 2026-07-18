@@ -7344,6 +7344,56 @@
       "translated": "Непідтримуване вкладення"
     },
     {
+      "id": "native.android.bf40f9f9a508155d",
+      "source": "Other answer",
+      "translated": "Інша відповідь"
+    },
+    {
+      "id": "native.android.fa81739f52e7697f",
+      "source": "Submit",
+      "translated": "Надіслати"
+    },
+    {
+      "id": "native.android.f68cd7a84be4089e",
+      "source": "Answered",
+      "translated": "Відповідь надано"
+    },
+    {
+      "id": "native.android.a0dc883947c2f980",
+      "source": "Answered elsewhere",
+      "translated": "Відповідь надано в іншому місці"
+    },
+    {
+      "id": "native.android.1a0e6b33059a63aa",
+      "source": "Expired",
+      "translated": "Термін дії минув"
+    },
+    {
+      "id": "native.android.d6d8fc83cec68418",
+      "source": "Cancelled",
+      "translated": "Скасовано"
+    },
+    {
+      "id": "native.android.73f64d0d54b7f9c0",
+      "source": "Pending",
+      "translated": "Очікує"
+    },
+    {
+      "id": "native.android.92dfa7979d04989c",
+      "source": "Submitting…",
+      "translated": "Надсилання…"
+    },
+    {
+      "id": "native.android.c5e9ee99f9d9c612",
+      "source": "Expires in ${seconds / 60}m ${seconds % 60}s",
+      "translated": "Залишилося ${seconds / 60} хв ${seconds % 60} с"
+    },
+    {
+      "id": "native.android.2ca602fbdf96f1e7",
+      "source": "Expires in ${seconds}s",
+      "translated": "Залишилося ${seconds} с"
+    },
+    {
       "id": "native.android.118e8d239b18895e",
       "source": "Model",
       "translated": "Модель"
@@ -20104,6 +20154,11 @@
       "translated": "Gateway не зміг спланувати \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Спробуйте ще раз."
     },
     {
+      "id": "native.apple.ba758aa97c24ffe6",
+      "source": "Wake up, my friend!",
+      "translated": "Прокидайся, друже!"
+    },
+    {
       "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
       "translated": "<прихований секрет>"
@@ -22907,6 +22962,41 @@
       "id": "native.apple.b6b3b9af4c618060",
       "source": "Expand plan",
       "translated": "Розгорнути план"
+    },
+    {
+      "id": "native.apple.da4494f9e875169d",
+      "source": "Other answer",
+      "translated": "Інша відповідь"
+    },
+    {
+      "id": "native.apple.e9c3855562d8e4e9",
+      "source": "Not selected",
+      "translated": "Не вибрано"
+    },
+    {
+      "id": "native.apple.bd4335213464d4be",
+      "source": "Selected",
+      "translated": "Вибрано"
+    },
+    {
+      "id": "native.apple.e3095b651fc46b52",
+      "source": "Submit",
+      "translated": "Надіслати"
+    },
+    {
+      "id": "native.apple.6c1adc16e0a846e5",
+      "source": "Submitting…",
+      "translated": "Надсилання…"
+    },
+    {
+      "id": "native.apple.698bdb0d6537edb6",
+      "source": "Expires in \\(seconds / 60)m \\(seconds % 60)s",
+      "translated": "Залишилося \\(seconds / 60) хв \\(seconds % 60) с"
+    },
+    {
+      "id": "native.apple.30e1c342b3345290",
+      "source": "Expires in \\(seconds)s",
+      "translated": "Залишилося \\(seconds) с"
     },
     {
       "id": "native.apple.7cd6fb01b9f5d14a",

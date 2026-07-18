@@ -17,6 +17,7 @@ import {
   type MemoryQmdStartupMode,
   type OpenClawConfig,
   resolveMemoryHostAgentWorkspaceDir,
+  resolveMemoryHostSearchPathConfig,
   normalizeAgentId,
   resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
@@ -92,6 +93,13 @@ export type ResolvedMemoryBackendConfig = {
 
 /** @public */ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
+  /**
+   * Whether ordinary memory searches and memory_get may access exported
+   * session transcripts. Only explicit memory.qmd.sessions.enabled opts
+   * transcripts into the ordinary memory corpus; remember-across-conversations
+   * implies export for trusted recall search only.
+   */
+  readable: boolean;
   exportDir?: string;
   retentionDays?: number;
 };
@@ -306,13 +314,20 @@ function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefi
 function resolveSessionConfig(
   cfg: MemoryQmdConfig["sessions"],
   workspaceDir: string,
+  options: { explicit: boolean },
 ): ResolvedQmdSessionConfig {
   const enabled = Boolean(cfg?.enabled);
   const exportDirRaw = cfg?.exportDir?.trim();
-  const exportDir = exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
+  // A configured exportDir belongs to explicit session export. When export is
+  // only implied by rememberAcrossConversations, honoring it could write
+  // transcripts into workspace memory/ and leak them into the ordinary memory
+  // corpus; implied exports always use the default private location.
+  const exportDir =
+    options.explicit && exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
   const retentionDays = resolvePositiveIntegerConfig(cfg?.retentionDays);
   return {
     enabled,
+    readable: enabled && options.explicit,
     exportDir,
     retentionDays,
   };
@@ -431,6 +446,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
+  const memorySearch = resolveMemoryHostSearchPathConfig(params.cfg, normalizedAgentId);
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const agentEntry = params.cfg.agents?.list?.find(
@@ -476,7 +492,17 @@ export function resolveMemoryBackendConfig(params: {
     searchTool: resolveSearchTool(qmdCfg?.searchTool),
     collections,
     includeDefaultMemory,
-    sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
+    sessions: resolveSessionConfig(
+      {
+        ...qmdCfg?.sessions,
+        enabled:
+          qmdCfg?.sessions?.enabled === true || memorySearch?.rememberAcrossConversations === true,
+      },
+      workspaceDir,
+      // Remember-only export is search-only for trusted recall; ordinary
+      // memory_get reads and sessions options require explicit sessions.enabled.
+      { explicit: qmdCfg?.sessions?.enabled === true },
+    ),
     update: {
       intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
       debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),

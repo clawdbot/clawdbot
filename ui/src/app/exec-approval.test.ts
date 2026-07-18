@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
 import {

@@ -91,10 +91,16 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
   // Forwarding cases prove request-scoped flags survive the overflow-compaction
   // route into the eventual embedded attempt.
   const onAgentToolResult = vi.fn();
+  const conversationRecall = {
+    anchorSessionKey: "agent:main:telegram:direct:owner",
+    scope: "same-agent-private" as const,
+    corpus: "sessions" as const,
+  };
   return {
     runId: "forward-attempt-params",
     params: {
       toolsAllow: ["exec", "read"],
+      conversationRecall,
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -108,6 +114,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     },
     expected: {
       toolsAllow: ["exec", "read"],
+      conversationRecall,
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,

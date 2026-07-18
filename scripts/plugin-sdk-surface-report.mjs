@@ -265,7 +265,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
       // +1: async memory prompt preparation registration.
-      8153,
+      // +4: gateway-backed harness question runner, claim/cancel helpers, and caller type.
+      // Harvest: internal question runtime exports -2.
+      8155,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -301,7 +303,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolver.
       // +1: async memory prompt preparation registration.
-      4535,
+      // +3: gateway-backed harness question runner and claim/cancel helpers.
+      // Harvest: internal question runtime callable -1.
+      4537,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

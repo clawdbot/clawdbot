@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
@@ -7,7 +8,22 @@ public enum OpenClawChatTransportEvent: Sendable {
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
+    case questionRequested(QuestionRecord)
+    case questionResolved(OpenClawQuestionResolvedEvent)
     case seqGap
+}
+
+public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
+    public let id: String
+    public let status: QuestionStatus
+    public let answers: QuestionAnswers?
+
+    // periphery:ignore - Package consumers construct transport events; native apps decode them.
+    public init(id: String, status: QuestionStatus, answers: QuestionAnswers? = nil) {
+        self.id = id
+        self.status = status
+        self.answers = answers
+    }
 }
 
 public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
@@ -319,6 +335,8 @@ public protocol OpenClawChatTransport: Sendable {
     func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease?
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
+    func listQuestions() async throws -> [QuestionRecord]
+    func resolveQuestion(id: String, answers: [String: [String]]) async throws
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
     func resolveInlineWidgetResource(
@@ -332,6 +350,17 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func listQuestions() async throws -> [QuestionRecord] {
+        []
+    }
+
+    public func resolveQuestion(id _: String, answers _: [String: [String]]) async throws {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "question.resolve not supported by this transport"])
+    }
+
     public func requestFullMessage(sessionKey _: String, messageID _: String) async throws -> OpenClawChatMessage? {
         nil
     }

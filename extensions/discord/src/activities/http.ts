@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
-import { resolveActivityUserAuthorized } from "./allowlist.js";
 import {
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
@@ -40,12 +39,6 @@ type DiscordActivityHttpDeps = {
   now?: () => number;
   readVendorAsset?: (assetPath: string) => Promise<Buffer>;
   logError?: (message: string) => void;
-};
-
-type DiscordOauthUser = {
-  id?: string;
-  username?: string;
-  discriminator?: string;
 };
 
 function setCommonHeaders(res: ServerResponse): void {
@@ -225,23 +218,13 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       } catch {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });
       }
-      const user: DiscordOauthUser = {
-        id: typeof userResponse.body?.id === "string" ? userResponse.body.id : undefined,
-        username:
-          typeof userResponse.body?.username === "string" ? userResponse.body.username : undefined,
-        discriminator:
-          typeof userResponse.body?.discriminator === "string"
-            ? userResponse.body.discriminator
-            : undefined,
-      };
-      if (!userResponse.ok || !user.id) {
+      const discordUserId =
+        typeof userResponse.body?.id === "string" ? userResponse.body.id : undefined;
+      if (!userResponse.ok || !discordUserId) {
         return respondJson(res, 401, { error: "Discord user lookup failed" });
       }
-      if (!resolveActivityUserAuthorized(account.config, { ...user, id: user.id })) {
-        return respondJson(res, 403, { error: "Discord user is not allowlisted" });
-      }
       const minted = await deps.runtime.store.createSession({
-        discordUserId: user.id,
+        discordUserId,
         accountId: account.accountId,
       });
       completed = true;

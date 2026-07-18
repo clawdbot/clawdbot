@@ -82,6 +82,46 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   });
 
+  it("applies ChatGPT Responses strict compat on first-party OpenAI API hosts", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: {} }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-chatgpt-responses",
+      model: {
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools,
+    });
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
+
+  it("leaves non-openai providers untouched by OpenAI strict compat", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const tools = [{ name: "demo", description: "", parameters: { type: "string" } }] as never;
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+      model: {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        id: "claude-opus-4-6",
+      } as never,
+      tools,
+    });
+    expect(normalized).toBe(tools);
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
