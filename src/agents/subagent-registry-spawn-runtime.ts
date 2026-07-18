@@ -1,43 +1,4 @@
-import type { SubagentProgressOrigin } from "./subagent-registry.types.js";
-
-type RegisterSubagentRunParams = {
-  runId: string;
-  childSessionKey: string;
-  controllerSessionKey?: string;
-  requesterSessionKey: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-    groupId?: string | null;
-    groupChannel?: string | null;
-    groupSpace?: string | null;
-  };
-  progressOrigin?: SubagentProgressOrigin;
-  requesterDisplayKey: string;
-  task: string;
-  taskName?: string;
-  agentId?: string;
-  requesterAgentId?: string;
-  cleanup: "delete" | "keep";
-  label?: string;
-  model?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  runTimeoutSeconds?: number;
-  expectsCompletionMessage?: boolean;
-  spawnMode?: "run" | "session";
-  silentAnnounce?: boolean;
-  wakeOnReturn?: boolean;
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
-  continuationTargetSessionKey?: string;
-  continuationTargetSessionKeys?: string[];
-  continuationFanoutMode?: "tree" | "all";
-  traceparent?: string;
-};
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
 
 type CountActiveRunsForSessionFn = (requesterSessionKey: string) => number;
 type RegisterSubagentRunFn = (params: RegisterSubagentRunParams) => void;
