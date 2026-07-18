@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/migrate-hermes",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.3",
   "private": true,
   "description": "Hermes to OpenClaw migration provider",
   "type": "module",
@@ -13,7 +13,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.7.2-beta.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
