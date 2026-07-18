@@ -55,6 +55,18 @@ function messageForReason(params: {
 
 /** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  // Name check instead of instanceof: bundling can duplicate the class across
+  // chunks, and clients need the 503 envelope rather than masked content.
+  if (err instanceof Error && err.name === "GatewayDrainingError") {
+    return {
+      status: 503,
+      error: {
+        message: err.message,
+        type: "service_unavailable",
+        code: "gateway_unavailable",
+      },
+    };
+  }
   const described = describeFailoverError(err);
   const reason = described.reason;
   if (!reason) {
